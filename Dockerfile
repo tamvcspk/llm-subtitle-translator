@@ -20,12 +20,16 @@ RUN if [ "$INSTALL_FFMPEG" = "true" ]; then \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
+# uv workspace: every member's pyproject.toml must be present for --locked.
+# Only the worker member is installed; the runtime layout under /app is unchanged.
 COPY pyproject.toml uv.lock /app/
+COPY apps/worker/pyproject.toml /app/apps/worker/pyproject.toml
+COPY packages/subcore/pyproject.toml /app/packages/subcore/pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev
+    uv sync --locked --no-dev --package llm-subtitle-worker
 
-COPY worker.py /app/worker.py
-COPY gst_worker /app/gst_worker
-COPY static /app/static
+COPY apps/worker/worker.py /app/worker.py
+COPY apps/worker/gst_worker /app/gst_worker
+COPY apps/worker/static /app/static
 
 CMD ["python", "/app/worker.py"]

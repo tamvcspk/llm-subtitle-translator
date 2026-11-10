@@ -29,21 +29,22 @@ def main() -> int:
     previous = locked_version()
 
     run("uv", "lock", "--upgrade-package", PACKAGE)
-    run("uv", "sync", "--locked", "--no-dev")
-    run(
-        "uv",
-        "run",
-        "--locked",
-        "python",
-        "-m",
-        "unittest",
-        "discover",
-        "-s",
-        "tests",
-        "-t",
-        ".",
-        "-v",
-    )
+    run("uv", "sync", "--locked", "--no-dev", "--all-packages")
+    for member in ("apps/worker", "packages/subcore"):
+        run(
+            "uv",
+            "run",
+            "--locked",
+            "python",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            f"{member}/tests",
+            "-t",
+            member,
+            "-v",
+        )
     run(
         "uv",
         "run",
@@ -53,8 +54,9 @@ def main() -> int:
         "compileall",
         "-q",
         "-f",
-        "worker.py",
-        "gst_worker",
+        "apps/worker/worker.py",
+        "apps/worker/gst_worker",
+        "packages/subcore/src",
     )
 
     current = locked_version()

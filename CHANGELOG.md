@@ -1,3 +1,13 @@
+# 2026-11-11
+- Converted the repository to a uv workspace (P0, no behavior change): the
+  worker moved to `apps/worker/` (`llm-subtitle-worker`), a new `subcore`
+  engine skeleton lives in `packages/subcore/`. The Docker image installs only
+  the worker and keeps the `/app/worker.py`, `/app/gst_worker`, `/app/static`
+  runtime layout. CI runs each member's tests separately.
+- Fork housekeeping: the default image is now
+  `ghcr.io/tamvcspk/llm-subtitle-translator:latest` (compose, `.env.example`,
+  README, configuration docs); Dependabot PRs are assigned to the fork owner.
+
 # 2026-09-07
 - Centralized queue lifecycle transitions, recovery, retry metadata, quota
   admission, and error-file cleanup in the queue module; the worker supplies

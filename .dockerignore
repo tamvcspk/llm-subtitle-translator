@@ -11,5 +11,7 @@ venv
 state
 queue
 tests
+apps/*/tests
+packages/*/tests
 docs
 *.log

@@ -13,7 +13,7 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `BAZARR_URL` | Yes | `http://bazarr:6767` | Bazarr base URL from inside the worker container. |
 | `BAZARR_API_KEY` | No | empty | If empty, the worker tries app settings, then Bazarr `config.yaml`. |
 | `INSTALL_FFMPEG` | No | `false` | Optional local image build flag. Leave false when Bazarr extracts subtitles. |
-| `GST_BAZARR_IMAGE` | No | `ghcr.io/kingzleshe/gemini-srt-translator-bazarr:latest` | Image used by `docker compose pull` and `docker compose up`. |
+| `GST_BAZARR_IMAGE` | No | `ghcr.io/tamvcspk/llm-subtitle-translator:latest` | Image used by `docker compose pull` and `docker compose up`. |
 | `MEDIA_ROOT` | Yes | `/mnt/data` | Host media directory mounted as `/media`. |
 | `BAZARR_CONFIG_DIR` | Yes | `/opt/docker/bazarr/config` | Host Bazarr config directory. |
 | `BAZARR_POSTPROCESS_DIR` | Yes | `/opt/docker/bazarr/postprocess` | Shared post-processing and queue directory. |
@@ -62,7 +62,7 @@ docker run -d \
   -v /opt/docker/bazarr/postprocess:/bazarr-postprocess \
   -v /opt/docker/gemini-srt-translator-bazarr:/state \
   -v /opt/docker/bazarr/postprocess/queue:/queue \
-  ghcr.io/kingzleshe/gemini-srt-translator-bazarr:latest
+  ghcr.io/tamvcspk/llm-subtitle-translator:latest
 ```
 
 This starts with default settings. Open the web console to enter Bazarr, Gemini,
@@ -87,7 +87,7 @@ docker compose up -d
 For non-Compose deployments:
 
 ```bash
-docker pull ghcr.io/kingzleshe/gemini-srt-translator-bazarr:latest
+docker pull ghcr.io/tamvcspk/llm-subtitle-translator:latest
 docker rm -f gemini-srt-translator-bazarr 2>/dev/null || true
 # run the docker run command again with the same env and volume options
 ```

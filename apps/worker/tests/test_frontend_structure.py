@@ -4,8 +4,9 @@ import tomllib
 import unittest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-STATIC = ROOT / "static"
+APP_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = APP_ROOT.parents[1]
+STATIC = APP_ROOT / "static"
 
 
 def read_html() -> str:
@@ -142,9 +143,9 @@ class FrontendStructureTests(unittest.TestCase):
 
 class DeploymentConfigTests(unittest.TestCase):
     def test_compose_uses_6789_inside_and_outside_container(self):
-        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
-        worker_py = (ROOT / "worker.py").read_text(encoding="utf-8")
+        compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+        worker_py = (APP_ROOT / "worker.py").read_text(encoding="utf-8")
 
         self.assertIn("name: gemini-srt-translator-bazarr", compose)
         self.assertIn("WEB_PORT: 6789", compose)
@@ -155,8 +156,8 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertNotIn(":8080", compose)
 
     def test_default_state_dir_mounts_project_root_not_nested_state_dir(self):
-        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
 
         self.assertIn("${WORKER_STATE_DIR:-/opt/docker/gemini-srt-translator-bazarr}:/state", compose)
         self.assertNotIn("${WORKER_STATE_DIR:-/opt/docker/gemini-srt-translator-bazarr/state}:/state", compose)
@@ -164,8 +165,8 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertNotIn("WORKER_STATE_DIR=/opt/docker/gemini-srt-translator-bazarr/state", env_example)
 
     def test_queue_mount_is_outside_worker_state_mount(self):
-        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-        worker_py = (ROOT / "worker.py").read_text(encoding="utf-8")
+        compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        worker_py = (APP_ROOT / "worker.py").read_text(encoding="utf-8")
 
         self.assertIn("QUEUE_DIR: /queue", compose)
         self.assertIn("${BAZARR_POSTPROCESS_DIR:-/opt/docker/bazarr/postprocess}/queue:/queue", compose)
@@ -174,9 +175,9 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertIn('os.getenv("QUEUE_DIR", "/queue")', worker_py)
 
     def test_docker_build_skips_ffmpeg_by_default_after_upstream_fix(self):
-        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
 
         self.assertIn("uv sync --locked --no-dev", dockerfile)
         self.assertIn("ARG INSTALL_FFMPEG=false", dockerfile)
@@ -185,7 +186,7 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertIn("INSTALL_FFMPEG=false", env_example)
 
     def test_upstream_dependency_allows_compatible_3x_updates(self):
-        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        pyproject = tomllib.loads((APP_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         dependencies = pyproject["project"]["dependencies"]
         upstream = [item for item in dependencies if item.startswith("gemini-srt-translator")]
 

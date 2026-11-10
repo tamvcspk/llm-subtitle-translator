@@ -5,12 +5,12 @@ updates:
     schedule:
       interval: daily
       time: "09:00"
-      timezone: Asia/Taipei
+      timezone: Asia/Ho_Chi_Minh
     allow:
       - dependency-name: gemini-srt-translator
         dependency-type: direct
     open-pull-requests-limit: 1
     assignees:
-      - kingzleshe
+      - tamvcspk
     commit-message:
       prefix: deps

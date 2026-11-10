@@ -1,0 +1,11 @@
+# Virtual workspace root: no package of its own, only workspace members.
+# Target layout: docs/design/ARCHITECTURE.md (ADR-2).
+
+[tool.uv]
+required-version = ">=0.8"
+
+[tool.uv.workspace]
+members = [
+    "apps/worker",
+    "packages/subcore",
+]

@@ -99,7 +99,7 @@ class QueueLifecycleTests(unittest.TestCase):
 
     def test_bazarr_embedded_python_admission_matches_worker_file_protocol(self):
         # Execute the producer payload without requiring Bash on Windows.
-        script = (Path(__file__).resolve().parents[1] / "bazarr-postprocess" / "gst_enqueue.sh").read_text(encoding="utf-8")
+        script = (Path(__file__).resolve().parents[3] / "bazarr-postprocess" / "gst_enqueue.sh").read_text(encoding="utf-8")
         payload = script.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
         environment = {
             **os.environ, "QUEUE_DIR": self.queue_dir,

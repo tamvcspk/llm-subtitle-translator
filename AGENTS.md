@@ -1,12 +1,15 @@
 # Project Collaboration Rules
 
+## Fork Status
+
+This repository is `tamvcspk/llm-subtitle-translator`, a fork of `kingzleshe/gemini-srt-translator-bazarr` (remote `upstream`, push disabled). The fork is being redesigned; the target design lives in `docs/design/SPEC.md` and `docs/design/ARCHITECTURE.md` and takes precedence over upstream docs when they conflict. `docs/ARCHITECTURE.md` describes the inherited (current) code.
+
+- Pull upstream fixes by cherry-pick only; never push to `upstream`.
+
 ## Runtime Environment
 
-- The service runs in Docker on `192.168.1.1`, with container name `gemini-srt-translator-bazarr` and web port `6789`.
-- SSH command: `ssh root@192.168.1.1`. Run SSH connections to the device outside the sandbox, subject to the current tool permission settings.
-- Service data directory on the host: `/opt/docker/gemini-srt-translator-bazarr`.
-- Queue directory on the host: `/opt/docker/bazarr/postprocess/queue`, mapped to `/queue` in the container.
-- Bazarr enqueue script: `/opt/docker/bazarr/postprocess/gst_enqueue.sh`.
+- Deployment target for this fork is not set up yet. The upstream author's host details (`192.168.1.1`, SSH as root) do not apply to this fork; do not connect to them.
+- Default container paths are unchanged from upstream: `/state`, `/queue`, `/media`, `/bazarr-postprocess`, web port `6789`.
 
 ## Build and Deployment
 
@@ -17,20 +20,23 @@
 
 ## Development Commands
 
-Dependencies are managed with `uv` (`uv sync --locked`); tests use stdlib `unittest`, not pytest. CI (`.github/workflows/ci.yml`) runs:
+The repo is a **uv workspace** (virtual root, one `uv.lock`): `apps/worker` (`llm-subtitle-worker`: `worker.py`, `gst_worker/`, `static/`, `tests/`, not packaged) and `packages/subcore` (`subcore` engine library, `src/` layout). Install with `uv sync --locked --all-packages`; add deps with `uv add --package <member> <dep>`. Tests use stdlib `unittest`, not pytest; each member's tests run in a separate process. CI (`.github/workflows/ci.yml`) runs:
 
 ```bash
-uv run --locked python -m unittest discover -s tests -t . -v
-uv run --locked python -m compileall -q -f worker.py gst_worker
+uv run --locked python -m unittest discover -s apps/worker/tests -t apps/worker -v
+uv run --locked python -m unittest discover -s packages/subcore/tests -t packages/subcore -v
+uv run --locked python -m compileall -q -f apps/worker/worker.py apps/worker/gst_worker packages/subcore/src
 uv run --locked gst --help
 ```
 
-Run one module or test by dotted name:
+Run one module or test by dotted name (from the member directory):
 
 ```bash
-uv run --locked python -m unittest tests.test_worker_queue
-uv run --locked python -m unittest tests.test_worker_queue.TestWorkerQueueTests.test_enqueue_translation_jobs_for_enabled_targets
+uv run --locked --directory apps/worker python -m unittest tests.test_worker_queue
+uv run --locked --directory apps/worker python -m unittest tests.test_worker_queue.TestWorkerQueueTests.test_enqueue_translation_jobs_for_enabled_targets
 ```
+
+The Docker image installs only `llm-subtitle-worker` and keeps the old runtime layout (`/app/worker.py`, `/app/gst_worker`, `/app/static`). Every new workspace member needs its `pyproject.toml` copied in the `Dockerfile` before `uv sync --locked`.
 
 Local console preview on Windows: `scripts/start-local.ps1 [-Demo] [-NoWorker]` runs against an isolated `local-state/` directory instead of the Docker `/state` and `/queue` mounts. `-NoWorker` keeps the process from consuming queue jobs.
 
@@ -43,8 +49,10 @@ Read `docs/ARCHITECTURE.md` before changing queue, translation, or Bazarr behavi
 The end-to-end flow spans three independent pieces:
 
 1. `bazarr-postprocess/gst_enqueue.sh` runs inside the Bazarr container, writes one queue JSON per missing target, and returns fast. It stays dependency-free and network-free; its embedded Python payload is tested against the worker's admission and retry protocol, so queue format changes must update both sides.
-2. `worker.py` + `gst_worker/` consume the queue one job at a time, call the `gst` CLI, write the target `.srt` beside the media, and ask Bazarr to rescan.
-3. `static/` is a dependency-free web console that talks only to the worker's own API.
+2. `apps/worker/worker.py` + `gst_worker/` consume the queue one job at a time, call the `gst` CLI, write the target `.srt` beside the media, and ask Bazarr to rescan.
+3. `apps/worker/static/` is a dependency-free web console that talks only to the worker's own API.
+
+`packages/subcore` must stay free of Bazarr, queue, and HTTP knowledge (ADR-2); the worker depends on it, never the reverse. Roadmap phases (P0–P5) are in `docs/design/ARCHITECTURE.md` §7.
 
 Seams to respect when adding code:
 

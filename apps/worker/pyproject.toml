@@ -1,11 +1,12 @@
 [project]
-name = "gemini-srt-translator-bazarr"
+name = "llm-subtitle-worker"
 version = "0.0.0"
-description = "Bazarr companion worker for gemini-srt-translator"
+description = "Bazarr companion worker: queue, console, and translation runtime"
 requires-python = ">=3.12,<3.15"
 dependencies = [
     "gemini-srt-translator>=3.8.1,<4",
 ]
 
 [tool.uv]
+# Runs as a script (worker.py) next to the gst_worker package; not built or installed.
 package = false

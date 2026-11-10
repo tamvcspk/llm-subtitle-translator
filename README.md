@@ -74,7 +74,7 @@ Bazarr sees the new local subtitle
 The default image is published to GitHub Container Registry:
 
 ```text
-ghcr.io/kingzleshe/gemini-srt-translator-bazarr:latest
+ghcr.io/tamvcspk/llm-subtitle-translator:latest
 ```
 
 The image is published for `linux/amd64` and `linux/arm64`, including Raspberry
@@ -90,7 +90,7 @@ docker compose up -d
 For a direct Docker install without Compose:
 
 ```bash
-docker pull ghcr.io/kingzleshe/gemini-srt-translator-bazarr:latest
+docker pull ghcr.io/tamvcspk/llm-subtitle-translator:latest
 docker rm -f gemini-srt-translator-bazarr 2>/dev/null || true
 docker run -d \
   --name gemini-srt-translator-bazarr \
@@ -101,7 +101,7 @@ docker run -d \
   -v /opt/docker/bazarr/postprocess:/bazarr-postprocess \
   -v /opt/docker/gemini-srt-translator-bazarr:/state \
   -v /opt/docker/bazarr/postprocess/queue:/queue \
-  ghcr.io/kingzleshe/gemini-srt-translator-bazarr:latest
+  ghcr.io/tamvcspk/llm-subtitle-translator:latest
 ```
 
 The container already defaults to `/state`, `/queue`,

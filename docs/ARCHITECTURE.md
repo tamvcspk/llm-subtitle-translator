@@ -1,5 +1,11 @@
 # Architecture
 
+> Describes the current (inherited) worker. The repository is a uv workspace:
+> worker paths below (`worker.py`, `gst_worker/`, `static/`, `tests/`) live under
+> `apps/worker/`; the new engine package is `packages/subcore/`. The image keeps
+> the old runtime layout (`/app/worker.py`, `/app/gst_worker`, `/app/static`).
+> Target design: [design/ARCHITECTURE.md](design/ARCHITECTURE.md).
+
 ## Components
 
 ### Bazarr Post-Processing Script

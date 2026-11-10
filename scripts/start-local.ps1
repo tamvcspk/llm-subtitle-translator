@@ -11,7 +11,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $projectRoot '.venv\Scripts\python.exe'
 
 if (-not (Test-Path -LiteralPath $python)) {
-    throw "Virtual environment not found: $python. Run 'uv sync' from the project root first."
+    throw "Virtual environment not found: $python. Run 'uv sync --all-packages' from the project root first."
 }
 
 # Keep local previews isolated from the Docker service's /state and /queue mounts.
@@ -47,9 +47,10 @@ $env:LOG_DIR = Join-Path $stateDir 'logs'
 $env:APP_CONFIG_PATH = Join-Path $stateDir 'config.json'
 $env:POSTPROCESS_TARGETS_PATH = Join-Path $postprocessDir 'targets.json'
 $env:TMDB_CACHE_PATH = Join-Path $stateDir 'cache\tmdb_cache.json'
-$env:STATIC_DIR = Join-Path $projectRoot 'static'
+$appRoot = Join-Path $projectRoot 'apps\worker'
+$env:STATIC_DIR = Join-Path $appRoot 'static'
 
-$arguments = @('.\worker.py', '--host', '127.0.0.1', '--port', $Port)
+$arguments = @((Join-Path $appRoot 'worker.py'), '--host', '127.0.0.1', '--port', $Port)
 if ($NoWorker) { $arguments += '--no-worker' }
 
 Write-Host "Local console: http://localhost:$Port" -ForegroundColor Cyan

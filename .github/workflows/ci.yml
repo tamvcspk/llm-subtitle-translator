@@ -26,13 +26,16 @@ jobs:
           enable-cache: true
 
       - name: Install locked dependencies
-        run: uv sync --locked --no-dev
+        run: uv sync --locked --no-dev --all-packages
 
-      - name: Run tests
-        run: uv run --locked python -m unittest discover -s tests -t . -v
+      - name: Run worker tests
+        run: uv run --locked python -m unittest discover -s apps/worker/tests -t apps/worker -v
+
+      - name: Run subcore tests
+        run: uv run --locked python -m unittest discover -s packages/subcore/tests -t packages/subcore -v
 
       - name: Compile Python sources
-        run: uv run --locked python -m compileall -q -f worker.py gst_worker
+        run: uv run --locked python -m compileall -q -f apps/worker/worker.py apps/worker/gst_worker packages/subcore/src
 
       - name: Check upstream CLI
         run: uv run --locked gst --help

@@ -12,9 +12,8 @@ on:
       - "Dockerfile"
       - "pyproject.toml"
       - "uv.lock"
-      - "worker.py"
-      - "gst_worker/**"
-      - "static/**"
+      - "apps/worker/**"
+      - "packages/*/pyproject.toml"
       - "bazarr-postprocess/**"
   workflow_dispatch:
 
