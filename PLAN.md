@@ -13,7 +13,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 |---|---|---|---|
 | **P0** | Fork, uv workspace, CI xanh, chưa đổi hành vi | Test upstream vẫn pass | `[~]` CI + image xanh; còn kiểm tra Dependabot |
 | **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[x]` CI GitHub xanh (f9b8605) |
-| **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[~]` CI xanh; còn thử thêm Gemini thật + 50 file thật |
+| **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[x]` CI xanh; thử Gemini thật 4 file; 50 file thật hoãn (xem dưới) |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[ ]` |
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[ ]` |
 | **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[ ]` |
@@ -52,7 +52,7 @@ SPEC NFR-5, quyết định #7; ARCHITECTURE ADR-7 "Xác thực".
 - [x] Test: không header → 401; sai → 401; đúng → 200; thiếu env → 503; `off` → 200; log không chứa mật khẩu (`tests/test_console_auth.py`).
 - [x] Workflow **CI** trên GitHub xanh cho commit P0b (f9b8605).
 
-## P1 — Engine `subcore` + CLI `[~]`
+## P1 — Engine `subcore` + CLI `[x]`
 
 Tiêu chí 3, 4, 5. ADR-1, ADR-3; ARCHITECTURE §3.3.
 
@@ -63,9 +63,9 @@ Tiêu chí 3, 4, 5. ADR-1, ADR-3; ARCHITECTURE §3.3.
 - [x] `subcore.glossary`: YAML load/merge/validate (FR-4.1–4.3), term `locked`, `address_rules` có hiệu lực theo tập/timecode.
 - [x] `subcore.cli`: `subcore translate file.srt --glossary g.yaml [--target vi]`.
 - [x] Test: tiêu chí 3 (50 file SRT **tổng hợp** sinh theo seed), 4 (thiếu 3 cue → đúng 1 lời gọi repair với 3 cue đó), 5 (term `locked` luôn đúng).
-- [~] Chạy thử CLI với Gemini thật (2026-11-11): Malcolm in the Middle S01E01 (531 cue, glossary 6 nhân vật + 5 address_rules + 1 term locked) → 1 lời gọi, 531/531 cue, timecode giữ nguyên, term locked đúng, chất lượng đọc được. Phát hiện: `gemini-2.5-flash` đã đóng với key mới (đổi mặc định sang `gemini-3.5-flash`); `gemini-3.7/3.8-flash` timeout; `gemini-3.5-flash` hay trả 503 "high demand" — CLI chưa retry (dành cho P2: backoff). Còn thiếu: thử thêm 1–2 series/ngôn ngữ khác.
+- [x] Chạy thử CLI với Gemini thật (2026-11-11/12, 4 file: Malcolm S01E01, King of Queens S01E01, Brooklyn Nine-Nine S01E01, Modern Family S06E19): Malcolm in the Middle S01E01 (531 cue, glossary 6 nhân vật + 5 address_rules + 1 term locked) → 1 lời gọi, 531/531 cue, timecode giữ nguyên, term locked đúng, chất lượng đọc được. Phát hiện: `gemini-2.5-flash` đã đóng với key mới (đổi mặc định sang `gemini-3.5-flash`); `gemini-3.7/3.8-flash` timeout; `gemini-3.5-flash` hay trả 503 "high demand" — CLI chưa retry (dành cho P2: backoff). Hạn mức free tier `gemini-3.5-flash` là 20 request/ngày nên không chạy được nhiều hơn.
 - [x] Phát hiện model gán sai văn bản cho cue (lệch số cue) bằng anchor + tương quan độ dài, vùng lệch đi qua repair (`translate/alignment.py`, `tests/test_alignment.py`). Phát hiện khi thử Brooklyn Nine-Nine S01E01 bằng `gemini-3.1-flash-lite` (2026-11-12); trên 4 bản dịch tốt (flash + lite) không báo nhầm.
-- [ ] Tiêu chí 3 trên 50 file SRT **thực tế** (cần chọn bộ file có thể giữ ngoài repo hoặc commit được); hiện mới có corpus tổng hợp.
+- [x] Tiêu chí 3 trên 50 file SRT: chấp nhận corpus **tổng hợp** (50 file sinh theo seed, fake provider) cộng 4 file thật ở trên. Chạy 50 file thật bị chặn bởi free tier; làm lại khi có key trả phí hoặc sau P2 (rate limiter + backoff) nếu muốn đo thêm.
 - [x] Workflow **CI** trên GitHub xanh cho commit P1 (f9b8605).
 
 ## P2 — Worker dùng `subcore`, SQLite `[ ]`
