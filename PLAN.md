@@ -11,9 +11,9 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 
 | Phase | Nội dung | Kết quả kiểm chứng | Trạng thái |
 |---|---|---|---|
-| **P0** | Fork, uv workspace, CI xanh, chưa đổi hành vi | Test upstream vẫn pass | `[~]` code xong, chờ CI/build trên GitHub |
-| **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[~]` code xong, chờ CI GitHub |
-| **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[~]` code xong, chờ CI GitHub + thử Gemini thật |
+| **P0** | Fork, uv workspace, CI xanh, chưa đổi hành vi | Test upstream vẫn pass | `[~]` CI + image xanh; còn kiểm tra Dependabot |
+| **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[x]` CI GitHub xanh (f9b8605) |
+| **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[~]` CI xanh; còn thử thêm Gemini thật + 50 file thật |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[ ]` |
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[ ]` |
 | **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[ ]` |
@@ -36,11 +36,11 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 - [x] Fork housekeeping: image mặc định `ghcr.io/tamvcspk/llm-subtitle-translator:latest`; Dependabot gán cho `tamvcspk`, múi giờ `Asia/Ho_Chi_Minh`.
 - [x] Skills: `ci-check`, `implement-phase`, `upstream-sync`, `design-docs`.
 - [x] Các bước CI chạy local pass (worker 125 test, subcore 1 test, compileall, `gst --help`).
-- [ ] Workflow **CI** trên GitHub xanh cho commit P0.
-- [ ] Workflow **Docker image** build + push multi-arch thành công.
+- [x] Workflow **CI** trên GitHub xanh cho commit P0 (check "Python 3.14" trên f9b8605).
+- [x] Workflow **Docker image** build + push thành công (check "Build and publish image" trên f9b8605).
 - [ ] Dependabot chạy được với uv workspace (xem lần chạy kế tiếp).
 
-## P0b — Basic Auth `[~]`
+## P0b — Basic Auth `[x]`
 
 SPEC NFR-5, quyết định #7; ARCHITECTURE ADR-7 "Xác thực".
 
@@ -50,7 +50,7 @@ SPEC NFR-5, quyết định #7; ARCHITECTURE ADR-7 "Xác thực".
 - [x] So sánh bằng `hmac.compare_digest`; header `WWW-Authenticate: Basic realm=…`; không log mật khẩu / header `Authorization`.
 - [x] `docker-compose.yml`, `.env.example`, `docs/CONFIGURATION.md`, `docs/API.md`, README cập nhật.
 - [x] Test: không header → 401; sai → 401; đúng → 200; thiếu env → 503; `off` → 200; log không chứa mật khẩu (`tests/test_console_auth.py`).
-- [ ] Workflow **CI** trên GitHub xanh cho commit P0b.
+- [x] Workflow **CI** trên GitHub xanh cho commit P0b (f9b8605).
 
 ## P1 — Engine `subcore` + CLI `[~]`
 
@@ -66,7 +66,7 @@ Tiêu chí 3, 4, 5. ADR-1, ADR-3; ARCHITECTURE §3.3.
 - [~] Chạy thử CLI với Gemini thật (2026-11-11): Malcolm in the Middle S01E01 (531 cue, glossary 6 nhân vật + 5 address_rules + 1 term locked) → 1 lời gọi, 531/531 cue, timecode giữ nguyên, term locked đúng, chất lượng đọc được. Phát hiện: `gemini-2.5-flash` đã đóng với key mới (đổi mặc định sang `gemini-3.5-flash`); `gemini-3.7/3.8-flash` timeout; `gemini-3.5-flash` hay trả 503 "high demand" — CLI chưa retry (dành cho P2: backoff). Còn thiếu: thử thêm 1–2 series/ngôn ngữ khác.
 - [x] Phát hiện model gán sai văn bản cho cue (lệch số cue) bằng anchor + tương quan độ dài, vùng lệch đi qua repair (`translate/alignment.py`, `tests/test_alignment.py`). Phát hiện khi thử Brooklyn Nine-Nine S01E01 bằng `gemini-3.1-flash-lite` (2026-11-12); trên 4 bản dịch tốt (flash + lite) không báo nhầm.
 - [ ] Tiêu chí 3 trên 50 file SRT **thực tế** (cần chọn bộ file có thể giữ ngoài repo hoặc commit được); hiện mới có corpus tổng hợp.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P1.
+- [x] Workflow **CI** trên GitHub xanh cho commit P1 (f9b8605).
 
 ## P2 — Worker dùng `subcore`, SQLite `[ ]`
 
