@@ -36,6 +36,19 @@ or has exhausted its own daily quota.
 The rules that move a translation job through the job queue, including settling,
 recovery, retries, quota pauses, and terminal outcomes.
 
+**Glossary**:
+Human-owned YAML rules for one series and target language: terms, characters,
+and address rules. It always overrides anything the machine infers.
+
+**Locked term**:
+A glossary term whose translation must appear in the output of every cue whose
+source contains the term. A violation is repaired; if the model still refuses it
+is kept with a warning rather than failing the job.
+
+**Repair**:
+A follow-up model call that re-requests only the cues whose answer was missing or
+invalid, with a few neighbouring cues as context.
+
 **Translation attempt**:
 One execution of translation work, including its unfinished work files,
 checkpoint, partial output, and publication of a completed target subtitle.

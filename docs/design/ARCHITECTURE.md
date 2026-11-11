@@ -1,6 +1,6 @@
 # ARCHITECTURE — LLM Subtitle Translator for Bazarr
 
-> Trạng thái: **Draft v0.3** · 2026-11-11 · Hiện thực hoá [SPEC.md](SPEC.md)
+> Trạng thái: **Draft v0.4** · 2026-11-11 (v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md)) · Hiện thực hoá [SPEC.md](SPEC.md)
 > Tài liệu này mô tả kiến trúc **đích**. Kiến trúc hiện tại kế thừa từ upstream nằm ở [docs/ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
@@ -46,6 +46,15 @@ llm-subtitle-translator/            # fork
 ```
 
 **Đã làm ở P0:** root `pyproject.toml` là *virtual workspace root* (không có `[project]`), một `uv.lock` chung. `subcore` dùng `src/` layout (`packages/subcore/src/subcore/`), build bằng `uv_build`, cài editable. `apps/worker` khai báo `package = false` (chạy dạng script, giữ nguyên import `gst_worker`). Image chỉ cài member `llm-subtitle-worker` và giữ layout runtime cũ (`/app/worker.py`, `/app/gst_worker`, `/app/static`).
+
+**Đã làm ở P1 (các chỗ tài liệu còn để mở):**
+- `i` gửi cho LLM là **số thứ tự 1-based** của cue trong danh sách đã parse, không phải index trong file SRT (index có thể trùng/đứt quãng); `Cue` giữ nguyên `index` và dòng `timing` gốc, nên file ra trùng timecode byte-by-byte do cấu tạo.
+- Cue rỗng/chỉ có khoảng trắng không gửi cho LLM, giữ nguyên.
+- Vi phạm term `locked` được kiểm bằng so khớp chuỗi (không phân biệt hoa thường) và đưa vào vòng repair; nếu model vẫn từ chối sau 2 vòng thì giữ bản dịch và ghi cảnh báo, **không** fail job (lỗi cấu trúc — thiếu cue, hỏng thẻ — mới fail).
+- `address_rules` dùng `a_to_b`/`b_to_a` dạng "xưng–hô" theo góc nhìn người nói; `from` bao gồm, `until` loại trừ; mốc thời gian trong tập được đổi sang số thứ tự cue trước khi vào prompt.
+- Cắt part dùng ước lượng token offline (không gọi count_tokens để khỏi tốn quota); `MAX_TOKENS` trả về phần đã có để repair/split phần thiếu.
+- Chia nhỏ sau khi repair hỏng: một cấp, số part = max(2, 2× số part đang dùng), có thể nhỏ hơn 100 cue.
+- Lỗi provider (`RateLimited`…) chỉ được ném ra khỏi `translate()`; backoff/limiter là việc của P2.
 
 **Vì sao một repo thay vì "monorepo chứa 2 repo clone + set upstream":**
 - Sau ADR-1 chỉ còn **một** upstream có ý nghĩa (worker Bazarr). gst chỉ là nguồn tham khảo.
@@ -325,17 +334,7 @@ Nếu sha256 file đang nằm trên đĩa **không** khớp phiên bản `curren
 
 ## 7. Lộ trình
 
-| Phase | Nội dung | Kết quả kiểm chứng |
-|---|---|---|
-| **P0** | Fork, chuyển sang uv workspace, CI xanh, chưa đổi hành vi | Test upstream vẫn pass |
-| **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Request không có/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không xuất hiện trong log |
-| **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí nghiệm thu 3, 4, 5 (qua CLI) |
-| **P2** | Worker dùng `subcore` thay `gst`; SQLite (`jobs`, `translations` có version/backup, `llm_calls`); rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 8 |
-| **P3** | Console: Library, Episode (gốc–dịch, timecode), correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 |
-| **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 |
-| **P5** | Đề xuất (FR-6) + research grounding + Review inbox; provider `openai_compat` | FR-6, FR-7, FR-9.1, FR-11.1 |
-
-P1 dùng được ngay bằng CLI trước khi động vào worker — cách nhanh nhất để đánh giá chất lượng dịch với glossary thật. P3 đứng trước memory vì correction + dịch lại là "lưới an toàn" chất lượng cần có trước khi tự động hoá thêm.
+Đã chuyển sang [PLAN.md](../../PLAN.md) ở gốc repo: phase P0–P5 (và P0b), phạm vi từng phase dạng checklist, kết quả kiểm chứng, trạng thái, backlog sau v1. Mục này chỉ giữ để các liên kết cũ vẫn tìm được chỗ.
 
 ---
 

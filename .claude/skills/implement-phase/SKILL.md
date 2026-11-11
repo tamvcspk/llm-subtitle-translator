@@ -9,7 +9,7 @@ The design docs are the contract. `docs/design/` wins over upstream docs; `docs/
 
 ## 1. Scope it from the docs
 
-1. Read `docs/design/ARCHITECTURE.md` §7 (roadmap) and find the phase row: its content and its **verification column** ("Kết quả kiểm chứng").
+1. Read `PLAN.md` and find the phase: its checklist, its **verification column** ("Kết quả kiểm chứng"), and unchecked items left over from earlier phases.
 2. For every FR/NFR/ADR the phase touches, read the exact text in `SPEC.md` / `ARCHITECTURE.md`. Note items marked **[Đổi]** — they deliberately differ from the original SRS; do not "fix" them back.
 3. Map the phase's acceptance criteria to SPEC §6 numbers. Those become tests.
 4. If the docs are silent or contradictory on something that changes behavior, ask the user (one concise question) instead of guessing; record the answer with the `design-docs` skill.
@@ -32,6 +32,6 @@ The design docs are the contract. `docs/design/` wins over upstream docs; `docs/
 ## 4. Finish
 
 1. Run the `ci-check` skill; all steps must pass.
-2. Update docs in the same change: `docs/API.md` for endpoints, `docs/CONFIGURATION.md` for env/settings, `CONTEXT.md` for new domain terms, `AGENTS.md` if commands or layout changed, and mark progress in `docs/design/ARCHITECTURE.md` (short "Đã làm ở Px" note, not a changelog).
+2. Update docs in the same change: `docs/API.md` for endpoints, `docs/CONFIGURATION.md` for env/settings, `CONTEXT.md` for new domain terms, `AGENTS.md` if commands or layout changed. Tick the finished items in `PLAN.md` and update the phase status in its overview table; only mark a phase `[x]` after CI on GitHub is green. Add a short "Đã làm ở Px" note in `docs/design/ARCHITECTURE.md` only when the implementation fixed a design choice the doc left open.
 3. Add a `CHANGELOG.md` entry under Unreleased.
 4. Report: what was built, which acceptance criteria are now covered by which tests, what is deferred. Distinguish repo changes from image builds and running-service state (AGENTS.md) — a phase being done in code does not mean it is deployed.
