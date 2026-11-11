@@ -3,7 +3,7 @@ FROM python:3.14-slim
 COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
 
 LABEL org.opencontainers.image.title="Gemini SRT Translator for Bazarr" \
-      org.opencontainers.image.description="A Bazarr companion app that translates configured source subtitles with gemini-srt-translator." \
+      org.opencontainers.image.description="A Bazarr companion app that translates configured source subtitles with an in-process LLM engine (subcore)." \
       org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONUNBUFFERED=1 \
@@ -24,7 +24,9 @@ RUN if [ "$INSTALL_FFMPEG" = "true" ]; then \
 # Only the worker member is installed; the runtime layout under /app is unchanged.
 COPY pyproject.toml uv.lock /app/
 COPY apps/worker/pyproject.toml /app/apps/worker/pyproject.toml
-COPY packages/subcore/pyproject.toml /app/packages/subcore/pyproject.toml
+COPY packages/subcore/pyproject.toml packages/subcore/README.md /app/packages/subcore/
+# subcore is a workspace dependency of the worker, so its sources are needed to install it.
+COPY packages/subcore/src /app/packages/subcore/src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --package llm-subtitle-worker
 

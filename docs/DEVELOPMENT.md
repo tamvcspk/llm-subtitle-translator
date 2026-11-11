@@ -33,20 +33,14 @@ uv run --locked python -m unittest discover -s packages/subcore/tests -t package
 uv run --locked python -m compileall -q -f apps/worker/worker.py apps/worker/gst_worker packages/subcore/src
 ```
 
-## Update the Upstream Translator
+## Dependencies
 
-The direct dependency allows compatible 3.x releases while `uv.lock` pins the
-exact version used by local development, CI, and Docker. To check for a new
-release, update the lockfile, and run the verification suite:
-
-```powershell
-uv run python scripts/update_upstream.py
-```
-
-Dependabot runs the equivalent release check daily and opens a pull request
-when a compatible `gemini-srt-translator` release is available. Pull requests
-must pass the CI workflow before merging; the existing Docker workflow publishes
-the updated image after the change reaches `main`.
+The translation engine is the workspace package `packages/subcore`; its only
+network dependency is `google-genai`. `uv.lock` pins exact versions for local
+development, CI, and Docker. Dependabot opens a daily pull request when a
+compatible `google-genai` release is available; pull requests must pass the CI
+workflow before merging, and the existing Docker workflow publishes the updated
+image after the change reaches `main`.
 
 ## Run Locally
 

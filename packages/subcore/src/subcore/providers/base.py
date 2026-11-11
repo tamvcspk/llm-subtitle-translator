@@ -20,6 +20,7 @@ __all__ = [
     "QuotaExhausted",
     "Unavailable",
     "BadOutput",
+    "DeadlineExceeded",
 ]
 
 
@@ -57,6 +58,10 @@ class Unavailable(ProviderError):
 
 class BadOutput(ProviderError):
     """The call succeeded but produced nothing usable (blocked, empty, truncated)."""
+
+
+class DeadlineExceeded(ProviderError):
+    """The caller's time budget (job watchdog, NFR-2) ran out before another call could finish."""
 
 
 @dataclass(frozen=True)

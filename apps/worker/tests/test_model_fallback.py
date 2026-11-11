@@ -33,33 +33,6 @@ class ModelPolicyTests(unittest.TestCase):
         self.assertEqual(queue_policy.provider_retry_decision(4, 0).state, "failed")
 
 
-class ExhaustedTranslatorRetryTests(unittest.TestCase):
-    def run_with_output(self, stdout):
-        with tempfile.TemporaryDirectory() as tmp:
-            subtitle = Path(tmp) / "Movie.en.srt"
-            subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
-            result = type("Result", (), {"returncode": 130, "stdout": stdout, "stderr": ""})()
-            with patch("gst_worker.translation.subprocess.run", return_value=result):
-                translation.run_translation(
-                    {"subtitle_path": str(subtitle), "output_path": str(Path(tmp) / "Movie.zh.srt"), "target_code": "zh"},
-                    "",
-                    {"gst_batch_size": 500, "gst_retry_batch_size": 0},
-                )
-
-    def test_content_error_that_stopped_gst_fails_even_after_an_earlier_503(self):
-        with self.assertRaisesRegex(RuntimeError, "upstream retry limit") as raised:
-            self.run_with_output(
-                "503 UNAVAILABLE. Model is overloaded. Pausing for 60 seconds...\n"
-                "Stopping script due to reaching 3 consecutive errors to prevent API quota waste. "
-                "Last error: Expected 300 lines, got 307."
-            )
-        self.assertNotIsInstance(raised.exception, translation.ProviderUnavailableError)
-
-    def test_overload_retry_exhaustion_is_deferred(self):
-        with self.assertRaises(translation.ProviderUnavailableError):
-            self.run_with_output("Model is still overloaded after 3 attempts. Aborting. Last error: 503")
-
-
 class ModelFallbackQueueTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

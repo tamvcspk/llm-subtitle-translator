@@ -1,5 +1,5 @@
 // Rendering for translation jobs, shared by the dashboard and the queue view.
-import { basename, dirname, formatBytes, formatDateTime } from "./format.js";
+import { basename, dirname, formatDateTime } from "./format.js";
 import { h, icon, pairPill } from "./ui.js";
 
 export const QUEUE_STATES = ["pending", "processing", "deferred", "done", "failed"];
@@ -15,8 +15,7 @@ export const STATE_LABELS = {
 function progressBlock(job) {
   const since = job.started_at || job.created_at;
   const facts = [];
-  if (job.progress_checkpoint) facts.push(`Translator checkpoint: line ${job.progress_checkpoint}`);
-  if (job.partial_bytes) facts.push(`Partial output: ${formatBytes(job.partial_bytes)}`);
+  if (job.progress_total) facts.push(`${job.progress_done || 0} of ${job.progress_total} cues translated`);
   return h("div", { class: "progress" },
     h("div", { class: "progress-track" }, h("div", { class: "progress-bar" })),
     h("div", { class: "progress-meta" },

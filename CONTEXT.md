@@ -12,14 +12,6 @@ _Avoid_: Batch (a batch is only part of a translation attempt).
 The collection of translation jobs awaiting execution, running, deferred for a
 later attempt, completed, or failed.
 
-**Translation work files**:
-The unfinished subtitle output and recorded translation progress associated with
-a translation attempt. They are distinct from a completed target subtitle.
-
-**Checkpoint**:
-A recorded position in subtitle translation progress. A checkpoint alone does
-not establish that unfinished subtitle output is available for resuming.
-
 **Daily quota pause**:
 The period after every configured model has exhausted its daily Gemini quota
 during which new translation jobs and retries are blocked; waiting jobs are
@@ -28,8 +20,7 @@ pauses that model alone. The pause follows the models configured now: switching
 to a model that still has quota lifts it.
 
 **Fallback model**:
-An optional second Gemini model that continues a translation job from its
-checkpoint when the primary model stays unavailable through every delayed retry
+An optional second Gemini model that takes over a translation job when the primary model stays unavailable through every delayed retry
 or has exhausted its own daily quota.
 
 **Queue lifecycle**:
@@ -50,5 +41,21 @@ A follow-up model call that re-requests only the cues whose answer was missing o
 invalid, with a few neighbouring cues as context.
 
 **Translation attempt**:
-One execution of translation work, including its unfinished work files,
-checkpoint, partial output, and publication of a completed target subtitle.
+One execution of translation work for a job: reading the source, calling the
+engine, and publishing the finished result. An interrupted attempt keeps nothing
+and starts again from the beginning.
+
+**Translation version**:
+One published result for a target subtitle path, with its sha256, the input and
+context it was made from, and a stored copy. Retranslating or reverting adds a
+version instead of replacing history.
+
+**System-made file**:
+A target subtitle whose sha256 equals the current translation version for its
+path. Any other existing file (hand-edited or foreign) is never overwritten by an
+automatic job and is backed up before a retranslate or revert.
+
+**Rate limiter**:
+Per-API-key request and token pacing (RPM, TPM, RPD) around every model call.
+Rate-limit and overload errors are retried with backoff inside the attempt; only
+when they persist does the queue defer the job.

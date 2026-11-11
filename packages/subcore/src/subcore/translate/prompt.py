@@ -82,6 +82,8 @@ _TARGET_RULES = {"vi": _VI_RULES}
 @dataclass
 class PromptContext:
     target_lang: str = "vi"
+    # Display name sent to the model when the code alone is ambiguous (e.g. "Simplified Chinese").
+    target_name: str | None = None
     source_lang: str | None = None
     glossary: Glossary | None = None
     season: int | None = None
@@ -137,7 +139,7 @@ def _glossary_section(glossary: Glossary, active: list[ActiveRule]) -> str:
 def build_system(ctx: PromptContext, cues: list[Any] | None = None) -> str:
     """Assemble the system prompt. ``cues`` is only used to place timed address rules."""
     sections: list[tuple[str, str]] = [
-        ("Core rules", _CORE_RULES.format(language=language_name(ctx.target_lang))),
+        ("Core rules", _CORE_RULES.format(language=ctx.target_name or language_name(ctx.target_lang))),
     ]
     lang_rules = _TARGET_RULES.get(ctx.target_lang.lower().split("-")[0])
     if lang_rules:

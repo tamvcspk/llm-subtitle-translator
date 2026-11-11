@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 from gst_worker.console import ConsoleActions
 from gst_worker.queue_policy import daily_quota_retry_at, provider_retry_decision
-from gst_worker.translation_attempt import TranslationAttempt
 
 
 class QueuePolicyTests(unittest.TestCase):
@@ -31,14 +30,6 @@ class ConsoleActionsTests(unittest.TestCase):
         with patch("gst_worker.console.enqueue_translation_jobs", return_value=["a"]) as enqueue:
             self.assertEqual(actions.enqueue({"job_id": "a"}, [{"code": "zh"}]), ["a"])
         enqueue.assert_called_once_with("queue", {"job_id": "a"}, [{"code": "zh"}])
-
-
-class TranslationAttemptTests(unittest.TestCase):
-    def test_attempt_is_the_single_observation_and_execution_seam(self):
-        attempt = TranslationAttempt()
-        with patch("gst_worker.translation_attempt.translation.translation_progress", return_value={"progress_checkpoint": 4}) as progress:
-            self.assertEqual(attempt.progress({"subtitle_path": "x"}), {"progress_checkpoint": 4})
-        progress.assert_called_once()
 
 
 if __name__ == "__main__":

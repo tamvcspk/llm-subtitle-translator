@@ -11,7 +11,6 @@ from typing import Any, Callable
 from .config import enabled_target_languages
 from .subtitles import target_output_path
 from .translation import DailyQuotaExceededError, ProviderUnavailableError
-from .translation_attempt import DEFAULT_ATTEMPT
 from .queue_policy import PROVIDER_RETRY_DELAYS, daily_quota_retry_at, provider_retry_decision, select_model
 
 
@@ -227,8 +226,6 @@ def queue_snapshot(queue_dir: str, limit: int = 100) -> dict[str, Any]:
                 job = {"job_id": path.stem}
             job["_state"] = state
             job["_path"] = str(path)
-            if state == "processing":
-                job.update(DEFAULT_ATTEMPT.progress(job))
             if state in {"deferred", "failed"}:
                 error_path = path.with_suffix(".error")
                 if error_path.exists():
@@ -338,7 +335,7 @@ class JobQueue:
 
     def process_once(
         self,
-        execute: Callable[[dict[str, Any], Callable[[str], None]], str],
+        execute: Callable[..., str],
         *,
         settle_seconds: int = 0,
         now: float | None = None,
@@ -368,10 +365,11 @@ class JobQueue:
             if model:
                 job["gst_model"] = model
 
-            def update_status(stage: str) -> None:
+            def update_status(stage: str, **fields: Any) -> None:
                 job["started_at"] = float(job.get("started_at") or time.time())
                 job["updated_at"] = time.time()
                 job["stage"] = stage
+                job.update(fields)
                 _write_job(processing_path, job)
 
             logging.info("Job %s started | %s | %s -> %s", processing_path.stem,
@@ -380,6 +378,8 @@ class JobQueue:
             update_status("Starting translation")
             status = execute(job, update_status)
             _reset_retry(job)
+            for key in ("progress_done", "progress_total"):
+                job.pop(key, None)
             _write_job(processing_path, job)
             destination = self.queue_dir / "done" / processing_path.name
             logging.info("Job %s finished | status=%s | duration=%.1fs", processing_path.stem, status, time.monotonic() - started)

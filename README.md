@@ -1,15 +1,16 @@
 # Gemini SRT Translator for Bazarr
 
 A small Docker sidecar for Bazarr that turns extracted subtitle files into
-gemini-srt-translator jobs.
+LLM translation jobs.
 
 The worker is designed for media servers where Bazarr can already extract or
 index source subtitles, but the final translated subtitles still need to be
 created automatically. It listens for Bazarr post-processing events, exposes a
-small web console, queues translation work, calls the `gst` CLI from
-[`gemini-srt-translator`](https://github.com/MaKTaiL/gemini-srt-translator),
-writes target-language `.srt` files next to the media, then asks Bazarr to scan
-the matching item again.
+small web console, queues translation work, translates in-process with the
+`subcore` engine (Gemini, with rate limiting, retries, cue validation and
+repair), writes target-language `.srt` files next to the media, then asks Bazarr
+to scan the matching item again. Every published file is versioned with a
+backup, so a retranslation can be reverted.
 
 ## Features
 
@@ -19,9 +20,9 @@ the matching item again.
   system backups, and logs.
 - Settings page shows configured secrets as `**********` and provides API-key
   test buttons for Bazarr, Gemini, and TMDB.
-- gemini-srt-translator options are configurable in the web console, including
-  model selection from a dropdown, batch size, quota mode, logs, token reports,
-  and model tuning parameters.
+- Translation options are configurable in the web console, including model
+  selection from a dropdown, a fallback model, quota mode, and temperature.
+  `LLM_RPM`/`LLM_TPM`/`LLM_RPD` cap the request rate per API key.
 - Multi-source and multi-target output support, for example `en -> zh`,
   `ja -> zh`, `zh -> en`.
 - Single-worker queue so Gemini quota is not consumed by uncontrolled parallel
@@ -51,7 +52,7 @@ Bazarr custom post-processing
         v
 Gemini SRT Translator for Bazarr
         |
-        | gst translate -i input.<source>.srt -l target -o output.<target>.srt
+        | subcore: translate input.<source>.srt -> output.<target>.srt
         v
 translated subtitle beside media
         |
@@ -66,7 +67,7 @@ Bazarr sees the new local subtitle
 - Bazarr with API access.
 - Bazarr media paths and this worker's `/media` mount must point at the same
   files.
-- A Gemini API key for `gemini-srt-translator`.
+- A Gemini API key.
 - Optional TMDB API key for richer translation context.
 
 ## Docker Image

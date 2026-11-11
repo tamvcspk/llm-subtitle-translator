@@ -185,13 +185,12 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertIn("INSTALL_FFMPEG: ${INSTALL_FFMPEG:-false}", compose)
         self.assertIn("INSTALL_FFMPEG=false", env_example)
 
-    def test_upstream_dependency_allows_compatible_3x_updates(self):
+    def test_worker_uses_the_workspace_engine_not_the_gst_cli(self):
         pyproject = tomllib.loads((APP_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         dependencies = pyproject["project"]["dependencies"]
-        upstream = [item for item in dependencies if item.startswith("gemini-srt-translator")]
 
-        self.assertEqual(len(upstream), 1)
-        self.assertRegex(upstream[0], r"^gemini-srt-translator>=\d+\.\d+\.\d+,<4$")
+        self.assertEqual(dependencies, ["subcore"])
+        self.assertEqual(pyproject["tool"]["uv"]["sources"]["subcore"], {"workspace": True})
 
 
 if __name__ == "__main__":

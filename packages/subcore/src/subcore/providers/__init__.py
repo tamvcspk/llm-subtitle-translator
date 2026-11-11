@@ -4,6 +4,7 @@ from .base import (
     AuthError,
     BadOutput,
     Capabilities,
+    DeadlineExceeded,
     LLMRequest,
     LLMResponse,
     Provider,
@@ -13,12 +14,18 @@ from .base import (
     Unavailable,
 )
 from .fake import FakeProvider
+from .limiter import CallLog, FailoverProvider, RateLimiter, ResilientProvider
 
 __all__ = [
     "AuthError",
     "BadOutput",
+    "CallLog",
     "Capabilities",
+    "DeadlineExceeded",
+    "FailoverProvider",
     "FakeProvider",
+    "RateLimiter",
+    "ResilientProvider",
     "LLMRequest",
     "LLMResponse",
     "Provider",

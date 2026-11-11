@@ -47,7 +47,9 @@ from gst_worker.queue import (
 )
 from gst_worker.console import ConsoleActions
 from gst_worker.queue_policy import configured_models
-from gst_worker.translation_attempt import DEFAULT_ATTEMPT
+from gst_worker.store import Store
+from gst_worker.translation_attempt import DEFAULT_ATTEMPT, TranslationAttempt
+from gst_worker.versions import TranslationVersions
 from gst_worker.subtitles import scan_source_subtitles
 from gst_worker.runtime import RuntimeContext
 from gst_worker.tmdb import build_tmdb_description
@@ -84,6 +86,9 @@ def load_settings(config_path: str | None = None) -> dict[str, Any]:
     settings["gst_retry_batch_size"] = int(app_config.get("gst_retry_batch_size", 300))
     settings["gst_model"] = str(app_config.get("gst_model") or os.getenv("GST_MODEL", "gemini-flash-latest"))
     settings["job_settle_seconds"] = int(app_config.get("job_settle_seconds") or 0)
+    for key in ("llm_rpm", "llm_tpm", "llm_rpd"):
+        if os.getenv(key.upper(), "").strip():
+            settings[key] = os.getenv(key.upper(), "").strip()
     if os.getenv("GST_BATCH_SIZE") and not app_config.get("gst_batch_size"):
         settings["gst_batch_size"] = int(os.getenv("GST_BATCH_SIZE", "500"))
     return settings
@@ -135,7 +140,8 @@ def process_job(
     settings: dict[str, Any],
     cache: MemoryCache,
     http: HTTPClient,
-    status_callback: Callable[[str], None] | None = None,
+    status_callback: Callable[..., None] | None = None,
+    attempt: TranslationAttempt | None = None,
 ) -> str:
     if should_skip_job(job):
         logging.info("Skipping job for %s", job.get("subtitle_path"))
@@ -157,7 +163,11 @@ def process_job(
     # The queue picks primary or fallback per attempt; the configured model is the default.
     if job.get("gst_model"):
         settings = {**settings, "gst_model": str(job["gst_model"])}
-    status = DEFAULT_ATTEMPT.run(job, description, settings)
+    def report_progress(done: int, total: int) -> None:
+        if status_callback:
+            status_callback(f"Translating {done}/{total} cues", progress_done=done, progress_total=total)
+
+    status = (attempt or DEFAULT_ATTEMPT).run(job, description, settings, on_progress=report_progress)
     if status_callback:
         status_callback("Refreshing Bazarr")
     refresh_bazarr(job, http=http, bazarr_url=settings["bazarr_url"], api_key=settings["bazarr_api_key"])
@@ -167,11 +177,19 @@ def process_job(
 class QueueWorker:
     """Bind the queue's execution callback to the configured translation workflow."""
 
-    def __init__(self, queue_dir: str, settings: dict[str, Any], cache: MemoryCache, http: HTTPClient) -> None:
+    def __init__(
+        self,
+        queue_dir: str,
+        settings: dict[str, Any],
+        cache: MemoryCache,
+        http: HTTPClient,
+        attempt: TranslationAttempt | None = None,
+    ) -> None:
         self.queue = JobQueue(queue_dir)
         self.settings = settings
         self.cache = cache
         self.http = http
+        self.attempt = attempt
         self.console = ConsoleActions(queue_dir)
         self.queue.recover_interrupted_jobs()
 
@@ -187,7 +205,9 @@ class QueueWorker:
 
     def process_once(self, now: float | None = None) -> bool:
         return self.queue.process_once(
-            lambda job, update_status: process_job(job, self.settings, self.cache, self.http, update_status),
+            lambda job, update_status: process_job(
+                job, self.settings, self.cache, self.http, update_status, self.attempt
+            ),
             settle_seconds=max(0, int(self.settings.get("job_settle_seconds") or 0)),
             now=now,
             models=self.models(),
@@ -543,43 +563,49 @@ def main() -> int:
 
     cache = JsonFileCache(os.getenv("TMDB_CACHE_PATH", f"{state_dir}/cache/tmdb_cache.json"))
     http = HTTPClient(timeout=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")))
-    worker = QueueWorker(queue_dir=queue_dir, settings=settings, cache=cache, http=http)
+    data_dir = os.getenv("DATA_DIR", state_dir)
+    store = Store(os.getenv("DB_PATH", f"{data_dir}/app.db"))
+    attempt = TranslationAttempt(versions=TranslationVersions(store, f"{data_dir}/backups/subtitles"))
+    worker = QueueWorker(queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt)
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
     backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path)
 
-    if args.once:
-        worker.process_once()
+    try:
+        if args.once:
+            worker.process_once()
+            return 0
+
+        threading.Thread(
+            target=run_backup_scheduler,
+            args=(state_dir, config_path, postprocess_targets_path, backup_check_seconds),
+            daemon=True,
+        ).start()
+
+        if args.worker_only:
+            worker.run_forever(args.sleep)
+            return 0
+
+        ctx = RuntimeContext(
+            queue_dir=queue_dir,
+            console=worker.console,
+            settings=settings,
+            worker=worker,
+            http=http,
+            state_dir=state_dir,
+            config_path=config_path,
+            postprocess_targets_path=postprocess_targets_path,
+            static_dir=static_dir,
+            log_dir=log_dir,
+            bazarr=bazarr,
+            backups=backups,
+            transport=HTTPTransport(http),
+        ).as_handler_context()
+        if not args.no_worker:
+            threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()
+        start_web_server(ctx, args.host, args.port, ConsoleAuth.from_env(os.environ))
         return 0
-
-    threading.Thread(
-        target=run_backup_scheduler,
-        args=(state_dir, config_path, postprocess_targets_path, backup_check_seconds),
-        daemon=True,
-    ).start()
-
-    if args.worker_only:
-        worker.run_forever(args.sleep)
-        return 0
-
-    ctx = RuntimeContext(
-        queue_dir=queue_dir,
-        console=worker.console,
-        settings=settings,
-        worker=worker,
-        http=http,
-        state_dir=state_dir,
-        config_path=config_path,
-        postprocess_targets_path=postprocess_targets_path,
-        static_dir=static_dir,
-        log_dir=log_dir,
-        bazarr=bazarr,
-        backups=backups,
-        transport=HTTPTransport(http),
-    ).as_handler_context()
-    if not args.no_worker:
-        threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()
-    start_web_server(ctx, args.host, args.port, ConsoleAuth.from_env(os.environ))
-    return 0
+    finally:
+        store.close()
 
 
 if __name__ == "__main__":

@@ -115,7 +115,7 @@ async function retryAll() {
   const jobs = (store.queue?.failed || []).filter((job) => matches(job, filterText()));
   const confirmed = await confirmDialog({
     title: `Retry ${plural(jobs.length, "failed job")}?`,
-    message: "Each job moves back to pending and runs again from the start or its saved partial output.",
+    message: "Each job moves back to pending and runs again from the start.",
     confirmLabel: "Retry all",
   });
   if (!confirmed) return;

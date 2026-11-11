@@ -39,10 +39,17 @@ Domain code is split under `gst_worker/`:
   policy seam; filesystem moves remain in `queue.py`.
 - `console.py`: `ConsoleActions`, the small interface used by the HTTP adapter
   for queue actions. It keeps request routing separate from queue orchestration;
-- `translation_attempt.py`: `TranslationAttempt`, the observation and execution
-  seam for unfinished translation work, checkpoints, and publication;
-- `translation.py`: translation execution and the `gst` work-file protocol,
-  including checkpoint interpretation, partial-output cleanup, and publication;
+- `translation_attempt.py`: `TranslationAttempt`, the execution seam for one
+  translation job: it reads the source, calls `subcore` in-process, maps typed
+  provider errors to the queue's exceptions, and publishes the result;
+- `translation.py`: the two failure classes the queue acts on
+  (`ProviderUnavailableError`, `DailyQuotaExceededError`) and secret redaction;
+- `llm.py`: builds the provider for an attempt from settings: one rate-limited
+  Gemini provider per API key, with failover to the next key;
+- `store.py`: SQLite (`app.db`, versioned migrations) with the `translations`
+  and `llm_calls` tables;
+- `versions.py`: `TranslationVersions`, publishing with version history, backup
+  before overwrite, and revert;
 - `tmdb.py`: TMDB lookup and translation description generation;
 - `bazarr.py`: Bazarr API refresh, wanted-item lookup, and API-key parsing;
 - `backups.py`: server-side backup listing and creation;
@@ -50,8 +57,9 @@ Domain code is split under `gst_worker/`:
   bounded event snapshots, and clearing the current log;
 - `http.py`: small HTTP client and JSON file cache helpers.
 
-The worker calls the `gst` CLI from `gemini-srt-translator`, writes the target
-subtitle, and asks Bazarr to scan the affected series or movie.
+The worker translates in-process with the `subcore` engine (workspace package
+`packages/subcore`), writes the target subtitle, and asks Bazarr to scan the
+affected series or movie. There is no subprocess and no `gst` CLI.
 
 `QueueWorker` binds `JobQueue.process_once` to the configured translation
 workflow through an execution callback and exposes `ConsoleActions` to the HTTP
@@ -60,11 +68,24 @@ interface with a callback and a real temporary directory, without HTTP or TMDB
 setup. Recovery is explicit at worker startup, so creating a queue handle does
 not recover work that is still running.
 
-Queue snapshots obtain translation progress through the `TranslationAttempt`
-interface;
-they do not interpret translator filenames or checkpoint fields. Execution and
-observation share the translation module's work-file implementation. A visible
-checkpoint does not by itself imply resumability: partial output must also exist.
+Translation progress is reported by the attempt through the queue's status
+callback and stored in the processing job (`stage`, `progress_done`,
+`progress_total`); queue snapshots just read the job file. A failed or
+interrupted attempt starts again from the beginning: only a finished result is
+kept, so there are no work files to resume from.
+
+The SQLite store (`DATA_DIR/app.db`, default `STATE_DIR`) holds machine-owned
+state. `translations` keeps every version published for a target path with its
+sha256, input hash, and a copy under `DATA_DIR/backups/subtitles/`; `llm_calls`
+records every model attempt (tokens, latency, outcome). The queue itself is
+still the JSON file layout below; moving it into a `jobs` table is a later step.
+
+A target file is *system-made* when the store's current version for its path has
+the file's sha256. An automatic job never overwrites any existing target. A
+retranslate or revert first keeps a file that is not the current version (a hand
+edit, or a file someone else put there) as an `external` version, so nothing is
+lost, then writes atomically. Reverting restores a stored version byte for byte
+and records the restore as a new version.
 
 `RuntimeContext` is the composition seam for the running process. It carries the
 queue console actions, Bazarr integration, backup maintenance, and HTTP transport
@@ -72,9 +93,10 @@ adapters alongside the worker's shared settings and state paths. The legacy
 module-level functions remain compatibility entry points for direct callers and
 older tests; new runtime composition should depend on the typed context fields.
 
-The direct seam tests in `tests/test_architecture_modules.py` verify policy,
-console actions, and translation-attempt delegation independently of the HTTP
-server and the complete queue lifecycle tests.
+The direct seam tests in `tests/test_architecture_modules.py` verify policy and
+console actions, and `tests/test_translation_attempt.py` runs the translation
+attempt against fake providers, independently of the HTTP server and the
+complete queue lifecycle tests.
 
 Bazarr remains a separate, dependency-free file producer. Its embedded Python
 payload is tested against the worker's admission and retry protocol; it does not
@@ -142,36 +164,42 @@ switching to a model that still has quota lifts it.
 
 The queue adds runtime fields: `gst_model` is the model chosen for the latest
 translation attempt, and `use_fallback_model` marks a job handed to the fallback
-model after a provider outage. A manual retry clears the retry fields.
+model after a provider outage. A manual retry clears the retry fields. An
+optional `trigger` (`auto` by default, or `retranslate`) lets an explicit
+retranslation overwrite an existing target after backing it up.
 
 ## Translation Flow
 
 1. The worker picks the oldest pending job.
-2. Existing output files are skipped to avoid overwriting subtitles.
+2. Existing output files are skipped to avoid overwriting subtitles (automatic
+   jobs only; see the version rules above).
 3. TMDB context is built when `TMDB_API_KEY` is available.
-4. The worker executes `gst translate` with the model the queue chose for this
+4. If the store already holds a result for the same source sha256, target
+   language, and context hash (model, temperature, prompt version, TMDB
+   description), the stored copy is published and no model call is made.
+5. Otherwise `subcore` translates with the model the queue chose for this
    attempt: the primary `gst_model`, or `gst_fallback_model` when the job was
-   handed over or the primary model's daily quota is exhausted.
-5. A Gemini `503` moves the job to `deferred` for 5, 15, 30, then 60 minutes.
-   This includes `gst` stopping at its own consecutive-error limit when the last
-   error was a `503`, because an outage outlasts its short internal retries.
-   While a job waits out an outage, no other job starts, so a queue of jobs does
-   not spend daily quota on the same errors. After four delayed retries the job
-   moves to the fallback model once, resuming from its checkpoint; without a
-   fallback, or when the fallback is also unavailable, it moves to `failed`.
-   If `gst` stops at its retry limit on any other last error, such as invalid
-   content, the job fails immediately without queue retries so nested retries do
-   not multiply provider requests. The worker log retains a redacted failure
-   diagnostic even if the failed job is cancelled.
-6. A daily quota `429` pauses that model for 24 hours. If another configured
+   handed over or the primary model's daily quota is exhausted. Every call goes
+   through a rate limiter (RPM/TPM/RPD) and retries `429`/`503` with
+   exponential backoff, jitter, and the server's `retry-after`. Calls time out
+   after 300 seconds and a job has a 30 minute watchdog (`JOB_TIMEOUT_SECONDS`).
+6. Provider failures arrive as typed exceptions, not parsed text. A `503` or
+   rate limit that outlasts the in-process retries moves the job to `deferred`
+   for 5, 15, 30, then 60 minutes. While a job waits out an outage, no other job
+   starts, so a queue of jobs does not spend daily quota on the same errors.
+   After four delayed retries the job moves to the fallback model once; without
+   a fallback, or when the fallback is also unavailable, it moves to `failed`.
+   Output that stays invalid after repair and splitting, a rejected API key, or
+   an exceeded watchdog fails the job immediately.
+7. A daily quota error pauses that model for 24 hours. If another configured
    model still has quota, the job returns to `pending` and continues on it.
    Once every configured model is exhausted, the job and waiting jobs move to
    `failed`, automatic retries are cancelled, and admission and manual retries
    are blocked until the first model's pause expires, or until the settings
    name a model whose quota is not exhausted.
-   Content line-count errors alone retry with the smaller batch size.
-7. On success, the job moves to `done`.
-8. The worker refreshes Bazarr with `scan-disk`; if item IDs are missing, it
+8. On success the result is written atomically, recorded as a version, and the
+   job moves to `done`.
+9. The worker refreshes Bazarr with `scan-disk`; if item IDs are missing, it
    falls back to full subtitle scan tasks.
 
 ## Path Model

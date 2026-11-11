@@ -9,9 +9,9 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `CONSOLE_USER` | Yes | empty | Username for the web console and API (HTTP Basic Auth). |
 | `CONSOLE_PASSWORD` | Yes | empty | Password for the web console and API. Read from the environment only; never stored in `config.json`, never returned by the API. |
 | `CONSOLE_AUTH` | No | empty | Set to `off` to disable authentication. Any other value keeps it on. |
-| `GEMINI_API_KEY` | No | empty | Primary Gemini API key used by `gemini-srt-translator`; can also be set in the web console. |
+| `GEMINI_API_KEY` | No | empty | Primary Gemini API key; can also be set in the web console. |
 | `GEMINI_API_KEY1` | No | empty | Alias for the primary Gemini key. |
-| `GEMINI_API_KEY2` | No | empty | Optional second key passed through to `gemini-srt-translator`. |
+| `GEMINI_API_KEY2` | No | empty | Optional second key; used when the first key's quota is exhausted or rejected. |
 | `TMDB_API_KEY` | No | empty | Used to build movie/show/episode descriptions; can also be set in the web console. |
 | `BAZARR_URL` | Yes | `http://bazarr:6767` | Bazarr base URL from inside the worker container. |
 | `BAZARR_API_KEY` | No | empty | If empty, the worker tries app settings, then Bazarr `config.yaml`. |
@@ -21,9 +21,15 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `BAZARR_CONFIG_DIR` | Yes | `/opt/docker/bazarr/config` | Host Bazarr config directory. |
 | `BAZARR_POSTPROCESS_DIR` | Yes | `/opt/docker/bazarr/postprocess` | Shared post-processing and queue directory. |
 | `WORKER_STATE_DIR` | Yes | `/opt/docker/gemini-srt-translator-bazarr` | Worker state, config, logs, and cache. |
-| `GST_MODEL` | No | `gemini-flash-latest` | Model passed to `gst translate --model`. |
-| `GST_BATCH_SIZE` | No | `500` | Batch size passed to `gst translate --batch-size`. |
-| `GST_RETRY_BATCH_SIZE` | No | `300` | Smaller batch used only after a subtitle line-count/content error. Set `0` to disable. |
+| `GST_MODEL` | No | `gemini-flash-latest` | Default Gemini model. |
+| `GST_BATCH_SIZE` | No | `500` | Ignored since the worker translates with `subcore`, which plans parts itself. |
+| `GST_RETRY_BATCH_SIZE` | No | `300` | Ignored, see `GST_BATCH_SIZE`. |
+| `LLM_RPM` | No | `10` (`0` with `gst_paid_quota`) | Requests per minute per API key; `0` means unlimited. |
+| `LLM_TPM` | No | `0` | Estimated input tokens per minute per API key; `0` means unlimited. |
+| `LLM_RPD` | No | `0` | Requests per rolling 24 hours per API key; `0` means unlimited. When reached, that key counts as out of daily quota. |
+| `JOB_TIMEOUT_SECONDS` | No | `1800` | Watchdog for one translation job (minimum 60). |
+| `DATA_DIR` | No | `STATE_DIR` | Where `app.db` and `backups/subtitles/` (subtitle versions) live. |
+| `DB_PATH` | No | `DATA_DIR/app.db` | SQLite database path. |
 | `GST_TARGET_LANGUAGE` | No | `Simplified Chinese` | Legacy fallback when a job has no target language. |
 | `WORKER_SLEEP_SECONDS` | No | `15` | Delay between queue polling cycles. |
 | `HTTP_TIMEOUT_SECONDS` | No | `20` | Timeout for Bazarr and TMDB HTTP calls. |
@@ -181,36 +187,30 @@ The public settings API returns configured secrets as `**********` plus
 `*_configured` booleans, never the stored secret values. Saving `**********`
 keeps the existing secret.
 
-## gemini-srt-translator Options
+## Translation Options
 
-The Settings page writes these `gst translate` options into app config:
+The Settings page writes these options into app config:
 
-- `gst_model`: selected from `/api/gemini-models`; passed to `--model`.
+- `gst_model`: selected from `/api/gemini-models`.
 - `gst_fallback_model`: optional second model, empty by default. A job moves to
   it after the primary model stays unavailable (`503`) through every delayed
   retry, or when the primary model's daily quota is exhausted; each Gemini model
-  has its own daily quota. The job resumes from its checkpoint. A value equal to
-  `gst_model` is stored as empty.
-- `gst_batch_size`: passed to `--batch-size`.
-- `gst_retry_batch_size`: used only when `gst` reports invalid subtitle content,
-  such as an output line-count mismatch. Provider `429` and `503` errors never
-  reduce the batch size or trigger an immediate subprocess retry. Set to `0` to
-  disable the content fallback.
-- `gst_paid_quota`: enables `--paid-quota`.
-- `gst_skip_upgrade`: enables `--skip-upgrade`.
-- `gst_quiet`: enables `--quiet`.
-- `gst_progress_log`: enables `--progress-log`.
-- `gst_thoughts_log`: enables `--thoughts-log`.
-- `gst_token_report`: enables `--token-report`, which writes the upstream
-  token and cost report JSON next to the input subtitle by default.
-- `gst_temperature`, `gst_top_p`, `gst_top_k`: model tuning values.
-- `gst_thinking_budget`, `gst_thinking_level`: thinking controls.
-- `gst_no_streaming`, `gst_no_thinking`: boolean CLI switches.
-- `gst_context_size`: preceding subtitle lines supplied as translation context;
-  defaults to `50`, while `0` disables context.
+  has its own daily quota. The translation starts again on the fallback model.
+  A value equal to `gst_model` is stored as empty.
+- `gst_paid_quota`: removes the default free-tier request limit (`LLM_RPM`).
+- `gst_temperature`: model temperature.
+- `gst_thinking_budget`, `gst_no_thinking`: thinking token budget, applied only
+  to Gemini 2.5 models; newer models keep their own default.
 - `job_settle_seconds`: queue settle window before a new job can run. Default
   is `600` seconds so Bazarr has time to finish extracting other embedded
   subtitles from the same media file.
+
+These keys are still stored and shown by the Settings page but have no effect
+since the worker stopped calling the `gst` CLI: `gst_batch_size`,
+`gst_retry_batch_size`, `gst_skip_upgrade`, `gst_quiet`, `gst_progress_log`,
+`gst_thoughts_log`, `gst_token_report`, `gst_top_p`, `gst_top_k`,
+`gst_thinking_level`, `gst_no_streaming`, `gst_context_size`. The Settings page
+will drop them in a later phase.
 
 ## Backup
 
@@ -252,7 +252,7 @@ not required configuration.
 The settings page loads source and target choices from Bazarr's
 `/api/system/languages` endpoint.
 
-`code` controls filenames. `language` is passed to gemini-srt-translator.
+`code` controls filenames. `language` is the language name sent to the model.
 
 Output examples:
 

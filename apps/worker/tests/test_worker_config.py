@@ -20,7 +20,6 @@ from gst_worker import (
     queue as gst_queue,
     subtitles as gst_subtitles,
     tmdb as gst_tmdb,
-    translation as gst_translation,
 )
 
 
@@ -404,20 +403,6 @@ class TestWorkerConfigTests(unittest.TestCase):
             self.assertEqual(settings["tmdb_api_key"], "tmdb-secret")
 
 
-    def test_translation_environment_uses_configured_gemini_keys(self):
-        env = gst_translation.translation_environment(
-            {
-                "gemini_api_key": "gemini-secret",
-                "gemini_api_key2": "gemini-secret-2",
-            },
-            base_env={},
-        )
-
-        self.assertEqual(env["GEMINI_API_KEY"], "gemini-secret")
-        self.assertEqual(env["GEMINI_API_KEY1"], "gemini-secret")
-        self.assertEqual(env["GEMINI_API_KEY2"], "gemini-secret-2")
-
-
     def test_seed_app_config_from_settings_writes_missing_runtime_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.json"
@@ -580,91 +565,6 @@ class TestWorkerConfigTests(unittest.TestCase):
                     }
                 )
             )
-
-
-    def test_build_gst_command_uses_job_target_language(self):
-        command = gst_translation.build_gst_command(
-            "/media/Movie.en.srt",
-            "/media/Movie.zt.srt",
-            "",
-            target_language="Traditional Chinese",
-        )
-
-        self.assertEqual(command[command.index("-l") + 1], "Traditional Chinese")
-
-
-    def test_build_gst_command_uses_configured_gst_settings(self):
-        command = gst_translation.build_gst_command(
-            "/media/Movie.en.srt",
-            "/media/Movie.zh.srt",
-            "",
-            target_language="Simplified Chinese",
-            gst_settings={
-                "gst_model": "gemini-2.5-flash",
-                "gst_batch_size": 500,
-                "gst_paid_quota": True,
-                "gst_skip_upgrade": False,
-                "gst_quiet": False,
-                "gst_progress_log": True,
-                "gst_thoughts_log": True,
-                "gst_temperature": "0.7",
-                "gst_top_p": "0.95",
-                "gst_top_k": "40",
-                "gst_thinking_budget": "2048",
-                "gst_thinking_level": "medium",
-                "gst_no_streaming": True,
-                "gst_no_thinking": True,
-                "gst_token_report": True,
-                "gst_token_stats": True,
-                "gst_context_size": 80,
-            },
-        )
-
-        self.assertEqual(command[command.index("--model") + 1], "gemini-2.5-flash")
-        self.assertEqual(command[command.index("--batch-size") + 1], "500")
-        self.assertIn("--paid-quota", command)
-        self.assertIn("--progress-log", command)
-        self.assertIn("--thoughts-log", command)
-        self.assertIn("--no-streaming", command)
-        self.assertIn("--no-thinking", command)
-        self.assertIn("--token-report", command)
-        self.assertNotIn("--token-stats", command)
-        self.assertEqual(command[command.index("--context-size") + 1], "80")
-        self.assertIn("--temperature", command)
-        self.assertIn("--top-p", command)
-        self.assertIn("--top-k", command)
-        self.assertIn("--thinking-budget", command)
-        self.assertNotIn("--thinking-level", command)
-        self.assertNotIn("--skip-upgrade", command)
-        self.assertNotIn("--quiet", command)
-
-
-    def test_build_gst_command_uses_one_thinking_option_when_both_are_configured(self):
-        flash_25_command = gst_translation.build_gst_command(
-            "/media/Movie.en.srt",
-            "/media/Movie.zh.srt",
-            "",
-            gst_settings={
-                "gst_model": "gemini-2.5-flash",
-                "gst_thinking_budget": "2048",
-                "gst_thinking_level": "medium",
-            },
-        )
-        flash_latest_command = gst_translation.build_gst_command(
-            "/media/Movie.en.srt",
-            "/media/Movie.zh.srt",
-            "",
-            gst_settings={
-                "gst_model": "gemini-flash-latest",
-                "gst_thinking_budget": "2048",
-                "gst_thinking_level": "medium",
-            },
-        )
-
-        self.assertIn("--thinking-budget", flash_25_command)
-        self.assertNotIn("--thinking-level", flash_25_command)
-        self.assertNotIn("--thinking-budget", flash_latest_command)
-        self.assertIn("--thinking-level", flash_latest_command)
 
 
 if __name__ == "__main__":

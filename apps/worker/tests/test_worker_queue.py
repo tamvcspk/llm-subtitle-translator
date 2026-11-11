@@ -354,30 +354,23 @@ class TestWorkerQueueTests(unittest.TestCase):
             self.assertTrue((queue_dir / "done" / "overloaded.json").exists())
 
 
-    def test_processing_snapshot_includes_runtime_status_and_checkpoint(self):
+    def test_processing_snapshot_includes_runtime_status_and_cue_progress(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue_dir = Path(tmp) / "queue"
             gst_queue.ensure_queue_dirs(str(queue_dir))
-            subtitle = Path(tmp) / "Movie.en.srt"
-            output = Path(tmp) / "Movie.zh.srt"
-            subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
-            subtitle.with_suffix(".progress").write_text(json.dumps({"line": 42}), encoding="utf-8")
-            output.with_name("Movie.zh.partial.srt").write_text("partial", encoding="utf-8")
             job = {
                 "job_id": "active",
-                "subtitle_path": str(subtitle),
-                "output_path": str(output),
-                "stage": "Sending subtitle batches to Gemini",
+                "stage": "Translating 120/300 cues",
+                "progress_done": 120,
+                "progress_total": 300,
                 "started_at": 1000,
             }
             (queue_dir / "processing" / "active.json").write_text(json.dumps(job), encoding="utf-8")
 
-            snapshot = gst_queue.queue_snapshot(str(queue_dir))
+            active = gst_queue.queue_snapshot(str(queue_dir))["processing"][0]
 
-            active = snapshot["processing"][0]
-            self.assertEqual(active["stage"], "Sending subtitle batches to Gemini")
-            self.assertEqual(active["progress_checkpoint"], 42)
-            self.assertEqual(active["partial_bytes"], 7)
+            self.assertEqual(active["stage"], "Translating 120/300 cues")
+            self.assertEqual((active["progress_done"], active["progress_total"]), (120, 300))
 
 
     def test_queue_worker_recovers_interrupted_processing_job_on_startup(self):
@@ -504,172 +497,4 @@ class TestWorkerQueueTests(unittest.TestCase):
 
             self.assertTrue((queue_dir / "failed" / "still-overloaded.json").exists())
             self.assertFalse((queue_dir / "deferred" / "still-overloaded.json").exists())
-
-
-    def test_run_translation_defers_gemini_503_that_outlasts_translator_retries(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            subtitle = root / "Movie.en.srt"
-            output = root / "Movie.zh.srt"
-            subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
-            result = type(
-                "Result",
-                (),
-                {
-                    "returncode": 130,
-                    "stdout": (
-                        "Stopping script due to reaching 3 consecutive errors. "
-                        "Last error: 503 UNAVAILABLE. This model is currently experiencing high demand."
-                    ),
-                    "stderr": "",
-                },
-            )()
-
-            with patch("gst_worker.translation.subprocess.run", return_value=result) as run:
-                with self.assertRaises(gst_translation.ProviderUnavailableError):
-                    gst_translation.run_translation(
-                        {
-                            "subtitle_path": str(subtitle),
-                            "output_path": str(output),
-                            "target_code": "zh",
-                            "target_language": "Simplified Chinese",
-                        },
-                        "",
-                        {"gemini_api_key": "secret", "gst_batch_size": 500, "gst_retry_batch_size": 300},
-                    )
-
-            self.assertEqual(run.call_count, 1)
-
-    def test_exhausted_translator_retries_fail_without_queue_restarts(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            source = root / "Movie.en.srt"
-            source.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
-            queue = gst_queue.JobQueue(str(root / "queue"))
-            job = {"subtitle_path": str(source), "target_code": "zh", "job_id": "exhausted"}
-            (queue.queue_dir / "pending" / "exhausted.json").write_text(json.dumps(job), encoding="utf-8")
-            result = type("Result", (), {"returncode": 130, "stdout":
-                "Stopping script due to reaching 3 consecutive errors to prevent API quota waste. "
-                "Last error: Expected 300 lines, got 307. key=test-private-key", "stderr": ""})()
-            settings = {"gemini_api_key": "test-private-key"}
-            with patch("gst_worker.translation.subprocess.run", return_value=result) as run:
-                with self.assertLogs(level="ERROR") as logs:
-                    queue.process_once(lambda job, update: gst_translation.run_translation(
-                        job, "", settings))
-                self.assertTrue((queue.queue_dir / "failed" / "exhausted.json").exists())
-                self.assertFalse(queue.process_once(lambda job, update: self.fail("Unexpected retry"), now=time.time() + 10000))
-            self.assertEqual(run.call_count, 1)
-            self.assertIn("Expected 300 lines, got 307", "\n".join(logs.output))
-            self.assertNotIn("test-private-key", "\n".join(logs.output))
-
-
-    def test_run_translation_does_not_retry_daily_quota_exhaustion(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            subtitle = root / "Movie.en.srt"
-            output = root / "Movie.zh.srt"
-            subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
-            result = type(
-                "Result",
-                (),
-                {
-                    "returncode": 130,
-                    "stdout": (
-                        "429 RESOURCE_EXHAUSTED: Quota exceeded for metric "
-                        "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
-                    ),
-                    "stderr": "",
-                },
-            )()
-
-            with patch("gst_worker.translation.subprocess.run", return_value=result) as run:
-                with self.assertRaises(gst_translation.DailyQuotaExceededError):
-                    gst_translation.run_translation(
-                        {
-                            "subtitle_path": str(subtitle),
-                            "output_path": str(output),
-                            "target_code": "zh",
-                            "target_language": "Simplified Chinese",
-                        },
-                        "",
-                        {"gemini_api_key": "secret", "gst_batch_size": 500, "gst_retry_batch_size": 300},
-                    )
-
-            self.assertEqual(run.call_count, 1)
-
-
-    def test_run_translation_resumes_with_retry_batch_size(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            subtitle = root / "Movie.en.srt"
-            output = root / "Movie.zh.srt"
-            partial = root / "Movie.zh.partial.srt"
-            progress = root / "Movie.en.progress"
-            subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
-            partial.write_text("already translated chunk", encoding="utf-8")
-            progress.write_text('{"line": 701, "input_file": "Movie.en.srt"}', encoding="utf-8")
-            commands = []
-
-            def fake_run(command, **kwargs):
-                commands.append(command)
-                temp_output = Path(command[command.index("-o") + 1])
-                temp_output.write_text("finished from resume", encoding="utf-8")
-                return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-            with patch("gst_worker.translation.subprocess.run", side_effect=fake_run):
-                status = gst_translation.run_translation(
-                    {
-                        "subtitle_path": str(subtitle),
-                        "output_path": str(output),
-                        "target_code": "zh",
-                        "target_language": "Simplified Chinese",
-                    },
-                    "",
-                    {"gemini_api_key": "secret", "gst_batch_size": 1000, "gst_retry_batch_size": 500},
-                )
-
-            self.assertEqual(status, "translated")
-            self.assertEqual(len(commands), 1)
-            self.assertEqual(commands[0][commands[0].index("--batch-size") + 1], "500")
-            self.assertEqual(output.read_text(encoding="utf-8"), "finished from resume")
-
-
-    def test_run_translation_does_not_retry_unknown_resume_exit_130(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            subtitle = root / "Movie.en.srt"
-            output = root / "Movie.zh.srt"
-            partial = root / "Movie.zh.partial.srt"
-            progress = root / "Movie.en.progress"
-            subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
-            partial.write_text("already translated chunk", encoding="utf-8")
-            progress.write_text('{"line": 701, "input_file": "Movie.en.srt"}', encoding="utf-8")
-            commands = []
-
-            def fake_run(command, **kwargs):
-                commands.append(command)
-                self.assertTrue(partial.exists())
-                self.assertTrue(progress.exists())
-                return type("Result", (), {"returncode": 130, "stdout": "", "stderr": ""})()
-
-            with patch("gst_worker.translation.subprocess.run", side_effect=fake_run):
-                with self.assertRaises(RuntimeError):
-                    gst_translation.run_translation(
-                        {
-                            "subtitle_path": str(subtitle),
-                            "output_path": str(output),
-                            "target_code": "zh",
-                            "target_language": "Simplified Chinese",
-                        },
-                        "",
-                        {
-                            "gemini_api_key": "secret",
-                            "gst_batch_size": 500,
-                            "gst_retry_batch_size": 300,
-                        },
-                    )
-
-            self.assertEqual(len(commands), 1)
-            self.assertEqual(commands[0][commands[0].index("--batch-size") + 1], "300")
-
 

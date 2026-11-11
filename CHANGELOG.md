@@ -1,3 +1,23 @@
+# Unreleased
+- **P2: the worker now translates in-process with `subcore` instead of the `gst`
+  CLI.** `gemini-srt-translator` is no longer a dependency. Provider errors are
+  typed (daily quota, rate limit/overload, rejected key) rather than parsed from
+  CLI output. Calls are paced per API key (`LLM_RPM`, `LLM_TPM`, `LLM_RPD`;
+  default 10 RPM unless paid quota is enabled), `429`/`503` retry with backoff,
+  jitter and `retry-after`, a second API key takes over when the first is spent,
+  and a job has a 30 minute watchdog (`JOB_TIMEOUT_SECONDS`).
+  **Upgrade notes:** a failed translation now restarts from the beginning (no
+  `.partial`/`.progress` resume). The Settings options `gst_batch_size`,
+  `gst_retry_batch_size`, `gst_top_p`, `gst_top_k`, `gst_thinking_level`,
+  `gst_context_size` and the logging/streaming switches no longer have any effect.
+- New SQLite store `app.db` (in `DATA_DIR`, default the state volume) records
+  every published subtitle version and every model call. A result is reused
+  without a model call when the source, model, temperature and description are
+  unchanged. Every version has a copy in `backups/subtitles/`; a retranslate keeps
+  hand-edited files as backups first and a revert restores any version exactly.
+  Automatic jobs still never overwrite an existing target.
+- Removed `scripts/update_upstream.py`; Dependabot now watches `google-genai`.
+
 # 2026-11-12
 - `subcore` now detects a model that attaches translations to the wrong cue
   number (seen with `gemini-3.1-flash-lite`: all ids present, text shifted by

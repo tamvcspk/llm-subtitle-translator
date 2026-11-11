@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     labels:
       org.opencontainers.image.title: "Gemini SRT Translator for Bazarr"
-      org.opencontainers.image.description: "A Bazarr companion app that translates configured source subtitles with gemini-srt-translator."
+      org.opencontainers.image.description: "A Bazarr companion app that translates configured source subtitles with an in-process LLM engine (subcore)."
       org.opencontainers.image.licenses: "MIT"
     env_file:
       - path: .env
@@ -27,8 +27,10 @@ services:
       BAZARR_URL: ${BAZARR_URL:-http://bazarr:6767}
       BAZARR_API_KEY: ${BAZARR_API_KEY:-}
       GST_MODEL: ${GST_MODEL:-gemini-flash-latest}
-      GST_BATCH_SIZE: ${GST_BATCH_SIZE:-500}
-      GST_RETRY_BATCH_SIZE: ${GST_RETRY_BATCH_SIZE:-300}
+      LLM_RPM: ${LLM_RPM:-}
+      LLM_TPM: ${LLM_TPM:-}
+      LLM_RPD: ${LLM_RPD:-}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-1800}
       GST_TARGET_LANGUAGE: ${GST_TARGET_LANGUAGE:-Simplified Chinese}
       WORKER_SLEEP_SECONDS: ${WORKER_SLEEP_SECONDS:-15}
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-20}

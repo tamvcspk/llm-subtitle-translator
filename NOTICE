@@ -4,15 +4,11 @@ This project is an independent Bazarr companion application. It is not
 affiliated with, endorsed by, or maintained by Bazarr, Sonarr, Radarr, TMDB, or
 Google.
 
-Runtime translation is performed by the gemini-srt-translator package and its
-`gst` CLI:
-https://github.com/MaKTaiL/gemini-srt-translator
+Runtime translation is performed in-process by the `subcore` engine
+(packages/subcore). This repository does not depend on, vendor, or redistribute
+the gemini-srt-translator package (https://github.com/MaKTaiL/gemini-srt-translator).
 
-gemini-srt-translator is licensed separately by its upstream authors. This
-repository does not vendor or redistribute the upstream source code.
-
-The `subcore` engine (packages/subcore) adapts ideas and wording from
-gemini-srt-translator: the core translation rules in its system prompt and the
+`subcore` adapts ideas and wording from gemini-srt-translator: the core translation rules in its system prompt and the
 JSON item contract (one `{i, text}` object per subtitle cue). Those portions are
 derived from software under the MIT License:
 

@@ -26,7 +26,7 @@ The repo is a **uv workspace** (virtual root, one `uv.lock`): `apps/worker` (`ll
 uv run --locked python -m unittest discover -s apps/worker/tests -t apps/worker -v
 uv run --locked python -m unittest discover -s packages/subcore/tests -t packages/subcore -v
 uv run --locked python -m compileall -q -f apps/worker/worker.py apps/worker/gst_worker packages/subcore/src
-uv run --locked gst --help
+uv run --locked subcore --help
 ```
 
 Run one module or test by dotted name (from the member directory):
@@ -36,22 +36,20 @@ uv run --locked --directory apps/worker python -m unittest tests.test_worker_que
 uv run --locked --directory apps/worker python -m unittest tests.test_worker_queue.TestWorkerQueueTests.test_enqueue_translation_jobs_for_enabled_targets
 ```
 
-The Docker image installs only `llm-subtitle-worker` and keeps the old runtime layout (`/app/worker.py`, `/app/gst_worker`, `/app/static`). Every new workspace member needs its `pyproject.toml` copied in the `Dockerfile` before `uv sync --locked`.
+The Docker image installs only `llm-subtitle-worker` (which depends on `subcore`, so `packages/subcore/src` and its README are copied too) and keeps the old runtime layout (`/app/worker.py`, `/app/gst_worker`, `/app/static`). Every new workspace member needs its `pyproject.toml` copied in the `Dockerfile` before `uv sync --locked`.
 
 Local console preview on Windows: `scripts/start-local.ps1 [-Demo] [-NoWorker]` runs against an isolated `local-state/` directory instead of the Docker `/state` and `/queue` mounts. `-NoWorker` keeps the process from consuming queue jobs.
 
 `subcore` has a manual CLI for judging translation quality without the worker: `uv run subcore translate file.srt --glossary g.yaml` (key from `GEMINI_API_KEY`; `--provider fake` for a dry run).
 
-To bump the upstream `gemini-srt-translator` pin: `uv run python scripts/update_upstream.py`.
-
 ## Architecture
 
-Read `docs/ARCHITECTURE.md` before changing queue, translation, or Bazarr behavior; it is the source of truth for module responsibilities, queue layout, and job shape. Domain vocabulary (translation job, translation attempt, checkpoint, daily quota pause, queue lifecycle) is defined in `CONTEXT.md`; use those terms in code and reports. HTTP endpoints are in `docs/API.md`, settings in `docs/CONFIGURATION.md`.
+Read `docs/ARCHITECTURE.md` before changing queue, translation, or Bazarr behavior; it is the source of truth for module responsibilities, queue layout, and job shape. Domain vocabulary (translation job, translation attempt, translation version, daily quota pause, queue lifecycle) is defined in `CONTEXT.md`; use those terms in code and reports. HTTP endpoints are in `docs/API.md`, settings in `docs/CONFIGURATION.md`.
 
 The end-to-end flow spans three independent pieces:
 
 1. `bazarr-postprocess/gst_enqueue.sh` runs inside the Bazarr container, writes one queue JSON per missing target, and returns fast. It stays dependency-free and network-free; its embedded Python payload is tested against the worker's admission and retry protocol, so queue format changes must update both sides.
-2. `apps/worker/worker.py` + `gst_worker/` consume the queue one job at a time, call the `gst` CLI, write the target `.srt` beside the media, and ask Bazarr to rescan.
+2. `apps/worker/worker.py` + `gst_worker/` consume the queue one job at a time, translate in-process with `subcore`, write the target `.srt` beside the media, and ask Bazarr to rescan.
 3. `apps/worker/static/` is a dependency-free web console that talks only to the worker's own API.
 
 `packages/subcore` must stay free of Bazarr, queue, and HTTP knowledge (ADR-2); the worker depends on it, never the reverse. Roadmap phases (P0, P0b, P1–P5), their checklists, and status are in `PLAN.md`; tick items there as work lands.
@@ -60,7 +58,8 @@ Seams to respect when adding code:
 
 - `RuntimeContext` (`gst_worker/runtime.py`) is the composition seam for the running process. New runtime wiring depends on its typed fields; the legacy module-level functions are compatibility entry points for older callers and tests.
 - `queue_policy.py` holds pure retry/quota decisions; filesystem moves stay in `queue.py` (`JobQueue`). The HTTP layer reaches the queue only through `ConsoleActions`.
-- Queue snapshots read translation progress through `TranslationAttempt`; translator work-file and checkpoint details stay in `translation.py`. A checkpoint alone does not imply resumability: partial output must also exist.
+- `TranslationAttempt` (`translation_attempt.py`) is the only place that calls `subcore` and maps its typed provider errors (`QuotaExhausted`, `RateLimited`/`Unavailable`, ...) to the queue's `DailyQuotaExceededError` / `ProviderUnavailableError`; never classify failures by parsing error text. Progress reaches the queue through the status callback (`progress_done`/`progress_total`).
+- Target subtitles are published only through `TranslationVersions` (`versions.py`), which records each version in the SQLite `Store` and keeps a copy under `DATA_DIR/backups/subtitles/`. An automatic job never overwrites an existing target; retranslate and revert back up a non-system file first.
 - Queue recovery runs explicitly at worker startup; creating a `JobQueue` handle must not recover in-flight work.
 
 Invariants:
