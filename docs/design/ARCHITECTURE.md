@@ -55,6 +55,7 @@ llm-subtitle-translator/            # fork
 - Cắt part dùng ước lượng token offline (không gọi count_tokens để khỏi tốn quota); `MAX_TOKENS` trả về phần đã có để repair/split phần thiếu.
 - Chia nhỏ sau khi repair hỏng: một cấp, số part = max(2, 2× số part đang dùng), có thể nhỏ hơn 100 cue.
 - Lỗi provider (`RateLimited`…) chỉ được ném ra khỏi `translate()`; backoff/limiter là việc của P2.
+- **Phát hiện lệch cue** (`translate/alignment.py`): model yếu có thể trả đủ mọi `i` nhưng gán sai văn bản (lệch 2–4 cue kéo dài hàng trăm cue; thấy ở `gemini-3.1-flash-lite`). Hai tín hiệu không phụ thuộc ngôn ngữ: (1) *anchor* — nhóm chữ số và tên riêng viết hoa giữa câu của source phải có trong bản dịch, và nếu chỉ thấy ở cue lân cận thì cue bị coi là lệch; (2) tương quan độ dài source–bản dịch trong cửa sổ trượt 20 cue, nếu dịch đi k cue cho tương quan tốt hơn hẳn thì cửa sổ lệch. Vùng lệch được gửi lại qua đúng vòng repair thông thường; nếu vẫn còn lệch thì chỉ cảnh báo, **không** fail job (heuristic). Giới hạn đã biết: đoạn lệch ngắn (~10 cue cuối file) không có anchor và không đủ cửa sổ thì không bắt được.
 
 **Vì sao một repo thay vì "monorepo chứa 2 repo clone + set upstream":**
 - Sau ADR-1 chỉ còn **một** upstream có ý nghĩa (worker Bazarr). gst chỉ là nguồn tham khảo.

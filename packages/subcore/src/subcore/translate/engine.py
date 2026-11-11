@@ -12,7 +12,7 @@ from typing import Callable
 
 from .. import srt
 from ..providers.base import BadOutput, LLMRequest, Provider
-from . import planner
+from . import alignment, planner
 from .prompt import RESPONSE_SCHEMA, PromptContext, build_system, build_user
 from .validate import check_cue, parse_reply
 
@@ -151,10 +151,23 @@ class _Run:
         failing = self._apply(ids, reply, candidates)
 
         for _ in range(self.options.repair_rounds):
+            for n, why in alignment.find_misaligned(ids, self.source, self.out).items():
+                failing.setdefault(n, why)
             if not failing:
                 return
             reply = self._call("repair", sorted(failing), self._window(sorted(failing)), failing)
             failing = self._apply(sorted(failing), reply, candidates)
+
+        # Drift is a heuristic, never a failure: cues that already hold a (possibly shifted)
+        # translation stay, with a warning for the reviewer.
+        for n in [n for n in failing if n in self.out and n not in candidates]:
+            del failing[n]
+        drifting = sorted(alignment.find_misaligned(ids, self.source, self.out))
+        if drifting:
+            self.warnings.append(
+                f"{len(drifting)} cue(s) (cue {drifting[0]} to {drifting[-1]}) may carry the "
+                "translation of a neighbouring cue; review them"
+            )
 
         if not failing:
             return

@@ -1,3 +1,12 @@
+# 2026-11-12
+- `subcore` now detects a model that attaches translations to the wrong cue
+  number (seen with `gemini-3.1-flash-lite`: all ids present, text shifted by
+  2–4 cues for hundreds of cues). Digit/name anchors and a sliding length
+  profile flag the shifted region, which is re-requested through the normal
+  repair rounds; a drift that survives them only adds a warning.
+- `subcore` default Gemini model is `gemini-3.5-flash` (`gemini-2.5-flash` is
+  closed to new API users).
+
 # 2026-11-11
 - Added mandatory HTTP Basic Auth for the web console and API (P0b, NFR-5).
   Set `CONSOLE_USER` and `CONSOLE_PASSWORD`; requests without matching

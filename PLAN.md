@@ -63,7 +63,8 @@ Tiêu chí 3, 4, 5. ADR-1, ADR-3; ARCHITECTURE §3.3.
 - [x] `subcore.glossary`: YAML load/merge/validate (FR-4.1–4.3), term `locked`, `address_rules` có hiệu lực theo tập/timecode.
 - [x] `subcore.cli`: `subcore translate file.srt --glossary g.yaml [--target vi]`.
 - [x] Test: tiêu chí 3 (50 file SRT **tổng hợp** sinh theo seed), 4 (thiếu 3 cue → đúng 1 lời gọi repair với 3 cue đó), 5 (term `locked` luôn đúng).
-- [ ] Chạy thử CLI với Gemini thật trên vài file thật + glossary thật để đánh giá chất lượng (cần `GEMINI_API_KEY`).
+- [~] Chạy thử CLI với Gemini thật (2026-11-11): Malcolm in the Middle S01E01 (531 cue, glossary 6 nhân vật + 5 address_rules + 1 term locked) → 1 lời gọi, 531/531 cue, timecode giữ nguyên, term locked đúng, chất lượng đọc được. Phát hiện: `gemini-2.5-flash` đã đóng với key mới (đổi mặc định sang `gemini-3.5-flash`); `gemini-3.7/3.8-flash` timeout; `gemini-3.5-flash` hay trả 503 "high demand" — CLI chưa retry (dành cho P2: backoff). Còn thiếu: thử thêm 1–2 series/ngôn ngữ khác.
+- [x] Phát hiện model gán sai văn bản cho cue (lệch số cue) bằng anchor + tương quan độ dài, vùng lệch đi qua repair (`translate/alignment.py`, `tests/test_alignment.py`). Phát hiện khi thử Brooklyn Nine-Nine S01E01 bằng `gemini-3.1-flash-lite` (2026-11-12); trên 4 bản dịch tốt (flash + lite) không báo nhầm.
 - [ ] Tiêu chí 3 trên 50 file SRT **thực tế** (cần chọn bộ file có thể giữ ngoài repo hoặc commit được); hiện mới có corpus tổng hợp.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P1.
 
