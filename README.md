@@ -96,6 +96,8 @@ docker run -d \
   --name gemini-srt-translator-bazarr \
   --restart unless-stopped \
   -p 6789:6789 \
+  -e CONSOLE_USER=admin \
+  -e CONSOLE_PASSWORD='choose-a-password' \
   -v /mnt/data:/media \
   -v /opt/docker/bazarr/config:/bazarr-config:ro \
   -v /opt/docker/bazarr/postprocess:/bazarr-postprocess \
@@ -107,8 +109,11 @@ docker run -d \
 The container already defaults to `/state`, `/queue`,
 `/bazarr-postprocess/targets.json`, and web port `6789`, so the direct
 `docker run` form only needs the host paths and public settings.
-Open `http://<docker-host>:6789/` and enter the Bazarr, Gemini, and TMDB
-settings in the web console.
+The console requires a login (`CONSOLE_USER` / `CONSOLE_PASSWORD`, HTTP Basic
+Auth); without them it answers `503` while the queue worker keeps running. See
+[Console Authentication](docs/CONFIGURATION.md#console-authentication).
+Open `http://<docker-host>:6789/`, sign in, and enter the Bazarr, Gemini, and
+TMDB settings in the web console.
 
 If you prefer to seed values from a file, create
 `/opt/docker/gemini-srt-translator-bazarr/.env` first, then add this option to
@@ -178,7 +183,8 @@ docker compose up -d
 For a local source build instead of the published GHCR image, run
 `docker compose up -d --build`.
 
-Open the console:
+Set `CONSOLE_USER` and `CONSOLE_PASSWORD` in `.env` first (the console is
+locked until you do), then open the console:
 
 ```text
 http://<docker-host>:6789/

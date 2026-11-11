@@ -6,6 +6,9 @@ Copy `.env.example` to `.env` and edit values for your host.
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
+| `CONSOLE_USER` | Yes | empty | Username for the web console and API (HTTP Basic Auth). |
+| `CONSOLE_PASSWORD` | Yes | empty | Password for the web console and API. Read from the environment only; never stored in `config.json`, never returned by the API. |
+| `CONSOLE_AUTH` | No | empty | Set to `off` to disable authentication. Any other value keeps it on. |
 | `GEMINI_API_KEY` | No | empty | Primary Gemini API key used by `gemini-srt-translator`; can also be set in the web console. |
 | `GEMINI_API_KEY1` | No | empty | Alias for the primary Gemini key. |
 | `GEMINI_API_KEY2` | No | empty | Optional second key passed through to `gemini-srt-translator`. |
@@ -24,6 +27,26 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `GST_TARGET_LANGUAGE` | No | `Simplified Chinese` | Legacy fallback when a job has no target language. |
 | `WORKER_SLEEP_SECONDS` | No | `15` | Delay between queue polling cycles. |
 | `HTTP_TIMEOUT_SECONDS` | No | `20` | Timeout for Bazarr and TMDB HTTP calls. |
+
+## Console Authentication
+
+Every request to the web console (static files and `/api/*`, all methods) needs
+HTTP Basic Auth. There are no exempt paths.
+
+- `CONSOLE_USER` and `CONSOLE_PASSWORD` both set: requests without the matching
+  `Authorization` header get `401` with `WWW-Authenticate: Basic`. Browsers
+  remember the login, so the console has no separate login page; scripts send
+  the header (`curl -u user:password ...`).
+- Either one missing (and no `CONSOLE_AUTH=off`): the console and API answer
+  `503` with instructions. The queue worker keeps processing jobs, and an error
+  is logged at every start.
+- `CONSOLE_AUTH=off`: no authentication, with a warning logged at every start.
+  Use only on a trusted network.
+
+Credentials are compared in constant time and are never logged. The Bazarr
+post-processing script only writes queue files and does not call the HTTP API,
+so it needs no credentials. Basic Auth is not encrypted; keep the port on the
+LAN or place a TLS reverse proxy in front.
 
 The Docker web port is fixed as `6789:6789` in `docker-compose.yml` so the
 container listen port and host port stay aligned.
@@ -57,6 +80,8 @@ docker run -d \
   --name gemini-srt-translator-bazarr \
   --restart unless-stopped \
   -p 6789:6789 \
+  -e CONSOLE_USER=admin \
+  -e CONSOLE_PASSWORD='choose-a-password' \
   -v /mnt/data:/media \
   -v /opt/docker/bazarr/config:/bazarr-config:ro \
   -v /opt/docker/bazarr/postprocess:/bazarr-postprocess \

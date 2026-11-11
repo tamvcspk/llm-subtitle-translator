@@ -47,6 +47,9 @@ $env:LOG_DIR = Join-Path $stateDir 'logs'
 $env:APP_CONFIG_PATH = Join-Path $stateDir 'config.json'
 $env:POSTPROCESS_TARGETS_PATH = Join-Path $postprocessDir 'targets.json'
 $env:TMDB_CACHE_PATH = Join-Path $stateDir 'cache\tmdb_cache.json'
+# The console requires Basic Auth. Local preview binds to 127.0.0.1, so skip auth
+# unless CONSOLE_USER / CONSOLE_PASSWORD are already set in this shell.
+if (-not ($env:CONSOLE_USER -and $env:CONSOLE_PASSWORD)) { $env:CONSOLE_AUTH = 'off' }
 $appRoot = Join-Path $projectRoot 'apps\worker'
 $env:STATIC_DIR = Join-Path $appRoot 'static'
 

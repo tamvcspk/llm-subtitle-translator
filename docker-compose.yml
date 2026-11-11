@@ -21,6 +21,9 @@ services:
       GEMINI_API_KEY1: ${GEMINI_API_KEY1:-}
       GEMINI_API_KEY2: ${GEMINI_API_KEY2:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      CONSOLE_USER: ${CONSOLE_USER:-}
+      CONSOLE_PASSWORD: ${CONSOLE_PASSWORD:-}
+      CONSOLE_AUTH: ${CONSOLE_AUTH:-}
       BAZARR_URL: ${BAZARR_URL:-http://bazarr:6767}
       BAZARR_API_KEY: ${BAZARR_API_KEY:-}
       GST_MODEL: ${GST_MODEL:-gemini-flash-latest}

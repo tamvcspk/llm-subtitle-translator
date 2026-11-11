@@ -1,8 +1,24 @@
 # HTTP API
 
 The web console uses these endpoints. They are intentionally small and local to
-the worker; do not expose them directly to the internet without authentication
-or a trusted reverse proxy.
+the worker; do not expose them directly to the internet without a trusted
+reverse proxy that adds TLS.
+
+## Authentication
+
+Every endpoint, and every static file, requires HTTP Basic Auth
+(`Authorization: Basic base64(user:password)`) using `CONSOLE_USER` and
+`CONSOLE_PASSWORD`. See [CONFIGURATION.md](CONFIGURATION.md#console-authentication).
+
+| Situation | Response |
+| --- | --- |
+| Missing or wrong credentials | `401` `{"error": "authentication required"}` with `WWW-Authenticate: Basic realm="LLM Subtitle Translator"` |
+| `CONSOLE_USER` / `CONSOLE_PASSWORD` not configured | `503` `{"error": "..."}` with setup instructions |
+| `CONSOLE_AUTH=off` | No check |
+
+```bash
+curl -u "$CONSOLE_USER:$CONSOLE_PASSWORD" http://<host>:6789/api/status
+```
 
 ## GET /api/status
 

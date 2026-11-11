@@ -1,4 +1,18 @@
 # 2026-11-11
+- Added mandatory HTTP Basic Auth for the web console and API (P0b, NFR-5).
+  Set `CONSOLE_USER` and `CONSOLE_PASSWORD`; requests without matching
+  credentials get `401`, and with credentials unset the console answers `503`
+  with instructions while the queue worker keeps running. `CONSOLE_AUTH=off`
+  opts out (warning logged at start). **Upgrade note:** existing deployments
+  must add the two variables or the console stays locked.
+- Added the `subcore` engine (P1, library + CLI only; the worker still runs `gst`):
+  SRT parsing/validation/atomic write, a typed-error provider layer (Gemini via
+  google-genai, plus a network-free fake), a translator that plans parts at
+  silences, sends `{i, text}` only (never timecodes), and repairs just the
+  invalid cues (2 rounds, then split), and YAML glossaries with locked terms and
+  timed address rules. `subcore translate file.srt --glossary g.yaml` translates
+  by hand. NOTICE now carries the MIT attribution for the prompt rules adapted
+  from gemini-srt-translator.
 - Converted the repository to a uv workspace (P0, no behavior change): the
   worker moved to `apps/worker/` (`llm-subtitle-worker`), a new `subcore`
   engine skeleton lives in `packages/subcore/`. The Docker image installs only

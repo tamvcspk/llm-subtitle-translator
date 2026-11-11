@@ -40,6 +40,8 @@ The Docker image installs only `llm-subtitle-worker` and keeps the old runtime l
 
 Local console preview on Windows: `scripts/start-local.ps1 [-Demo] [-NoWorker]` runs against an isolated `local-state/` directory instead of the Docker `/state` and `/queue` mounts. `-NoWorker` keeps the process from consuming queue jobs.
 
+`subcore` has a manual CLI for judging translation quality without the worker: `uv run subcore translate file.srt --glossary g.yaml` (key from `GEMINI_API_KEY`; `--provider fake` for a dry run).
+
 To bump the upstream `gemini-srt-translator` pin: `uv run python scripts/update_upstream.py`.
 
 ## Architecture
@@ -52,7 +54,7 @@ The end-to-end flow spans three independent pieces:
 2. `apps/worker/worker.py` + `gst_worker/` consume the queue one job at a time, call the `gst` CLI, write the target `.srt` beside the media, and ask Bazarr to rescan.
 3. `apps/worker/static/` is a dependency-free web console that talks only to the worker's own API.
 
-`packages/subcore` must stay free of Bazarr, queue, and HTTP knowledge (ADR-2); the worker depends on it, never the reverse. Roadmap phases (P0–P5) are in `docs/design/ARCHITECTURE.md` §7.
+`packages/subcore` must stay free of Bazarr, queue, and HTTP knowledge (ADR-2); the worker depends on it, never the reverse. Roadmap phases (P0, P0b, P1–P5), their checklists, and status are in `PLAN.md`; tick items there as work lands.
 
 Seams to respect when adding code:
 
@@ -65,4 +67,5 @@ Invariants:
 
 - An existing target subtitle is never overwritten.
 - Gemini, TMDB, and Bazarr API keys are never logged or returned unmasked.
+- Every HTTP request (static and `/api/*`) passes Basic Auth in `ConsoleHandler.parse_request` before routing (`gst_worker/auth.py`). Credentials come from `CONSOLE_USER`/`CONSOLE_PASSWORD` env only and are never logged, stored in config, or exposed through `RuntimeContext`; `CONSOLE_AUTH=off` is the only opt-out.
 - Bazarr and the worker must see identical media paths (`/media/...`).

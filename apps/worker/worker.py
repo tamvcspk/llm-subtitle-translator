@@ -22,6 +22,8 @@ from gst_worker.backups import (
     purge_old_backups,
     restore_backup_archive,
 )
+from gst_worker import auth as console_auth
+from gst_worker.auth import ConsoleAuth
 from gst_worker.bazarr import BazarrIntegration, list_wanted_items, read_bazarr_api_key, refresh_bazarr
 from gst_worker.config import (
     SECRET_MASK,
@@ -256,10 +258,33 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def ctx(self) -> dict[str, Any]:
         return self.server.ctx  # type: ignore[attr-defined]
 
-    def send_json(self, payload: Any, status: int = 200) -> None:
+    def parse_request(self) -> bool:
+        """Authenticate before any route runs (static, /api/*, any method; NFR-5)."""
+        if not super().parse_request():
+            return False
+        auth = getattr(self.server, "auth", None)
+        # No auth handle on the server means a wiring mistake: fail closed.
+        decision = auth.check(self.headers.get("Authorization")) if auth is not None else console_auth.UNCONFIGURED
+        if decision == console_auth.ALLOW:
+            return True
+        # The request body is left unread, so the connection cannot be reused.
+        self.close_connection = True
+        if decision == console_auth.UNCONFIGURED:
+            self.send_error_json(console_auth.UNCONFIGURED_MESSAGE, status=503)
+        else:
+            self.send_json(
+                {"error": "authentication required"},
+                status=401,
+                headers={"WWW-Authenticate": f'Basic realm="{console_auth.REALM}", charset="UTF-8"'},
+            )
+        return False
+
+    def send_json(self, payload: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -482,9 +507,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def start_web_server(ctx: dict[str, Any], host: str, port: int) -> None:
+def start_web_server(ctx: dict[str, Any], host: str, port: int, auth: ConsoleAuth) -> None:
     server = ThreadingHTTPServer((host, port), ConsoleHandler)
     server.ctx = ctx  # type: ignore[attr-defined]
+    server.auth = auth  # type: ignore[attr-defined]
+    auth.log_startup()
     logging.info("Gemini SRT Translator for Bazarr listening on http://%s:%s", host, port)
     server.serve_forever()
 
@@ -551,7 +578,7 @@ def main() -> int:
     ).as_handler_context()
     if not args.no_worker:
         threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()
-    start_web_server(ctx, args.host, args.port)
+    start_web_server(ctx, args.host, args.port, ConsoleAuth.from_env(os.environ))
     return 0
 
 
