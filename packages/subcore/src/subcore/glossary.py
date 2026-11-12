@@ -11,6 +11,8 @@ Schema (all sections optional)::
         aliases: [Kyber crystals]     # extra source spellings
         locked: true                  # output MUST contain `target` for cues containing `source`
         note: "object"
+        from: "S01E03"                # optional window (episode granularity), like address rules
+        until: "S02E01"
     characters:
       - name: Alice
         target: Alice
@@ -34,7 +36,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +107,9 @@ class Term:
     aliases: tuple[str, ...] = ()
     locked: bool = False
     note: str = ""
+    # Story-order window in which the term applies (episode granularity; FR-11.2.3).
+    start: Position | None = None
+    until: Position | None = None
 
     @property
     def sources(self) -> tuple[str, ...]:
@@ -156,6 +161,35 @@ class Glossary:
 
     def locked_terms(self) -> list[Term]:
         return [t for t in self.terms if t.locked]
+
+    def for_episode(self, season: int | None, episode: int | None) -> "Glossary":
+        """The glossary as it applies to one episode: terms outside their window are dropped.
+
+        Address rules keep their windows (they resolve to cue ranges at prompt time). With an
+        unknown episode every term applies.
+        """
+        if season is None or episode is None:
+            return self
+        ep_start = Position(season, episode, 0)
+        ep_end = Position(season, episode, _END_OF_EPISODE)
+        terms = tuple(
+            t
+            for t in self.terms
+            if not (t.start is not None and t.start >= ep_end) and not (t.until is not None and t.until <= ep_start)
+        )
+        return replace(self, terms=terms)
+
+    def with_term(self, term: Term) -> "Glossary":
+        """Add ``term``, replacing an entry with the same source and start."""
+        key = (term.source.casefold(), str(term.start or ""))
+        kept = tuple(t for t in self.terms if (t.source.casefold(), str(t.start or "")) != key)
+        return replace(self, terms=(*kept, term))
+
+    def with_address_rule(self, rule: AddressRule) -> "Glossary":
+        """Add ``rule``, replacing an entry for the same pair and start."""
+        key = (rule.a.casefold(), rule.b.casefold(), str(rule.start or ""))
+        kept = tuple(r for r in self.address_rules if (r.a.casefold(), r.b.casefold(), str(r.start or "")) != key)
+        return replace(self, address_rules=(*kept, rule))
 
     def active_address_rules(
         self, season: int | None, episode: int | None, cues: list[srt.Cue] | None = None
@@ -241,6 +275,10 @@ def loads(text: str) -> Glossary:
         locked = entry.get("locked", False)
         if not isinstance(locked, bool):
             raise GlossaryError(f"{where}.locked: expected true/false")
+        start = Position.parse(entry["from"], f"{where}.from") if entry.get("from") is not None else None
+        until = Position.parse(entry["until"], f"{where}.until") if entry.get("until") is not None else None
+        if start and until and until <= start:
+            raise GlossaryError(f"{where}: 'until' ({until}) must be after 'from' ({start})")
         terms.append(
             Term(
                 source=_need_str(entry, "source", where),
@@ -248,6 +286,8 @@ def loads(text: str) -> Glossary:
                 aliases=tuple(a.strip() for a in aliases),
                 locked=locked,
                 note=_need_str(entry, "note", where, required=False),
+                start=start,
+                until=until,
             )
         )
 
@@ -316,6 +356,10 @@ def dumps(glossary: Glossary) -> str:
                 item["locked"] = True
             if t.note:
                 item["note"] = t.note
+            if t.start:
+                item["from"] = str(t.start)
+            if t.until:
+                item["until"] = str(t.until)
             data["terms"].append(item)
     if glossary.characters:
         data["characters"] = [
@@ -343,11 +387,11 @@ def dumps(glossary: Glossary) -> str:
 def merge(*glossaries: Glossary) -> Glossary:
     """Combine glossaries; later ones win on conflicts.
 
-    Terms merge by case-insensitive ``source``, characters by ``name``, address rules by
+    Terms merge by case-insensitive ``(source, from)``, characters by ``name``, address rules by
     ``(a, b, from)``. A non-empty ``style``/``target_lang`` from a later glossary replaces
     the earlier one.
     """
-    terms: dict[str, Term] = {}
+    terms: dict[tuple[str, str], Term] = {}
     characters: dict[str, Character] = {}
     rules: dict[tuple[str, str, str], AddressRule] = {}
     style = target_lang = ""
@@ -355,7 +399,7 @@ def merge(*glossaries: Glossary) -> Glossary:
         style = g.style or style
         target_lang = g.target_lang or target_lang
         for t in g.terms:
-            terms[t.source.casefold()] = t
+            terms[(t.source.casefold(), str(t.start or ""))] = t
         for c in g.characters:
             characters[c.name.casefold()] = c
         for r in g.address_rules:

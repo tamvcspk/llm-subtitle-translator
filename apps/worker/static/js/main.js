@@ -9,17 +9,20 @@ import { scanView, wantedView } from "./views/candidates.js";
 import settings from "./views/settings.js";
 import system from "./views/system.js";
 import logs from "./views/logs.js";
+import library from "./views/library.js";
+import episode from "./views/episode.js";
+import glossary from "./views/glossary.js";
 
-const VIEWS = { dashboard, queue, wanted: wantedView, scan: scanView, settings, system, logs };
+const VIEWS = { dashboard, queue, library, episode, glossary, wanted: wantedView, scan: scanView, settings, system, logs };
 const POLL_MS = 5000;
 
 const initialized = new Set();
 let currentView = null;
 
-/** "#queue/failed" → { view: "queue", param: "failed" } */
+/** "#queue/failed" → { view: "queue", param: "failed" }; "#episode/34/vi" → param "34/vi" */
 function viewFromHash() {
-  const [view, param] = window.location.hash.slice(1).split("/");
-  return Object.hasOwn(VIEWS, view) ? { view, param } : { view: "dashboard" };
+  const [view, ...rest] = window.location.hash.slice(1).split("/");
+  return Object.hasOwn(VIEWS, view) ? { view, param: rest.join("/") } : { view: "dashboard" };
 }
 
 async function switchView({ view, param }) {
@@ -28,8 +31,10 @@ async function switchView({ view, param }) {
   currentView = view;
 
   document.querySelectorAll(".view").forEach((el) => { el.hidden = el.dataset.view !== view; });
+  // Detail pages (episode, glossary) have no nav item of their own and light up their parent.
+  const navView = def.nav || view;
   document.querySelectorAll(".nav-item").forEach((el) => {
-    if (el.dataset.view === view) el.setAttribute("aria-current", "page");
+    if (el.dataset.view === navView) el.setAttribute("aria-current", "page");
     else el.removeAttribute("aria-current");
   });
   document.getElementById("view-title").textContent = def.title;

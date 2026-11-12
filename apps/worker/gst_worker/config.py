@@ -24,24 +24,17 @@ GEMINI_LANGUAGE_NAMES = {
 }
 SECRET_MASK = "**********"
 SECRET_CONFIG_KEYS = ("bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key")
+# Settings the in-process engine reads. Options of the old `gst` CLI (batch sizes, top_p/top_k, thinking
+# level, streaming, context size, logging switches) were dropped in P3: they changed nothing.
 GST_BOOL_CONFIG_KEYS = (
     "gst_paid_quota",
-    "gst_skip_upgrade",
-    "gst_quiet",
-    "gst_progress_log",
-    "gst_thoughts_log",
-    "gst_token_report",
-    "gst_no_streaming",
     "gst_no_thinking",
 )
 GST_STRING_CONFIG_KEYS = (
     "gst_model",
     "gst_fallback_model",
     "gst_temperature",
-    "gst_top_p",
-    "gst_top_k",
     "gst_thinking_budget",
-    "gst_thinking_level",
 )
 DEFAULT_APP_CONFIG = {
     "source_languages": DEFAULT_SOURCE_LANGUAGES,
@@ -55,22 +48,10 @@ DEFAULT_APP_CONFIG = {
     "tmdb_api_key": "",
     "gst_model": "gemini-flash-latest",
     "gst_fallback_model": "",
-    "gst_batch_size": 500,
-    "gst_retry_batch_size": 300,
     "gst_paid_quota": False,
-    "gst_skip_upgrade": True,
-    "gst_quiet": True,
-    "gst_progress_log": False,
-    "gst_thoughts_log": False,
-    "gst_token_report": False,
     "gst_temperature": "0.7",
-    "gst_top_p": "0.95",
-    "gst_top_k": "40",
     "gst_thinking_budget": "2048",
-    "gst_thinking_level": "medium",
-    "gst_no_streaming": True,
     "gst_no_thinking": False,
-    "gst_context_size": 50,
     "job_settle_seconds": 600,
 }
 
@@ -127,22 +108,8 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
         normalized["gst_model"] = str(DEFAULT_APP_CONFIG["gst_model"])
     if normalized["gst_fallback_model"] == normalized["gst_model"]:
         normalized["gst_fallback_model"] = ""
-    if normalized["gst_thinking_level"] not in {"", "minimal", "low", "medium", "high"}:
-        normalized["gst_thinking_level"] = ""
     for key in GST_BOOL_CONFIG_KEYS:
         normalized[key] = bool(normalized.get(key))
-    try:
-        normalized["gst_batch_size"] = max(1, int(normalized.get("gst_batch_size", 500)))
-    except (TypeError, ValueError):
-        normalized["gst_batch_size"] = 500
-    try:
-        normalized["gst_retry_batch_size"] = max(0, int(normalized.get("gst_retry_batch_size", 300)))
-    except (TypeError, ValueError):
-        normalized["gst_retry_batch_size"] = 300
-    try:
-        normalized["gst_context_size"] = max(0, int(normalized.get("gst_context_size", 50)))
-    except (TypeError, ValueError):
-        normalized["gst_context_size"] = 50
     try:
         normalized["job_settle_seconds"] = max(0, int(normalized.get("job_settle_seconds", 600)))
     except (TypeError, ValueError):

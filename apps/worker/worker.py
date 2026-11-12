@@ -45,10 +45,14 @@ from gst_worker.queue import (
     should_skip_job,
     sync_daily_quota_pause,
 )
+from gst_worker import library_api
 from gst_worker.console import ConsoleActions
+from gst_worker.glossaries import GlossaryFiles
+from gst_worker.library import Library, enrich_job_identity
 from gst_worker.queue_policy import configured_models
 from gst_worker.store import Store
 from gst_worker.translation_attempt import DEFAULT_ATTEMPT, TranslationAttempt
+from gst_worker.units import UnitService
 from gst_worker.versions import TranslationVersions
 from gst_worker.subtitles import scan_source_subtitles
 from gst_worker.runtime import RuntimeContext
@@ -82,15 +86,11 @@ def load_settings(config_path: str | None = None) -> dict[str, Any]:
         settings[key] = str(app_config.get(key) or "").strip()
     for key in GST_BOOL_CONFIG_KEYS:
         settings[key] = bool(app_config.get(key))
-    settings["gst_batch_size"] = int(app_config.get("gst_batch_size") or 500)
-    settings["gst_retry_batch_size"] = int(app_config.get("gst_retry_batch_size", 300))
     settings["gst_model"] = str(app_config.get("gst_model") or os.getenv("GST_MODEL", "gemini-flash-latest"))
     settings["job_settle_seconds"] = int(app_config.get("job_settle_seconds") or 0)
     for key in ("llm_rpm", "llm_tpm", "llm_rpd"):
         if os.getenv(key.upper(), "").strip():
             settings[key] = os.getenv(key.upper(), "").strip()
-    if os.getenv("GST_BATCH_SIZE") and not app_config.get("gst_batch_size"):
-        settings["gst_batch_size"] = int(os.getenv("GST_BATCH_SIZE", "500"))
     return settings
 
 
@@ -149,6 +149,8 @@ def process_job(
 
     if status_callback:
         status_callback("Resolving movie details")
+    if not job.get("unit_id"):
+        enrich_job_identity(job, http, settings["bazarr_url"], settings["bazarr_api_key"])
     description = build_tmdb_description(
         job,
         bazarr=http,
@@ -312,9 +314,22 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def send_error_json(self, message: str, status: int = 400) -> None:
         self.send_json({"error": message}, status=status)
 
+    def library_api(self, method: str, parsed: urllib.parse.ParseResult, body: dict[str, Any] | None = None) -> bool:
+        """Serve the library/episode/glossary routes; False when the path is not one of them."""
+        service = self.ctx.get("units")
+        if service is None or not library_api.handles(parsed.path):
+            return False
+        result = library_api.handle(service, method, parsed.path, urllib.parse.parse_qs(parsed.query), body)
+        if result is None:
+            return False
+        self.send_json(result[1], status=result[0])
+        return True
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         try:
+            if self.library_api("GET", parsed):
+                return
             if parsed.path == "/api/status":
                 self.send_json(self.api_status())
             elif parsed.path == "/api/queue":
@@ -393,6 +408,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 return
 
             body = read_json_body(self)
+            if self.library_api("POST", parsed, body):
+                return
             if parsed.path == "/api/settings":
                 saved = save_app_config(self.ctx["config_path"], body, self.ctx["postprocess_targets_path"])
                 settings = load_settings(self.ctx["config_path"])
@@ -477,6 +494,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self.send_error_json(str(exc), status=400)
         except Exception as exc:
             logging.exception("POST %s failed", self.path)
+            self.send_error_json(str(exc), status=500)
+
+    def do_PUT(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        try:
+            if not self.library_api("PUT", parsed, read_json_body(self)):
+                self.send_error_json("not found", status=404)
+        except ValueError as exc:
+            self.send_error_json(str(exc), status=400)
+        except Exception as exc:
+            logging.exception("PUT %s failed", self.path)
             self.send_error_json(str(exc), status=500)
 
     def api_status(self) -> dict[str, Any]:
@@ -565,9 +593,13 @@ def main() -> int:
     http = HTTPClient(timeout=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")))
     data_dir = os.getenv("DATA_DIR", state_dir)
     store = Store(os.getenv("DB_PATH", f"{data_dir}/app.db"))
-    attempt = TranslationAttempt(versions=TranslationVersions(store, f"{data_dir}/backups/subtitles"))
+    versions = TranslationVersions(store, f"{data_dir}/backups/subtitles")
+    glossaries = GlossaryFiles(data_dir)
+    library = Library(store, glossaries, versions)
+    attempt = TranslationAttempt(versions=versions, library=library)
     worker = QueueWorker(queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt)
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
+    units = UnitService(library, glossaries, versions, queue_dir, refresh_bazarr=bazarr.refresh)
     backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path)
 
     try:
@@ -599,6 +631,7 @@ def main() -> int:
             bazarr=bazarr,
             backups=backups,
             transport=HTTPTransport(http),
+            units=units,
         ).as_handler_context()
         if not args.no_worker:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()

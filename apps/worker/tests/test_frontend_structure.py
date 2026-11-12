@@ -38,8 +38,8 @@ class FrontendStructureTests(unittest.TestCase):
         pairs = re.findall(r'class="nav-item" href="#(\w+)" data-view="(\w+)"', html)
         self.assertTrue(all(href == view for href, view in pairs))
         views = {view for _, view in pairs}
-        self.assertEqual(views, {"dashboard", "queue", "wanted", "scan", "settings", "system", "logs"})
-        for view in views:
+        self.assertEqual(views, {"dashboard", "queue", "library", "wanted", "scan", "settings", "system", "logs"})
+        for view in views | {"episode", "glossary"}:  # detail pages have no nav item of their own
             self.assertIn(f'id="view-{view}" class="view" data-view="{view}"', html)
 
     def test_backups_live_under_system_view(self):
@@ -63,19 +63,38 @@ class FrontendStructureTests(unittest.TestCase):
         settings = view_section(read_html(), "settings")
         names = set(re.findall(r'name="(\w+)"', settings))
 
+        # Only settings the in-process engine reads are offered (P3 dropped the old `gst` CLI options).
         self.assertEqual(names, {
             "bazarr_url", "bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key",
-            "gst_model", "gst_fallback_model", "gst_batch_size", "gst_retry_batch_size", "job_settle_seconds",
-            "gst_paid_quota", "gst_skip_upgrade", "gst_quiet", "gst_progress_log", "gst_thoughts_log",
-            "gst_token_report", "gst_temperature", "gst_top_p", "gst_top_k", "gst_context_size",
-            "gst_thinking_budget", "gst_thinking_level", "gst_no_streaming", "gst_no_thinking",
+            "gst_model", "gst_fallback_model", "job_settle_seconds", "gst_paid_quota",
+            "gst_temperature", "gst_thinking_budget", "gst_no_thinking",
             "media_roots", "scan_limit",
         })
         self.assertIn('<select id="f-gst_model" name="gst_model"', settings)
         self.assertIn('<select id="f-gst_fallback_model" name="gst_fallback_model"', settings)
-        self.assertIn("Token report", settings)
         self.assertNotIn("gst_token_stats", settings + read_scripts())
         self.assertNotIn("gst_resume_fallback_batch_size", settings)
+
+    def test_settings_form_names_match_the_saved_config_keys(self):
+        from gst_worker.config import DEFAULT_APP_CONFIG
+
+        names = set(re.findall(r'name="(\w+)"', view_section(read_html(), "settings")))
+        self.assertEqual(names - set(DEFAULT_APP_CONFIG), set())
+
+    def test_library_pages_use_the_documented_endpoints_and_show_status(self):
+        html = read_html()
+        scripts = read_scripts()
+
+        for endpoint in (
+            "/api/library/series", "/api/library/movies", "/cues?", "/corrections", "/retranslate", "/versions",
+            "/diff", "/revert", "/api/series/", "/glossary",
+        ):
+            self.assertIn(endpoint, scripts)
+        for element in ('id="episode-jump"', 'id="episode-search"', 'id="cue-dialog"', 'id="retranslate-dialog"',
+                        'id="episode-version-list"', 'id="glossary-yaml"', 'id="glossary-check"'):
+            self.assertIn(element, html)
+        self.assertIn("Stale", scripts)
+        self.assertIn("is only flagged", html)
 
     def test_secret_fields_have_masks_and_test_buttons(self):
         settings = view_section(read_html(), "settings")

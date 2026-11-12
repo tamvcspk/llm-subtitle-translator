@@ -22,6 +22,7 @@ AUTO = "auto"
 RETRANSLATE = "retranslate"
 REVERT = "revert"
 EXTERNAL = "external"
+CUE_EDIT = "cue_edit"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -110,6 +111,8 @@ class TranslationVersions:
         model: str = "",
         tokens_in: int = 0,
         tokens_out: int = 0,
+        unit_id: int | None = None,
+        glossary_hash: str = "",
     ) -> Published:
         path = Path(output_path)
         if path.exists() and trigger == AUTO:
@@ -137,6 +140,8 @@ class TranslationVersions:
             model=model,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            unit_id=unit_id,
+            glossary_hash=glossary_hash,
         )
         return Published("translated", version)
 
@@ -167,5 +172,7 @@ class TranslationVersions:
             context_hash=str(target["context_hash"]),
             parent_version=version,
             model=str(target["model"]),
+            unit_id=target.get("unit_id"),
+            glossary_hash=str(target.get("glossary_hash") or ""),
         )
         return Published("reverted", new_version)

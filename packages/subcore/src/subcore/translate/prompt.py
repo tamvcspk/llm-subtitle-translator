@@ -144,11 +144,14 @@ def build_system(ctx: PromptContext, cues: list[Any] | None = None) -> str:
     lang_rules = _TARGET_RULES.get(ctx.target_lang.lower().split("-")[0])
     if lang_rules:
         sections.append(("Target-language rules", lang_rules))
-    if ctx.glossary and not ctx.glossary.is_empty():
-        active = ctx.active_rules
-        if active is None:
-            active = ctx.glossary.active_address_rules(ctx.season, ctx.episode, cues)
-        sections.append(("Glossary", _glossary_section(ctx.glossary, active)))
+    if ctx.glossary:
+        # Terms carry a story-order window (FR-11.2.3): only those in effect for this episode.
+        glossary = ctx.glossary.for_episode(ctx.season, ctx.episode)
+        if not glossary.is_empty():
+            active = ctx.active_rules
+            if active is None:
+                active = glossary.active_address_rules(ctx.season, ctx.episode, cues)
+            sections.append(("Glossary", _glossary_section(glossary, active)))
     sections.extend(ctx.extra_sections)
 
     meta = []
@@ -183,13 +186,28 @@ def format_targets(ids: list[int]) -> str:
     return ", ".join(out)
 
 
-def build_user(source: dict[int, str], targets: list[int], notes: dict[int, str] | None = None) -> str:
+def build_user(
+    source: dict[int, str],
+    targets: list[int],
+    notes: dict[int, str] | None = None,
+    reference: dict[int, str] | None = None,
+) -> str:
     """User message: the source items (context) plus the exact ids to translate.
 
+    ``reference`` holds finished translations of items that are *not* requested (locked edits,
+    cues outside a retranslated range): shown so names, tone and forms of address stay consistent.
     Timecodes and SRT indexes are never included (FR-3.1).
     """
     items = "\n".join(json.dumps({"i": i, "text": text}, ensure_ascii=False) for i, text in source.items())
     parts = [f"SOURCE ITEMS (one JSON object per line):\n{items}"]
+    if reference:
+        done = "\n".join(
+            json.dumps({"i": i, "text": text}, ensure_ascii=False) for i, text in sorted(reference.items())
+        )
+        parts.append(
+            "ALREADY TRANSLATED (final; do not output these items; keep names, tone and forms of address "
+            f"consistent with them):\n{done}"
+        )
     parts.append(
         "TASK: translate ONLY these items and return one {\"i\", \"text\"} object for each, in order: "
         + format_targets(targets)

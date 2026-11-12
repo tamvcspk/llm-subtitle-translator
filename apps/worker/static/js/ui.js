@@ -29,6 +29,11 @@ const ICONS = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>',
   monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  library: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  chevron: '<path d="m9 6 6 6-6 6"/>',
+  glossary: '<path d="M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M8 9h8M8 13h5"/>',
 };
 
 export function icon(name) {
@@ -137,6 +142,36 @@ export function loadingState(text) {
 export function errorState(text, retry) {
   return h("div", { class: "empty empty-error" }, icon("alert"), h("strong", { text: "Could not load" }),
     h("p", { text }), retry && actionButton("Try again", retry, { iconName: "refresh" }));
+}
+
+const STATUS_TEXT = {
+  current: ["ok", "Current", "Made with the rules that apply now."],
+  stale: ["warn", "Stale", "The glossary or the episode's corrections changed after this was translated."],
+  incomplete: ["warn", "Incomplete", "Translated without all the earlier episodes available as context."],
+  untranslated: ["muted", "Untranslated", "No translation made by this worker yet."],
+};
+
+/** Coloured dot plus label for a translation status. */
+export function statusPill(status) {
+  const [tone, label, help] = STATUS_TEXT[status] || ["muted", status, ""];
+  return h("span", { class: `status status-${tone}`, title: help }, h("span", { class: "dot" }), label);
+}
+
+export const STATUS_LABELS = Object.fromEntries(Object.entries(STATUS_TEXT).map(([key, value]) => [key, value[1]]));
+
+/** Views whose title depends on loaded data set it themselves. */
+export function setHeading(title, subtitle = "") {
+  document.getElementById("view-title").textContent = title;
+  document.getElementById("view-subtitle").textContent = subtitle;
+  document.title = `${title} · GST Bazarr`;
+}
+
+/** Breadcrumb trail: [["Library", "#library"], ["Show"]] — the last item is plain text. */
+export function crumbs(container, trail) {
+  container.replaceChildren(...trail.flatMap(([label, href], index) => [
+    index ? h("span", { class: "crumb-sep", text: "/" }) : null,
+    href ? h("a", { class: "link", href, text: label }) : h("span", { text: label }),
+  ]));
 }
 
 /** Language pair pill: "en → zh". */

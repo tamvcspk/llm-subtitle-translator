@@ -210,89 +210,59 @@ class TestWorkerConfigTests(unittest.TestCase):
                 {
                     "gst_model": "gemini-2.5-flash",
                     "gst_fallback_model": " gemini-3.5-flash-lite ",
-                    "gst_batch_size": 500,
-                    "gst_retry_batch_size": 250,
-                    "gst_resume_fallback_batch_size": 50,
                     "gst_paid_quota": True,
-                    "gst_skip_upgrade": False,
-                    "gst_quiet": False,
-                    "gst_progress_log": True,
-                    "gst_thoughts_log": True,
                     "gst_temperature": "0.7",
-                    "gst_top_p": "0.95",
-                    "gst_top_k": "40",
                     "gst_thinking_budget": "2048",
-                    "gst_thinking_level": "medium",
-                    "gst_no_streaming": True,
                     "gst_no_thinking": True,
-                    "gst_token_report": True,
-                    "gst_token_stats": True,
-                    "gst_context_size": 80,
                     "job_settle_seconds": 600,
                 },
             )
 
             self.assertEqual(saved["gst_model"], "gemini-2.5-flash")
             self.assertEqual(saved["gst_fallback_model"], "gemini-3.5-flash-lite")
-            self.assertEqual(saved["gst_batch_size"], 500)
-            self.assertEqual(saved["gst_retry_batch_size"], 250)
-            self.assertNotIn("gst_resume_fallback_batch_size", saved)
             self.assertTrue(saved["gst_paid_quota"])
-            self.assertFalse(saved["gst_skip_upgrade"])
-            self.assertFalse(saved["gst_quiet"])
-            self.assertTrue(saved["gst_progress_log"])
-            self.assertTrue(saved["gst_thoughts_log"])
             self.assertEqual(saved["gst_temperature"], "0.7")
-            self.assertEqual(saved["gst_top_p"], "0.95")
-            self.assertEqual(saved["gst_top_k"], "40")
             self.assertEqual(saved["gst_thinking_budget"], "2048")
-            self.assertEqual(saved["gst_thinking_level"], "medium")
-            self.assertTrue(saved["gst_no_streaming"])
             self.assertTrue(saved["gst_no_thinking"])
-            self.assertTrue(saved["gst_token_report"])
-            self.assertNotIn("gst_token_stats", saved)
-            self.assertEqual(saved["gst_context_size"], 80)
             self.assertEqual(saved["job_settle_seconds"], 600)
 
+    def test_settings_of_the_old_gst_cli_are_dropped_from_saved_config(self):
+        """P3: these changed nothing since the worker stopped calling `gst`; an old config.json loses them."""
+        dead = {
+            "gst_batch_size": 500, "gst_retry_batch_size": 250, "gst_resume_fallback_batch_size": 50,
+            "gst_skip_upgrade": False, "gst_quiet": False, "gst_progress_log": True, "gst_thoughts_log": True,
+            "gst_token_report": True, "gst_token_stats": True, "gst_top_p": "0.95", "gst_top_k": "40",
+            "gst_thinking_level": "medium", "gst_no_streaming": True, "gst_context_size": 80,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(json.dumps({"gst_model": "gemini-2.5-flash", **dead}), encoding="utf-8")
+
+            loaded = gst_config.load_app_config(str(config_path))
+            saved = gst_config.save_app_config(str(config_path), {**loaded, **dead})
+
+            for key in dead:
+                self.assertNotIn(key, loaded)
+                self.assertNotIn(key, saved)
+                self.assertNotIn(key, json.loads(config_path.read_text(encoding="utf-8")))
+            self.assertEqual(saved["gst_model"], "gemini-2.5-flash")
 
     def test_fallback_model_equal_to_primary_is_disabled(self):
         config = gst_config.normalize_app_config({"gst_model": "gemini-3.8-flash", "gst_fallback_model": "gemini-3.8-flash"})
 
         self.assertEqual(config["gst_fallback_model"], "")
 
-
     def test_default_gst_tuning_matches_recommended_automation_profile(self):
         config = gst_config.normalize_app_config({"gst_no_context": True})
 
         self.assertEqual(config["gst_model"], "gemini-flash-latest")
         self.assertEqual(config["gst_fallback_model"], "")
-        self.assertEqual(config["gst_batch_size"], 500)
-        self.assertEqual(config["gst_retry_batch_size"], 300)
-        self.assertNotIn("gst_resume_fallback_batch_size", config)
         self.assertEqual(config["job_settle_seconds"], 600)
         self.assertEqual(config["gst_temperature"], "0.7")
-        self.assertEqual(config["gst_top_p"], "0.95")
-        self.assertEqual(config["gst_top_k"], "40")
         self.assertEqual(config["gst_thinking_budget"], "2048")
-        self.assertEqual(config["gst_thinking_level"], "medium")
-        self.assertTrue(config["gst_no_streaming"])
         self.assertFalse(config["gst_paid_quota"])
-        self.assertEqual(config["gst_context_size"], 50)
+        self.assertFalse(config["gst_no_thinking"])
         self.assertNotIn("gst_no_context", config)
-
-
-    def test_normalize_app_config_preserves_explicit_batch_sizes(self):
-        config = gst_config.normalize_app_config(
-            {
-                "gst_batch_size": 1000,
-                "gst_retry_batch_size": 500,
-                "gst_resume_fallback_batch_size": 50,
-            }
-        )
-
-        self.assertEqual(config["gst_batch_size"], 1000)
-        self.assertEqual(config["gst_retry_batch_size"], 500)
-        self.assertNotIn("gst_resume_fallback_batch_size", config)
 
 
     def test_save_app_config_preserves_blank_secret_fields(self):

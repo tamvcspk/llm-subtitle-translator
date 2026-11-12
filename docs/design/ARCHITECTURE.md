@@ -324,6 +324,8 @@ Nếu sha256 file đang nằm trên đĩa **không** khớp phiên bản `curren
 | `GET /api/units/{id}/versions` · `GET …/versions/{v}/diff?against=` · `POST …/versions/{v}/revert` | Lịch sử, diff, hoàn tác |
 | `GET/PUT /api/series/{id}/glossary?lang=vi` | Đọc/ghi YAML (kiểm schema, ghi atomic) |
 
+**Đã làm ở P3** (các điểm thiết kế để ngỏ): (1) thêm bảng `unit_outputs(unit, lang → output_path)`; `translations` vẫn khoá theo `output_path`, có thêm `unit_id`, `glossary_hash`, `context_complete`. (2) Trước P4, `stale` = `glossary_hash` lưu trong phiên bản khác hash của luật hiện hành (glossary YAML đã lọc theo tập + correction `term/address/note` đang bật); `cue_edit` không nằm trong hash. P4 sẽ thay bằng `context_hash` đầy đủ. (3) `term` trong glossary có `from`/`until` mức tập; `address_rules` giữ mức timecode. (4) `note` chỉ có scope `episode` (glossary không có mục ghi chú). (5) Unit nhận diện từ id Bazarr rồi tên file; `series_key` = `tvdb-<id>` › `bazarr-<id>` › slug tên. (6) `GET /api/units/{id}/context` thuộc P4. (7) `retranslate.correction_ids` giới hạn correction dùng cho lần dịch lại (mặc định: tất cả đang bật).
+
 ---
 
 ## 6. Cấu hình

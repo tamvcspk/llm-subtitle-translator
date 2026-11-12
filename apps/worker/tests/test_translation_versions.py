@@ -133,14 +133,14 @@ class StoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "nested" / "app.db"
             first = Store(path)
-            self.assertEqual(first.schema_version, 1)
+            self.assertEqual(first.schema_version, 2)
             first.record_llm_call(
                 "j", provider="p", model="m", task="translate", tokens_in=3, tokens_out=4, latency_ms=5, outcome="ok"
             )
             first.close()
             second = Store(path)
             try:
-                self.assertEqual(second.schema_version, 1)
+                self.assertEqual(second.schema_version, 2)
                 self.assertEqual(second.token_totals(), {"calls": 1, "tokens_in": 3, "tokens_out": 4})
             finally:
                 second.close()

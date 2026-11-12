@@ -153,22 +153,10 @@ Default:
   "tmdb_api_key": "",
   "gst_model": "gemini-flash-latest",
   "gst_fallback_model": "",
-  "gst_batch_size": 500,
-  "gst_retry_batch_size": 300,
   "gst_paid_quota": false,
-  "gst_skip_upgrade": true,
-  "gst_quiet": true,
-  "gst_progress_log": false,
-  "gst_thoughts_log": false,
-  "gst_token_report": false,
   "gst_temperature": "0.7",
-  "gst_top_p": "0.95",
-  "gst_top_k": "40",
   "gst_thinking_budget": "2048",
-  "gst_thinking_level": "medium",
-  "gst_no_streaming": true,
   "gst_no_thinking": false,
-  "gst_context_size": 50,
   "job_settle_seconds": 600
 }
 ```
@@ -205,12 +193,49 @@ The Settings page writes these options into app config:
   is `600` seconds so Bazarr has time to finish extracting other embedded
   subtitles from the same media file.
 
-These keys are still stored and shown by the Settings page but have no effect
-since the worker stopped calling the `gst` CLI: `gst_batch_size`,
-`gst_retry_batch_size`, `gst_skip_upgrade`, `gst_quiet`, `gst_progress_log`,
-`gst_thoughts_log`, `gst_token_report`, `gst_top_p`, `gst_top_k`,
-`gst_thinking_level`, `gst_no_streaming`, `gst_context_size`. The Settings page
-will drop them in a later phase.
+The options of the old `gst` CLI (`gst_batch_size`, `gst_retry_batch_size`,
+`gst_skip_upgrade`, `gst_quiet`, `gst_progress_log`, `gst_thoughts_log`,
+`gst_token_report`, `gst_top_p`, `gst_top_k`, `gst_thinking_level`,
+`gst_no_streaming`, `gst_context_size`) are gone: they had no effect since the
+worker translates in-process. An old `config.json` that still contains them is
+accepted; the keys are dropped the next time settings are saved.
+
+## Glossaries and Data Directory
+
+`DATA_DIR` (default: `STATE_DIR`) holds machine-owned data:
+
+```text
+app.db                                   versions, library, corrections
+backups/subtitles/                       a copy of every published subtitle version
+backups/glossary/<series|movies>/<key>/  the previous glossary file before each console save
+series/<key>/glossary.<lang>.yaml        series glossary (hand-editable, see below)
+movies/<key>/glossary.<lang>.yaml        movie glossary
+```
+
+`<key>` is `tvdb-<id>` when Bazarr knows the TVDB id, else `bazarr-<series id>`,
+else a slug of the title. A glossary applies to one series and one target
+language and may be edited by hand or on the Glossary page. Example:
+
+```yaml
+style: casual, keep honorifics
+terms:
+  - source: Kyber crystal
+    target: tinh thể Kyber
+    locked: true        # the target must appear whenever the source does
+    from: S01E03        # optional window, episode granularity; until: is exclusive
+characters:
+  - name: Alice
+    gender: f
+address_rules:
+  - a: Alice
+    b: Bob
+    a_to_b: em–anh      # how Alice addresses Bob
+    from: S01E06 00:32:10
+```
+
+A glossary file that is not valid stops translation jobs for that series with the
+reason in the job error; fix the file (or restore the copy in `backups/glossary/`)
+and retry.
 
 ## Backup
 

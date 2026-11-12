@@ -23,14 +23,16 @@ from subcore.providers import (
 )
 from subcore.translate import PromptContext, TranslateOptions, TranslationError, translate
 
+from .library import Library
 from .llm import MissingApiKey, build_provider
+from .rules import UnitRules
 from .store import Store
 from .subtitles import target_output_path
 from .translation import ERROR_TAIL_LENGTH, DailyQuotaExceededError, ProviderUnavailableError, redact
-from .versions import AUTO, SKIPPED_EXISTING, TranslationVersions, sha256_bytes
+from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, TranslationVersions, sha256_bytes
 
 # Bump when the prompt or engine behaviour changes enough that old results should not be reused (NFR-3).
-PROMPT_VERSION = "p2-1"
+PROMPT_VERSION = "p3-1"
 DEFAULT_JOB_TIMEOUT_SECONDS = 1800  # NFR-2 watchdog
 
 ProviderFactory = Callable[..., Provider]
@@ -43,10 +45,10 @@ def job_timeout_seconds() -> float:
         return float(DEFAULT_JOB_TIMEOUT_SECONDS)
 
 
-def context_hash(model: str, target_code: str, description: str, temperature: float | None) -> str:
+def context_hash(model: str, target_code: str, description: str, temperature: float | None, rules_hash: str = "") -> str:
     """Everything besides the source text that changes what the model is asked (NFR-3)."""
     payload = json.dumps(
-        [PROMPT_VERSION, model, target_code, description, temperature], ensure_ascii=False
+        [PROMPT_VERSION, model, target_code, description, temperature, rules_hash], ensure_ascii=False
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -59,17 +61,23 @@ def _temperature(settings: dict[str, Any]) -> float | None:
 
 
 class TranslationAttempt:
-    """Runs one translation job. Wired with a store/versions pair, or bare (no history, no cache)."""
+    """Runs one translation job. Wired with a store/versions pair, or bare (no history, no cache).
+
+    With a ``library`` the attempt also knows which episode it is translating, so the glossary and the
+    episode's corrections shape the prompt and the published version is linked to its unit (P3).
+    """
 
     def __init__(
         self,
         versions: TranslationVersions | None = None,
         store: Store | None = None,
         provider_factory: ProviderFactory = build_provider,
+        library: Library | None = None,
     ) -> None:
         self.versions = versions
         self.store = store if store is not None else (versions.store if versions else None)
         self.provider_factory = provider_factory
+        self.library = library
 
     def run(
         self,
@@ -82,27 +90,33 @@ class TranslationAttempt:
         target_code = str(job.get("target_code") or "zh")
         output = str(job.get("output_path") or target_output_path(str(source), target_code))
         trigger = str(job.get("trigger") or AUTO)
+        unit = self._register(job)
         if trigger == AUTO and Path(output).exists():
             return SKIPPED_EXISTING
 
         source_sha = sha256_bytes(source.read_bytes())
+        cues = srt.parse_file(source)
+        if not cues:
+            raise RuntimeError(f"Source subtitle has no cues: {source.name}")
+
+        retranslate = dict(job.get("retranslate") or {}) if trigger == RETRANSLATE else {}
+        rules = self._rules(unit, target_code, cues, retranslate.get("correction_ids"))
         model = str(settings.get("gst_model") or os.getenv("GST_MODEL", "gemini-flash-latest"))
         temperature = _temperature(settings)
-        ctx_hash = context_hash(model, target_code, description, temperature)
+        ctx_hash = context_hash(model, target_code, description, temperature, rules.hash)
         published = dict(
             trigger=trigger, source_path=str(source), source_sha256=source_sha,
             target_lang=target_code, context_hash=ctx_hash, model=model,
+            unit_id=int(unit["id"]) if unit else None, glossary_hash=rules.hash,
         )
 
-        if self.versions is not None and trigger == AUTO:
+        if self.versions is not None and trigger == AUTO and not rules.locked:
             cached = self.versions.cached_text(source_sha, target_code, ctx_hash)
             if cached is not None:
                 logging.info("Reusing stored translation for %s (same input and context); no model call", output)
                 return self.versions.publish(output, cached, **published).status
 
-        cues = srt.parse_file(source)
-        if not cues:
-            raise RuntimeError(f"Source subtitle has no cues: {source.name}")
+        only, keep = self._plan(retranslate, rules, cues, output)
 
         job_id = str(job.get("job_id") or "")
 
@@ -122,9 +136,16 @@ class TranslationAttempt:
                 target_name=str(job.get("target_language") or "") or None,
                 source_lang=str(job.get("source_code") or "") or None,
                 overview=description,
+                glossary=rules.glossary if not rules.glossary.is_empty() else None,
+                active_rules=rules.active_rules,
+                extra_sections=rules.extra_sections,
+                season=unit["season"] if unit else None,
+                episode=unit["episode"] if unit else None,
+                title=self._title(unit),  # the series, or the movie
             )
             result = translate(
-                provider, cues, context, TranslateOptions(temperature=temperature), on_progress=on_progress
+                provider, cues, context, TranslateOptions(temperature=temperature),
+                on_progress=on_progress, only=only, keep=keep,
             )
         except QuotaExhausted as exc:
             raise DailyQuotaExceededError(self._message("Daily quota exhausted", exc, settings)) from None
@@ -152,6 +173,52 @@ class TranslationAttempt:
         return self.versions.publish(
             output, text, tokens_in=result.tokens_in, tokens_out=result.tokens_out, **published
         ).status
+
+    # -- library ---------------------------------------------------------------
+    def _register(self, job: dict[str, Any]) -> dict[str, Any] | None:
+        if self.library is None:
+            return None
+        unit_id = self.library.register_job(job)
+        return self.library.store.get_unit(unit_id)
+
+    def _rules(self, unit, target_code: str, cues, correction_ids) -> UnitRules:
+        if self.library is None or unit is None:
+            return UnitRules()
+        return self.library.unit_rules(unit, target_code, cues=cues, correction_ids=correction_ids)
+
+    def _title(self, unit) -> str:
+        if not unit:
+            return ""
+        if unit["series_id"] is not None and self.library is not None:
+            series = self.library.store.get_series(int(unit["series_id"]))
+            return str(series["title"]) if series else ""
+        return str(unit["title"] or "")
+
+    @staticmethod
+    def _plan(retranslate: dict[str, Any], rules: UnitRules, cues, output: str):
+        """Which cues to request (``only``) and which to carry over unchanged (``keep``).
+
+        A range retranslation keeps every cue outside the range exactly as the current target has it
+        (FR-11.3.2); locked cue edits are kept in every case (FR-11.2.4).
+        """
+        keep: dict[int, str] = {}
+        only = None
+        window = retranslate.get("range")
+        if window:
+            first, last = int(window["first"]), int(window["last"])
+            try:
+                current = srt.parse_file(output)
+            except (OSError, srt.SrtError):
+                raise RuntimeError("The current target subtitle cannot be read; retranslate the whole episode") from None
+            if len(current) != len(cues):
+                raise RuntimeError(
+                    "The current target subtitle has a different number of cues than the source; "
+                    "retranslate the whole episode"
+                )
+            only = range(first, last + 1)
+            keep = {n: cue.text for n, cue in enumerate(current, start=1) if not first <= n <= last}
+        keep.update(rules.locked)
+        return only, keep
 
     @staticmethod
     def _message(prefix: str, exc: BaseException, settings: dict[str, Any]) -> str:

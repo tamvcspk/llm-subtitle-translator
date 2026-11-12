@@ -87,6 +87,30 @@ edit, or a file someone else put there) as an `external` version, so nothing is
 lost, then writes atomically. Reverting restores a stored version byte for byte
 and records the restore as a new version.
 
+### Library, corrections and retranslation (P3)
+
+A *unit* (an episode or a movie) is registered the first time a job for it runs
+(`library.py`; identity from Bazarr ids, then the file name, with best-effort
+enrichment from the Bazarr API). `units` and `series` rows, a
+`unit_outputs(unit, language) → path` mapping, `corrections`, and a `unit_id` plus
+`glossary_hash` on every translation version live in `app.db` (schema 2).
+
+`rules.py` merges the series glossary (`DATA_DIR/series/<key>/glossary.<lang>.yaml`,
+read by `glossaries.py`) with the unit's active episode corrections for one
+episode. Terms and address rules carry `from`/`until` windows. The result goes to
+the prompt, and its hash is stored as the version's `glossary_hash`: when the hash
+computed now differs, the translation is *stale* (flagged only). Hand-edited cues
+(`cue_edit`) are outside the hash; they are locked output.
+
+`units.py` (`UnitService`) implements the console actions: cue view, corrections,
+retranslation, versions, diff, revert, glossary read/write. `library_api.py` routes
+`/api/library/*`, `/api/units/*` and `/api/series/*` to it. A retranslation is a
+queue job (`trigger: retranslate`, `priority: 100`, `retranslate.range`,
+`retranslate.correction_ids`); the attempt asks `subcore` for the range only
+(`only=`), passing locked cues and the current translation of cues outside the
+range as `keep=`, which are copied verbatim and shown to the model as reference
+translations.
+
 `RuntimeContext` is the composition seam for the running process. It carries the
 queue console actions, Bazarr integration, backup maintenance, and HTTP transport
 adapters alongside the worker's shared settings and state paths. The legacy

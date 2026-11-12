@@ -59,3 +59,28 @@ automatic job and is backed up before a retranslate or revert.
 Per-API-key request and token pacing (RPM, TPM, RPD) around every model call.
 Rate-limit and overload errors are retried with backoff inside the attempt; only
 when they persist does the queue defer the job.
+
+**Unit**:
+One episode of a series, or one movie. Registered when the first job for it runs;
+identified from Bazarr ids or, failing that, the file name. The Library lists units.
+
+**Correction**:
+A person's fix to how a unit is translated. Kinds: `term`, `address`, `note`
+(applied by the model on the next retranslation) and `cue_edit` (the person's own
+text for one cue, applied at once). Scope `episode` lives in `app.db`; `forward`
+and `series` are written to the glossary.
+
+**Locked cue**:
+A cue the person edited by hand. Every later retranslation copies it verbatim,
+never requests it, and shows it to the model as a reference translation.
+
+**Retranslation**:
+A manually requested translation job for a unit, for the whole episode or a cue or
+time range, that overwrites the target after keeping the old file as a version.
+It runs ahead of automatic jobs. Only the range is requested, but the whole
+source is still sent as context.
+
+**Stale translation**:
+A translation made with different rules (glossary file or episode corrections)
+than the ones that apply to its episode now. Only ever flagged; never
+retranslated automatically.

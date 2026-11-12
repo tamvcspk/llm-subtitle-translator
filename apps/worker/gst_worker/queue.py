@@ -111,7 +111,8 @@ def should_skip_job(job: dict[str, Any]) -> bool:
         return True
     if not subtitle_path or not Path(subtitle_path).exists():
         return True
-    return Path(output_path).exists()
+    # An explicit retranslation exists to replace the target (the version history keeps the old one).
+    return Path(output_path).exists() and job.get("trigger") != "retranslate"
 
 
 def ensure_queue_dirs(queue_dir: str) -> None:
@@ -204,6 +205,29 @@ def enqueue_translation_jobs(
         _write_job(pending, job)
         created.append(str(pending))
     return created
+
+
+RETRANSLATE_PRIORITY = 100  # automatic jobs have none (0); FR-11.3.4
+
+
+def enqueue_retranslation(queue_dir: str, job: dict[str, Any]) -> str:
+    """Queue one explicit retranslation ahead of automatic work; one per target at a time."""
+    reject_daily_quota(queue_dir)
+    ensure_queue_dirs(queue_dir)
+    subtitle_path, output_path = str(job.get("subtitle_path", "")), str(job.get("output_path", ""))
+    target_code = str(job.get("target_code", ""))
+    root = Path(queue_dir)
+    prefix = hashlib.sha1(f"retranslate|{subtitle_path}|{output_path}|{target_code}".encode("utf-8")).hexdigest()
+    for state in ("pending", "processing", "deferred"):
+        if any((root / state).glob(f"{prefix}-*.json")):
+            raise ValueError("A retranslation of this subtitle is already queued")
+    jid = f"{prefix}-{time.time_ns()}"
+    pending = root / "pending" / f"{jid}.json"
+    _write_job(pending, {
+        **job, "job_id": jid, "trigger": "retranslate", "priority": RETRANSLATE_PRIORITY,
+        "created_at": int(time.time()),
+    })
+    return jid
 
 
 def queue_snapshot(queue_dir: str, limit: int = 100) -> dict[str, Any]:
@@ -317,9 +341,12 @@ class JobQueue:
             return None
         settle_seconds = max(0, settle_seconds)
         jobs = sorted((self.queue_dir / "pending").glob("*.json"), key=lambda path: path.stat().st_mtime)
+        best: tuple[int, Path] | None = None  # highest priority wins; oldest first within a priority
         for job_path in jobs:
+            priority = 0
             try:
                 job = json.loads(job_path.read_text(encoding="utf-8"))
+                priority = int(job.get("priority") or 0)
                 subtitle_path = Path(str(job.get("subtitle_path") or ""))
                 # The settle window protects an actively written subtitle, not
                 # the queue event.  A manually queued, already-stable subtitle
@@ -328,10 +355,10 @@ class JobQueue:
                     job.get("created_at") or job_path.stat().st_mtime
                 )
             except Exception:
-                return job_path
-            if current_time - settled_from >= settle_seconds:
-                return job_path
-        return None
+                settled_from = float("-inf")  # unreadable: let the run fail it visibly
+            if current_time - settled_from >= settle_seconds and (best is None or priority > best[0]):
+                best = (priority, job_path)
+        return best[1] if best else None
 
     def process_once(
         self,

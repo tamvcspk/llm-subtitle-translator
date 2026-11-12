@@ -1,4 +1,32 @@
 # Unreleased
+- **P3: Library, Episode and Glossary pages in the console.** The worker now knows
+  which series, episode or movie each job is (Bazarr ids, falling back to the file
+  name) and lists them under **Library** with a status per target language:
+  `current`, `stale` (the glossary or the episode's corrections changed after the
+  translation was made; only flagged, never retranslated automatically),
+  `incomplete`, `untranslated`. The **Episode** page shows source and translation
+  side by side, jumps to a player time (`00:23:10`) or searches both texts, and
+  works on a phone. A cue can be corrected by hand (applied at once as a new
+  version, no model call, then locked: later retranslations keep it byte for byte),
+  or a rule can be added from it: `term`, `address` (forms of address) or `note`,
+  scoped to this episode (stored in `app.db`), from this episode onward, or the
+  whole series (both written to the series glossary YAML). **Retranslate** redoes
+  the whole episode, a cue range or a time range (the whole source is still sent as
+  context, only the range is requested), ahead of automatic jobs, with the rules
+  you choose. **History** lists every version with a cue-level diff and one-click
+  restore. **Glossary** edits a series' YAML with validation, an atomic write, a
+  backup of the previous file and a count of translations a save would make stale.
+  New endpoints are in `docs/API.md`; glossary terms accept `from`/`until`.
+  The worker reads `DATA_DIR/series/<key>/glossary.<lang>.yaml` for every job.
+  **Upgrade notes:** `app.db` migrates to schema 2 on start (adds series, units,
+  corrections; existing versions are kept but only appear in Library once their
+  episode is translated again). A glossary file that is not valid YAML now stops
+  the job with the reason instead of translating without it.
+- Settings: removed the options that have had no effect since P2 (`gst_batch_size`,
+  `gst_retry_batch_size`, `gst_skip_upgrade`, `gst_quiet`, `gst_progress_log`,
+  `gst_thoughts_log`, `gst_token_report`, `gst_top_p`, `gst_top_k`,
+  `gst_thinking_level`, `gst_no_streaming`, `gst_context_size`). Saving settings
+  drops them from `config.json`. The nav item "Library scan" is now "Media scan".
 - **P2: the worker now translates in-process with `subcore` instead of the `gst`
   CLI.** `gemini-srt-translator` is no longer a dependency. Provider errors are
   typed (daily quota, rate limit/overload, rejected key) rather than parsed from

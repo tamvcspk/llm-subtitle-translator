@@ -38,9 +38,11 @@
           <span class="badge badge-danger" id="nav-failed-count" hidden></span>
         </span>
       </a>
+      <div class="nav-label">Translations</div>
+      <a class="nav-item" href="#library" data-view="library" data-icon="library"><span>Library</span></a>
       <div class="nav-label">Find work</div>
       <a class="nav-item" href="#wanted" data-view="wanted" data-icon="wanted"><span>Bazarr wanted</span></a>
-      <a class="nav-item" href="#scan" data-view="scan" data-icon="scan"><span>Library scan</span></a>
+      <a class="nav-item" href="#scan" data-view="scan" data-icon="scan"><span>Media scan</span></a>
       <div class="nav-label">Configure</div>
       <a class="nav-item" href="#settings" data-view="settings" data-icon="settings"><span>Settings</span></a>
       <a class="nav-item" href="#system" data-view="system" data-icon="system"><span>Backups</span></a>
@@ -161,6 +163,94 @@
       </section>
     </section>
 
+    <!-- Library: series and movies; #library/<series id> lists a series' episodes -->
+    <section id="view-library" class="view" data-view="library" hidden>
+      <nav id="library-crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
+      <section class="panel">
+        <header class="panel-head panel-head-wrap">
+          <nav id="library-tabs" class="tabs" aria-label="Filter by status"></nav>
+        </header>
+        <div id="library-list" class="rows"></div>
+        <p class="footnote">
+          Stale means the glossary or the episode's corrections changed after the translation was made. It is only flagged:
+          nothing is retranslated unless you ask for it on the episode page.
+        </p>
+      </section>
+    </section>
+
+    <!-- Episode: #episode/<unit id>/<language> -->
+    <section id="view-episode" class="view" data-view="episode" hidden>
+      <nav id="episode-crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
+      <section class="panel">
+        <header class="panel-head panel-head-wrap">
+          <div>
+            <h2 id="episode-title"></h2>
+            <p class="panel-sub" id="episode-meta"></p>
+          </div>
+          <div class="toolbar">
+            <span id="episode-status"></span>
+            <a id="episode-glossary" class="btn btn-sm" href="#library" data-icon="glossary">Glossary</a>
+            <button id="episode-retranslate" type="button" class="btn btn-primary btn-sm" data-icon="retry">Retranslate…</button>
+          </div>
+        </header>
+        <div id="episode-warning" class="banner banner-warn banner-flat" role="status" hidden>
+          <span class="banner-icon" data-icon="alert"></span>
+          <p></p>
+        </div>
+        <div class="subhead">
+          <nav id="episode-tabs" class="tabs" aria-label="Episode sections">
+            <button type="button" class="tab" data-tab="cues" aria-current="page">Subtitles</button>
+            <button type="button" class="tab" data-tab="history">History <span class="tab-count" id="episode-version-count"></span></button>
+          </nav>
+          <div id="episode-langs" class="chip-list"></div>
+        </div>
+
+        <div id="episode-cues-pane">
+          <div class="cue-tools">
+            <div class="input-group cue-jump">
+              <input id="episode-jump" class="input mono" type="text" inputmode="numeric" placeholder="Jump to 00:23:10" aria-label="Jump to player time" spellcheck="false">
+              <button id="episode-jump-go" type="button" class="btn">Go</button>
+            </div>
+            <input id="episode-search" class="input input-search" type="search" placeholder="Search source or translation" aria-label="Search cues">
+            <span id="episode-cue-status" class="muted" role="status"></span>
+          </div>
+          <details id="episode-corrections" class="corrections">
+            <summary id="episode-correction-summary">Corrections for this episode</summary>
+            <div id="episode-correction-list"></div>
+          </details>
+          <div class="cue cue-head" aria-hidden="true">
+            <div class="cue-meta">Cue</div><div class="cue-src">Source</div><div class="cue-dst">Translation</div><div></div>
+          </div>
+          <div id="episode-cue-list" class="cues"></div>
+        </div>
+
+        <div id="episode-history-pane" hidden>
+          <div id="episode-version-list"></div>
+          <p class="footnote">Every version the worker writes is kept outside the media folder. Restoring one puts those exact bytes back and is itself recorded as a version.</p>
+        </div>
+      </section>
+    </section>
+
+    <!-- Glossary: #glossary/<series id>/<language> -->
+    <section id="view-glossary" class="view" data-view="glossary" hidden>
+      <nav id="glossary-crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
+      <section class="panel">
+        <header class="panel-head panel-head-wrap">
+          <div id="glossary-langs" class="chip-list"></div>
+          <div class="toolbar">
+            <button id="glossary-check" type="button" class="btn">Check</button>
+            <button id="glossary-save" type="button" class="btn btn-primary" disabled>Save glossary</button>
+          </div>
+        </header>
+        <div id="glossary-result" class="notice" role="status" hidden></div>
+        <textarea id="glossary-yaml" class="input mono glossary-editor" rows="26" spellcheck="false" aria-label="Glossary YAML"></textarea>
+        <p class="footnote">
+          Saving through the console re-writes the file, which drops comments; the previous file is kept under backups/glossary.
+          Rules from the glossary always win over anything the model infers. A saved change can mark translations stale; it never retranslates them.
+        </p>
+      </section>
+    </section>
+
     <!-- Bazarr wanted -->
     <section id="view-wanted" class="view" data-view="wanted" hidden>
       <section class="panel">
@@ -247,7 +337,7 @@
         <section class="settings-card">
           <div class="settings-intro">
             <h2>Translator</h2>
-            <p>Options passed to gemini-srt-translator for every translation attempt.</p>
+            <p>The models used for every translation attempt and how the worker paces its requests.</p>
           </div>
           <div class="field-grid">
             <div class="field field-wide">
@@ -260,27 +350,12 @@
               <p class="hint">Continues a job when the model above stays unavailable through every delayed retry or runs out of daily quota.</p>
             </div>
             <div class="field">
-              <label for="f-gst_batch_size">Batch size</label>
-              <input id="f-gst_batch_size" name="gst_batch_size" class="input" type="number" min="1" max="10000" data-type="int" data-default="500">
-              <p class="hint">Subtitle lines sent per Gemini request.</p>
-            </div>
-            <div class="field">
-              <label for="f-gst_retry_batch_size">Retry batch size</label>
-              <input id="f-gst_retry_batch_size" name="gst_retry_batch_size" class="input" type="number" min="0" max="10000" data-type="int" data-default="0">
-              <p class="hint">Batch size used when an attempt is retried.</p>
-            </div>
-            <div class="field">
               <label for="f-job_settle_seconds">Queue settle seconds</label>
               <input id="f-job_settle_seconds" name="job_settle_seconds" class="input" type="number" min="0" max="3600" data-type="int" data-default="0">
               <p class="hint">How long a new job waits before the worker picks it up.</p>
             </div>
             <div class="checks field-wide">
               <label class="check"><input type="checkbox" name="gst_paid_quota"><span>Paid quota</span></label>
-              <label class="check"><input type="checkbox" name="gst_skip_upgrade"><span>Skip upgrade check</span></label>
-              <label class="check"><input type="checkbox" name="gst_quiet"><span>Quiet output</span></label>
-              <label class="check"><input type="checkbox" name="gst_progress_log"><span>Progress log</span></label>
-              <label class="check"><input type="checkbox" name="gst_thoughts_log"><span>Thoughts log</span></label>
-              <label class="check"><input type="checkbox" name="gst_token_report"><span>Token report</span></label>
             </div>
           </div>
         </section>
@@ -288,7 +363,7 @@
         <section class="settings-card">
           <div class="settings-intro">
             <h2>Model tuning</h2>
-            <p>Sampling and thinking controls. Leave a value empty to use the translator's default.</p>
+            <p>Sampling and thinking controls. The thinking budget applies to Gemini 2.5 models only; newer models keep their own default.</p>
           </div>
           <div class="field-grid field-grid-3">
             <div class="field">
@@ -296,33 +371,10 @@
               <input id="f-gst_temperature" name="gst_temperature" class="input" type="number" min="0" max="2" step="0.01">
             </div>
             <div class="field">
-              <label for="f-gst_top_p">Top P</label>
-              <input id="f-gst_top_p" name="gst_top_p" class="input" type="number" min="0" max="1" step="0.01">
-            </div>
-            <div class="field">
-              <label for="f-gst_top_k">Top K</label>
-              <input id="f-gst_top_k" name="gst_top_k" class="input" type="number" min="0" step="1">
-            </div>
-            <div class="field">
-              <label for="f-gst_context_size">Context lines</label>
-              <input id="f-gst_context_size" name="gst_context_size" class="input" type="number" min="0" step="1" data-type="int" data-default="50">
-            </div>
-            <div class="field">
               <label for="f-gst_thinking_budget">Thinking budget</label>
               <input id="f-gst_thinking_budget" name="gst_thinking_budget" class="input" type="number" min="0" max="32768" step="1">
             </div>
-            <div class="field">
-              <label for="f-gst_thinking_level">Thinking level</label>
-              <select id="f-gst_thinking_level" name="gst_thinking_level" class="input">
-                <option value="">Default</option>
-                <option value="minimal">minimal</option>
-                <option value="low">low</option>
-                <option value="medium">medium</option>
-                <option value="high">high</option>
-              </select>
-            </div>
             <div class="checks field-wide">
-              <label class="check"><input type="checkbox" name="gst_no_streaming"><span>Disable streaming</span></label>
               <label class="check"><input type="checkbox" name="gst_no_thinking"><span>Disable thinking</span></label>
             </div>
           </div>
@@ -435,6 +487,105 @@
   </main>
 
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <!-- Correct one cue, or add a rule from it -->
+  <dialog id="cue-dialog" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2 id="cue-title"></h2>
+      <div class="field">
+        <label>Source</label>
+        <div id="cue-source" class="cue-quote"></div>
+      </div>
+      <div class="field">
+        <label for="cue-text">Translation</label>
+        <textarea id="cue-text" class="input" rows="3"></textarea>
+        <p class="hint">Saving writes a new version at once, without calling the model. The cue is then locked: later retranslations keep your text.</p>
+        <p id="cue-edit-note" class="hint hint-warn" hidden>This cue cannot be edited until the episode has a translation with the same number of cues as its source.</p>
+        <div class="dialog-actions"><button id="cue-save" type="button" class="btn btn-primary">Save and lock</button></div>
+      </div>
+
+      <h3 class="dialog-section">Or add a rule for the model</h3>
+      <div class="field-grid">
+        <div class="field">
+          <label for="corr-kind">Kind</label>
+          <select id="corr-kind" class="input">
+            <option value="term">Term</option>
+            <option value="address">Form of address</option>
+            <option value="note">Note</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="corr-scope">Applies to</label>
+          <select id="corr-scope" class="input">
+            <option value="episode">This episode only</option>
+            <option value="forward">This episode onward (glossary)</option>
+            <option value="series">Whole series (glossary)</option>
+          </select>
+        </div>
+        <div class="field-wide field-grid" data-corr-kind="term">
+          <div class="field"><label for="corr-term-source">Source term</label><input id="corr-term-source" class="input" type="text" spellcheck="false"></div>
+          <div class="field"><label for="corr-term-target">Translate as</label><input id="corr-term-target" class="input" type="text" spellcheck="false"></div>
+          <label class="check field-wide"><input id="corr-term-locked" type="checkbox" checked><span>Locked: the translation must appear wherever the term does</span></label>
+        </div>
+        <div class="field-wide field-grid" data-corr-kind="address" hidden>
+          <div class="field"><label for="corr-a">Speaker A</label><input id="corr-a" class="input" type="text" spellcheck="false"></div>
+          <div class="field"><label for="corr-b">Speaker B</label><input id="corr-b" class="input" type="text" spellcheck="false"></div>
+          <div class="field"><label for="corr-a-to-b">A says to B <span class="label-hint">self–other</span></label><input id="corr-a-to-b" class="input" type="text" placeholder="em–anh" spellcheck="false"></div>
+          <div class="field"><label for="corr-b-to-a">B says to A</label><input id="corr-b-to-a" class="input" type="text" placeholder="anh–em" spellcheck="false"></div>
+          <label class="check field-wide"><input id="corr-from-cue" type="checkbox"><span>Only from this cue on</span></label>
+        </div>
+        <div class="field field-wide" data-corr-kind="note" hidden>
+          <label for="corr-note">Note for the translator</label>
+          <textarea id="corr-note" class="input" rows="2" placeholder="Bob is being sarcastic; keep the biting tone"></textarea>
+        </div>
+      </div>
+      <p class="hint">Rules for this episode apply the next time you retranslate. Wider scopes are written to the series glossary and may mark other translations stale.</p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn">Close</button>
+        <button id="cue-add" type="button" class="btn">Add rule</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Retranslate -->
+  <dialog id="retranslate-dialog" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2>Retranslate</h2>
+      <p>The new translation replaces the file on disk and Bazarr is asked to rescan. The old one stays in History and can be restored.</p>
+      <fieldset class="field scope-set">
+        <legend>What to translate again</legend>
+        <label class="check"><input type="radio" name="rt-scope" value="all" checked><span>The whole episode</span></label>
+        <label class="check"><input type="radio" name="rt-scope" value="cues"><span>A range of cues</span></label>
+        <div id="rt-cues" class="field-grid" hidden>
+          <div class="field"><label for="rt-first">From cue</label><input id="rt-first" class="input" type="number" min="1"></div>
+          <div class="field"><label for="rt-last">To cue</label><input id="rt-last" class="input" type="number" min="1"></div>
+        </div>
+        <label class="check"><input type="radio" name="rt-scope" value="time"><span>A time range</span></label>
+        <div id="rt-time" class="field-grid" hidden>
+          <div class="field"><label for="rt-start">From</label><input id="rt-start" class="input mono" type="text" placeholder="00:23:10" spellcheck="false"></div>
+          <div class="field"><label for="rt-end">To</label><input id="rt-end" class="input mono" type="text" placeholder="00:25:00" spellcheck="false"></div>
+        </div>
+        <p class="hint">A range still sends the whole source for context, but only asks for those cues, so it costs far less. Cues outside the range stay exactly as they are.</p>
+      </fieldset>
+      <fieldset id="rt-corrections-wrap" class="field scope-set" hidden>
+        <legend>Rules to use</legend>
+        <div id="rt-corrections" class="checks"></div>
+      </fieldset>
+      <p id="rt-locked" class="hint" hidden></p>
+      <fieldset class="field scope-set">
+        <legend>Add now (this episode only)</legend>
+        <div class="field-grid">
+          <div class="field"><label for="rt-term-source">Term</label><input id="rt-term-source" class="input" type="text" spellcheck="false"></div>
+          <div class="field"><label for="rt-term-target">Translate as</label><input id="rt-term-target" class="input" type="text" spellcheck="false"></div>
+          <div class="field field-wide"><label for="rt-note">Note for the translator</label><textarea id="rt-note" class="input" rows="2"></textarea></div>
+        </div>
+      </fieldset>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="rt-submit" type="button" class="btn btn-primary">Queue retranslation</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="confirm-dialog" class="dialog">
     <form method="dialog">

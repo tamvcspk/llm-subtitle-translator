@@ -21,6 +21,7 @@ class RuntimeContext:
     bazarr: BazarrIntegration
     backups: BackupMaintenance
     transport: HTTPTransport
+    units: Any = None  # UnitService: library, corrections, retranslation, versions, glossaries
 
     def as_handler_context(self) -> dict[str, Any]:
         return self.__dict__.copy()

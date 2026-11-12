@@ -114,22 +114,10 @@ current stored key.
   "tmdb_api_key": "",
   "gst_model": "gemini-flash-latest",
   "gst_fallback_model": "",
-  "gst_batch_size": 500,
-  "gst_retry_batch_size": 300,
   "gst_paid_quota": false,
-  "gst_skip_upgrade": true,
-  "gst_quiet": true,
-  "gst_progress_log": false,
-  "gst_thoughts_log": false,
-  "gst_token_report": false,
   "gst_temperature": "0.7",
-  "gst_top_p": "0.95",
-  "gst_top_k": "40",
   "gst_thinking_budget": "2048",
-  "gst_thinking_level": "medium",
-  "gst_no_streaming": true,
   "gst_no_thinking": false,
-  "gst_context_size": 50,
   "job_settle_seconds": 600,
   "source_languages": [
     {"code": "en", "language": "English", "enabled": true},
@@ -252,3 +240,104 @@ Returns:
 ```json
 {"ok": true, "kind": "gemini_api_key", "message": "Gemini API key is valid"}
 ```
+
+## Library, episodes, corrections, versions and glossaries
+
+These endpoints back the Library, Episode and Glossary pages. Errors are
+`{"error": "..."}` with `400` (bad request or invalid YAML) or `404` (unknown
+unit, series, version or language). A *unit* is one episode or one movie; ids
+come from `GET /api/library/...`. Cues are addressed by their 1-based number `n`
+in the source subtitle (the same number the model sees), not the SRT index.
+`lang` is a target language code and may be omitted when the unit has exactly
+one target.
+
+Statuses: `current`, `stale` (rules changed since translation; never
+retranslated automatically), `incomplete`, `untranslated`.
+
+### GET /api/library/series
+`{"items": [{"id", "key", "title", "stale_policy", "units", "counts": {"current", "stale", "incomplete", "untranslated"}}]}`
+
+### GET /api/library/series/{id}/units?status=
+`{"series": {...}, "languages": ["vi"], "units": [{"id", "season", "episode", "title", "status", "targets": [{"lang", "status", "version", "trigger", "model", "updated_at", "exists", "modified_outside"}]}]}`.
+`modified_outside` is true when the file on disk is not the version the worker wrote.
+
+### GET /api/library/movies?status=
+`{"items": [<unit>...]}` in the same shape as the units above.
+
+### GET /api/units/{id}
+One unit with its targets, its series and whether the source subtitle is still on disk.
+
+### GET /api/units/{id}/cues?lang=&at=&q=&offset=&limit=
+Source and translation side by side. `at=00:23:10` (also `23:10`, `1:02:03.5`)
+sets `focus` to the cue playing then, or the nearest one, and returns the page
+containing it. `q` keeps cues whose source or translation contains the text.
+Default `limit` and maximum is 5000.
+
+```json
+{"lang": "vi", "total": 531, "offset": 0, "focus": 112, "aligned": true, "has_target": true,
+ "rows": [{"n": 112, "index": 112, "start": "00:23:10", "start_ms": 1390000, "end_ms": 1392500,
+           "source": "...", "target": "...", "locked": false}]}
+```
+
+### GET /api/units/{id}/corrections?lang=
+Active episode-scope corrections: `{"items": [{"id", "kind", "payload", "created_at"}]}`.
+
+### POST /api/units/{id}/corrections
+```json
+{"lang": "vi", "kind": "term", "scope": "episode",
+ "payload": {"source": "Kyber crystal", "target": "tinh thể Kyber", "locked": true}}
+```
+`kind` and `payload`:
+
+| kind | payload | model call |
+| --- | --- | --- |
+| `term` | `source`, `target`, optional `locked` (default true), `aliases`, `note` | on the next retranslation |
+| `address` | `a`, `b`, `a_to_b` and/or `b_to_a` (`"self–other"`), optional `from_cue`, `note` | on the next retranslation |
+| `note` | `text` (episode scope only) | on the next retranslation |
+| `cue_edit` | `cue`, `text`; or `edits: [{cue, text}]` (episode scope only) | none: a new version is written at once, Bazarr is asked to rescan, and the cues are locked |
+
+`scope` is `episode` (stored in `app.db`), `forward` (from this episode on) or
+`series`; the last two write the series glossary YAML (movie glossary for movies)
+and return `impact: {"stale_now", "stale_after", "would_stale"}`. A `cue_edit`
+reply has `version` and `warnings` (for example tags that differ from the
+source). Locked cues are kept verbatim by every later retranslation and shown to
+the model as reference translations.
+
+### POST /api/units/{id}/corrections/{correction_id}/remove
+Deactivates an episode correction (a cue edit stops locking its cue; the file is unchanged).
+
+### POST /api/units/{id}/retranslate
+```json
+{"lang": "vi", "range": {"cues": [120, 180]}, "correction_ids": [3, 4],
+ "new_corrections": [{"kind": "note", "payload": {"text": "Bob is sarcastic"}}]}
+```
+`range` is `{"cues": [first, last]}`, `{"time": ["00:23:10", "00:25:00"]}` or
+omitted for the whole episode. A range needs an existing target with the same
+number of cues; cues outside it stay exactly as they are. `correction_ids`
+limits which active term/address/note corrections are used (default: all).
+Queues a job ahead of automatic work (priority 100); only one retranslation per
+target can be queued at a time. Reply: `{"ok": true, "job_id", "range", "correction_ids"}`.
+The result overwrites the target and is recorded as a version; the old file is
+kept in `backups/subtitles/`.
+
+### GET /api/units/{id}/versions?lang=
+`{"lang", "modified_outside", "versions": [{"version", "trigger", "status", "parent_version", "model", "sha256", "tokens_in", "tokens_out", "created_at", "current"}]}`, newest first.
+`trigger` is `auto`, `retranslate`, `cue_edit`, `revert` or `external` (a hand edit kept before an overwrite).
+
+### GET /api/units/{id}/versions/{v}/diff?against=&lang=
+Cue-level changes from `against` (default: the previous version) to `v`:
+`{"version", "against", "changed_cues", "changes": [{"op", "before": [{n, index, time, text}], "after": [...]}]}`.
+
+### POST /api/units/{id}/versions/{v}/revert
+Body `{"lang": "vi"}`. Restores version `v` byte for byte as a new version (what
+was on disk is kept first) and asks Bazarr to rescan. Cue locks whose text is no
+longer in the restored file are released. Reply `{"ok": true, "version", "restored"}`.
+
+### GET /api/series/{id}/glossary?lang=
+`{"lang", "exists", "yaml", "stale_units"}`. `lang` is required.
+
+### PUT /api/series/{id}/glossary?lang=
+Body `{"yaml": "...", "dry_run": false}`. The YAML is validated (`400` names the
+offending path), the previous file is kept under `backups/glossary/`, and the new
+one is written atomically. Reply `{"ok", "saved", "stale_now", "stale_after", "would_stale"}`;
+with `dry_run` nothing is written.

@@ -8,7 +8,7 @@ LLM only ever sees ``{i, text}``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Iterable
 
 from .. import srt
 from ..providers.base import BadOutput, LLMRequest, Provider
@@ -79,6 +79,8 @@ class _Run:
         ctx: PromptContext,
         options: TranslateOptions,
         on_progress: Callable[[int, int], None] | None,
+        only: Iterable[int] | None = None,
+        keep: dict[int, str] | None = None,
     ) -> None:
         self.provider = provider
         self.cues = cues
@@ -86,18 +88,24 @@ class _Run:
         self.options = options
         self.on_progress = on_progress
         self.system = build_system(ctx, cues)
-        self.glossary = ctx.glossary
+        self.glossary = ctx.glossary.for_episode(ctx.season, ctx.episode) if ctx.glossary else None
         self.source = {n: c.text for n, c in enumerate(cues, start=1) if c.text.strip()}
+        self.keep = {n: text for n, text in (keep or {}).items() if 1 <= n <= len(cues)}
+        wanted = None if only is None else set(only)
+        self.targets = [
+            n for n in sorted(self.source) if n not in self.keep and (wanted is None or n in wanted)
+        ]
         self.out: dict[int, str] = {}
         self.calls: list[CallRecord] = []
         self.warnings: list[str] = []
-        self.total = len(self.source)
+        self.total = len(self.targets)
 
     # -- one model call ---------------------------------------------------
     def _call(self, kind: str, targets: list[int], context: dict[int, str], notes: dict[int, str]):
+        reference = {n: text for n, text in self.keep.items() if n in context}
         req = LLMRequest(
             system=self.system,
-            user=build_user(context, targets, notes),
+            user=build_user(context, targets, notes, reference),
             response_schema=RESPONSE_SCHEMA if self.provider.caps.structured_output else None,
             temperature=self.options.temperature,
             task="translate",
@@ -197,25 +205,34 @@ def translate(
     ctx: PromptContext | None = None,
     options: TranslateOptions | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    only: Iterable[int] | None = None,
+    keep: dict[int, str] | None = None,
 ) -> TranslationResult:
     """Translate ``cues`` and return new cues with identical index/timing.
+
+    ``only`` restricts the request to those cue ordinals (1-based); the whole source is still
+    sent as context (FR-11.3.2). ``keep`` maps ordinals to final texts that are copied to the
+    output verbatim, never requested, and shown to the model as reference translations (locked
+    cue edits, cues outside a retranslated range). Any other cue keeps its source text.
 
     Raises :class:`TranslationError` if cues stay invalid after two repair rounds and
     one split; provider errors (``RateLimited`` etc.) propagate to the caller.
     """
     ctx = ctx or PromptContext()
     options = options or TranslateOptions()
-    run = _Run(provider, cues, ctx, options, on_progress)
-    targets = sorted(run.source)
-    parts = planner.plan_parts(
-        cues,
-        targets,
-        provider.caps.max_output_tokens,
-        output_factor=options.output_factor,
-        min_part_cues=options.min_part_cues,
-    )
-    for part in parts:
-        run.run_part(part, kind="translate", parts_used=len(parts), depth=0)
+    run = _Run(provider, cues, ctx, options, on_progress, only, keep)
+    if run.targets:
+        parts = planner.plan_parts(
+            cues,
+            run.targets,
+            provider.caps.max_output_tokens,
+            output_factor=options.output_factor,
+            min_part_cues=options.min_part_cues,
+        )
+        for part in parts:
+            run.run_part(part, kind="translate", parts_used=len(parts), depth=0)
 
-    translated = [cue.with_text(run.out.get(n, cue.text)) for n, cue in enumerate(cues, start=1)]
+    translated = [
+        cue.with_text(run.out.get(n, run.keep.get(n, cue.text))) for n, cue in enumerate(cues, start=1)
+    ]
     return TranslationResult(cues=translated, calls=run.calls, warnings=run.warnings)

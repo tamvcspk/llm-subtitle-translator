@@ -15,7 +15,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[x]` CI GitHub xanh (f9b8605) |
 | **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[x]` CI xanh; thử Gemini thật 4 file; 50 file thật hoãn (xem dưới) |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[~]` Code + test xong (xem dưới); còn bảng `jobs`/importer và chạy thật với Bazarr |
-| **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[ ]` |
+| **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong (xem dưới); còn CI GitHub xanh và thử giao diện trên trình duyệt thật |
 | **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[ ]` |
 | **P5** | Đề xuất + research grounding + Review inbox; provider `openai_compat` | FR-6, FR-7, FR-9.1, FR-11.1 | `[ ]` |
 
@@ -73,7 +73,7 @@ Tiêu chí 3, 4, 5. ADR-1, ADR-3; ARCHITECTURE §3.3.
 Tiêu chí 6, 8. ADR-4, ADR-5; ARCHITECTURE §4, NFR-1/2/3/7.
 
 - [x] Store SQLite `app.db` (`DATA_DIR`, mặc định `STATE_DIR`; migration theo `user_version`): bảng `translations` (version, bản sao, sha256, trigger, `context_hash`) và `llm_calls` (`gst_worker/store.py`). `translations` khoá theo `output_path` cho đến khi có `units` (P3/P4).
-- [ ] Bảng `jobs` + importer `/queue/incoming/*.json` → `jobs`. **Hoãn có chủ ý:** hàng đợi vẫn là cây thư mục JSON (`pending/processing/...`) mà `gst_enqueue.sh`, `JobQueue`, console và ~40 test đang dùng; chuyển sang SQLite đụng cả script Bazarr lẫn console nên làm riêng, cùng lúc có `units` ở P3.
+- [ ] Bảng `jobs` + importer `/queue/incoming/*.json` → `jobs`. **Hoãn có chủ ý:** hàng đợi vẫn là cây thư mục JSON (`pending/processing/...`) mà `gst_enqueue.sh`, `JobQueue`, console và ~40 test đang dùng; chuyển sang SQLite đụng cả script Bazarr lẫn console nên làm riêng. `units` đã có từ P3 nhưng hàng đợi vẫn là cây thư mục JSON (job dịch lại là một file trong `pending/` có `priority`); bảng `jobs` dời sang P4 cùng scheduler.
 - [x] Worker gọi `subcore` trong process thay cho subprocess `gst`; lỗi nhà cung cấp là exception có kiểu (`QuotaExhausted` → `DailyQuotaExceededError`, `RateLimited`/`Unavailable` → `ProviderUnavailableError`), không còn phân loại bằng chuỗi stdout (`translation_attempt.py`). Mất: resume từ `.partial`/`.progress` (một lần dịch lỗi chạy lại từ đầu).
 - [x] Rate limiter RPM/TPM/RPD theo API key + backoff có jitter, tôn trọng `retry-after` (`subcore.providers.limiter`); hết quota ngày → queue pause như cũ (NFR-1). Nhiều key: chuyển key khi hết quota (FR-9.4). Giới hạn qua `LLM_RPM/TPM/RPD`.
 - [x] Timeout 300 s mỗi lời gọi (đã có ở adapter Gemini), watchdog 30 phút mỗi job (`JOB_TIMEOUT_SECONDS`, kiểm tra trước mỗi lời gọi); idempotent theo sha256 nguồn + `context_hash` (model, temperature, prompt version, mô tả TMDB) — chạy lại không gọi LLM (NFR-2, NFR-3).
@@ -81,20 +81,26 @@ Tiêu chí 6, 8. ADR-4, ADR-5; ARCHITECTURE §4, NFR-1/2/3/7.
 - [x] Dịch lại ghi đè + bản sao trong `DATA_DIR/backups/subtitles/`, hoàn tác từng byte (tiêu chí 8) — mức thư viện (`versions.py`) + `trigger: retranslate` trong job. Endpoint và nút trên console thuộc P3.
 - [x] Bỏ dependency `gemini-srt-translator`, bước CI `gst --help` (thay bằng `subcore --help`), `scripts/update_upstream.py`; Dependabot theo dõi `google-genai`; cập nhật `docs/ARCHITECTURE.md`.
 - [ ] Chạy thật với Bazarr (khi đã có môi trường triển khai cho fork).
-- [ ] Dọn các ô Settings không còn tác dụng (`gst_batch_size`, `gst_top_p`, ... xem `docs/CONFIGURATION.md`) — làm cùng đợt sửa console ở P3.
+- [x] Dọn các ô Settings không còn tác dụng (`gst_batch_size`, `gst_top_p`, ...) — xong ở P3.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P2 (chỉ đánh dấu `[x]` cho phase sau bước này).
 
-## P3 — Console: Library, Episode, correction, dịch lại `[ ]`
+## P3 — Console: Library, Episode, correction, dịch lại `[~]`
 
 Tiêu chí 7. FR-10, FR-11.2, FR-11.3; ADR-7; API §5.
 
-- [ ] Trang **Library**: series → tập, trạng thái `current/stale/incomplete`, lọc.
-- [ ] Trang **Episode**: bảng gốc–dịch song song, nhảy theo timecode, tìm text (FR-11.2.5); mobile-usable.
-- [ ] Correction `term/address/note/cue_edit`, scope `episode/forward/series`; `forward/series` ghi vào glossary YAML, `episode` vào bảng `corrections`; `cue_edit` là khoá (FR-11.2.4).
-- [ ] Dịch lại theo cả tập / dải cue / dải thời gian, ưu tiên cao hơn job tự động (FR-11.3).
-- [ ] Tab **Lịch sử**: phiên bản, diff, hoàn tác.
-- [ ] Trang **Glossary**: sửa theo series, lưu YAML atomic, hiện số bản dịch sẽ stale.
-- [ ] Endpoint API §5 tương ứng + `docs/API.md`.
+- [x] Trang **Library**: series → tập, trạng thái `current/stale/incomplete/untranslated`, lọc (`views/library.js`, `library.py`). `stale` hiện = luật (glossary + correction) khác lúc dịch; `incomplete` chờ P4 (`context_complete`). Phim liệt kê riêng.
+- [x] Trang **Episode**: bảng gốc–dịch song song, nhảy theo timecode, tìm text (FR-11.2.5); layout xếp chồng trên điện thoại (`views/episode.js`).
+- [x] Correction `term/address/note/cue_edit`, scope `episode/forward/series`; `forward/series` ghi vào glossary YAML (term nay có `from`/`until`), `episode` vào bảng `corrections`; `cue_edit` là khoá và là mẫu trong prompt (FR-11.2.4). `note` chỉ scope `episode`.
+- [x] Dịch lại theo cả tập / dải cue / dải thời gian, ưu tiên cao hơn job tự động (FR-11.3); `subcore.translate(only=, keep=)`.
+- [x] Tab **Lịch sử**: phiên bản, diff theo cue, hoàn tác.
+- [x] Trang **Glossary**: sửa YAML theo series và ngôn ngữ, kiểm tra (dry run), lưu atomic có backup bản cũ, hiện số bản dịch sẽ stale.
+- [x] Endpoint API §5 (trừ `/context`, thuộc P4) + `docs/API.md`.
+- [x] Test tiêu chí 7 (`apps/worker/tests/test_corrections.py`, `packages/subcore/tests/test_corrections.py`) và tiêu chí 8 qua service.
+- [x] Dọn các ô Settings không còn tác dụng (12 khóa `gst_*`); đổi tên mục "Library scan" thành "Media scan".
+- [ ] Thử giao diện trên trình duyệt thật (desktop + điện thoại): chưa làm được trong phiên này, chỉ có kiểm cú pháp JS, cấu trúc HTML và test HTTP.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P3 (chỉ đánh dấu `[x]` cho phase sau bước này).
+
+---
 
 ## P4 — Story memory `[ ]`
 

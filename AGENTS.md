@@ -61,10 +61,12 @@ Seams to respect when adding code:
 - `TranslationAttempt` (`translation_attempt.py`) is the only place that calls `subcore` and maps its typed provider errors (`QuotaExhausted`, `RateLimited`/`Unavailable`, ...) to the queue's `DailyQuotaExceededError` / `ProviderUnavailableError`; never classify failures by parsing error text. Progress reaches the queue through the status callback (`progress_done`/`progress_total`).
 - Target subtitles are published only through `TranslationVersions` (`versions.py`), which records each version in the SQLite `Store` and keeps a copy under `DATA_DIR/backups/subtitles/`. An automatic job never overwrites an existing target; retranslate and revert back up a non-system file first.
 - Queue recovery runs explicitly at worker startup; creating a `JobQueue` handle must not recover in-flight work.
+- Library, corrections, retranslation, history and glossary pages reach the worker through `UnitService` (`units.py`, in `RuntimeContext.units`) and the pure router `library_api.py`; `library.py` knows units and statuses, `rules.py` (pure) merges the glossary file with episode corrections and hashes them (a different hash than the stored `glossary_hash` means stale), `glossaries.py` owns the YAML files. `TranslationAttempt` takes the `Library` so a job is registered and prompted with its rules. Retranslation jobs are queue files with `trigger: retranslate` and `priority: 100`; `should_skip_job` lets them overwrite and `_ready_job_path` runs them first.
 
 Invariants:
 
-- An existing target subtitle is never overwritten.
+- An existing target subtitle is never overwritten by an automatic job. Only an explicit retranslation, cue edit or revert replaces it, and each keeps the previous file as a version first.
+- A broken glossary file stops the job; a translation never silently runs without it.
 - Gemini, TMDB, and Bazarr API keys are never logged or returned unmasked.
 - Every HTTP request (static and `/api/*`) passes Basic Auth in `ConsoleHandler.parse_request` before routing (`gst_worker/auth.py`). Credentials come from `CONSOLE_USER`/`CONSOLE_PASSWORD` env only and are never logged, stored in config, or exposed through `RuntimeContext`; `CONSOLE_AUTH=off` is the only opt-out.
 - Bazarr and the worker must see identical media paths (`/media/...`).
