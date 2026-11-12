@@ -3,14 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from .config import enabled_target_languages
-from .subtitles import target_output_path
-from .translation import DailyQuotaExceededError, ProviderUnavailableError
+from .subtitles import existing_target_subtitle, target_output_path
+from .translation import DailyQuotaExceededError, HardJobError, ProviderUnavailableError
 from .queue_policy import PROVIDER_RETRY_DELAYS, daily_quota_retry_at, provider_retry_decision, select_model
 
 
@@ -98,7 +100,44 @@ def reject_daily_quota(queue_dir: str) -> None:
         raise ValueError("Daily Gemini quota exhausted; new jobs and retries are disabled until the quota pause expires.")
 
 
-def should_skip_job(job: dict[str, Any]) -> bool:
+def allowed_path_prefixes() -> tuple[str, ...]:
+    """Folders automatic jobs may come from (`GST_ONLY_PATHS`, comma separated); empty means anywhere.
+
+    A guard for trying the worker against a real Bazarr: only the named folders are ever translated,
+    however many items Bazarr reports as wanted.
+    """
+    raw = os.getenv("GST_ONLY_PATHS", "")
+    return tuple(p.strip().replace("\\", "/").rstrip("/") for p in re.split(r"[,\n]", raw) if p.strip())
+
+
+def outside_allowed_paths(subtitle_path: str) -> bool:
+    prefixes = allowed_path_prefixes()
+    if not prefixes:
+        return False
+    normalized = str(subtitle_path).replace("\\", "/")
+    return not any(normalized == prefix or normalized.startswith(prefix + "/") for prefix in prefixes)
+
+
+def max_open_jobs() -> int:
+    """Most jobs allowed to wait or run at once (`GST_MAX_PENDING`); 0 means no cap."""
+    try:
+        return max(0, int(os.getenv("GST_MAX_PENDING", "0") or 0))
+    except ValueError:
+        return 0
+
+
+def open_job_count(queue_dir: str) -> int:
+    root = Path(queue_dir)
+    return sum(len(list((root / state).glob("*.json"))) for state in ("pending", "processing", "deferred"))
+
+
+def queue_is_full(queue_dir: str) -> bool:
+    limit = max_open_jobs()
+    return limit > 0 and open_job_count(queue_dir) >= limit
+
+
+def skip_reason(job: dict[str, Any]) -> str | None:
+    """Why a job must not translate anything, or None when it should run."""
     provider = str(job.get("provider", "")).lower()
     language = str(job.get("source_code") or job.get("language") or "").split(":", 1)[0].lower()
     subtitle_path = str(job.get("subtitle_path", ""))
@@ -106,13 +145,26 @@ def should_skip_job(job: dict[str, Any]) -> bool:
     output_path = str(job.get("output_path") or target_output_path(subtitle_path, target_code, source_code=language))
 
     if provider and provider not in {"embeddedsubtitles", "gemini-console", "manual", "local"}:
-        return True
+        return f"provider {provider} is not handled"
     if language and language == target_code.lower():
-        return True
+        return "source and target language are the same"
     if not subtitle_path or not Path(subtitle_path).exists():
-        return True
+        return "source subtitle is gone"
     # An explicit retranslation exists to replace the target (the version history keeps the old one).
-    return Path(output_path).exists() and job.get("trigger") != "retranslate"
+    if job.get("trigger") == "retranslate":
+        return None
+    if outside_allowed_paths(subtitle_path):
+        return "outside GST_ONLY_PATHS"
+    if Path(output_path).exists():
+        return "target subtitle already exists"
+    found = existing_target_subtitle(subtitle_path, target_code, language)
+    if found:
+        return f"{target_code} subtitle already present: {Path(found).name}"
+    return None
+
+
+def should_skip_job(job: dict[str, Any]) -> bool:
+    return skip_reason(job) is not None
 
 
 def ensure_queue_dirs(queue_dir: str) -> None:
@@ -136,6 +188,8 @@ def retry_failed_job(queue_dir: str, job_id: str) -> bool:
     try:
         job = json.loads(failed.read_text(encoding="utf-8"))
         _reset_retry(job)
+        job.pop("escalated_from", None)
+        job.pop("escalation_reason", None)
         _write_job(failed, job)
     except (OSError, TypeError, ValueError):
         pass
@@ -174,13 +228,17 @@ def enqueue_translation_jobs(
         return created
     source_code = str(base_job.get("source_code") or base_job.get("language") or "en").split(":", 1)[0].strip()
     source_language = str(base_job.get("source_language") or source_code or "English")
+    if outside_allowed_paths(subtitle_path):
+        logging.warning("Not queueing %s: outside GST_ONLY_PATHS", subtitle_path)
+        return created
 
     for target in enabled_target_languages({"target_languages": targets}):
         target_code = str(target["code"])
         if source_code.lower() == target_code.lower():
             continue
         output_path = str(base_job.get("output_path") or target_output_path(subtitle_path, target_code, source_code=source_code))
-        if Path(output_path).exists():
+        # Only a language that is missing gets translated: any sibling subtitle already in it counts.
+        if Path(output_path).exists() or existing_target_subtitle(subtitle_path, target_code, source_code):
             continue
         jid = job_id_for(subtitle_path, output_path, target_code)
         pending = Path(queue_dir) / "pending" / f"{jid}.json"
@@ -188,6 +246,10 @@ def enqueue_translation_jobs(
         deferred = Path(queue_dir) / "deferred" / f"{jid}.json"
         if pending.exists() or processing.exists() or deferred.exists():
             continue
+        if queue_is_full(queue_dir):
+            logging.warning("Not queueing %s (%s): GST_MAX_PENDING=%s jobs are already waiting",
+                            subtitle_path, target_code, max_open_jobs())
+            break
         if retry_failed_job(queue_dir, jid):
             created.append(str(pending))
             continue
@@ -259,6 +321,32 @@ def queue_snapshot(queue_dir: str, limit: int = 100) -> dict[str, Any]:
             jobs.append(job)
         snapshot[state] = jobs
     return snapshot
+
+
+def layer_report(queue_dir: str) -> dict[str, Any]:
+    """How the two model layers are doing, from the job files: is the strong model worth having?
+
+    ``by_model`` counts finished translations per model; ``escalated`` counts jobs the default model could
+    not finish (invalid output after repair) that moved to the strong model, and how those ended. If few
+    jobs escalate, or the strong model does not rescue most of them, the layer is not earning its place.
+    """
+    root = Path(queue_dir)
+    by_model: dict[str, dict[str, int]] = {}
+    escalated = {"total": 0, "done": 0, "failed": 0, "waiting": 0}
+    for state in QUEUE_STATES:
+        for path in (root / state).glob("*.json"):
+            try:
+                job = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if job.get("escalated_from"):
+                escalated["total"] += 1
+                key = state if state in ("done", "failed") else "waiting"
+                escalated[key] += 1
+            if state in ("done", "failed") and job.get("gst_model") and (state == "failed" or job.get("result") == "translated"):
+                counts = by_model.setdefault(str(job["gst_model"]), {"done": 0, "failed": 0})
+                counts[state] += 1
+    return {"by_model": by_model, "escalated": escalated}
 
 
 class JobQueue:
@@ -407,6 +495,7 @@ class JobQueue:
             _reset_retry(job)
             for key in ("progress_done", "progress_total"):
                 job.pop(key, None)
+            job["result"] = status
             _write_job(processing_path, job)
             destination = self.queue_dir / "done" / processing_path.name
             logging.info("Job %s finished | status=%s | duration=%.1fs", processing_path.stem, status, time.monotonic() - started)
@@ -482,6 +571,27 @@ class JobQueue:
                     len(PROVIDER_RETRY_DELAYS),
                     processing_path.name,
                 )
+        except HardJobError as exc:
+            strong_available = (
+                len(models) > 1
+                and job.get("gst_model") != models[1]
+                and models[1] not in model_quota_pauses(str(self.queue_dir))
+            )
+            if strong_available:
+                # A hard job: the default model could not produce valid output. Try the strong model once.
+                job["escalated_from"] = job.get("gst_model")
+                job["escalation_reason"] = str(exc)[-300:]
+                job["use_fallback_model"] = True
+                job["last_error"] = str(exc)
+                _write_job(processing_path, job)
+                destination = self.queue_dir / "pending" / processing_path.name
+                logging.warning("Job %s: %s could not produce valid output; continuing on strong model %s",
+                                processing_path.stem, job.get("gst_model"), models[1])
+            else:
+                destination = self.queue_dir / "failed" / processing_path.name
+                error = str(exc)
+                logging.error("Job %s failed on %s: %s", processing_path.stem, job.get("gst_model"),
+                              str(exc).splitlines()[0][:240] if str(exc) else type(exc).__name__)
         except Exception as exc:
             destination = self.queue_dir / "failed" / processing_path.name
             error = str(exc)

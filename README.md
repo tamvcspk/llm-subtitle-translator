@@ -21,7 +21,8 @@ backup, so a retranslation can be reverted.
 - Settings page shows configured secrets as `**********` and provides API-key
   test buttons for Bazarr, Gemini, and TMDB.
 - Translation options are configurable in the web console, including model
-  selection from a dropdown, a fallback model, quota mode, and temperature.
+  selection from a dropdown (a light default model plus a strong model for hard
+  jobs), quota mode, and temperature.
   `LLM_RPM`/`LLM_TPM`/`LLM_RPD` cap the request rate per API key.
 - Multi-source and multi-target output support, for example `en -> zh`,
   `ja -> zh`, `zh -> en`.

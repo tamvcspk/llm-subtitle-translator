@@ -188,22 +188,31 @@ switching to a model that still has quota lifts it.
 
 The queue adds runtime fields: `gst_model` is the model chosen for the latest
 translation attempt, and `use_fallback_model` marks a job handed to the fallback
-model after a provider outage. A manual retry clears the retry fields. An
+model after a provider outage or a hard job (`escalated_from` and
+`escalation_reason` then say why). A finished job also records its `result`
+(`translated`, `skipped`, `skipped-not-wanted`, ...). A manual retry clears the
+retry and escalation fields. An
 optional `trigger` (`auto` by default, or `retranslate`) lets an explicit
 retranslation overwrite an existing target after backing it up.
 
 ## Translation Flow
 
 1. The worker picks the oldest pending job.
-2. Existing output files are skipped to avoid overwriting subtitles (automatic
-   jobs only; see the version rules above).
+2. The job is dropped, with no model call, unless its language is still missing
+   (automatic jobs only; see the version rules above): the exact target file or
+   any sibling subtitle in that language exists, the folder is outside
+   `GST_ONLY_PATHS`, or Bazarr no longer lists the language in the item's
+   `missing_subtitles` (`skipped-not-wanted`; if Bazarr cannot answer, the files
+   decide). The same checks run when the job is queued, so most never enter the
+   queue; `GST_MAX_PENDING` caps how many can.
 3. TMDB context is built when `TMDB_API_KEY` is available.
 4. If the store already holds a result for the same source sha256, target
    language, and context hash (model, temperature, prompt version, TMDB
    description), the stored copy is published and no model call is made.
 5. Otherwise `subcore` translates with the model the queue chose for this
-   attempt: the primary `gst_model`, or `gst_fallback_model` when the job was
-   handed over or the primary model's daily quota is exhausted. Every call goes
+   attempt: the default `gst_model` (a light model), or the strong model
+   `gst_fallback_model` when the job was handed over (hard job or outage) or the
+   default model's daily quota is exhausted. Every call goes
    through a rate limiter (RPM/TPM/RPD) and retries `429`/`503` with
    exponential backoff, jitter, and the server's `retry-after`. Calls time out
    after 300 seconds and a job has a 30 minute watchdog (`JOB_TIMEOUT_SECONDS`).
@@ -213,8 +222,13 @@ retranslation overwrite an existing target after backing it up.
    starts, so a queue of jobs does not spend daily quota on the same errors.
    After four delayed retries the job moves to the fallback model once; without
    a fallback, or when the fallback is also unavailable, it moves to `failed`.
-   Output that stays invalid after repair and splitting, a rejected API key, or
-   an exceeded watchdog fails the job immediately.
+   A rejected API key or an exceeded watchdog fails the job immediately. Output
+   that stays invalid after repair and splitting (`HardJobError`) is a hard job:
+   the default model is a light one, so the job moves once to the strong model
+   (`gst_fallback_model`), recording `escalated_from`; if that also fails, or
+   there is no strong model, the job fails. `layer_report` (`/api/status`
+   `model_layers`) counts how many jobs escalate and how many the strong model
+   finishes, to decide whether the layering is worth keeping.
 7. A daily quota error pauses that model for 24 hours. If another configured
    model still has quota, the job returns to `pending` and continues on it.
    Once every configured model is exhausted, the job and waiting jobs move to

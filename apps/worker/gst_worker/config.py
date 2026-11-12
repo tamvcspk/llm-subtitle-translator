@@ -22,6 +22,10 @@ GEMINI_LANGUAGE_NAMES = {
     "Chinese Simplified": "Simplified Chinese",
     "Chinese Traditional": "Traditional Chinese",
 }
+# Two model layers: the cheap default does the work; the strong model (setting `gst_fallback_model`)
+# only takes jobs the default cannot finish: output that stays invalid, an outage, or spent quota.
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_STRONG_MODEL = "gemini-3.5-flash"
 SECRET_MASK = "**********"
 SECRET_CONFIG_KEYS = ("bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key")
 # Settings the in-process engine reads. Options of the old `gst` CLI (batch sizes, top_p/top_k, thinking
@@ -46,8 +50,8 @@ DEFAULT_APP_CONFIG = {
     "gemini_api_key": "",
     "gemini_api_key2": "",
     "tmdb_api_key": "",
-    "gst_model": "gemini-flash-latest",
-    "gst_fallback_model": "",
+    "gst_model": DEFAULT_MODEL,
+    "gst_fallback_model": DEFAULT_STRONG_MODEL,
     "gst_paid_quota": False,
     "gst_temperature": "0.7",
     "gst_thinking_budget": "2048",

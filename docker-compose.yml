@@ -26,7 +26,9 @@ services:
       CONSOLE_AUTH: ${CONSOLE_AUTH:-}
       BAZARR_URL: ${BAZARR_URL:-http://bazarr:6767}
       BAZARR_API_KEY: ${BAZARR_API_KEY:-}
-      GST_MODEL: ${GST_MODEL:-gemini-flash-latest}
+      GST_MODEL: ${GST_MODEL:-gemini-3.1-flash-lite}
+      GST_ONLY_PATHS: ${GST_ONLY_PATHS:-}
+      GST_MAX_PENDING: ${GST_MAX_PENDING:-0}
       LLM_RPM: ${LLM_RPM:-}
       LLM_TPM: ${LLM_TPM:-}
       LLM_RPD: ${LLM_RPD:-}

@@ -18,7 +18,7 @@ from subcore.providers import (
 
 from gst_worker import queue as gst_queue
 from gst_worker.store import Store
-from gst_worker.translation import DailyQuotaExceededError, ProviderUnavailableError
+from gst_worker.translation import DailyQuotaExceededError, HardJobError, ProviderUnavailableError
 from gst_worker.translation_attempt import TranslationAttempt
 from gst_worker.versions import TranslationVersions
 
@@ -178,7 +178,7 @@ class FailureMappingTests(unittest.TestCase):
 
     def test_invalid_output_after_repair_fails_the_job(self):
         env = Env(self, handler=lambda req, n: "this is not json")
-        with self.assertRaisesRegex(RuntimeError, "Translation failed"):
+        with self.assertRaisesRegex(HardJobError, "Translation failed"):  # the queue may escalate this one
             env.run()
         self.assertFalse(env.output.exists())
 

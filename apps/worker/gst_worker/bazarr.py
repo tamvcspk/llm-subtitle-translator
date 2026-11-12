@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,34 @@ def missing_enabled_targets(item: dict[str, Any], targets: list[dict[str, Any]])
         return []
     missing_codes = {str(entry.get("code2") or "").lower() for entry in missing}
     return [target for target in enabled_target_languages({"target_languages": targets}) if str(target["code"]).lower() in missing_codes]
+
+
+def target_still_missing(job: dict[str, Any], http: HTTPClient, bazarr_url: str, api_key: str) -> bool | None:
+    """Does Bazarr itself still list the job's target language as missing for this item?
+
+    ``False`` means Bazarr has the language (or does not want it): do not translate. ``None`` means
+    Bazarr cannot say (no ids on the job, no key, unreachable, unexpected answer); the caller then
+    relies on the files on disk.
+    """
+    media_id = str(job.get("media_id") or "")
+    if not media_id or not api_key or not bazarr_url:
+        return None
+    headers = {"X-API-KEY": api_key}
+    try:
+        if job.get("media_type") == "series":
+            item = first_data(http.get_json(f"{bazarr_url}/api/episodes", params={"episodeid[]": media_id}, headers=headers))
+        elif job.get("media_type") == "movie":
+            item = first_data(http.get_json(f"{bazarr_url}/api/movies", params={"radarrid[]": media_id}, headers=headers))
+        else:
+            return None
+    except Exception as exc:  # unreachable Bazarr must not stop translation that the files say is needed
+        logging.warning("Could not ask Bazarr whether %s is missing: %s", job.get("target_code"), exc)
+        return None
+    missing = item.get("missing_subtitles") if isinstance(item, dict) else None
+    if not isinstance(missing, list):
+        return None
+    codes = {str(entry.get("code2") or "").lower() for entry in missing if isinstance(entry, dict)}
+    return str(job.get("target_code") or "").lower() in codes
 
 
 def list_wanted_items(

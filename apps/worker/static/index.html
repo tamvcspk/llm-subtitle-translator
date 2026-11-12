@@ -341,13 +341,14 @@
           </div>
           <div class="field-grid">
             <div class="field field-wide">
-              <label for="f-gst_model">Model</label>
+              <label for="f-gst_model">Default model</label>
               <select id="f-gst_model" name="gst_model" class="input"></select>
+              <p class="hint">A light model that translates every job.</p>
             </div>
             <div class="field field-wide">
-              <label for="f-gst_fallback_model">Fallback model</label>
+              <label for="f-gst_fallback_model">Strong model</label>
               <select id="f-gst_fallback_model" name="gst_fallback_model" class="input"></select>
-              <p class="hint">Continues a job when the model above stays unavailable through every delayed retry or runs out of daily quota.</p>
+              <p class="hint">Takes a job the default model cannot finish (output still invalid after repair), or continues it when the default stays unavailable or runs out of daily quota. Choose None to use one model only.</p>
             </div>
             <div class="field">
               <label for="f-job_settle_seconds">Queue settle seconds</label>

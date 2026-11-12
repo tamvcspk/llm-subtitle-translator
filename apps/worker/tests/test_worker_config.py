@@ -255,8 +255,8 @@ class TestWorkerConfigTests(unittest.TestCase):
     def test_default_gst_tuning_matches_recommended_automation_profile(self):
         config = gst_config.normalize_app_config({"gst_no_context": True})
 
-        self.assertEqual(config["gst_model"], "gemini-flash-latest")
-        self.assertEqual(config["gst_fallback_model"], "")
+        self.assertEqual(config["gst_model"], "gemini-3.1-flash-lite")
+        self.assertEqual(config["gst_fallback_model"], "gemini-3.5-flash")
         self.assertEqual(config["job_settle_seconds"], 600)
         self.assertEqual(config["gst_temperature"], "0.7")
         self.assertEqual(config["gst_thinking_budget"], "2048")

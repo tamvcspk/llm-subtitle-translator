@@ -23,9 +23,10 @@ from .base import (
 
 __all__ = ["GeminiProvider", "map_api_error", "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S"]
 
-# gemini-2.5-flash is closed to new API users (404); 3.5-flash answered promptly in the
-# 2026-11-11 trial, while 3.7/3.8-flash timed out.
-DEFAULT_MODEL = "gemini-3.5-flash"
+# The light model does the routine work; the worker escalates hard jobs to a stronger one
+# (gemini-3.5-flash). gemini-2.5-flash is closed to new API users (404); in the 2026-11-11
+# trial 3.5-flash answered promptly while 3.7/3.8-flash timed out.
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_TIMEOUT_S = 300.0  # NFR-2: >= 300 s per call
 
 _RETRY_DELAY_RE = re.compile(r"^\s*([\d.]+)\s*s\s*$")

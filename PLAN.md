@@ -15,7 +15,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[x]` CI GitHub xanh (f9b8605) |
 | **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[x]` CI xanh; thử Gemini thật 4 file; 50 file thật hoãn (xem dưới) |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[~]` Code + test xong (xem dưới); còn bảng `jobs`/importer và chạy thật với Bazarr |
-| **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong (xem dưới); còn CI GitHub xanh và thử giao diện trên trình duyệt thật |
+| **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong, CI xanh (e5babb1); còn thử giao diện trên trình duyệt thật |
 | **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[ ]` |
 | **P5** | Đề xuất + research grounding + Review inbox; provider `openai_compat` | FR-6, FR-7, FR-9.1, FR-11.1 | `[ ]` |
 
@@ -80,7 +80,11 @@ Tiêu chí 6, 8. ADR-4, ADR-5; ARCHITECTURE §4, NFR-1/2/3/7.
 - [x] "File do hệ thống tạo" = có trong `translations` với sha256 khớp; job tự động không bao giờ ghi đè file có sẵn; file bị sửa tay hoặc file lạ → lưu thành phiên bản `external` trước khi dịch lại (FR-8.1, NFR-4).
 - [x] Dịch lại ghi đè + bản sao trong `DATA_DIR/backups/subtitles/`, hoàn tác từng byte (tiêu chí 8) — mức thư viện (`versions.py`) + `trigger: retranslate` trong job. Endpoint và nút trên console thuộc P3.
 - [x] Bỏ dependency `gemini-srt-translator`, bước CI `gst --help` (thay bằng `subcore --help`), `scripts/update_upstream.py`; Dependabot theo dõi `google-genai`; cập nhật `docs/ARCHITECTURE.md`.
-- [ ] Chạy thật với Bazarr (khi đã có môi trường triển khai cho fork).
+- [x] Chỉ dịch ngôn ngữ **còn thiếu** (FR-9.6): có phụ đề cùng video ở ngôn ngữ đích dưới tên nào cũng được (`Name.vi.hi.srt`, `.ass`, ...; track forced không tính) hoặc Bazarr không còn liệt kê ngôn ngữ trong `missing_subtitles` của mục → bỏ job, không gọi model (`existing_target_subtitle`, `target_still_missing`, `skipped-not-wanted`). Script Bazarr có bản sao các kiểm tra này. Đã xác nhận trên Bazarr thật (chỉ đọc, 2026-11-12) rằng `/api/episodes` trả `missing_subtitles[].code2`; Bazarr thật đang có 929 tập thiếu `vi`.
+- [x] Rào chắn để thử với Bazarr thật mà **không dịch cả thư viện** (`GST_ONLY_PATHS`, `GST_MAX_PENDING`, đọc ở cả worker lẫn `gst_enqueue.sh`; bao cả nút "enqueue scan" của console). Test: `apps/worker/tests/test_missing_only.py`.
+- [ ] Chạy thật với Bazarr (khi đã có môi trường triển khai cho fork). **Điều kiện bắt buộc:** đặt `GST_ONLY_PATHS` vào đúng một thư mục thử (một series) và `GST_MAX_PENDING` ≤ 3 trong cả container Bazarr và worker; dùng key Gemini free tier; xem hàng đợi trước khi để chạy không giám sát; chỉ nới rào sau khi bản dịch đầu đọc được.
+- [x] Hai tầng model (FR-9.5): mặc định `gemini-3.1-flash-lite`, model mạnh `gemini-3.5-flash` chỉ cho job khó (đầu ra vẫn sai sau repair + chia nhỏ → `HardJobError`, leo thang đúng một lần), sập provider, hết quota. Lý do thử: trong thử nghiệm Brooklyn Nine-Nine (xem P1) `3.1-flash-lite` đã gán sai văn bản cho cue mà bản `flash` thì không.
+- [ ] **Đánh giá tầng thứ hai có đáng giữ không** (quyết định bỏ hay giữ FR-9.5): sau khi dịch ≥ 20 tập thật bằng key có hạn mức đủ, đọc `/api/status` → `model_layers`. Bỏ tầng (xoá model mạnh trong Settings, đổi `DEFAULT_STRONG_MODEL` thành rỗng) nếu **dưới 1 job trong 10 phải leo thang** (model nhẹ gần như không gặp job khó, tầng thừa) hoặc **model mạnh cứu được dưới một nửa số job leo thang** (đắt hơn mà không hơn). Giữ nếu ngược lại. Chưa có số liệu thật nên chưa kết luận.
 - [x] Dọn các ô Settings không còn tác dụng (`gst_batch_size`, `gst_top_p`, ...) — xong ở P3.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P2 (chỉ đánh dấu `[x]` cho phase sau bước này).
 
@@ -98,7 +102,7 @@ Tiêu chí 7. FR-10, FR-11.2, FR-11.3; ADR-7; API §5.
 - [x] Test tiêu chí 7 (`apps/worker/tests/test_corrections.py`, `packages/subcore/tests/test_corrections.py`) và tiêu chí 8 qua service.
 - [x] Dọn các ô Settings không còn tác dụng (12 khóa `gst_*`); đổi tên mục "Library scan" thành "Media scan".
 - [ ] Thử giao diện trên trình duyệt thật (desktop + điện thoại): chưa làm được trong phiên này, chỉ có kiểm cú pháp JS, cấu trúc HTML và test HTTP.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P3 (chỉ đánh dấu `[x]` cho phase sau bước này).
+- [x] Workflow **CI** trên GitHub xanh cho commit P3 (e5babb1: "Python 3.14" và "Build and publish image" đều thành công). Đã chạy image đó trên homeserver bằng container `--rm` (tmpfs, fake provider): auth, Library, cue edit, diff, stale theo term `forward`, glossary validate/dry-run/lưu, hoàn tác, xếp hàng dịch lại. Dịch lại chưa chạy tới cùng (không có key Gemini, cửa sổ settle 600 s).
 
 ---
 

@@ -47,9 +47,23 @@ Returns queue counts, current settings, Bazarr URL, and Bazarr ping status.
     "tmdb_api_key_configured": true
   },
   "bazarr_url": "http://bazarr:6767",
-  "bazarr": {"status": "OK"}
+  "bazarr": {"status": "OK"},
+  "model_layers": {
+    "by_model": {
+      "gemini-3.1-flash-lite": {"done": 41, "failed": 1},
+      "gemini-3.5-flash": {"done": 3, "failed": 1}
+    },
+    "escalated": {"total": 5, "done": 3, "failed": 1, "waiting": 1}
+  }
 }
 ```
+
+`model_layers` is read from the job files and shows whether the strong model is
+worth having. `by_model` counts translated and failed jobs per model that ran
+them last; `escalated` counts jobs the default model could not finish (output
+still invalid after repair) that moved to the strong model, split by how they
+ended. Few escalations, or a strong model that rescues few of them, means the
+second layer is not paying for itself.
 
 ## GET /api/queue
 
@@ -93,8 +107,8 @@ be reached or no key is configured, the worker returns a bundled fallback list.
 ```json
 {
   "items": [
-    {"id": "gemini-flash-latest", "name": "gemini-flash-latest"},
-    {"id": "gemini-2.5-flash", "name": "gemini-2.5-flash"}
+    {"id": "gemini-3.1-flash-lite", "name": "gemini-3.1-flash-lite"},
+    {"id": "gemini-3.5-flash", "name": "gemini-3.5-flash"}
   ]
 }
 ```
@@ -112,8 +126,8 @@ current stored key.
   "gemini_api_key": "",
   "gemini_api_key2": "",
   "tmdb_api_key": "",
-  "gst_model": "gemini-flash-latest",
-  "gst_fallback_model": "",
+  "gst_model": "gemini-3.1-flash-lite",
+  "gst_fallback_model": "gemini-3.5-flash",
   "gst_paid_quota": false,
   "gst_temperature": "0.7",
   "gst_thinking_budget": "2048",

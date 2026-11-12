@@ -1,4 +1,28 @@
 # Unreleased
+- **Two model layers, light by default.** The default model is now
+  `gemini-3.1-flash-lite` and the *strong model* (setting `gst_fallback_model`,
+  default `gemini-3.5-flash`) only takes a job the default cannot finish: output
+  that stays invalid after repair and splitting now moves the job to the strong
+  model once (before, it failed at once); an outage or a spent daily quota still
+  hands the job over as before. A job that was escalated records
+  `escalated_from` and `escalation_reason`; `/api/status` has `model_layers`
+  (finished jobs per model, and how many escalated jobs the strong model rescued)
+  so the split can be judged and dropped if it does not pay (clear the strong
+  model in Settings to run one model). Existing `config.json` files keep the
+  models they already saved.
+- **Translate only what Bazarr still misses, and never the whole library.**
+  A target language now counts as present when *any* sibling subtitle of that
+  video is in it (`Name.vi.hi.srt`, `Name.vi.ass`, ...; a forced-only track does
+  not), not only the exact file the worker would write; this applies to the
+  Bazarr script, console enqueue, the media scan and the worker. Before a job
+  spends a model call the worker asks Bazarr whether the language is still in the
+  item's `missing_subtitles`; if Bazarr says it is not, the job ends as
+  `skipped-not-wanted` (if Bazarr cannot answer, the files decide). New guards for
+  trying the worker against a real Bazarr, read by the worker and by
+  `gst_enqueue.sh` (set them in both containers): `GST_ONLY_PATHS` (comma
+  separated folders; nothing outside them is queued or translated) and
+  `GST_MAX_PENDING` (most jobs waiting or running at once; `0` is no cap).
+  Explicit retranslations are not affected.
 - **P3: Library, Episode and Glossary pages in the console.** The worker now knows
   which series, episode or movie each job is (Bazarr ids, falling back to the file
   name) and lists them under **Library** with a status per target language:

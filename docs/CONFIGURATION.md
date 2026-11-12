@@ -21,7 +21,9 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `BAZARR_CONFIG_DIR` | Yes | `/opt/docker/bazarr/config` | Host Bazarr config directory. |
 | `BAZARR_POSTPROCESS_DIR` | Yes | `/opt/docker/bazarr/postprocess` | Shared post-processing and queue directory. |
 | `WORKER_STATE_DIR` | Yes | `/opt/docker/gemini-srt-translator-bazarr` | Worker state, config, logs, and cache. |
-| `GST_MODEL` | No | `gemini-flash-latest` | Default Gemini model. |
+| `GST_MODEL` | No | `gemini-3.1-flash-lite` | Default Gemini model. |
+| `GST_ONLY_PATHS` | No | empty | Comma-separated folders. When set, nothing outside them is queued or translated. A guard for trying the worker against a real Bazarr; set it for the Bazarr container too (the enqueue script reads it). |
+| `GST_MAX_PENDING` | No | `0` | Most jobs allowed to wait, run or be deferred at once; further items are not queued. `0` is no cap. Same guard, same two containers. |
 | `GST_BATCH_SIZE` | No | `500` | Ignored since the worker translates with `subcore`, which plans parts itself. |
 | `GST_RETRY_BATCH_SIZE` | No | `300` | Ignored, see `GST_BATCH_SIZE`. |
 | `LLM_RPM` | No | `10` (`0` with `gst_paid_quota`) | Requests per minute per API key; `0` means unlimited. |
@@ -151,8 +153,8 @@ Default:
   "gemini_api_key": "",
   "gemini_api_key2": "",
   "tmdb_api_key": "",
-  "gst_model": "gemini-flash-latest",
-  "gst_fallback_model": "",
+  "gst_model": "gemini-3.1-flash-lite",
+  "gst_fallback_model": "gemini-3.5-flash",
   "gst_paid_quota": false,
   "gst_temperature": "0.7",
   "gst_thinking_budget": "2048",
@@ -179,12 +181,18 @@ keeps the existing secret.
 
 The Settings page writes these options into app config:
 
-- `gst_model`: selected from `/api/gemini-models`.
-- `gst_fallback_model`: optional second model, empty by default. A job moves to
-  it after the primary model stays unavailable (`503`) through every delayed
-  retry, or when the primary model's daily quota is exhausted; each Gemini model
-  has its own daily quota. The translation starts again on the fallback model.
-  A value equal to `gst_model` is stored as empty.
+- `gst_model`: the default model, a light one (`gemini-3.1-flash-lite`) that
+  translates every job. Selected from `/api/gemini-models`.
+- `gst_fallback_model`: the *strong model* (`gemini-3.5-flash` by default); the
+  Settings page calls it "Strong model". A job moves to it when the default
+  model cannot finish it: its output stays invalid after repair and splitting
+  (a hard job; tried once, then the job fails), the default model stays
+  unavailable (`503`) through every delayed retry, or its daily quota is
+  exhausted (each Gemini model has its own). The translation starts again on the
+  strong model. Choose *None* (empty) to run a single model. A value equal to
+  `gst_model` is stored as empty. `/api/status` `model_layers` shows how often
+  jobs escalate and how many the strong model finishes; if few escalate or it
+  rescues few, drop the layer.
 - `gst_paid_quota`: removes the default free-tier request limit (`LLM_RPM`).
 - `gst_temperature`: model temperature.
 - `gst_thinking_budget`, `gst_no_thinking`: thinking token budget, applied only
@@ -199,6 +207,36 @@ The options of the old `gst` CLI (`gst_batch_size`, `gst_retry_batch_size`,
 `gst_no_streaming`, `gst_context_size`) are gone: they had no effect since the
 worker translates in-process. An old `config.json` that still contains them is
 accepted; the keys are dropped the next time settings are saved.
+
+## What Gets Translated
+
+Only a language that is still missing. A job is dropped, with no model call, when:
+
+- the exact target file already exists, or any sibling subtitle of the same video
+  is already in that language (`Name.vi.hi.srt`, `Name.vi.ass`, ...; forced-only
+  tracks do not count). The language is matched by its code in the file name;
+- Bazarr itself no longer lists the language in the item's `missing_subtitles`
+  (checked when the job starts, for jobs that carry Bazarr ids; if Bazarr cannot
+  answer, the files above decide). The job ends as `skipped-not-wanted`;
+- the folder is not under `GST_ONLY_PATHS`, when that is set.
+
+An explicit retranslation, cue edit or revert is never dropped by these rules.
+
+### Trying the worker against a real Bazarr
+
+Bazarr may report hundreds of items as wanted (a 929-episode backlog is normal)
+and runs the post-processing script for every subtitle it downloads, and the
+console's "enqueue the scan" button queues up to `scan_limit` files. Before the
+first real run, limit the blast radius in **both** containers (the script reads
+them in Bazarr's container, the worker re-checks them when it starts a job):
+
+```bash
+GST_ONLY_PATHS=/media/Series/One Test Show   # only this folder is ever translated
+GST_MAX_PENDING=3                            # at most 3 jobs waiting or running
+```
+
+Raise or remove them once the first results look right. Check
+`GET /api/queue` (or the Queue page) before leaving it unattended.
 
 ## Glossaries and Data Directory
 

@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--out", help="output path (default: <name>.<target>.srt beside the input)")
     t.add_argument("--force", action="store_true", help="overwrite the output file if it exists")
     t.add_argument("--provider", choices=["gemini", "fake"], default="gemini")
-    t.add_argument("--model", help="model name (gemini default: gemini-3.5-flash)")
+    t.add_argument("--model", help="model name (gemini default: gemini-3.1-flash-lite)")
     t.add_argument("--api-key-env", default="GEMINI_API_KEY", help="environment variable holding the API key")
     t.add_argument("--title", help="series/movie title (sent to the model as context)")
     t.add_argument("--overview", help="short plot overview (sent to the model as context)")

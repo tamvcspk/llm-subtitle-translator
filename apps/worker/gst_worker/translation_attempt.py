@@ -23,12 +23,13 @@ from subcore.providers import (
 )
 from subcore.translate import PromptContext, TranslateOptions, TranslationError, translate
 
+from .config import DEFAULT_MODEL
 from .library import Library
 from .llm import MissingApiKey, build_provider
 from .rules import UnitRules
 from .store import Store
 from .subtitles import target_output_path
-from .translation import ERROR_TAIL_LENGTH, DailyQuotaExceededError, ProviderUnavailableError, redact
+from .translation import ERROR_TAIL_LENGTH, DailyQuotaExceededError, HardJobError, ProviderUnavailableError, redact
 from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, TranslationVersions, sha256_bytes
 
 # Bump when the prompt or engine behaviour changes enough that old results should not be reused (NFR-3).
@@ -101,7 +102,7 @@ class TranslationAttempt:
 
         retranslate = dict(job.get("retranslate") or {}) if trigger == RETRANSLATE else {}
         rules = self._rules(unit, target_code, cues, retranslate.get("correction_ids"))
-        model = str(settings.get("gst_model") or os.getenv("GST_MODEL", "gemini-flash-latest"))
+        model = str(settings.get("gst_model") or os.getenv("GST_MODEL", DEFAULT_MODEL))
         temperature = _temperature(settings)
         ctx_hash = context_hash(model, target_code, description, temperature, rules.hash)
         published = dict(
@@ -159,7 +160,9 @@ class TranslationAttempt:
             raise RuntimeError(self._message("The provider rejected the API key", exc, settings)) from None
         except MissingApiKey as exc:
             raise RuntimeError(str(exc)) from None
-        except (TranslationError, ProviderError) as exc:
+        except TranslationError as exc:
+            raise HardJobError(self._message("Translation failed", exc, settings)) from None
+        except ProviderError as exc:
             raise RuntimeError(self._message("Translation failed", exc, settings)) from None
 
         for warning in result.warnings:

@@ -19,9 +19,19 @@ failed rather than automatically resumed. Exhausting only one model's quota
 pauses that model alone. The pause follows the models configured now: switching
 to a model that still has quota lifts it.
 
-**Fallback model**:
-An optional second Gemini model that takes over a translation job when the primary model stays unavailable through every delayed retry
-or has exhausted its own daily quota.
+**Strong model** (setting `gst_fallback_model`):
+The second of two model layers. The default model is a light one that translates
+every job; the strong model takes over a job the default cannot finish: a hard
+job, an outage that outlasts every delayed retry, or a spent daily quota. Optional;
+without it there is one layer.
+
+**Hard job**:
+A translation job whose output stays invalid after repair and splitting on the
+default model. It moves to the strong model once; if that fails too the job fails.
+
+**Wanted language**:
+A target language Bazarr still lists in an item's `missing_subtitles` and that no
+sibling subtitle already provides. Only wanted languages are translated.
 
 **Queue lifecycle**:
 The rules that move a translation job through the job queue, including settling,

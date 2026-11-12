@@ -5,7 +5,7 @@ import { languageLabel, loadLanguages, loadModels, refreshStatus, store } from "
 import { h, icon, runAction, toast } from "../ui.js";
 
 const SECRET_MASK = "**********";
-const DEFAULT_MODEL = "gemini-flash-latest";
+const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 
 const selected = { source: [], target: [] };
 let form;

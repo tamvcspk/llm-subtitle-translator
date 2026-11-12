@@ -66,6 +66,8 @@ Seams to respect when adding code:
 Invariants:
 
 - An existing target subtitle is never overwritten by an automatic job. Only an explicit retranslation, cue edit or revert replaces it, and each keeps the previous file as a version first.
+- Only a missing language is translated: a sibling subtitle already in the target language (any name, `existing_target_subtitle` in `subtitles.py`) or Bazarr no longer listing it in `missing_subtitles` (`target_still_missing`) ends the job with no model call. Real-Bazarr trials run with `GST_ONLY_PATHS` and `GST_MAX_PENDING` set in both containers (see `docs/CONFIGURATION.md`); never point the worker at a whole library without them. The script's embedded copy of these checks must change with `queue.py`.
+- Two model layers: the light default model does the work; the strong model (`gst_fallback_model`) only takes hard jobs (`HardJobError`), outages and spent quota. Do not widen what escalates without looking at `model_layers`.
 - A broken glossary file stops the job; a translation never silently runs without it.
 - Gemini, TMDB, and Bazarr API keys are never logged or returned unmasked.
 - Every HTTP request (static and `/api/*`) passes Basic Auth in `ConsoleHandler.parse_request` before routing (`gst_worker/auth.py`). Credentials come from `CONSOLE_USER`/`CONSOLE_PASSWORD` env only and are never logged, stored in config, or exposed through `RuntimeContext`; `CONSOLE_AUTH=off` is the only opt-out.

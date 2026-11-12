@@ -21,6 +21,13 @@ class DailyQuotaExceededError(RuntimeError):
     """The provider's daily quota is exhausted."""
 
 
+class HardJobError(RuntimeError):
+    """The model's output stayed invalid after repair and splitting.
+
+    A stronger model may still succeed, so the queue escalates the job once before failing it.
+    """
+
+
 def redact(text: str, settings: dict[str, Any] | None = None) -> str:
     """Remove configured API keys and Google key patterns from ``text``."""
     for name in ("gemini_api_key", "gemini_api_key2", "bazarr_api_key", "tmdb_api_key"):

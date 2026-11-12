@@ -24,8 +24,15 @@ from gst_worker.backups import (
 )
 from gst_worker import auth as console_auth
 from gst_worker.auth import ConsoleAuth
-from gst_worker.bazarr import BazarrIntegration, list_wanted_items, read_bazarr_api_key, refresh_bazarr
+from gst_worker.bazarr import (
+    BazarrIntegration,
+    list_wanted_items,
+    read_bazarr_api_key,
+    refresh_bazarr,
+    target_still_missing,
+)
 from gst_worker.config import (
+    DEFAULT_MODEL,
     SECRET_MASK,
     SECRET_CONFIG_KEYS,
     GST_BOOL_CONFIG_KEYS,
@@ -41,8 +48,9 @@ from gst_worker.logs import clear_logs, configure_logging, read_log_snapshot
 from gst_worker.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
 from gst_worker.queue import (
     JobQueue,
+    layer_report,
     queue_snapshot,
-    should_skip_job,
+    skip_reason,
     sync_daily_quota_pause,
 )
 from gst_worker import library_api
@@ -86,7 +94,7 @@ def load_settings(config_path: str | None = None) -> dict[str, Any]:
         settings[key] = str(app_config.get(key) or "").strip()
     for key in GST_BOOL_CONFIG_KEYS:
         settings[key] = bool(app_config.get(key))
-    settings["gst_model"] = str(app_config.get("gst_model") or os.getenv("GST_MODEL", "gemini-flash-latest"))
+    settings["gst_model"] = str(app_config.get("gst_model") or os.getenv("GST_MODEL", DEFAULT_MODEL))
     settings["job_settle_seconds"] = int(app_config.get("job_settle_seconds") or 0)
     for key in ("llm_rpm", "llm_tpm", "llm_rpd"):
         if os.getenv(key.upper(), "").strip():
@@ -143,9 +151,17 @@ def process_job(
     status_callback: Callable[..., None] | None = None,
     attempt: TranslationAttempt | None = None,
 ) -> str:
-    if should_skip_job(job):
-        logging.info("Skipping job for %s", job.get("subtitle_path"))
+    reason = skip_reason(job)
+    if reason:
+        logging.info("Skipping job for %s: %s", job.get("subtitle_path"), reason)
         return "skipped"
+    # Bazarr decides what is wanted: when it says the language is not missing, spend no model call.
+    if job.get("trigger") != "retranslate" and target_still_missing(
+        job, http, settings["bazarr_url"], settings["bazarr_api_key"]
+    ) is False:
+        logging.info("Skipping job for %s: Bazarr does not list %s as missing",
+                     job.get("subtitle_path"), job.get("target_code"))
+        return "skipped-not-wanted"
 
     if status_callback:
         status_callback("Resolving movie details")
@@ -516,6 +532,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "daily_quota_pause": snapshot["daily_quota_pause"],
             "settings": public_app_config(self.ctx["config_path"], settings),
             "bazarr_url": settings["bazarr_url"],
+            "model_layers": layer_report(self.ctx["queue_dir"]),
         }
         try:
             status["bazarr"] = self.ctx["http"].get_json(

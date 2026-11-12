@@ -89,6 +89,46 @@ def output_path_for(code):
             return ".".join(parts) + ".srt"
     return f"{prefix}.{code}.srt"
 
+SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".sub", ".vtt")
+
+def existing_target(code):
+    """A sibling subtitle already in this language, however it is named (Name.vi.hi.srt, Name.vi.ass)."""
+    path = pathlib.Path(subtitle_path)
+    stem = path.name.rsplit(".", 1)[0] if "." in path.name else path.name
+    parts = stem.split(".")
+    for idx in range(len(parts) - 1, -1, -1):
+        if parts[idx].lower() == source["code"].lower():
+            stem = ".".join(parts[:idx])
+            break
+    prefix = stem.lower() + "."
+    try:
+        siblings = sorted(path.parent.iterdir())
+    except OSError:
+        return None
+    for sibling in siblings:
+        name = sibling.name.lower()
+        if len(name) <= len(prefix) or not name.startswith(prefix) or not name.endswith(SUBTITLE_EXTENSIONS):
+            continue
+        tokens = name[len(prefix):].rsplit(".", 1)[0].split(".")
+        if code.lower() in tokens and "forced" not in tokens:
+            return sibling
+    return None
+
+# Guards for trying this against a real Bazarr: translate only inside GST_ONLY_PATHS and never keep
+# more than GST_MAX_PENDING jobs waiting, however many items Bazarr reports as wanted.
+normalized_subtitle = subtitle_path.replace("\\", "/")
+only_paths = [p.strip().replace("\\", "/").rstrip("/") for p in os.environ.get("GST_ONLY_PATHS", "").replace("\n", ",").split(",") if p.strip()]
+if only_paths and not any(normalized_subtitle == p or normalized_subtitle.startswith(p + "/") for p in only_paths):
+    print("skip: outside GST_ONLY_PATHS")
+    raise SystemExit(0)
+try:
+    max_open = max(0, int(os.environ.get("GST_MAX_PENDING", "0") or 0))
+except ValueError:
+    max_open = 0
+
+def open_jobs():
+    return sum(len(list((queue / state).glob("*.json"))) for state in ("pending", "processing", "deferred"))
+
 created = []
 for target in enabled(targets):
     code = target["code"]
@@ -96,13 +136,16 @@ for target in enabled(targets):
     if code.lower() == source["code"].lower():
         continue
     output_path = output_path_for(code)
-    if pathlib.Path(output_path).exists():
+    if pathlib.Path(output_path).exists() or existing_target(code):
         continue
     job_id = hashlib.sha1(f"{subtitle_path}|{output_path}|{code}".encode("utf-8")).hexdigest()
     pending = queue / "pending" / f"{job_id}.json"
     processing = queue / "processing" / f"{job_id}.json"
     if pending.exists() or processing.exists() or (queue / "deferred" / pending.name).exists():
         continue
+    if max_open and open_jobs() >= max_open:
+        print(f"skip: GST_MAX_PENDING={max_open} jobs already waiting")
+        break
     tmp = pending.with_name(f".{job_id}.tmp")
     job = {
         "job_id": job_id,

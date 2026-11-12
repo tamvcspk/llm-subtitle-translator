@@ -130,6 +130,8 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
 - FR-9.2 Mỗi provider khai báo năng lực: `max_input_tokens`, `max_output_tokens`, `structured_output`, `web_search`, giới hạn RPM/TPM/RPD.
 - FR-9.3 Model được chọn **theo tác vụ**: `translate`, `extract`, `summarize`, `research` (vd extract dùng model rẻ hơn).
 - FR-9.4 Hỗ trợ nhiều API key cho một provider (xoay vòng khi chạm quota).
+- FR-9.5 **[Đổi]** Hai tầng model cho tác vụ `translate`: model **mặc định** nhẹ (`gemini-3.1-flash-lite`) dịch mọi job; model **mạnh** (`gemini-3.5-flash`, tuỳ chọn) chỉ nhận job mà model mặc định không làm được — đầu ra vẫn sai sau repair và chia nhỏ, provider sập quá các lần thử lại, hoặc hết quota ngày. Mỗi job leo thang tối đa một lần. Tầng thứ hai chỉ được giữ nếu số liệu (`model_layers`) cho thấy nó cứu được đáng kể số job; nếu không thì bỏ (xoá model mạnh trong Settings).
+- FR-9.6 Chỉ dịch ngôn ngữ còn **thiếu**: bỏ job (không gọi model) khi đã có phụ đề cùng video ở ngôn ngữ đích dưới bất kỳ tên nào, hoặc khi Bazarr không còn liệt kê ngôn ngữ đó trong `missing_subtitles` của mục.
 
 ### FR-10 Console & API
 
