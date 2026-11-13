@@ -76,6 +76,26 @@ class ConsoleAuth:
         return ALLOW if (user_ok and password_ok) else UNAUTHORIZED
 
 
+def explain_failure(auth: ConsoleAuth, authorization: str | None) -> str:
+    """Why a request was refused, for the log: never the credentials themselves, only which part failed."""
+    if not authorization:
+        return "no credentials were sent (the login prompt was dismissed or the client did not show one)"
+    scheme = authorization.strip().partition(" ")[0].lower()
+    if scheme != "basic":
+        return f"unsupported authorization scheme {scheme[:20]!r}"
+    credentials = _parse_basic(authorization)
+    if credentials is None:
+        return "the credentials the client sent could not be read"
+    user, password = credentials
+    if not hmac.compare_digest(user.encode("utf-8"), auth.user.encode("utf-8")):
+        same_ignoring_case = user.casefold() == auth.user.casefold()
+        return "wrong user name" + (" (right letters, wrong capitals: auto-capitalisation?)" if same_ignoring_case else "")
+    if not hmac.compare_digest(password.encode("utf-8"), auth.password.encode("utf-8")):
+        same_ignoring_case = password.casefold() == auth.password.casefold()
+        return "wrong password" + (" (right letters, wrong capitals: auto-capitalisation?)" if same_ignoring_case else "")
+    return "accepted"
+
+
 def _parse_basic(header: str | None) -> tuple[str, str] | None:
     if not header:
         return None

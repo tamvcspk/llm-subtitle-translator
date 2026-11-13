@@ -50,6 +50,21 @@ class ConsoleAuthPolicyTests(unittest.TestCase):
             with self.subTest(header=header):
                 self.assertEqual(auth.check(header), UNAUTHORIZED)
 
+    def test_a_refusal_is_explained_without_revealing_the_credentials(self):
+        from gst_worker.auth import explain_failure
+
+        auth = ConsoleAuth.from_env({"CONSOLE_USER": "trial", "CONSOLE_PASSWORD": "abcDEF123"})
+        self.assertIn("no credentials were sent", explain_failure(auth, None))
+        self.assertIn("wrong password", explain_failure(auth, basic("trial", "other")))
+        # Phone keyboards capitalise the first letter of a field; say so, because it is the usual cause.
+        self.assertIn("capitals", explain_failure(auth, basic("Trial", "abcDEF123")))
+        self.assertIn("capitals", explain_failure(auth, basic("trial", "AbcDEF123")))
+        self.assertIn("wrong user name", explain_failure(auth, basic("someone", "abcDEF123")))
+        self.assertIn("could not be read", explain_failure(auth, "Basic !!!"))
+        self.assertIn("unsupported", explain_failure(auth, "Bearer abc"))
+        for header in (None, basic("trial", "other"), basic("Trial", "abcDEF123"), "Bearer abc"):
+            self.assertNotIn("abcDEF123", explain_failure(auth, header))
+
     def test_repr_hides_secrets(self):
         text = repr(ConsoleAuth.from_env({"CONSOLE_USER": USER, "CONSOLE_PASSWORD": PASSWORD}))
         self.assertNotIn(PASSWORD, text)

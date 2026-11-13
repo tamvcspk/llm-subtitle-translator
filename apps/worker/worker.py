@@ -321,6 +321,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if decision == console_auth.UNCONFIGURED:
             self.send_error_json(console_auth.UNCONFIGURED_MESSAGE, status=503)
         else:
+            logging.info(
+                "web %s - login refused for %s: %s (client: %s)",
+                self.address_string(), self.path.split("?", 1)[0][:80],
+                console_auth.explain_failure(auth, self.headers.get("Authorization")),
+                (self.headers.get("User-Agent") or "unknown")[:90],
+            )
             self.send_json(
                 {"error": "authentication required"},
                 status=401,
