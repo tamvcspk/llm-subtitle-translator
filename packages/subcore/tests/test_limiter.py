@@ -134,7 +134,9 @@ class ResilientProviderTests(unittest.TestCase):
         # Reconstruct call times from the limiter's own record.
         stamps = sorted(limiter._day)
         for stamp in stamps:
-            self.assertLessEqual(len([s for s in stamps if stamp - 60 < s <= stamp]), 4)
+            # Float addition near 1000 s loses ~1e-13 s, so a call may land that much inside the window
+            # edge; a microsecond of tolerance keeps the check about the limiter, not about rounding.
+            self.assertLessEqual(len([s for s in stamps if stamp - 60 + 1e-6 < s <= stamp]), 4)
 
     def test_quota_exhausted_is_not_retried(self):
         def handler(req, n):
