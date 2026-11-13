@@ -1,6 +1,6 @@
 // Episode (or movie): source and translation side by side, correct a cue or add a rule, retranslate,
 // and browse, compare or restore earlier versions. `#episode/<unit id>/<language>`.
-import { get, post } from "../api.js";
+import { api, get, post } from "../api.js";
 import { formatDateTime, plural } from "../format.js";
 import { refreshQueue } from "../store.js";
 import {
@@ -14,7 +14,7 @@ const TRIGGERS = {
 };
 const WATCH_MS = 30 * 60 * 1000;
 
-const state = { unitId: null, lang: null, detail: null, cues: null, corrections: [], versions: null, query: "", watch: null };
+const state = { unitId: null, lang: null, detail: null, cues: null, corrections: [], versions: null, context: null, query: "", watch: null };
 let loadToken = 0;
 let searchTimer = 0;
 
@@ -215,6 +215,94 @@ async function loadVersions() {
   renderVersions();
 }
 
+// ---- Context (story memory) ------------------------------------------------------------------
+
+function contextSections(sections) {
+  return sections.map((section) => h("details", { class: "context-section", open: true },
+    h("summary", { text: section.title }), h("pre", { class: "context-text", text: section.body })));
+}
+
+function renderContext() {
+  const data = state.context;
+  const body = $("episode-context-body");
+  const hasSeries = state.detail.series_id != null;
+  $("episode-context-tab").hidden = !hasSeries || !state.detail.memory_applicable;
+  if (!data || !data.applicable) {
+    body.replaceChildren(emptyState("No story memory", "Story memory applies to episodes of a series only.", "clock"));
+    return;
+  }
+  const parts = [];
+  parts.push(h("p", { class: "context-state" },
+    h("span", { class: `status status-${data.enabled ? "ok" : "muted"}` }, h("span", { class: "dot" }), data.enabled ? "On" : "Off"),
+    ` Story memory is ${data.enabled ? "on" : "off"} for this series.`,
+    data.special ? " This is a special (season 0): it sees the story up to the point set below, and its own facts never feed the main story." : ""));
+
+  const used = data.used;
+  const flag = $("episode-context-flag");
+  const alert = Boolean(used && (used.changed || !used.complete));
+  flag.hidden = !alert;
+  flag.textContent = "!";
+  if (used) {
+    if (used.changed) {
+      parts.push(h("div", { class: "banner banner-warn banner-flat" }, h("span", { class: "banner-icon" }, icon("alert")),
+        h("p", { text: "The story behind earlier episodes has changed since this was translated, so the translation is flagged stale. Retranslate it when you want the new context used." })));
+    }
+    if (!used.complete) {
+      parts.push(h("div", { class: "banner banner-warn banner-flat" }, h("span", { class: "banner-icon" }, icon("alert")),
+        h("p", { text: `Translated without ${used.missing.join(", ")}: no subtitle (or no readable facts) was available for ${used.missing.length === 1 ? "that episode" : "those episodes"} at the time.` })));
+    }
+    parts.push(h("h3", { class: "context-heading", text: `Used for version ${used.version}` }));
+    parts.push(used.sections?.length ? contextSections(used.sections)
+      : h("p", { class: "muted", text: "The exact text was not kept for this version." }));
+  } else {
+    parts.push(h("p", { class: "muted", text: "This translation was made without story memory." }));
+  }
+
+  const now = data.now;
+  parts.push(h("h3", { class: "context-heading", text: "What a new translation would get now" }));
+  parts.push(h("div", { class: "chip-list" }, ...now.prior.map((item) => h("span", {
+    class: `chip ${item.has_facts ? "chip-current" : "chip-incomplete"}`,
+    title: item.has_facts ? "Facts read" : (item.has_source ? "Has a subtitle; facts not read yet" : "No subtitle"),
+  }, item.label, h("span", { class: `dot dot-${item.has_facts ? "current" : "incomplete"}` })))));
+  if (!now.prior.length) parts.push(h("p", { class: "muted", text: "No earlier episodes are known, so there is no history to give." }));
+  if (now.missing.length) {
+    parts.push(h("p", { class: "muted", text: `No facts yet for ${now.missing.join(", ")}. Use “Read facts now”, or they are read when a translation needs them.` }));
+  }
+  if (now.sections.length) {
+    if (now.approximate) parts.push(h("p", { class: "muted", text: "Older episodes are shown shortened; a translation condenses them with the model." }));
+    parts.push(contextSections(now.sections));
+  }
+  body.replaceChildren(...parts);
+
+  $("context-policy").value = data.policy || "";
+  $("context-anchor").value = data.specials_after || "";
+}
+
+async function loadContext() {
+  if (!state.detail?.memory_applicable) {
+    state.context = null;
+    renderContext();
+    return;
+  }
+  state.context = await get(`${base()}/context?${langQuery()}`);
+  renderContext();
+}
+
+async function saveMemorySettings() {
+  const seriesId = state.detail.series.id;
+  await api(`/api/series/${seriesId}/memory`, {
+    method: "PUT", body: { policy: $("context-policy").value, specials_after: $("context-anchor").value.trim() },
+  });
+  toast("Saved. Translations are only flagged stale if their story changed; none are retranslated.", "success");
+  await loadAll();
+}
+
+async function extractFacts() {
+  const result = await post(`${base()}/context/extract`);
+  toast(result.extracted.length ? `Read the facts of ${result.extracted.join(", ")}.` : "Every episode already has its facts.", "success");
+  await loadAll();
+}
+
 // ---- Cue dialog (edit + add a correction) -----------------------------------------------
 
 let dialogRow = null;
@@ -329,6 +417,7 @@ function showTab(tab) {
   });
   $("episode-cues-pane").hidden = tab !== "cues";
   $("episode-history-pane").hidden = tab !== "history";
+  $("episode-context-pane").hidden = tab !== "context";
 }
 
 async function loadAll() {
@@ -344,7 +433,7 @@ async function loadAll() {
       return;
     }
     renderHeader();
-    await Promise.all([loadCues(), loadCorrections(), loadVersions()]);
+    await Promise.all([loadCues(), loadCorrections(), loadVersions(), loadContext()]);
   } catch (error) {
     if (mine === loadToken) $("episode-cue-list").replaceChildren(errorState(error.message, loadAll));
   }
@@ -367,6 +456,8 @@ export default {
       }, 250);
     });
     $("episode-retranslate").addEventListener("click", openRetranslate);
+    $("context-save").addEventListener("click", (event) => runAction(event.currentTarget, saveMemorySettings));
+    $("context-extract").addEventListener("click", (event) => runAction(event.currentTarget, extractFacts));
     $("corr-kind").addEventListener("change", syncCorrectionForm);
     $("cue-save").addEventListener("click", (event) => runAction(event.currentTarget, saveCueEdit));
     $("cue-add").addEventListener("click", (event) => runAction(event.currentTarget, addCorrection));
@@ -388,7 +479,7 @@ export default {
       return;
     }
     if (id !== state.unitId) state.watch = null;
-    Object.assign(state, { unitId: id, lang: lang || null, cues: null, versions: null, query: "" });
+    Object.assign(state, { unitId: id, lang: lang || null, cues: null, versions: null, context: null, query: "" });
     $("episode-search").value = "";
     $("episode-jump").value = "";
     $("episode-cue-list").replaceChildren(loadingState("Loading subtitles…"));

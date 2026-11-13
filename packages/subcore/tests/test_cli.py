@@ -62,6 +62,24 @@ class CliTests(unittest.TestCase):
         good.write_text("terms:\n  - {source: A, target: B, locked: true}\n", encoding="utf-8")
         self.assertEqual(run("check-glossary", str(good))[0], 0)
 
+    def test_memory_command_prints_and_saves_the_facts_of_each_episode(self):
+        import json
+
+        second = self.dir / "Movie.S01E02.en.srt"
+        second.write_text(SRC, encoding="utf-8")
+        saved = self.dir / "facts.json"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = cli.main(["memory", str(self.src), str(second), "--provider", "fake", "--save", str(saved)])
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue().count("(fake provider: no facts)"), 2)
+        self.assertEqual(sorted(json.loads(saved.read_text(encoding="utf-8"))), ["Movie.S01E02.en.srt", "Movie.en.srt"])
+
+    def test_memory_command_rejects_an_unreadable_file(self):
+        code, err = run("memory", str(self.dir / "missing.srt"), "--provider", "fake")
+        self.assertEqual(code, 2)
+        self.assertIn("error", err)
+
     def test_missing_api_key_is_a_clear_error(self):
         import os
         from unittest import mock

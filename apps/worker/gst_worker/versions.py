@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 from subcore import srt
 
@@ -113,6 +115,9 @@ class TranslationVersions:
         tokens_out: int = 0,
         unit_id: int | None = None,
         glossary_hash: str = "",
+        memory_hash: str = "",
+        context_complete: bool = True,
+        missing_units: Iterable[str] = (),
     ) -> Published:
         path = Path(output_path)
         if path.exists() and trigger == AUTO:
@@ -142,6 +147,9 @@ class TranslationVersions:
             tokens_out=tokens_out,
             unit_id=unit_id,
             glossary_hash=glossary_hash,
+            memory_hash=memory_hash,
+            context_complete=context_complete,
+            missing_units=missing_units,
         )
         return Published("translated", version)
 
@@ -174,5 +182,8 @@ class TranslationVersions:
             model=str(target["model"]),
             unit_id=target.get("unit_id"),
             glossary_hash=str(target.get("glossary_hash") or ""),
+            memory_hash=str(target.get("memory_hash") or ""),
+            context_complete=bool(target.get("context_complete", 1)),
+            missing_units=json.loads(str(target.get("missing_units_json") or "[]")),
         )
         return Published("reverted", new_version)

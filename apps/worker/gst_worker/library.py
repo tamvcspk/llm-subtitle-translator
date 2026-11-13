@@ -11,6 +11,7 @@ file or episode corrections changed; FR-5.5). Staleness is only ever flagged, ne
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -127,10 +128,13 @@ def enrich_job_identity(job: dict[str, Any], http: Any, bazarr_url: str, api_key
 
 
 class Library:
-    def __init__(self, store: Store, glossaries: GlossaryFiles, versions: TranslationVersions) -> None:
+    def __init__(
+        self, store: Store, glossaries: GlossaryFiles, versions: TranslationVersions, memory: Any = None
+    ) -> None:
         self.store = store
         self.glossaries = glossaries
         self.versions = versions
+        self.memory = memory  # StoryMemory | None: when set, story memory also decides staleness (FR-5.5)
 
     # -- registering ---------------------------------------------------------
     def register_job(self, job: dict[str, Any]) -> int:
@@ -224,18 +228,20 @@ class Library:
             "version": None,
             "trigger": None,
             "model": "",
+            "missing_units": [],
             "updated_at": None,
             "modified_outside": False,
         }
         if current is None or not exists:
             info["modified_outside"] = exists and current is None  # a file we did not make
             return info
-        stale = (
-            not self.stale_ignored(unit)
-            and current["glossary_hash"] != self.unit_rules(unit, lang, glossary=glossary, cache=cache).hash
+        stale = not self.stale_ignored(unit) and (
+            current["glossary_hash"] != self.unit_rules(unit, lang, glossary=glossary, cache=cache).hash
+            or (self.memory is not None and self.memory.is_stale(unit, current, cache))
         )
         info.update(
             version=current["version"], trigger=current["trigger"], model=current["model"],
+            missing_units=json.loads(current["missing_units_json"] or "[]"),
             updated_at=current["created_at"], modified_outside=not self.versions.is_system_file(output_path),
             status="stale" if stale else ("current" if current["context_complete"] else "incomplete"),
         )

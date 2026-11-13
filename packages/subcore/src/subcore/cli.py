@@ -1,8 +1,12 @@
-"""Manual translation and debugging: ``subcore translate file.srt --glossary g.yaml``."""
+"""Manual translation and debugging: ``subcore translate file.srt --glossary g.yaml``.
+
+``subcore memory ep1.srt ep2.srt ...`` prints the story facts the memory would extract (P4).
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -10,6 +14,7 @@ from pathlib import Path
 
 from . import glossary as glossary_mod
 from . import srt
+from .memory import FactsError
 from .providers import FakeProvider
 from .providers.base import Provider, ProviderError
 from .translate import PromptContext, TranslateOptions, TranslationError, translate
@@ -91,6 +96,76 @@ def _cmd_translate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fake_facts(req, call_no) -> str:
+    return json.dumps({"characters": [], "relationship_events": [], "terms": [], "summary": "(fake provider: no facts)"})
+
+
+def _clock(ms: int) -> str:
+    seconds = ms // 1000
+    return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
+def _cmd_memory(args: argparse.Namespace) -> int:
+    """Read the story facts of several episodes (given in story order) and print what the memory would hold.
+
+    For judging extraction quality on a series you know (ARCHITECTURE section 8): check each relationship
+    event against the scene at the printed time, then the running state after each episode.
+    """
+    from .memory import UnitFacts, extract_facts, fold
+
+    if args.provider == "fake":
+        provider = FakeProvider(handler=_fake_facts)
+    else:
+        # Same pacing and backoff as the worker: a busy model ("high demand") is retried, not fatal.
+        from .providers.limiter import RateLimiter, ResilientProvider
+
+        provider = ResilientProvider(_build_provider(args), RateLimiter(rpm=10), max_attempts=6, base_delay=10.0)
+    folded: list[UnitFacts] = []
+    saved: dict[str, dict] = {}
+    for path in map(Path, args.files):
+        try:
+            cues = srt.parse_file(path)
+        except (OSError, srt.SrtError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        try:
+            result = extract_facts(provider, cues, title=args.title or "", source_lang=args.source)
+        except FactsError as exc:
+            print(f"error: {path.name}: {exc}", file=sys.stderr)
+            return 1
+        except ProviderError as exc:
+            print(f"error: provider failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        facts = result.facts
+        saved[path.name] = facts.to_dict()
+        episode = re.search(r"S\d{1,3}E\d{1,4}", path.stem, re.IGNORECASE)
+        folded.append(UnitFacts(episode.group(0).upper() if episode else path.stem, facts))
+        print(f"== {path.name} ({len(cues)} cues, {result.tokens_in} tokens in / {result.tokens_out} out)")
+        print(f"summary: {facts.summary}")
+        if facts.characters:
+            print("characters: " + "; ".join(
+                f"{c.name}" + (f" [{c.gender}]" if c.gender else "") + (f" ({c.age_hint})" if c.age_hint else "")
+                for c in facts.characters))
+        for e in facts.relationship_events:
+            when = _clock(cues[e.cue - 1].start_ms)
+            detail = f" ({e.detail})" if e.detail else ""
+            print(f'  cue {e.cue} @ {when}: {e.a} & {e.b}: {e.relation}{detail}, closeness {e.intimacy}/5, '
+                  f'{e.hierarchy}, confidence {e.confidence}  "{e.evidence}"')
+        if facts.terms:
+            print("terms: " + ", ".join(t.source for t in facts.terms))
+        state = fold(folded)
+        if state.relationships:
+            print("-- where each pair stands after this episode:")
+            for r in state.relationships:
+                detail = f" ({r.detail})" if r.detail else ""
+                print(f"     {r.a} & {r.b}: {r.relation}{detail}, closeness {r.intimacy}/5, {r.hierarchy} (since {r.since})")
+        print()
+    if args.save:
+        Path(args.save).write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"saved the facts to {args.save}", file=sys.stderr)
+    return 0
+
+
 def _cmd_check_glossary(args: argparse.Namespace) -> int:
     try:
         g = glossary_mod.load(args.file)
@@ -123,6 +198,18 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--season", type=int)
     t.add_argument("--episode", type=int)
     t.set_defaults(func=_cmd_translate)
+
+    m = sub.add_parser(
+        "memory", help="print the story facts of several episodes (in story order) to judge extraction quality"
+    )
+    m.add_argument("files", nargs="+", help="source .srt files, earliest episode first")
+    m.add_argument("--provider", choices=["gemini", "fake"], default="gemini")
+    m.add_argument("--model", help="model name (gemini default: gemini-3.1-flash-lite)")
+    m.add_argument("--api-key-env", default="GEMINI_API_KEY", help="environment variable holding the API key")
+    m.add_argument("--title", help="series title (sent to the model as context)")
+    m.add_argument("--source", help="source language code, e.g. en")
+    m.add_argument("--save", help="also write the facts of every file to this JSON file")
+    m.set_defaults(func=_cmd_memory, target="vi")
 
     g = sub.add_parser("check-glossary", help="validate a glossary YAML file")
     g.add_argument("file")

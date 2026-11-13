@@ -46,8 +46,10 @@ Domain code is split under `gst_worker/`:
   (`ProviderUnavailableError`, `DailyQuotaExceededError`) and secret redaction;
 - `llm.py`: builds the provider for an attempt from settings: one rate-limited
   Gemini provider per API key, with failover to the next key;
-- `store.py`: SQLite (`app.db`, versioned migrations) with the `translations`
-  and `llm_calls` tables;
+- `store.py`: SQLite (`app.db`, versioned migrations) with the `translations`,
+  `llm_calls`, library, `facts`, `summaries_cache` and `context_snapshots` tables;
+- `memory.py`: `StoryMemory`, the worker side of story memory: story order,
+  prerequisite fact extraction, gap waiting, the context bundle and its staleness;
 - `versions.py`: `TranslationVersions`, publishing with version history, backup
   before overwrite, and revert;
 - `tmdb.py`: TMDB lookup and translation description generation;
@@ -93,7 +95,8 @@ A *unit* (an episode or a movie) is registered the first time a job for it runs
 (`library.py`; identity from Bazarr ids, then the file name, with best-effort
 enrichment from the Bazarr API). `units` and `series` rows, a
 `unit_outputs(unit, language) → path` mapping, `corrections`, and a `unit_id` plus
-`glossary_hash` on every translation version live in `app.db` (schema 2).
+`glossary_hash` on every translation version live in `app.db` (schema 2; schema 3
+adds story memory, below).
 
 `rules.py` merges the series glossary (`DATA_DIR/series/<key>/glossary.<lang>.yaml`,
 read by `glossaries.py`) with the unit's active episode corrections for one
@@ -110,6 +113,44 @@ queue job (`trigger: retranslate`, `priority: 100`, `retranslate.range`,
 (`only=`), passing locked cues and the current translation of cues outside the
 range as `keep=`, which are copied verbatim and shown to the model as reference
 translations.
+
+### Story memory (P4)
+
+`subcore.memory` is the pure part: `facts.py` reads the *facts* of one unit from its
+source subtitle (characters, relationship changes with the cue where they show, terms,
+a summary; structured output, nothing but the numbered text is sent), `fold.py` folds the
+facts of the units before N into the *story state @N* and renders the prompt sections
+("Story so far", "Relationship state", "This episode"), `compress.py` condenses old
+summaries with one model call. No queue, no Bazarr, no filesystem layout.
+
+`memory.py` (`StoryMemory`) is the worker's side. Story order is `(season, episode)` as
+Bazarr numbers them; season 0 is outside the chain and sees the state after
+`series.specials_after` (default: the end of the first season). Before a unit is
+translated, `plan()`:
+
+1. asks Bazarr for the series' episodes and their source subtitles (`list_series_episodes`,
+   best effort) and registers them as units;
+2. for each earlier unit, reads its facts if its source exists and none are stored for
+   that sha256 + `EXTRACT_PROMPT_VERSION` (`facts` table), keeping stored facts when the
+   source has since gone; a unit with neither a source nor facts is a *gap*;
+3. while there is a gap and `memory_gap_wait_seconds` has not passed, raises
+   `ContextGapError`; the queue defers the job (`deferred_reason: context-gap`, `gap_since`
+   in the job file, rechecked every 5 minutes). After the wait, or for a retranslation, it
+   translates with `context_complete = 0` and the missing labels stored;
+4. builds the bundle; if the story exceeds `memory_budget_tokens`, the older summaries
+   are condensed by one `summarize` call cached in `summaries_cache`.
+
+Prerequisites run inline in the same attempt (one job at a time, ADR-4), not as separate
+`extract` queue jobs. The bundle's *fingerprint* (a hash of the label and content hash of
+every earlier unit's facts plus the unit's own) is stored as `translations.memory_hash`
+and the rendered text in `context_snapshots`. `Library.target_info` marks a version
+`stale` when the fingerprint computed from the stored facts now differs, or when a unit
+listed in its `missing_units_json` has a source subtitle now; both facts-per-unit lookups
+read "the newest stored facts for the current extraction prompt version", so building a
+bundle and checking staleness can never disagree. `TranslationAttempt` takes the extra
+sections from the plan (after the glossary and the episode corrections) and maps provider
+errors raised while extracting exactly as for translating, so a spent daily quota pauses
+the queue and the facts already read are kept.
 
 `RuntimeContext` is the composition seam for the running process. It carries the
 queue console actions, Bazarr integration, backup maintenance, and HTTP transport

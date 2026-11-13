@@ -69,6 +69,8 @@ class FrontendStructureTests(unittest.TestCase):
             "gst_model", "gst_fallback_model", "job_settle_seconds", "gst_paid_quota",
             "gst_temperature", "gst_thinking_budget", "gst_no_thinking",
             "media_roots", "scan_limit",
+            "memory_enabled", "memory_model", "memory_gap_wait_seconds", "memory_budget_tokens",
+            "memory_recent_episodes",
         })
         self.assertIn('<select id="f-gst_model" name="gst_model"', settings)
         self.assertIn('<select id="f-gst_fallback_model" name="gst_fallback_model"', settings)
@@ -87,11 +89,12 @@ class FrontendStructureTests(unittest.TestCase):
 
         for endpoint in (
             "/api/library/series", "/api/library/movies", "/cues?", "/corrections", "/retranslate", "/versions",
-            "/diff", "/revert", "/api/series/", "/glossary",
+            "/diff", "/revert", "/api/series/", "/glossary", "/context", "/context/extract", "/memory",
         ):
             self.assertIn(endpoint, scripts)
         for element in ('id="episode-jump"', 'id="episode-search"', 'id="cue-dialog"', 'id="retranslate-dialog"',
-                        'id="episode-version-list"', 'id="glossary-yaml"', 'id="glossary-check"'):
+                        'id="episode-version-list"', 'id="glossary-yaml"', 'id="glossary-check"',
+                        'id="episode-context-pane"', 'id="context-policy"', 'id="context-extract"'):
             self.assertIn(element, html)
         self.assertIn("Stale", scripts)
         self.assertIn("is only flagged", html)

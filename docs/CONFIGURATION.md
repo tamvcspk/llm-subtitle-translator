@@ -159,7 +159,12 @@ Default:
   "gst_temperature": "0.7",
   "gst_thinking_budget": "2048",
   "gst_no_thinking": false,
-  "job_settle_seconds": 600
+  "job_settle_seconds": 600,
+  "memory_enabled": false,
+  "memory_model": "",
+  "memory_gap_wait_seconds": 1800,
+  "memory_budget_tokens": 8000,
+  "memory_recent_episodes": 3
 }
 ```
 
@@ -200,6 +205,37 @@ The Settings page writes these options into app config:
 - `job_settle_seconds`: queue settle window before a new job can run. Default
   is `600` seconds so Bazarr has time to finish extracting other embedded
   subtitles from the same media file.
+
+## Story Memory
+
+Off by default. When on, the worker reads the source subtitles of the episodes before
+the one being translated and gives the model a short, deterministic summary of the story
+so far: who the characters are, how each pair stands to each other, what the last few
+episodes were about. It exists so forms of address (especially in Vietnamese) follow the
+story even when Bazarr delivers a season pack out of order. Turn it on after checking the
+extraction on a series you know: `uv run subcore memory ep01.srt ep02.srt ... --title Show`
+prints the facts and the running relationship state per episode.
+
+- `memory_enabled`: the global switch. A series overrides it on its Episode page
+  (Context tab) with *On* or *Off*.
+- `memory_gap_wait_seconds` (default `1800`): when an earlier episode has no source
+  subtitle yet, the job waits this long (checking every 5 minutes) and then translates with
+  the story incomplete (`incomplete` in the Library). `0` never waits. A manual retranslation
+  never waits.
+- `memory_model`: model that reads facts and condenses old summaries; blank uses `gst_model`.
+  A cheaper model is fine.
+- `memory_recent_episodes` (default `3`) and `memory_budget_tokens` (default `8000`): the
+  summaries of that many latest earlier episodes are given in full; when the whole story
+  would exceed the budget, older summaries are condensed by one model call (cached).
+- Cost: one extraction call per episode the first time it is needed (cached by the sha256 of
+  its subtitle and the extraction prompt version), so the first translated episode of a
+  100-episode series reads up to 99 earlier ones. Quota applies as usual: a spent daily
+  quota pauses the queue and the facts already read are kept. Use the per-series switch to
+  keep long series off.
+- Specials (season 0) see the story after the episode set under *Specials see the story
+  after* (blank: the end of season 1); their own facts never enter the main storyline.
+- A translation is flagged `stale` when the facts of an earlier episode changed or a missing
+  one arrived. Nothing is retranslated automatically.
 
 The options of the old `gst` CLI (`gst_batch_size`, `gst_retry_batch_size`,
 `gst_skip_upgrade`, `gst_quiet`, `gst_progress_log`, `gst_thoughts_log`,

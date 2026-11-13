@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from .config import enabled_target_languages
 from .subtitles import existing_target_subtitle, target_output_path
-from .translation import DailyQuotaExceededError, HardJobError, ProviderUnavailableError
+from .translation import ContextGapError, DailyQuotaExceededError, HardJobError, ProviderUnavailableError
 from .queue_policy import PROVIDER_RETRY_DELAYS, daily_quota_retry_at, provider_retry_decision, select_model
 
 
@@ -36,7 +36,7 @@ def _move_job(source: Path, destination: Path, error: str | None = None) -> None
 
 
 def _reset_retry(job: dict[str, Any]) -> None:
-    for key in ("provider_retry_count", "retry_at", "deferred_reason", "last_error", "use_fallback_model"):
+    for key in ("provider_retry_count", "retry_at", "deferred_reason", "last_error", "use_fallback_model", "gap_since"):
         job.pop(key, None)
 
 
@@ -571,6 +571,17 @@ class JobQueue:
                     len(PROVIDER_RETRY_DELAYS),
                     processing_path.name,
                 )
+        except ContextGapError as exc:
+            # An earlier episode has no source subtitle yet (FR-5.4): wait for it without holding the queue.
+            job["gap_since"] = exc.since
+            job["retry_at"] = exc.retry_at
+            job["deferred_reason"] = "context-gap"
+            job["last_error"] = str(exc)
+            _write_job(processing_path, job)
+            destination = self.queue_dir / "deferred" / processing_path.name
+            error = str(exc)
+            logging.info("Job %s deferred until %s: %s", processing_path.stem,
+                         datetime.fromtimestamp(exc.retry_at, timezone.utc).isoformat(), exc)
         except HardJobError as exc:
             strong_available = (
                 len(models) > 1

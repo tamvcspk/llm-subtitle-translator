@@ -133,6 +133,11 @@ current stored key.
   "gst_thinking_budget": "2048",
   "gst_no_thinking": false,
   "job_settle_seconds": 600,
+  "memory_enabled": false,
+  "memory_model": "",
+  "memory_gap_wait_seconds": 1800,
+  "memory_budget_tokens": 8000,
+  "memory_recent_episodes": 3,
   "source_languages": [
     {"code": "en", "language": "English", "enabled": true},
     {"code": "ja", "language": "Japanese", "enabled": true}
@@ -265,21 +270,24 @@ in the source subtitle (the same number the model sees), not the SRT index.
 `lang` is a target language code and may be omitted when the unit has exactly
 one target.
 
-Statuses: `current`, `stale` (rules changed since translation; never
-retranslated automatically), `incomplete`, `untranslated`.
+Statuses: `current`, `stale` (the rules or the story behind earlier episodes
+changed since translation; never retranslated automatically), `incomplete`
+(translated while an earlier episode had no subtitle or facts; the target has
+`missing_units` such as `["S01E03"]`), `untranslated`.
 
 ### GET /api/library/series
 `{"items": [{"id", "key", "title", "stale_policy", "units", "counts": {"current", "stale", "incomplete", "untranslated"}}]}`
 
 ### GET /api/library/series/{id}/units?status=
-`{"series": {...}, "languages": ["vi"], "units": [{"id", "season", "episode", "title", "status", "targets": [{"lang", "status", "version", "trigger", "model", "updated_at", "exists", "modified_outside"}]}]}`.
+`{"series": {...}, "languages": ["vi"], "units": [{"id", "season", "episode", "title", "status", "targets": [{"lang", "status", "version", "trigger", "model", "missing_units", "updated_at", "exists", "modified_outside"}]}]}`.
 `modified_outside` is true when the file on disk is not the version the worker wrote.
 
 ### GET /api/library/movies?status=
 `{"items": [<unit>...]}` in the same shape as the units above.
 
 ### GET /api/units/{id}
-One unit with its targets, its series and whether the source subtitle is still on disk.
+One unit with its targets, its series, whether the source subtitle is still on disk
+and `memory_applicable` (an episode of a series, so the Context tab applies).
 
 ### GET /api/units/{id}/cues?lang=&at=&q=&offset=&limit=
 Source and translation side by side. `at=00:23:10` (also `23:10`, `1:02:03.5`)
@@ -346,6 +354,46 @@ Cue-level changes from `against` (default: the previous version) to `v`:
 Body `{"lang": "vi"}`. Restores version `v` byte for byte as a new version (what
 was on disk is kept first) and asks Bazarr to rescan. Cue locks whose text is no
 longer in the restored file are released. Reply `{"ok": true, "version", "restored"}`.
+
+### GET /api/units/{id}/context?lang=
+The story memory behind a translation (episodes of a series only; a movie gets
+`{"applicable": false, "enabled": false}`). Reads stored facts only and never calls a model.
+
+```json
+{"applicable": true, "enabled": true, "policy": "", "specials_after": "", "label": "S01E06",
+ "special": false, "lang": "vi",
+ "used": {"version": 2, "complete": false, "missing": ["S01E03"], "changed": true,
+          "sections": [{"title": "Story so far", "body": "..."}]},
+ "now": {"fingerprint": "...", "approximate": false,
+         "sections": [{"title": "Relationship state", "body": "..."}],
+         "prior": [{"label": "S01E01", "has_source": true, "has_facts": true}],
+         "missing": ["S01E03"], "own_facts": {"summary": "...", "...": "..."}, "own_has_source": true}}
+```
+`used` is the context of the current version of the target (`null` when it was made
+without memory); `changed` means the facts it was built from differ from the ones
+stored now, which is why the translation is `stale`. `now` is what a translation
+started at this moment would get; `approximate` is true when old summaries could
+only be shortened, not condensed by the model (that needs a call). `policy` is the
+series switch (`""` follows the global `memory_enabled`, `"on"`, `"off"`).
+
+### POST /api/units/{id}/context/extract
+Reads the facts of this episode and of every earlier episode that has a source
+subtitle and no facts yet (**spends model calls**, one per episode, using
+`memory_model`). Reply `{"ok": true, "extracted": ["S01E01"], "results": {"S01E01": "extracted"}}`;
+a result is `cached`, `extracted`, `stored`, `no-source` or `failed`. A provider failure
+(quota, outage, missing key) is a `400` naming the error type.
+
+### GET /api/series/{id}/memory
+`{"series", "policy", "specials_after", "global_enabled", "units": [{"id", "label", "season", "episode", "has_source", "has_facts", "facts_hash"}]}`,
+in story order.
+
+### PUT /api/series/{id}/memory
+Body `{"policy": "" | "on" | "off", "specials_after": "S02E05"}`, both optional.
+`policy` switches story memory on or off for this series against the global setting.
+`specials_after` is where season 0 (specials) sits in the story: its context is the
+state after that episode (blank: after the last episode of the first season); its own
+facts never enter the main storyline. Changing either can make translations `stale`;
+nothing is retranslated. Reply: the same as `GET`.
 
 ### GET /api/series/{id}/glossary?lang=
 `{"lang", "exists", "yaml", "stale_units"}`. `lang` is required.

@@ -91,6 +91,36 @@ It runs ahead of automatic jobs. Only the range is requested, but the whole
 source is still sent as context.
 
 **Stale translation**:
-A translation made with different rules (glossary file or episode corrections)
-than the ones that apply to its episode now. Only ever flagged; never
-retranslated automatically.
+A translation made with different rules (glossary file or episode corrections),
+or with a different story behind it (the facts of an earlier episode changed, or a
+missing one arrived), than the ones that apply to its episode now. Only ever
+flagged; never retranslated automatically.
+
+**Episode facts**:
+What the source subtitle of one unit shows about the story: characters, changes in
+how two characters stand to each other (with the cue where it shows), terms, and a
+summary. Read from the source subtitle only, never from a translation, and stored
+per source sha256 and extraction prompt version, so they do not depend on the order
+episodes are translated in.
+
+**Story state @N**:
+The deterministic fold of the facts of every episode before episode N in story
+order: the characters, the latest relationship of each pair, the summaries of the
+earlier episodes (the latest few in full, older ones condensed). Never includes a
+later episode. Season 0 (specials) sits outside the chain and sees the state after a
+configured episode.
+
+**Context bundle**:
+The story state @N, the unit's own facts and the metadata, as prompt sections placed
+after the glossary and the corrections. Its fingerprint (a hash of the facts it was
+built from) is stored with the translation; a different fingerprint now means the
+translation is stale.
+
+**Prerequisite**:
+An earlier episode whose facts must exist before a unit is translated. Its facts are
+read on the spot when its subtitle exists.
+
+**Context gap**:
+An earlier episode with no source subtitle yet. The job is deferred for up to
+`memory_gap_wait_seconds`, then translated anyway and marked `incomplete`, naming the
+missing episodes.

@@ -1,4 +1,33 @@
 # Unreleased
+- **P4: story memory (off by default).** Before an episode is translated the worker
+  can read the source subtitles of the episodes before it and tell the model who the
+  characters are, how each pair stands to each other and what happened lately, so
+  forms of address follow the story even when Bazarr delivers a season pack out of
+  order. Facts come from source subtitles only (never from translations), are kept
+  per subtitle hash, and an episode never sees the facts of a later one: episode 6
+  translated first still knows episodes 1-5, episode 1 translated afterwards knows
+  nothing of 2-6. When an earlier episode has no subtitle yet the job waits
+  (`memory_gap_wait_seconds`, default 30 minutes, re-checked every 5), then
+  translates marked `incomplete` and names the missing episodes; when facts of an
+  earlier episode change or the missing episode arrives, the later translations are
+  flagged `stale` (never retranslated automatically). New **Context** tab on the
+  Episode page (what the translation used, what a new one would get, a per-series
+  On/Off switch, where specials sit in the story, "Read facts now"), a **Story
+  memory** card in Settings (`memory_enabled`, `memory_gap_wait_seconds`,
+  `memory_model`, `memory_recent_episodes`, `memory_budget_tokens`), and
+  `GET /api/units/{id}/context`, `POST /api/units/{id}/context/extract`,
+  `GET/PUT /api/series/{id}/memory`. `uv run subcore memory ep01.srt ep02.srt ...`
+  prints the extracted facts and the running relationship state with timecodes, to
+  judge extraction quality on a series you know before switching memory on. The
+  Checked against Gemini on six episodes each of three real series: the extraction
+  prompt now says a fiancé or spouse is `romantic` (it called them `family`) and
+  names the exact relationship ("mother and son", "son-in-law and father-in-law")
+  because `family` alone cannot tell a parent from a sibling; names like "Ted" and
+  "Ted Mosby" are merged into one character when that is unambiguous, but two
+  characters of one episode never are; a doubtful reading does not overturn a clear
+  one; and the command retries a busy model instead of stopping. The
+  database moves to schema 3 (new `facts`, `summaries_cache`, `context_snapshots`
+  tables); older databases upgrade in place.
 - **Two model layers, light by default.** The default model is now
   `gemini-3.1-flash-lite` and the *strong model* (setting `gst_fallback_model`,
   default `gemini-3.5-flash`) only takes a job the default cannot finish: output

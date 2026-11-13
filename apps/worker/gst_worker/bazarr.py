@@ -98,6 +98,35 @@ def target_still_missing(job: dict[str, Any], http: HTTPClient, bazarr_url: str,
     return str(job.get("target_code") or "").lower() in codes
 
 
+def list_series_episodes(
+    http: HTTPClient, bazarr_url: str, api_key: str, series_id: str, source_code: str
+) -> list[dict[str, Any]]:
+    """Every episode Bazarr lists for a series, with its source subtitle if there is one (FR-8.3).
+
+    ``source_path`` is empty for an episode with no external subtitle in ``source_code``; the worker treats
+    such an episode as a gap in the story memory until a subtitle appears.
+    """
+    response = http.get_json(
+        f"{bazarr_url}/api/episodes", params={"seriesid[]": str(series_id)}, headers={"X-API-KEY": api_key}
+    )
+    data = response.get("data") if isinstance(response, dict) else None
+    wanted = [{"code": source_code, "language": source_code}] if source_code else []
+    episodes: list[dict[str, Any]] = []
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict) or item.get("season") is None or item.get("episode") is None:
+            continue
+        found = find_source_subtitle(item.get("subtitles"), wanted) if wanted else {}
+        episodes.append({
+            "season": int(item["season"]),
+            "episode": int(item["episode"]),
+            "title": str(item.get("title") or ""),
+            "bazarr_id": str(item.get("sonarrEpisodeId") or ""),
+            "video_path": str(item.get("path") or ""),
+            "source_path": found.get("path", ""),
+        })
+    return episodes
+
+
 def list_wanted_items(
     http: HTTPClient,
     bazarr_url: str,
@@ -198,3 +227,5 @@ class BazarrIntegration:
         return list_wanted_items(self.http, self.bazarr_url, self.api_key, source_languages, targets, limit)
     def refresh(self, job: dict[str, Any]) -> None:
         refresh_bazarr(job, self.http, self.bazarr_url, self.api_key)
+    def series_episodes(self, series_id: str, source_code: str) -> list[dict[str, Any]]:
+        return list_series_episodes(self.http, self.bazarr_url, self.api_key, series_id, source_code)

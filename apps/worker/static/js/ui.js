@@ -146,8 +146,8 @@ export function errorState(text, retry) {
 
 const STATUS_TEXT = {
   current: ["ok", "Current", "Made with the rules that apply now."],
-  stale: ["warn", "Stale", "The glossary or the episode's corrections changed after this was translated."],
-  incomplete: ["warn", "Incomplete", "Translated without all the earlier episodes available as context."],
+  stale: ["warn", "Stale", "The glossary, the episode's corrections or the story of earlier episodes changed after this was translated."],
+  incomplete: ["warn", "Incomplete", "Translated without all the earlier episodes available as story context."],
   untranslated: ["muted", "Untranslated", "No translation made by this worker yet."],
 };
 

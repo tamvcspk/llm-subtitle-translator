@@ -28,6 +28,20 @@ class HardJobError(RuntimeError):
     """
 
 
+class ContextGapError(RuntimeError):
+    """An earlier episode has no source subtitle yet, so the story memory for this one is incomplete.
+
+    The queue defers the job until ``retry_at``; once ``gap_wait`` has passed the job runs anyway with
+    ``context_complete = false`` (FR-5.4). ``since`` is when the wait began and survives in the job file.
+    """
+
+    def __init__(self, message: str, *, retry_at: float, since: float, missing: list[str]) -> None:
+        super().__init__(message)
+        self.retry_at = retry_at
+        self.since = since
+        self.missing = missing
+
+
 def redact(text: str, settings: dict[str, Any] | None = None) -> str:
     """Remove configured API keys and Google key patterns from ``text``."""
     for name in ("gemini_api_key", "gemini_api_key2", "bazarr_api_key", "tmdb_api_key"):

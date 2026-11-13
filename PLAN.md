@@ -2,7 +2,7 @@
 
 > Lộ trình triển khai [docs/design/SPEC.md](docs/design/SPEC.md) (cái gì) theo [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) (như thế nào).
 > File này là **nguồn sự thật duy nhất** cho phase, phạm vi, trạng thái. Đổi yêu cầu → sửa SPEC/ARCHITECTURE; đổi thứ tự/tiến độ → sửa file này.
-> Cập nhật: 2026-11-12
+> Cập nhật: 2026-11-13
 
 Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa làm.
 "Tiêu chí N" = tiêu chí nghiệm thu SPEC §6.
@@ -16,7 +16,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[x]` CI xanh; thử Gemini thật 4 file; 50 file thật hoãn (xem dưới) |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[~]` Code + test xong (xem dưới); còn bảng `jobs`/importer và chạy thật với Bazarr |
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong, CI xanh (e5babb1); còn thử giao diện trên trình duyệt thật |
-| **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[ ]` |
+| **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[~]` Code + test xong (tiêu chí 1, 2 bằng fake provider); còn đo chất lượng trích quan hệ, thử giao diện, CI GitHub |
 | **P5** | Đề xuất + research grounding + Review inbox; provider `openai_compat` | FR-6, FR-7, FR-9.1, FR-11.1 | `[ ]` |
 
 **Vì sao thứ tự này:** P1 dùng được ngay bằng CLI trước khi động vào worker — cách nhanh nhất để đánh giá chất lượng dịch với glossary thật. P3 đứng trước memory vì correction + dịch lại là "lưới an toàn" chất lượng cần có trước khi tự động hoá thêm. P0b đứng đầu vì console hiện tại đã ghi được (settings, backup/restore, retry) và SPEC chốt Basic Auth "ngay từ đầu".
@@ -73,7 +73,7 @@ Tiêu chí 3, 4, 5. ADR-1, ADR-3; ARCHITECTURE §3.3.
 Tiêu chí 6, 8. ADR-4, ADR-5; ARCHITECTURE §4, NFR-1/2/3/7.
 
 - [x] Store SQLite `app.db` (`DATA_DIR`, mặc định `STATE_DIR`; migration theo `user_version`): bảng `translations` (version, bản sao, sha256, trigger, `context_hash`) và `llm_calls` (`gst_worker/store.py`). `translations` khoá theo `output_path` cho đến khi có `units` (P3/P4).
-- [ ] Bảng `jobs` + importer `/queue/incoming/*.json` → `jobs`. **Hoãn có chủ ý:** hàng đợi vẫn là cây thư mục JSON (`pending/processing/...`) mà `gst_enqueue.sh`, `JobQueue`, console và ~40 test đang dùng; chuyển sang SQLite đụng cả script Bazarr lẫn console nên làm riêng. `units` đã có từ P3 nhưng hàng đợi vẫn là cây thư mục JSON (job dịch lại là một file trong `pending/` có `priority`); bảng `jobs` dời sang P4 cùng scheduler.
+- [ ] Bảng `jobs` + importer `/queue/incoming/*.json` → `jobs`. **Hoãn có chủ ý:** hàng đợi vẫn là cây thư mục JSON (`pending/processing/...`) mà `gst_enqueue.sh`, `JobQueue`, console và ~40 test đang dùng; chuyển sang SQLite đụng cả script Bazarr lẫn console nên làm riêng. `units` đã có từ P3 nhưng hàng đợi vẫn là cây thư mục JSON (job dịch lại là một file trong `pending/` có `priority`); bảng `jobs` vẫn hoãn: scheduler P4 chạy prerequisite inline và gap là trạng thái `deferred` của hàng đợi thư mục, nên chưa cần.
 - [x] Worker gọi `subcore` trong process thay cho subprocess `gst`; lỗi nhà cung cấp là exception có kiểu (`QuotaExhausted` → `DailyQuotaExceededError`, `RateLimited`/`Unavailable` → `ProviderUnavailableError`), không còn phân loại bằng chuỗi stdout (`translation_attempt.py`). Mất: resume từ `.partial`/`.progress` (một lần dịch lỗi chạy lại từ đầu).
 - [x] Rate limiter RPM/TPM/RPD theo API key + backoff có jitter, tôn trọng `retry-after` (`subcore.providers.limiter`); hết quota ngày → queue pause như cũ (NFR-1). Nhiều key: chuyển key khi hết quota (FR-9.4). Giới hạn qua `LLM_RPM/TPM/RPD`.
 - [x] Timeout 300 s mỗi lời gọi (đã có ở adapter Gemini), watchdog 30 phút mỗi job (`JOB_TIMEOUT_SECONDS`, kiểm tra trước mỗi lời gọi); idempotent theo sha256 nguồn + `context_hash` (model, temperature, prompt version, mô tả TMDB) — chạy lại không gọi LLM (NFR-2, NFR-3).
@@ -92,7 +92,7 @@ Tiêu chí 6, 8. ADR-4, ADR-5; ARCHITECTURE §4, NFR-1/2/3/7.
 
 Tiêu chí 7. FR-10, FR-11.2, FR-11.3; ADR-7; API §5.
 
-- [x] Trang **Library**: series → tập, trạng thái `current/stale/incomplete/untranslated`, lọc (`views/library.js`, `library.py`). `stale` hiện = luật (glossary + correction) khác lúc dịch; `incomplete` chờ P4 (`context_complete`). Phim liệt kê riêng.
+- [x] Trang **Library**: series → tập, trạng thái `current/stale/incomplete/untranslated`, lọc (`views/library.js`, `library.py`). `stale` hiện = luật (glossary + correction) khác lúc dịch; `incomplete` = dịch khi thiếu tập trước (`context_complete`, P4). Phim liệt kê riêng.
 - [x] Trang **Episode**: bảng gốc–dịch song song, nhảy theo timecode, tìm text (FR-11.2.5); layout xếp chồng trên điện thoại (`views/episode.js`).
 - [x] Correction `term/address/note/cue_edit`, scope `episode/forward/series`; `forward/series` ghi vào glossary YAML (term nay có `from`/`until`), `episode` vào bảng `corrections`; `cue_edit` là khoá và là mẫu trong prompt (FR-11.2.4). `note` chỉ scope `episode`.
 - [x] Dịch lại theo cả tập / dải cue / dải thời gian, ưu tiên cao hơn job tự động (FR-11.3); `subcore.translate(only=, keep=)`.
@@ -106,16 +106,20 @@ Tiêu chí 7. FR-10, FR-11.2, FR-11.3; ADR-7; API §5.
 
 ---
 
-## P4 — Story memory `[ ]`
+## P4 — Story memory `[~]`
 
-Tiêu chí 1, 2. FR-5; ADR-6; ARCHITECTURE §3.1, §3.2, §3.4.
+Tiêu chí 1, 2. FR-5; ADR-6; ARCHITECTURE §3.1, §3.2, §3.4 (các điểm lệch có chủ ý ghi ở "Đã làm ở P4" trong `docs/design/ARCHITECTURE.md` §3.4).
 
-- [ ] Extractor facts theo unit (structured output, cache theo sha256 + `prompt_version`).
-- [ ] Fold @N xác định; compress khi vượt budget (cache `summaries_cache`); `context_hash`.
-- [ ] Scheduler: story order, prerequisite extract, `gap_wait`, `context_complete`, `settle_window`, đánh dấu `stale` (không tự dịch lại).
-- [ ] Season 0 neo theo cấu hình (FR-5.7); Bazarr API liệt kê unit + source subtitle (FR-8.3).
-- [ ] Tab **Context** trên trang Episode.
-- [ ] Đo chất lượng trích quan hệ trên 2–3 series quen thuộc trước khi bật mặc định (rủi ro §8).
+- [x] Extractor facts theo unit (structured output, cache theo sha256 + `prompt_version`): `subcore.memory.facts`, bảng `facts`.
+- [x] Fold @N xác định; compress khi vượt budget (cache `summaries_cache`); vân tay `memory_hash` thay cho `context_hash` khi xét stale (`subcore.memory.fold`, `compress`).
+- [x] Prerequisite extract inline, `gap_wait` (job `deferred`, `context-gap`), `context_complete`, `missing_units`, đánh dấu `stale` (không tự dịch lại): `gst_worker/memory.py`. `settle_window` đã có sẵn ở hàng đợi.
+- [x] Season 0 neo theo cấu hình (`series.specials_after`, FR-5.7); Bazarr API liệt kê tập + source subtitle (`list_series_episodes`, FR-8.3).
+- [x] Tab **Context** trên trang Episode (cái đã dùng / sẽ dùng bây giờ, bật/tắt memory theo series, neo season 0, "Read facts now"); mục **Story memory** trong Settings.
+- [x] Test tiêu chí 1 và 2 bằng fake provider (`apps/worker/tests/test_story_memory.py`, `packages/subcore/tests/test_memory.py`).
+- [x] Đo chất lượng trích quan hệ trên 3 series (2026-11-13, `gemini-3.1-flash-lite`, 6 tập đầu mỗi series: How I Met Your Mother S01, Modern Family S03, Brooklyn Nine-Nine S01; ~10–13k token vào / ~1k ra mỗi tập). Công cụ: `uv run subcore memory ep01.srt ep02.srt … --title X` (cần `GEMINI_API_KEY`). **Đúng:** nhân vật, giới tính, các quan hệ chính và thời điểm đổi (Ted–Robin yêu→bạn tập 2, Ted–Natalie hẹn hò→kẻ thù tập 4, Robin–Mike chia tay tập 6, Barney–Leslie họ hàng; Phil–Claire vợ chồng, Gloria–Manny mẹ–con, Jay–Manny cha dượng–con riêng, Phil–Jay rể–bố vợ; Holt–Peralta sếp–cấp dưới), timecode khớp cảnh. **Lỗi thấy được và đã sửa:** (1) vị hôn phu/thê bị gán `family` → prompt `x2`; (2) "Ted"/"Ted Mosby" thành hai người → fold gộp tên viết tắt khi không mơ hồ; (3) hai nhân vật cùng tập chung biệt danh "Podolski" (cháu và ông) bị gộp, gán nhầm quan hệ → nhân vật cùng một tập không bao giờ bị gộp với nhau; (4) `family` không phân biệt cha mẹ/anh chị em/thông gia, thứ tiếng Việt cần → sự kiện có thêm `detail` ("mother and son", "son-in-law and father-in-law"), prompt `x3`; (5) một đọc nghi ngờ (độ tin < 0.6) lật quan hệ đã rõ (≥ 0.9) → bỏ qua; (6) CLI chết khi gặp 503 → nay có backoff. **Còn lại, chấp nhận:** khung tạm thời có thể thay quan hệ bền (Peralta–Holt thành "rival, đánh cược" ở tập 6, mất "sếp–cấp dưới"; hierarchy đôi khi đổi theo một khoảnh khắc thân mật), người yêu cũ ghi `stranger`, `closeness` của cặp đang yêu hơi thấp, `age_hint` dao động giữa các tập. Vì vậy memory chỉ là gợi ý cho giọng và xưng hô; glossary và correction luôn thắng. `memory_enabled` vẫn **tắt mặc định**: chưa dịch thử tập nào có bật memory để so với bản không memory.
+- [x] So sánh dịch có/không memory (2026-11-13, Modern Family S03E06 → vi, `gemini-3.1-flash-lite`, temperature 0, engine `subcore` gọi thẳng, không qua worker/Bazarr; facts của S03E01–05 + tập 6; 1 lời gọi dịch mỗi bản; prompt vào 13,1k → 15,0k token). Kết quả: **có lợi nhưng chưa hoàn hảo**. Lợi: cha nói với con gái đổi "tôi" → "bố" (cue 2, 9, 20), "con"/"mẹ" tăng (con 98→117, mẹ 11→32, "tôi" cứng 98→39); nhóm bạn Claire–Mitchell–Cam–Joanne xưng "tớ–cậu" nhất quán thay vì lẫn "mình/tôi/em" và "các người" (cue 160–164); một câu giữa bạn bè không còn bị gọi nhầm là "con" (cue 105–108). Hại: ít nhất một câu Manny nói với mẹ bị đổi sang "em" thay vì "con" (cue 61–62); một số câu Gloria/Jay vẫn xưng sai chiều, vì phụ đề không có tên người nói nên cả hai bản đều đoán sai người nói ở vài chỗ; "tớ" cho Claire (~40 tuổi) hơi trẻ. Khuyến nghị: **giữ `memory_enabled` tắt mặc định**, bật theo từng series có quan hệ cố định (Context → On) và sửa bằng correction khi sai; chưa có lý do để bật chung vì tốn thêm một lời gọi trích facts cho mỗi tập trước đó ở lần đầu.
+- [ ] Thử giao diện (tab Context, Settings) trên trình duyệt thật.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P4 (chỉ đánh dấu `[x]` cho phase sau bước này).
 
 ## P5 — Đề xuất, research, Review inbox, provider thứ hai `[ ]`
 

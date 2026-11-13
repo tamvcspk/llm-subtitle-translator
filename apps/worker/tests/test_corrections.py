@@ -146,7 +146,7 @@ class StoreMigrationTests(unittest.TestCase):
             old.close()
             store = Store(path)
             try:
-                self.assertEqual(store.schema_version, 2)
+                self.assertEqual(store.schema_version, 3)
                 row = store.current_version("/m/a.vi.srt")
                 self.assertEqual((row["sha256"], row["unit_id"], row["glossary_hash"]), ("abc", None, ""))
             finally:

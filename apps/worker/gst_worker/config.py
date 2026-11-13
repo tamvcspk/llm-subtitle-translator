@@ -40,6 +40,16 @@ GST_STRING_CONFIG_KEYS = (
     "gst_temperature",
     "gst_thinking_budget",
 )
+# Story memory (P4). Off by default until its relationship extraction has been measured on real series
+# (ARCHITECTURE section 8); a series can override the switch in the console.
+MEMORY_BOOL_CONFIG_KEYS = ("memory_enabled",)
+MEMORY_STRING_CONFIG_KEYS = ("memory_model",)
+# key -> (default, minimum)
+MEMORY_INT_CONFIG_KEYS = {
+    "memory_gap_wait_seconds": (1800, 0),
+    "memory_budget_tokens": (8000, 500),
+    "memory_recent_episodes": (3, 0),
+}
 DEFAULT_APP_CONFIG = {
     "source_languages": DEFAULT_SOURCE_LANGUAGES,
     "target_languages": DEFAULT_TARGET_LANGUAGES,
@@ -57,6 +67,9 @@ DEFAULT_APP_CONFIG = {
     "gst_thinking_budget": "2048",
     "gst_no_thinking": False,
     "job_settle_seconds": 600,
+    "memory_enabled": False,
+    "memory_model": "",
+    **{key: default for key, (default, _) in MEMORY_INT_CONFIG_KEYS.items()},
 }
 
 
@@ -118,6 +131,15 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
         normalized["job_settle_seconds"] = max(0, int(normalized.get("job_settle_seconds", 600)))
     except (TypeError, ValueError):
         normalized["job_settle_seconds"] = 600
+    for key in MEMORY_BOOL_CONFIG_KEYS:
+        normalized[key] = bool(normalized.get(key))
+    for key in MEMORY_STRING_CONFIG_KEYS:
+        normalized[key] = str(normalized.get(key) or "").strip()
+    for key, (default, minimum) in MEMORY_INT_CONFIG_KEYS.items():
+        try:
+            normalized[key] = max(minimum, int(normalized.get(key, default)))
+        except (TypeError, ValueError):
+            normalized[key] = default
     try:
         normalized["scan_limit"] = max(1, int(normalized.get("scan_limit", 200)))
     except (TypeError, ValueError):

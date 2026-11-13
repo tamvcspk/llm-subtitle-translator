@@ -71,7 +71,11 @@ ROUTES: list[tuple[str, str, Handler]] = [
         ),
     ),
     ("POST", r"/api/units/(\d+)/versions/(\d+)/revert", lambda s, m, q, b: s.revert(int(m[1]), int(m[2]), _lang(q, b))),
-    ("GET", r"/api/series/(\d+)/glossary", lambda s, m, q, b: s.glossary(int(m[1]), _glossary_lang(q))),
+    ("GET", r"/api/units/(\d+)/context", lambda s, m, q, b: s.context(int(m[1]), _lang(q))),
+    ("POST", r"/api/units/(\d+)/context/extract", lambda s, m, q, b: s.refresh_context(int(m[1]))),
+    ("GET", r"/api/series/(\d+)/memory", lambda s, m, q, b: s.series_memory(int(m[1]))),
+    ("PUT", r"/api/series/(\d+)/memory", lambda s, m, q, b: s.set_series_memory(int(m[1]), b)),
+    ("GET", r"/api/series/(\d+)/glossary",lambda s, m, q, b: s.glossary(int(m[1]), _glossary_lang(q))),
     (
         "PUT",
         r"/api/series/(\d+)/glossary",

@@ -101,6 +101,42 @@ _MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE translations ADD COLUMN context_complete INTEGER NOT NULL DEFAULT 1;
     CREATE INDEX translations_unit ON translations (unit_id);
     """,
+    # P4: story memory. Facts are immutable per (unit, source sha256, extraction prompt version).
+    # series.memory is '' (follow the global setting), 'on' or 'off'; specials_after anchors season 0.
+    # translations.memory_hash is the fingerprint of the facts a version was made with ('' = none used);
+    # missing_units_json lists the earlier units that had no usable facts at the time (context_complete = 0).
+    """
+    ALTER TABLE series ADD COLUMN memory TEXT NOT NULL DEFAULT '';
+    ALTER TABLE series ADD COLUMN specials_after TEXT NOT NULL DEFAULT '';
+    CREATE TABLE facts (
+        id INTEGER PRIMARY KEY,
+        unit_id INTEGER NOT NULL REFERENCES units(id),
+        source_sha256 TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
+        json TEXT NOT NULL,
+        facts_hash TEXT NOT NULL,
+        tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL,
+        UNIQUE (unit_id, source_sha256, prompt_version)
+    );
+    CREATE TABLE summaries_cache (
+        id INTEGER PRIMARY KEY,
+        series_id INTEGER NOT NULL REFERENCES series(id),
+        up_to_unit INTEGER NOT NULL,
+        input_hash TEXT NOT NULL UNIQUE,
+        text TEXT NOT NULL,
+        created_at REAL NOT NULL
+    );
+    CREATE TABLE context_snapshots (
+        memory_hash TEXT PRIMARY KEY,
+        sections_json TEXT NOT NULL,
+        created_at REAL NOT NULL
+    );
+    ALTER TABLE translations ADD COLUMN memory_hash TEXT NOT NULL DEFAULT '';
+    ALTER TABLE translations ADD COLUMN missing_units_json TEXT NOT NULL DEFAULT '[]';
+    """,
 )
 
 
@@ -229,6 +265,8 @@ class Store:
         unit_id: int | None = None,
         glossary_hash: str = "",
         context_complete: bool = True,
+        memory_hash: str = "",
+        missing_units: Iterable[str] = (),
     ) -> None:
         with self._lock:
             self._db.execute("BEGIN")
@@ -241,12 +279,14 @@ class Store:
                 self._db.execute(
                     "INSERT INTO translations (output_path, source_path, source_sha256, target_lang, version,"
                     " stored_path, sha256, context_hash, trigger, parent_version, status, model, tokens_in,"
-                    " tokens_out, created_at, unit_id, glossary_hash, context_complete)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " tokens_out, created_at, unit_id, glossary_hash, context_complete, memory_hash,"
+                    " missing_units_json)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         output_path, source_path, source_sha256, target_lang, version, stored_path, sha256,
                         context_hash, trigger, parent_version, "current" if make_current else "superseded",
                         model, tokens_in, tokens_out, time.time(), unit_id, glossary_hash, int(context_complete),
+                        memory_hash, json.dumps(list(missing_units), ensure_ascii=False),
                     ),
                 )
                 self._db.execute("COMMIT")
@@ -395,6 +435,87 @@ class Store:
         with self._lock:
             cursor = self._db.execute("UPDATE corrections SET active = 0 WHERE id = ? AND active = 1", (correction_id,))
             return cursor.rowcount > 0
+
+    # -- story memory (P4) ------------------------------------------------------------
+    def find_unit(self, series_id: int, season: int, episode: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM units WHERE series_id = ? AND season = ? AND episode = ?", (series_id, season, episode)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_series_memory(self, series_id: int, *, memory: str | None = None, specials_after: str | None = None) -> None:
+        with self._lock:
+            if memory is not None:
+                self._db.execute("UPDATE series SET memory = ? WHERE id = ?", (memory, series_id))
+            if specials_after is not None:
+                self._db.execute("UPDATE series SET specials_after = ? WHERE id = ?", (specials_after, series_id))
+
+    def facts_row(self, unit_id: int, source_sha256: str, prompt_version: str, *, touch: bool = False) -> dict[str, Any] | None:
+        """Stored facts for exactly this source and prompt version. ``touch`` marks them as the newest in use."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM facts WHERE unit_id = ? AND source_sha256 = ? AND prompt_version = ?",
+                (unit_id, source_sha256, prompt_version),
+            ).fetchone()
+            if row is not None and touch:
+                self._db.execute("UPDATE facts SET created_at = ? WHERE id = ?", (time.time(), row["id"]))
+        return dict(row) if row else None
+
+    def save_facts(
+        self, unit_id: int, source_sha256: str, prompt_version: str, *, model: str, facts: dict[str, Any],
+        facts_hash: str, tokens_in: int = 0, tokens_out: int = 0,
+    ) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO facts (unit_id, source_sha256, prompt_version, model, json, facts_hash, tokens_in,"
+                " tokens_out, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (unit_id, source_sha256, prompt_version) DO UPDATE SET model = excluded.model,"
+                " json = excluded.json, facts_hash = excluded.facts_hash, tokens_in = excluded.tokens_in,"
+                " tokens_out = excluded.tokens_out, created_at = excluded.created_at",
+                (unit_id, source_sha256, prompt_version, model, json.dumps(facts, ensure_ascii=False, sort_keys=True),
+                 facts_hash, tokens_in, tokens_out, time.time()),
+            )
+
+    def latest_facts(self, unit_ids: Iterable[int], prompt_version: str) -> dict[int, dict[str, Any]]:
+        """The facts most recently saved or used for each unit under ``prompt_version``."""
+        ids = list(unit_ids)
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT * FROM facts WHERE prompt_version = ? AND unit_id IN ({marks}) ORDER BY created_at, id",
+                (prompt_version, *ids),
+            ).fetchall()
+        return {int(row["unit_id"]): dict(row) for row in rows}  # later rows overwrite earlier ones
+
+    def get_summary(self, input_hash: str) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT text FROM summaries_cache WHERE input_hash = ?", (input_hash,)).fetchone()
+        return str(row["text"]) if row else None
+
+    def put_summary(self, series_id: int, up_to_unit: int, input_hash: str, text: str) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO summaries_cache (series_id, up_to_unit, input_hash, text, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (series_id, up_to_unit, input_hash, text, time.time()),
+            )
+
+    def put_snapshot(self, memory_hash: str, sections: list[tuple[str, str]]) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO context_snapshots (memory_hash, sections_json, created_at) VALUES (?, ?, ?)",
+                (memory_hash, json.dumps([list(s) for s in sections], ensure_ascii=False), time.time()),
+            )
+
+    def get_snapshot(self, memory_hash: str) -> list[tuple[str, str]] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT sections_json FROM context_snapshots WHERE memory_hash = ?", (memory_hash,)
+            ).fetchone()
+        return [(str(a), str(b)) for a, b in json.loads(row["sections_json"])] if row else None
 
     def cached_versions(self, source_sha256: str, target_lang: str, context_hash: str) -> Iterable[dict[str, Any]]:
         """Versions made from the same input and context, newest first (NFR-3)."""

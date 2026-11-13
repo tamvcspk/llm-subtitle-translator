@@ -201,6 +201,7 @@
           <nav id="episode-tabs" class="tabs" aria-label="Episode sections">
             <button type="button" class="tab" data-tab="cues" aria-current="page">Subtitles</button>
             <button type="button" class="tab" data-tab="history">History <span class="tab-count" id="episode-version-count"></span></button>
+            <button type="button" class="tab" id="episode-context-tab" data-tab="context" hidden>Context <span class="tab-count tab-count-alert" id="episode-context-flag" hidden></span></button>
           </nav>
           <div id="episode-langs" class="chip-list"></div>
         </div>
@@ -227,6 +228,31 @@
         <div id="episode-history-pane" hidden>
           <div id="episode-version-list"></div>
           <p class="footnote">Every version the worker writes is kept outside the media folder. Restoring one puts those exact bytes back and is itself recorded as a version.</p>
+        </div>
+
+        <div id="episode-context-pane" hidden>
+          <div id="episode-context-body"></div>
+          <div class="context-controls">
+            <div class="field">
+              <label for="context-policy">Story memory for this series</label>
+              <select id="context-policy" class="input">
+                <option value="">Follow the global setting</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="context-anchor">Specials (season 0) see the story after</label>
+              <input id="context-anchor" class="input mono" type="text" placeholder="S01E10 — blank: end of season 1" spellcheck="false" autocomplete="off">
+            </div>
+            <button id="context-save" type="button" class="btn">Save</button>
+            <button id="context-extract" type="button" class="btn" data-icon="refresh">Read facts now</button>
+          </div>
+          <p class="footnote">
+            The story memory is built from the source subtitles of the episodes before this one, never from translations and never
+            from a later episode. It only shapes tone and forms of address; the glossary and your corrections always win.
+            A change here can mark translations stale; it never retranslates them. “Read facts now” spends model calls.
+          </p>
         </div>
       </section>
     </section>
@@ -357,6 +383,39 @@
             </div>
             <div class="checks field-wide">
               <label class="check"><input type="checkbox" name="gst_paid_quota"><span>Paid quota</span></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-card">
+          <div class="settings-intro">
+            <h2>Story memory</h2>
+            <p>Before an episode is translated, the worker reads the source subtitles of the episodes before it, so forms of address follow the story even when Bazarr delivers episodes out of order. Each series can override the switch on its Episode page (Context tab).</p>
+          </div>
+          <div class="field-grid">
+            <div class="checks field-wide">
+              <label class="check"><input type="checkbox" name="memory_enabled"><span>Use story memory</span></label>
+              <p class="hint">Off by default until you have checked the extracted relationships on a series you know (<code>subcore memory</code>). It adds one cheap model call per earlier episode the first time a series is translated.</p>
+            </div>
+            <div class="field">
+              <label for="f-memory_gap_wait_seconds">Wait for a missing episode (seconds)</label>
+              <input id="f-memory_gap_wait_seconds" name="memory_gap_wait_seconds" class="input" type="number" min="0" max="86400" data-type="int" data-default="1800">
+              <p class="hint">When an earlier episode has no subtitle yet, the job waits this long, then translates with the context incomplete. 0 never waits.</p>
+            </div>
+            <div class="field">
+              <label for="f-memory_model">Model for reading facts</label>
+              <input id="f-memory_model" name="memory_model" class="input mono" type="text" spellcheck="false" autocomplete="off" placeholder="Same as the default model">
+              <p class="hint">A cheaper model is fine here.</p>
+            </div>
+            <div class="field">
+              <label for="f-memory_recent_episodes">Episodes kept in full</label>
+              <input id="f-memory_recent_episodes" name="memory_recent_episodes" class="input" type="number" min="0" max="20" data-type="int" data-default="3">
+              <p class="hint">The summaries of this many latest earlier episodes are given in full; older ones are condensed.</p>
+            </div>
+            <div class="field">
+              <label for="f-memory_budget_tokens">Story budget (tokens)</label>
+              <input id="f-memory_budget_tokens" name="memory_budget_tokens" class="input" type="number" min="500" max="100000" data-type="int" data-default="8000">
+              <p class="hint">Roughly how much of the prompt the story so far may use before old episodes are condensed.</p>
             </div>
           </div>
         </section>

@@ -7,18 +7,26 @@ HTTP details. ``LookupError`` means "not found" and ``ValueError`` means "bad re
 from __future__ import annotations
 
 import difflib
+import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable
 
 from subcore import glossary as g
 from subcore import srt
 
+from subcore.providers import ProviderError
+
+from .config import DEFAULT_MODEL
 from .glossaries import GlossaryFiles
 from .library import Library
+from .llm import MissingApiKey, build_provider
+from .memory import MEMORY_MODES, StoryMemory, parse_anchor, unit_label
 from .queue import enqueue_retranslation
 from .rules import correction_position
+from .translation import redact
 from .versions import CUE_EDIT, TranslationVersions
 
 KINDS = ("term", "address", "note", "cue_edit")
@@ -59,6 +67,9 @@ class UnitService:
         versions: TranslationVersions,
         queue_dir: str,
         refresh_bazarr: Callable[[dict[str, Any]], None] | None = None,
+        memory: StoryMemory | None = None,
+        settings_source: Callable[[], dict[str, Any]] | None = None,
+        provider_factory: Callable[..., Any] = build_provider,
     ) -> None:
         self.library = library
         self.store = library.store
@@ -66,6 +77,9 @@ class UnitService:
         self.versions = versions
         self.queue_dir = queue_dir
         self._refresh = refresh_bazarr
+        self.memory = memory
+        self._settings = settings_source or (lambda: {})
+        self._provider_factory = provider_factory
 
     # -- lookups -----------------------------------------------------------------
     def unit(self, unit_id: int) -> dict[str, Any]:
@@ -118,6 +132,7 @@ class UnitService:
             **summary,
             "series": {"id": series["id"], "title": series["title"]} if series else None,
             "source_exists": bool(unit["source_path"]) and Path(unit["source_path"]).is_file(),
+            "memory_applicable": series is not None and self.memory is not None,
         }
 
     def cues(
@@ -444,6 +459,102 @@ class UnitService:
                 self.store.deactivate_correction(correction["id"])
         self._bazarr_refresh(unit)
         return {"ok": True, "version": published.version, "restored": version}
+
+    # -- story memory (P4) ----------------------------------------------------------------
+    def _target_or_none(self, unit: dict[str, Any], lang: str | None) -> dict[str, Any] | None:
+        try:
+            return self.output(unit, lang)
+        except (LookupError, ValueError):
+            return None
+
+    def context(self, unit_id: int, lang: str | None = None) -> dict[str, Any]:
+        """What the story memory gave this translation, and what it would give now (FR-5.2, ADR-7 Context tab)."""
+        unit = self.unit(unit_id)
+        if unit["series_id"] is None or self.memory is None:
+            return {"applicable": False, "enabled": False}
+        series = self.store.get_series(int(unit["series_id"]))
+        out = self._target_or_none(unit, lang)
+        current = self.store.current_version(out["output_path"]) if out else None
+        now = self.memory.preview(unit, self._settings())
+        used = None
+        if current and current["memory_hash"]:
+            sections = self.store.get_snapshot(current["memory_hash"])
+            used = {
+                "version": current["version"],
+                "complete": bool(current["context_complete"]),
+                "missing": json.loads(current["missing_units_json"] or "[]"),
+                "sections": [{"title": t, "body": b} for t, b in sections] if sections is not None else None,
+                "changed": current["memory_hash"] != now["fingerprint"],
+            }
+        return {
+            "applicable": True,
+            "enabled": self.memory.enabled_for(unit, self._settings()),
+            "policy": series["memory"],
+            "specials_after": series["specials_after"],
+            "label": unit_label(unit),
+            "special": (unit["season"] or 0) == 0,
+            "lang": out["target_lang"] if out else None,
+            "used": used,
+            "now": now,
+        }
+
+    def series_memory(self, series_id: int) -> dict[str, Any]:
+        series = self.store.get_series(series_id)
+        if series is None or self.memory is None:
+            raise LookupError(f"no series {series_id}")
+        settings = self._settings()
+        return {
+            "series": {"id": series["id"], "title": series["title"]},
+            "policy": series["memory"],
+            "specials_after": series["specials_after"],
+            "global_enabled": self.memory.options(settings).enabled,
+            "units": self.memory.coverage(series_id),
+        }
+
+    def set_series_memory(self, series_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        """Switch memory on or off for one series, or let it follow the global setting; anchor its specials."""
+        series = self.store.get_series(series_id)
+        if series is None or self.memory is None:
+            raise LookupError(f"no series {series_id}")
+        policy = body.get("policy")
+        anchor = body.get("specials_after")
+        if policy is not None and policy not in MEMORY_MODES:
+            raise ValueError("policy must be '' (follow the global setting), 'on' or 'off'")
+        if anchor is not None:
+            anchor = str(anchor).strip().upper()
+            if anchor and parse_anchor(anchor) is None:
+                raise ValueError("specials_after must look like S02E05")
+        self.store.set_series_memory(series_id, memory=policy, specials_after=anchor)
+        return self.series_memory(series_id)
+
+    def refresh_context(self, unit_id: int) -> dict[str, Any]:
+        """Extract facts now for this episode and the earlier ones that have a source subtitle (spends calls)."""
+        unit = self.unit(unit_id)
+        if unit["series_id"] is None or self.memory is None:
+            raise ValueError("story memory applies to episodes of a series only")
+        settings = self._settings()
+        model = str(settings.get("gst_model") or DEFAULT_MODEL)
+        providers: dict[str, Any] = {}
+
+        def provider_for(task: str):
+            name = model if task == "translate" else (str(settings.get("memory_model") or "").strip() or model)
+            if name not in providers:
+                def record(log) -> None:
+                    self.store.record_llm_call(
+                        "console-context", provider=log.provider, model=log.model, task=log.task,
+                        tokens_in=log.tokens_in, tokens_out=log.tokens_out, latency_ms=log.latency_ms,
+                        outcome=log.outcome,
+                    )
+                providers[name] = self._provider_factory(settings, name, deadline=time.monotonic() + 600, on_call=record)
+            return providers[name]
+
+        try:
+            result = self.memory.refresh(unit, settings, provider_for)
+        except MissingApiKey as exc:
+            raise ValueError(str(exc)) from None
+        except ProviderError as exc:
+            raise ValueError(redact(f"The provider could not finish ({type(exc).__name__}: {exc})", settings)) from None
+        return {"ok": True, **result}
 
     # -- glossary -------------------------------------------------------------------------
     def glossary(self, series_id: int, lang: str) -> dict[str, Any]:

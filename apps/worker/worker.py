@@ -26,6 +26,7 @@ from gst_worker import auth as console_auth
 from gst_worker.auth import ConsoleAuth
 from gst_worker.bazarr import (
     BazarrIntegration,
+    list_series_episodes,
     list_wanted_items,
     read_bazarr_api_key,
     refresh_bazarr,
@@ -37,6 +38,9 @@ from gst_worker.config import (
     SECRET_CONFIG_KEYS,
     GST_BOOL_CONFIG_KEYS,
     GST_STRING_CONFIG_KEYS,
+    MEMORY_BOOL_CONFIG_KEYS,
+    MEMORY_INT_CONFIG_KEYS,
+    MEMORY_STRING_CONFIG_KEYS,
     load_app_config,
     normalize_app_config,
     save_app_config,
@@ -57,6 +61,7 @@ from gst_worker import library_api
 from gst_worker.console import ConsoleActions
 from gst_worker.glossaries import GlossaryFiles
 from gst_worker.library import Library, enrich_job_identity
+from gst_worker.memory import StoryMemory
 from gst_worker.queue_policy import configured_models
 from gst_worker.store import Store
 from gst_worker.translation_attempt import DEFAULT_ATTEMPT, TranslationAttempt
@@ -96,6 +101,12 @@ def load_settings(config_path: str | None = None) -> dict[str, Any]:
         settings[key] = bool(app_config.get(key))
     settings["gst_model"] = str(app_config.get("gst_model") or os.getenv("GST_MODEL", DEFAULT_MODEL))
     settings["job_settle_seconds"] = int(app_config.get("job_settle_seconds") or 0)
+    for key in MEMORY_BOOL_CONFIG_KEYS:
+        settings[key] = bool(app_config.get(key))
+    for key in MEMORY_STRING_CONFIG_KEYS:
+        settings[key] = str(app_config.get(key) or "").strip()
+    for key in MEMORY_INT_CONFIG_KEYS:
+        settings[key] = int(app_config[key])
     for key in ("llm_rpm", "llm_tpm", "llm_rpd"):
         if os.getenv(key.upper(), "").strip():
             settings[key] = os.getenv(key.upper(), "").strip()
@@ -612,11 +623,24 @@ def main() -> int:
     store = Store(os.getenv("DB_PATH", f"{data_dir}/app.db"))
     versions = TranslationVersions(store, f"{data_dir}/backups/subtitles")
     glossaries = GlossaryFiles(data_dir)
-    library = Library(store, glossaries, versions)
-    attempt = TranslationAttempt(versions=versions, library=library)
+    def live_settings() -> dict[str, Any]:
+        return worker.settings  # the worker adopts new settings when they are saved
+
+    def bazarr_catalog(series: dict[str, Any], source_code: str) -> list[dict[str, Any]]:
+        current = live_settings()
+        if not current.get("bazarr_api_key") or not series["bazarr_id"]:
+            return []
+        return list_series_episodes(http, current["bazarr_url"], current["bazarr_api_key"], series["bazarr_id"], source_code)
+
+    memory = StoryMemory(store, settings_source=live_settings, catalog=bazarr_catalog)
+    library = Library(store, glossaries, versions, memory=memory)
+    attempt = TranslationAttempt(versions=versions, library=library, memory=memory)
     worker = QueueWorker(queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt)
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
-    units = UnitService(library, glossaries, versions, queue_dir, refresh_bazarr=bazarr.refresh)
+    units = UnitService(
+        library, glossaries, versions, queue_dir, refresh_bazarr=bazarr.refresh,
+        memory=memory, settings_source=live_settings,
+    )
     backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path)
 
     try:
