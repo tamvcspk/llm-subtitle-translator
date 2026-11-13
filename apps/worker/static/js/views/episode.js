@@ -272,7 +272,7 @@ function renderContext() {
     if (now.approximate) parts.push(h("p", { class: "muted", text: "Older episodes are shown shortened; a translation condenses them with the model." }));
     parts.push(contextSections(now.sections));
   }
-  body.replaceChildren(...parts);
+  body.replaceChildren(...parts.flat()); // contextSections() returns a list of elements
 
   $("context-policy").value = data.policy || "";
   $("context-anchor").value = data.specials_after || "";

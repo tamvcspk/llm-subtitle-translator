@@ -168,8 +168,9 @@ export function setHeading(title, subtitle = "") {
 
 /** Breadcrumb trail: [["Library", "#library"], ["Show"]] — the last item is plain text. */
 export function crumbs(container, trail) {
+  // replaceChildren turns a null argument into the text "null", so the first separator is left out, not nulled.
   container.replaceChildren(...trail.flatMap(([label, href], index) => [
-    index ? h("span", { class: "crumb-sep", text: "/" }) : null,
+    ...(index ? [h("span", { class: "crumb-sep", text: "/" })] : []),
     href ? h("a", { class: "link", href, text: label }) : h("span", { text: label }),
   ]));
 }
