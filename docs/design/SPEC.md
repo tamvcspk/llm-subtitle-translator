@@ -1,9 +1,10 @@
 # SPEC — LLM Subtitle Translator for Bazarr (tên tạm)
 
-> Trạng thái: **Draft v0.3** · 2026-11-11
+> Trạng thái: **Draft v0.5** · 2026-11-14
 > Thay thế bản SRS ban đầu. Những chỗ khác SRS gốc được đánh dấu **[Đổi]** kèm lý do.
 > v0.2: chốt các câu hỏi mở của v0.1 (mục 7), thêm FR-11 (duyệt, dịch lại, correction).
 > v0.3: chốt 2 câu hỏi mở của v0.2 — thông báo để v1.1; Basic Auth bật ngay từ đầu (NFR-5).
+> v0.5: NFR-5 — thêm form đăng nhập và đổi mật khẩu trong Settings cho tài khoản duy nhất, giữ Basic Auth cho script; thêm tiêu chí nghiệm thu 9 và quyết định #8. (Số v0.4 được ARCHITECTURE dùng trước đó; hai tài liệu cùng v0.5 từ đây.)
 
 ---
 
@@ -23,7 +24,7 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
 - Không transcribe từ audio.
 - Không dịch ASS/SSA giữ style (v1 chỉ SRT; VTT ở v1.1).
 - Không liên kết bối cảnh giữa các phim trong một franchise (movie là đơn vị độc lập).
-- Không multi-user, không auth phức tạp (homelab, mạng tin cậy) — chỉ một tài khoản Basic Auth (NFR-5).
+- Không multi-user, không quản lý user, không phân quyền, không OAuth/SSO (homelab, mạng tin cậy) — chỉ một tài khoản, vào bằng form đăng nhập hoặc Basic Auth (NFR-5). Đổi tên đăng nhập qua console và xác thực hai bước: để sau v1 nếu cần.
 - Không gửi thông báo (ntfy/Apprise/Telegram) khi có mục `pending` hoặc job fail — để **v1.1**. Console vẫn hiện badge `pending` và danh sách job lỗi (FR-11.1.1).
 
 ---
@@ -181,7 +182,7 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
 | NFR-2 Timeout | HTTP timeout mỗi lời gọi LLM ≥ 300 s (dùng streaming nếu provider hỗ trợ); watchdog mỗi job 30 phút. Không còn subprocess treo vô hạn. |
 | NFR-3 Idempotent | Chạy lại một job cho cùng input + context_hash không tạo lời gọi LLM mới nếu đã có kết quả. Facts và bản nén được cache theo hash. |
 | NFR-4 An toàn dữ liệu | Không bao giờ ghi đè file phụ đề không do hệ thống tạo. Dịch lại thì backup bản cũ. |
-| NFR-5 Bảo mật | API key chỉ qua env/secret hoặc config đã che; không log, không trả qua API; lọc pattern key khỏi log/lỗi. **Basic Auth bật mặc định** cho mọi đường dẫn HTTP (console tĩnh + `/api/*`), cấu hình qua env `CONSOLE_USER`/`CONSOLE_PASSWORD` (không lưu trong `config.json`, không sửa qua console). Thiếu một trong hai ⇒ worker vẫn xử lý queue nhưng HTTP trả `503` kèm hướng dẫn cấu hình, trừ khi tắt **tường minh** bằng `CONSOLE_AUTH=off` (log cảnh báo mỗi lần khởi động). So sánh mật khẩu bằng `hmac.compare_digest`; không log mật khẩu hay header `Authorization`. Bazarr không gọi HTTP của worker (chỉ thả file vào queue) nên auth không ảnh hưởng ingestion. Vẫn khuyến nghị chỉ expose trong LAN / sau reverse proxy có TLS (Basic Auth gửi mật khẩu dạng base64). |
+| NFR-5 Bảo mật | API key chỉ qua env/secret hoặc config đã che; không log, không trả qua API; lọc pattern key khỏi log/lỗi. **Xác thực bật mặc định** cho mọi đường dẫn HTTP (console tĩnh + `/api/*`); chỉ có **một tài khoản**. **[Đổi]** (v0.5, thay cho "chỉ Basic Auth, mật khẩu chỉ từ env") — hai cách vào, cùng một tài khoản: (a) **form đăng nhập** cho trình duyệt (cookie phiên); (b) **Basic Auth** cho script/Home Assistant (FR-10.3). *Lý do:* trình duyệt nhớ Basic Auth nhưng không có cách đăng xuất hay đổi mật khẩu, và mật khẩu chỉ nằm trong env thì phải sửa compose rồi khởi động lại container mỗi lần đổi. Tài khoản khởi tạo lấy từ env `CONSOLE_USER`/`CONSOLE_PASSWORD` ở lần chạy đầu; sau đó người dùng **đổi mật khẩu trong Settings** (cần nhập mật khẩu hiện tại, tối thiểu 8 ký tự) và mật khẩu đã lưu (băm `scrypt`, không lưu thô) thắng env. Quên mật khẩu: đặt `CONSOLE_PASSWORD_RESET=1` cùng `CONSOLE_USER`/`CONSOLE_PASSWORD` rồi khởi động lại để ghi đè tài khoản đã lưu (log cảnh báo bỏ cờ này đi). Chưa có tài khoản đã lưu và thiếu env ⇒ worker vẫn xử lý queue nhưng HTTP trả `503` kèm hướng dẫn (không có trang "đặt mật khẩu lần đầu" mở cho cả LAN), trừ khi tắt **tường minh** bằng `CONSOLE_AUTH=off` (log cảnh báo mỗi lần khởi động). Mật khẩu và token phiên so sánh bằng `hmac.compare_digest`; không log mật khẩu, cookie hay header `Authorization`; mật khẩu không nằm trong `config.json`, không trả qua API, không sửa qua `/api/settings`. Cookie phiên `HttpOnly`, `SameSite=Strict` (thêm `Secure` khi sau proxy HTTPS), hết hạn sau 7 ngày không dùng, mất hiệu lực khi đổi mật khẩu; thao tác ghi bằng cookie còn bị kiểm `Origin`/`Host`. Đăng nhập sai liên tiếp 5 lần từ một địa chỉ ⇒ khoá 5 phút (cả form lẫn Basic Auth). Bazarr không gọi HTTP của worker (chỉ thả file vào queue) nên auth không ảnh hưởng ingestion. Vẫn khuyến nghị chỉ expose trong LAN / sau reverse proxy có TLS (Basic Auth gửi mật khẩu dạng base64, form gửi dạng thô). |
 | NFR-6 Cô lập dữ liệu | Chỉ gửi lên LLM: text phụ đề, tên phim/series, metadata TMDB, glossary. Không gửi đường dẫn file, tên máy, key khác. |
 | NFR-7 Quan sát | Mỗi job ghi: số lời gọi, token vào/ra, model, thời gian, `context_hash`, `context_complete`. Console hiển thị tổng token theo ngày. |
 | NFR-8 Kiểm thử | Test không gọi mạng (fake provider). Bắt buộc có test tình huống FR-5 (tập 6 trước tập 1). |
@@ -201,6 +202,7 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
 6. **Quota:** giả lập 429 liên tục → không fail job, không vượt RPM cấu hình; giả lập hết quota ngày → queue tạm dừng.
 7. **Correction:** thêm `cue_edit` cho cue 10 rồi dịch lại cả tập → cue 10 giữ nguyên byte-by-byte; thêm `term` scope `forward` ở tập 3 → prompt tập 2 không chứa term đó, prompt tập 4 có.
 8. **Hoàn tác:** dịch lại → hoàn tác → file đích trùng sha256 với bản trước khi dịch lại.
+9. **Đăng nhập:** chưa đăng nhập → trình duyệt được chuyển tới form, `/api/*` trả `401`; đăng nhập đúng → cookie phiên dùng được console, đăng xuất → `401`; đổi mật khẩu trong Settings (nhập đúng mật khẩu hiện tại) → phiên cũ mất hiệu lực, mật khẩu env cũ không còn vào được, Basic Auth dùng mật khẩu mới; `CONSOLE_PASSWORD_RESET=1` ghi đè mật khẩu đã lưu bằng env; sai 5 lần liên tiếp → bị khoá; mật khẩu, cookie, header `Authorization` không có trong log và không trả qua API.
 
 ---
 
@@ -215,7 +217,8 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
 | 5 | Ai duyệt, dịch lại thế nào, thêm correction thế nào, UI ở đâu | Admin duy nhất, trong console sẵn có (FR-11, ADR-7). |
 
 | 6 | Thông báo (ntfy/Apprise/Telegram) khi có mục `pending` mới hoặc job fail | Để **v1.1**, kèm link tới trang duyệt. v1 chỉ có badge/danh sách trên console. |
-| 7 | Basic Auth cho console | **Bật ngay từ đầu**, mặc định bắt buộc; chỉ tắt tường minh bằng `CONSOLE_AUTH=off` (NFR-5). Làm ở phase P0b, trước P1. |
+| 7 | Basic Auth cho console | **Bật ngay từ đầu**, mặc định bắt buộc; chỉ tắt tường minh bằng `CONSOLE_AUTH=off` (NFR-5). Làm ở phase P0b, trước P1. Mở rộng bởi #8. |
+| 8 | Form đăng nhập thay vì chỉ Basic Auth; đổi mật khẩu; quên mật khẩu; Basic Auth cho script | **Một tài khoản**, hai cách vào: form đăng nhập (cookie phiên) cho trình duyệt, Basic Auth cho script. Tài khoản khởi tạo từ env `CONSOLE_USER`/`CONSOLE_PASSWORD`; người dùng đổi mật khẩu trong Settings và mật khẩu đã lưu thắng env. Quên mật khẩu: `CONSOLE_PASSWORD_RESET=1` + env, khởi động lại. Giữ Basic Auth song song (FR-10.3). Làm ở phase P0c. |
 
 ## 8. Câu hỏi mở
 

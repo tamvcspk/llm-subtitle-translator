@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .http import HTTPClient
+from .http import HTTPClient, describe_http_error
 from .tmdb import TMDB_BASE_URL
 
 
@@ -35,4 +35,5 @@ def test_connection(kind: str, settings: dict[str, str], http: HTTPClient) -> di
 
         return {"ok": False, "kind": kind, "message": "Unknown test target"}
     except Exception as exc:
-        return {"ok": False, "kind": kind, "message": str(exc)}
+        service = {"bazarr": "Bazarr", "tmdb_api_key": "TMDB"}.get(kind, "Gemini")
+        return {"ok": False, "kind": kind, "message": describe_http_error(exc, service)}

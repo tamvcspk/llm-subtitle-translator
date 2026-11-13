@@ -13,6 +13,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 |---|---|---|---|
 | **P0** | Fork, uv workspace, CI xanh, chưa đổi hành vi | Test upstream vẫn pass | `[~]` CI + image xanh; còn kiểm tra Dependabot |
 | **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[x]` CI GitHub xanh (f9b8605) |
+| **P0c** | Form đăng nhập + đổi mật khẩu trong Settings cho tài khoản duy nhất; Basic Auth giữ cho script (NFR-5, tiêu chí 9) | Tiêu chí 9: chưa đăng nhập → chuyển tới form / `401`; đăng nhập, đăng xuất, đổi mật khẩu vô hiệu phiên cũ và mật khẩu env cũ; `CONSOLE_PASSWORD_RESET=1` ghi đè; sai 5 lần → khoá; không rò mật khẩu/cookie vào log, API | `[ ]` |
 | **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[x]` CI xanh; thử Gemini thật 4 file; 50 file thật hoãn (xem dưới) |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[~]` Code + test xong (xem dưới); còn bảng `jobs`/importer và chạy thật với Bazarr |
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong, CI xanh (e5babb1); còn thử giao diện trên trình duyệt thật |
@@ -51,6 +52,19 @@ SPEC NFR-5, quyết định #7; ARCHITECTURE ADR-7 "Xác thực".
 - [x] `docker-compose.yml`, `.env.example`, `docs/CONFIGURATION.md`, `docs/API.md`, README cập nhật.
 - [x] Test: không header → 401; sai → 401; đúng → 200; thiếu env → 503; `off` → 200; log không chứa mật khẩu (`tests/test_console_auth.py`).
 - [x] Workflow **CI** trên GitHub xanh cho commit P0b (f9b8605).
+
+## P0c — Form đăng nhập `[ ]`
+
+SPEC NFR-5, quyết định #8, tiêu chí 9; ARCHITECTURE ADR-7 "Xác thực", §4 (`auth`), §5, §6, §8. Làm sau khi P4 xong thử giao diện (không chặn P5).
+
+- [ ] Bảng `auth` (schema 4): một dòng, mật khẩu băm `scrypt` + salt, bí mật phiên; tạo từ `CONSOLE_USER`/`CONSOLE_PASSWORD` ở lần chạy đầu, bỏ qua env khi đã có (trừ `CONSOLE_PASSWORD_RESET=1`: ghi đè, xoay bí mật phiên, log cảnh báo bỏ cờ).
+- [ ] Middleware: cookie phiên `gst_session` (`HttpOnly`, `SameSite=Strict`, `Secure` sau HTTPS, hết hạn 7 ngày không dùng) **hoặc** Basic Auth; ngoại lệ chỉ `GET /login` + tài nguyên của nó + `POST /api/auth/login`; chưa đăng nhập: trang HTML → `/login`, `/api/*` → `401` JSON không kèm `WWW-Authenticate` (trừ Basic Auth không cookie, không xin HTML); thao tác ghi bằng cookie kiểm `Origin`/`Host`.
+- [ ] Khoá 5 phút sau 5 lần sai liên tiếp từ một địa chỉ (chung cho form và Basic Auth); thiếu env và chưa có tài khoản → `503` như P0b; `CONSOLE_AUTH=off` vẫn tắt được.
+- [ ] Endpoint `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`, `POST /api/auth/password` (mật khẩu hiện tại + mới ≥ 8 ký tự; phiên cũ mất hiệu lực).
+- [ ] Console: trang `/login` (không CDN, dùng được trên điện thoại), nút Đăng xuất trên thanh bên, mục "Đổi mật khẩu" trong Settings; Settings không bao giờ hiển thị hay nhận mật khẩu qua `/api/settings`.
+- [ ] Test (`apps/worker/tests/test_console_auth.py` mở rộng, hoặc file mới): từng ý của tiêu chí 9, kể cả duyệt mọi route của router để chắc chắn không có đường dẫn nào ngoài danh sách ngoại lệ mở được khi chưa đăng nhập; log không chứa mật khẩu/cookie.
+- [ ] Docs khi làm xong: `docs/API.md`, `docs/CONFIGURATION.md` (`CONSOLE_PASSWORD_RESET`, đổi mật khẩu), `AGENTS.md` (invariant xác thực không còn "chỉ từ env"), `README.md`, `.env.example`, `CHANGELOG.md`.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P0c.
 
 ## P1 — Engine `subcore` + CLI `[x]`
 

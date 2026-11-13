@@ -810,11 +810,9 @@ textarea.input {
 
 .service-detail {
   max-width: 100%;
-  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere; /* a full sentence ("Cannot find Bazarr on the network ...") wraps instead of being cut */
 }
 
 .lang-flow {

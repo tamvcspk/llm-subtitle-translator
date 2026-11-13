@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -38,6 +40,32 @@ class JsonFileCache(MemoryCache):
         tmp = self.path.with_suffix(f"{self.path.suffix}.tmp")
         tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.path)
+
+
+def describe_http_error(exc: BaseException, service: str = "the service") -> str:
+    """A sentence for the console instead of the raw ``<urlopen error [Errno -3] ...>``.
+
+    Never includes the request URL, which can carry an API key in its query string.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code in (401, 403):
+            return f"{service} rejected the API key (HTTP {exc.code})."
+        if exc.code == 404:
+            return f"{service} answered 404. Check the address in Settings: it should be the base URL, without /api."
+        return f"{service} answered with HTTP {exc.code}."
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, socket.gaierror):
+        return (f"Cannot find {service} on the network (name lookup failed). Check the address in Settings "
+                "and that this container can reach it by that name.")
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return f"{service} did not answer in time."
+    if isinstance(reason, ConnectionRefusedError):
+        return f"{service} refused the connection. Is it running, and is the port in the address right?"
+    if isinstance(reason, OSError):
+        return f"Cannot reach {service} ({reason.strerror or type(reason).__name__})."
+    if isinstance(exc, ValueError):
+        return f"The address of {service} is not valid."
+    return f"Could not check {service} ({type(exc).__name__})."
 
 
 class HTTPClient:

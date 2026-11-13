@@ -1,6 +1,6 @@
 # ARCHITECTURE — LLM Subtitle Translator for Bazarr
 
-> Trạng thái: **Draft v0.4** · 2026-11-11 (v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md)) · Hiện thực hoá [SPEC.md](SPEC.md)
+> Trạng thái: **Draft v0.5** · 2026-11-14 (v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8) · Hiện thực hoá [SPEC.md](SPEC.md)
 > Tài liệu này mô tả kiến trúc **đích**. Kiến trúc hiện tại kế thừa từ upstream nằm ở [docs/ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
@@ -102,6 +102,7 @@ class Provider(Protocol):
 | Glossary (người viết/duyệt) | `/data/series/<series_key>/glossary.<lang>.yaml` | Sửa tay bằng editor, diff được, backup bằng copy. |
 | Đề xuất `pending` | SQLite `suggestions` | Máy sinh, cần trạng thái duyệt. |
 | Facts, story state cache, translations, jobs | SQLite `/data/app.db` | Cần truy vấn ("facts của mọi unit < N", "bản dịch stale"). |
+| Tài khoản console (mật khẩu băm, bí mật phiên) | SQLite `app.db`, bảng `auth` | Máy sinh và đổi được qua console; không để trong `config.json` (file đó được backup và hiện qua `/api/settings`). |
 | Queue đầu vào | `/queue/incoming/*.json` (giữ giao thức cũ) | Script trong Bazarr không đổi. Worker import file → bảng `jobs` rồi xoá file. |
 
 **[Đổi so với SRS]** SRS đề xuất JSON/TXT trước, SQLite sau. Bỏ giai đoạn file: truy vấn staleness/prerequisite trên file JSON sẽ phải viết lại khi lên SQLite.
@@ -145,7 +146,14 @@ Lỗ hổng thật của đề xuất trước là chiều ngược lại và l�
 
 Yêu cầu UI: responsive (điện thoại), không phụ thuộc CDN (homelab có thể offline).
 
-**Xác thực:** Basic Auth bắt buộc mặc định (SPEC NFR-5) — một middleware trong HTTP handler chặn **mọi** request trước khi route (static + `/api/*`), không có đường dẫn ngoại lệ. Trình duyệt tự nhớ credential nên console tĩnh không cần màn hình đăng nhập; script/Home Assistant gửi header `Authorization`. Credential chỉ đọc từ env lúc khởi động (`CONSOLE_USER`, `CONSOLE_PASSWORD`, `CONSOLE_AUTH=off` để tắt), không nằm trong `RuntimeContext` dưới dạng có thể serialize ra API.
+**Xác thực** (SPEC NFR-5, quyết định #8): một middleware trong HTTP handler chặn **mọi** request trước khi route (static + `/api/*`). Ngoại lệ duy nhất, hẹp: trang đăng nhập (`GET /login`, tài nguyên tĩnh của riêng nó) và `POST /api/auth/login`. Một tài khoản, hai cách vào:
+
+| Cách vào | Dùng cho | Cơ chế |
+|---|---|---|
+| Form đăng nhập | Trình duyệt | `POST /api/auth/login` → cookie phiên `gst_session` (`HttpOnly`, `SameSite=Strict`, thêm `Secure` khi `X-Forwarded-Proto: https`), token ký HMAC bằng bí mật phiên trong `app.db`, hết hạn sau 7 ngày không dùng, đổi mật khẩu thì bí mật xoay và mọi phiên cũ mất hiệu lực. Request ghi (POST/PUT) bằng cookie bị kiểm `Origin`/`Host` khớp. Chưa đăng nhập: `GET` trang HTML → chuyển tới `/login`; `/api/*` → `401` JSON **không** kèm `WWW-Authenticate` (để trình duyệt không bật hộp Basic Auth). |
+| Basic Auth | Script, Home Assistant (FR-10.3) | Header `Authorization`, cùng tài khoản; `401` kèm `WWW-Authenticate` chỉ khi request không mang cookie và không xin HTML. |
+
+Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nhập, mật khẩu băm `scrypt` kèm salt, bí mật phiên. Khởi động: nếu chưa có dòng nào mà có `CONSOLE_USER` + `CONSOLE_PASSWORD` thì tạo từ env; nếu đã có thì **bỏ qua env**, trừ khi `CONSOLE_PASSWORD_RESET=1` (ghi đè bằng env, xoay bí mật phiên, log cảnh báo bỏ cờ). Chưa có dòng nào và thiếu env ⇒ `503` như P0b; không có trang "đặt mật khẩu lần đầu" vì nó mở cho cả LAN trước khi ai đó kịp đặt. `CONSOLE_AUTH=off` vẫn là cách tắt duy nhất (log cảnh báo mỗi lần khởi động). Đổi mật khẩu: `POST /api/auth/password` cần mật khẩu hiện tại, mật khẩu mới ≥ 8 ký tự. Đăng nhập sai 5 lần liên tiếp từ một địa chỉ ⇒ khoá 5 phút (đếm chung cho form và Basic Auth, trong bộ nhớ). So sánh bằng `hmac.compare_digest`; mật khẩu, cookie và `Authorization` không bao giờ vào log, `config.json`, `/api/settings` hay `RuntimeContext` dưới dạng serialize được. Tên đăng nhập không đổi được qua console (đổi bằng reset). Backup (`backups.py`) hiện chỉ gồm `config.json` và `targets.json`, nên không mang theo mật khẩu băm; nếu sau này backup mở rộng sang `app.db` thì phải loại bảng `auth`, và restore không bao giờ ghi đè nó.
 
 ---
 
@@ -310,6 +318,8 @@ suggestions(id PK, series_id FK, target_lang, kind /* term|address_rule|characte
 corrections(id PK, unit_id FK, target_lang, kind /* term|address|note|cue_edit */,
             payload_json /* cue_edit: {cue, text} */, created_at, active)
             -- chỉ scope=episode; scope forward/series ghi vào glossary YAML
+auth(id PK CHECK (id = 1), username, password_hash /* scrypt + salt */, session_secret, updated_at)
+     -- một dòng duy nhất; xem ADR-7 "Xác thực"
 jobs(id PK, kind /* translate|extract|research|retranslate */, unit_id, target_lang,
      priority, params_json /* range, correction ids */, state, attempts,
      deferred_until, error, created_at, updated_at)
@@ -334,6 +344,8 @@ Nếu sha256 file đang nằm trên đĩa **không** khớp phiên bản `curren
 | `POST /api/units/{id}/retranslate` | `{range?: {cues|time}, correction_ids?, new_corrections?}` → job ưu tiên cao |
 | `GET /api/units/{id}/versions` · `GET …/versions/{v}/diff?against=` · `POST …/versions/{v}/revert` | Lịch sử, diff, hoàn tác |
 | `GET/PUT /api/series/{id}/glossary?lang=vi` | Đọc/ghi YAML (kiểm schema, ghi atomic) |
+| `POST /api/auth/login` (`{user, password}`) · `POST /api/auth/logout` · `GET /api/auth/me` | Đăng nhập (đường dẫn không cần xác thực duy nhất, cùng `GET /login`), đăng xuất, ai đang đăng nhập |
+| `POST /api/auth/password` (`{current, new}`) | Đổi mật khẩu; phiên cũ mất hiệu lực, phiên hiện tại được cấp lại |
 
 **Đã làm ở P3** (các điểm thiết kế để ngỏ): (1) thêm bảng `unit_outputs(unit, lang → output_path)`; `translations` vẫn khoá theo `output_path`, có thêm `unit_id`, `glossary_hash`, `context_complete`. (2) Trước P4, `stale` = `glossary_hash` lưu trong phiên bản khác hash của luật hiện hành (glossary YAML đã lọc theo tập + correction `term/address/note` đang bật); `cue_edit` không nằm trong hash. P4 sẽ thay bằng `context_hash` đầy đủ. (3) `term` trong glossary có `from`/`until` mức tập; `address_rules` giữ mức timecode. (4) `note` chỉ có scope `episode` (glossary không có mục ghi chú). (5) Unit nhận diện từ id Bazarr rồi tên file; `series_key` = `tvdb-<id>` › `bazarr-<id>` › slug tên. (6) `GET /api/units/{id}/context` làm ở P4, cùng `POST /api/units/{id}/context/extract` và `GET/PUT /api/series/{id}/memory` (xem docs/API.md). (7) `retranslate.correction_ids` giới hạn correction dùng cho lần dịch lại (mặc định: tất cả đang bật).
 
@@ -341,7 +353,7 @@ Nếu sha256 file đang nằm trên đĩa **không** khớp phiên bản `curren
 
 ## 6. Cấu hình
 
-- `.env`: đường dẫn, cổng, secrets (`GEMINI_API_KEY*`, `OPENAI_COMPAT_*`, `BAZARR_API_KEY`, `TMDB_API_KEY`, `CONSOLE_USER`, `CONSOLE_PASSWORD`; `CONSOLE_AUTH=off` để tắt Basic Auth).
+- `.env`: đường dẫn, cổng, secrets (`GEMINI_API_KEY*`, `OPENAI_COMPAT_*`, `BAZARR_API_KEY`, `TMDB_API_KEY`, `CONSOLE_USER`, `CONSOLE_PASSWORD` — tài khoản khởi tạo, bị bỏ qua khi đã có tài khoản lưu; `CONSOLE_PASSWORD_RESET=1` để ghi đè tài khoản đã lưu; `CONSOLE_AUTH=off` để tắt xác thực).
 - `/data/config.yaml` (sửa qua console): providers, model theo task (`translate`, `extract`, `summarize`, `research`), giới hạn RPM/TPM/RPD, `settle_window`, `gap_wait`, `stale_policy` mặc định, budget context, ngôn ngữ nguồn/đích.
 
 ---
@@ -360,4 +372,5 @@ Nếu sha256 file đang nằm trên đĩa **không** khớp phiên bản `curren
 | Prerequisite làm tốn quota khi lần đầu thêm series dài (vd 100 tập) | Extract dùng model rẻ nhất; giới hạn `max_prereq_per_day`; cho phép bật memory theo từng series. |
 | Fork phân kỳ, khó lấy fix Bazarr của upstream | Giữ `bazarr.py`/`gst_enqueue.sh` ít sửa nhất có thể; sync hàng tháng (ADR-2). |
 | Model đổi hành vi structured output | Adapter + test hợp đồng với fake; validate chặt ở engine, không tin provider. |
-| Console ghi được mà không có auth | Basic Auth bật mặc định từ P0b (NFR-5); tắt phải tường minh. Basic Auth không mã hoá ⇒ khuyến nghị chỉ expose trong LAN / sau reverse proxy có TLS. |
+| Console ghi được mà không có auth | Xác thực bật mặc định từ P0b (NFR-5); tắt phải tường minh. Basic Auth và form đăng nhập đều gửi mật khẩu không mã hoá ⇒ khuyến nghị chỉ expose trong LAN / sau reverse proxy có TLS. Từ P0c: khoá sau 5 lần sai, cookie `HttpOnly`/`SameSite=Strict`, kiểm `Origin` cho thao tác ghi. |
+| Form đăng nhập là ngoại lệ duy nhất của middleware (CSRF, brute force, lộ tài nguyên) | Ngoại lệ chỉ gồm `GET /login`, tài nguyên tĩnh của trang đó và `POST /api/auth/login`; test bắt buộc: mọi đường dẫn khác không cookie → `401`/chuyển hướng (liệt kê đường dẫn từ router, không từ danh sách tay). |

@@ -42,6 +42,37 @@ class FakeHTTP:
 
 
 class TestWorkerIntegrationsTests(unittest.TestCase):
+    def test_connection_errors_are_sentences_not_python_reprs(self):
+        import socket
+        import urllib.error
+
+        lookup = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+        message = gst_http.describe_http_error(lookup, "Bazarr")
+        self.assertIn("Cannot find Bazarr", message)
+        self.assertNotIn("urlopen", message)
+        self.assertNotIn("Errno", message)
+        self.assertIn("refused", gst_http.describe_http_error(urllib.error.URLError(ConnectionRefusedError()), "Bazarr"))
+        self.assertIn("in time", gst_http.describe_http_error(urllib.error.URLError(socket.timeout()), "Bazarr"))
+        denied = urllib.error.HTTPError("http://bazarr/api?key=SECRET", 401, "Unauthorized", {}, None)
+        text = gst_http.describe_http_error(denied, "Bazarr")
+        self.assertIn("rejected the API key", text)
+        self.assertNotIn("SECRET", text)  # a URL that carries a key never reaches the console
+        self.assertIn("not valid", gst_http.describe_http_error(ValueError("unknown url type"), "Bazarr"))
+
+    def test_a_failing_connection_test_reports_the_friendly_message(self):
+        import socket
+        import urllib.error
+
+        class Down:
+            def get_json(self, *args, **kwargs):
+                raise urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+
+        result = gst_connection_tests.test_connection(
+            "bazarr", {"bazarr_url": "http://bazarr:6767", "bazarr_api_key": "k"}, Down()
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("Cannot find Bazarr", result["message"])
+
     def test_connection_tests_call_expected_api(self):
         http = FakeHTTP(
             {

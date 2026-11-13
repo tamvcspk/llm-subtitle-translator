@@ -49,7 +49,7 @@ from gst_worker.config import (
 from gst_worker.connection_tests import test_connection
 from gst_worker.gemini import gemini_models
 from gst_worker.logs import clear_logs, configure_logging, read_log_snapshot
-from gst_worker.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
+from gst_worker.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache, describe_http_error
 from gst_worker.queue import (
     JobQueue,
     layer_report,
@@ -551,7 +551,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 headers={"X-API-KEY": settings["bazarr_api_key"]},
             )
         except Exception as exc:
-            status["bazarr"] = {"error": str(exc)}
+            status["bazarr"] = {"error": describe_http_error(exc, "Bazarr")}
         return status
 
     def serve_static(self, request_path: str) -> None:
