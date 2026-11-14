@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from .ports import Account
+from .ports import Account, LlmCall, TokenTotals
 
 _MIGRATIONS: tuple[str, ...] = (
     """
@@ -243,22 +243,29 @@ class Store:
                 (job_id, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at or time.time()),
             )
 
-    def llm_calls(self, job_id: str | None = None) -> list[dict[str, Any]]:
+    def llm_calls(self, job_id: str | None = None) -> list[LlmCall]:
         with self._lock:
             if job_id is None:
                 rows = self._db.execute("SELECT * FROM llm_calls ORDER BY id").fetchall()
             else:
                 rows = self._db.execute("SELECT * FROM llm_calls WHERE job_id = ? ORDER BY id", (job_id,)).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            LlmCall(
+                id=row["id"], job_id=row["job_id"], provider=row["provider"], model=row["model"], task=row["task"],
+                tokens_in=row["tokens_in"], tokens_out=row["tokens_out"], latency_ms=row["latency_ms"],
+                outcome=row["outcome"], at=row["at"],
+            )
+            for row in rows
+        ]
 
-    def token_totals(self, since: float = 0.0) -> dict[str, int]:
+    def token_totals(self, since: float = 0.0) -> TokenTotals:
         with self._lock:
             row = self._db.execute(
                 "SELECT COUNT(*) AS calls, COALESCE(SUM(tokens_in), 0) AS tokens_in,"
                 " COALESCE(SUM(tokens_out), 0) AS tokens_out FROM llm_calls WHERE at >= ?",
                 (since,),
             ).fetchone()
-        return {"calls": int(row["calls"]), "tokens_in": int(row["tokens_in"]), "tokens_out": int(row["tokens_out"])}
+        return TokenTotals(calls=int(row["calls"]), tokens_in=int(row["tokens_in"]), tokens_out=int(row["tokens_out"]))
 
     # -- translations ------------------------------------------------------
     def current_version(self, output_path: str) -> dict[str, Any] | None:

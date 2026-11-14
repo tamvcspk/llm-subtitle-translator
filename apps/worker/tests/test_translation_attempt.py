@@ -96,10 +96,10 @@ class TranslateAndPublishTests(unittest.TestCase):
         env.run()
         calls = env.store.llm_calls("job1")
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["outcome"], "ok")
-        self.assertEqual(calls[0]["task"], "translate")
-        self.assertGreater(calls[0]["tokens_in"], 0)
-        self.assertEqual(env.store.token_totals()["calls"], 1)
+        self.assertEqual(calls[0].outcome, "ok")
+        self.assertEqual(calls[0].task, "translate")
+        self.assertGreater(calls[0].tokens_in, 0)
+        self.assertEqual(env.store.token_totals().calls, 1)
 
     def test_progress_is_reported(self):
         env = Env(self)

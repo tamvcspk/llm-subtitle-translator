@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from gst_worker.ports import TokenTotals
 from gst_worker.store import Store
 from gst_worker.versions import AUTO, EXTERNAL, RETRANSLATE, REVERT, SKIPPED_EXISTING, TranslationVersions
 
@@ -141,7 +142,7 @@ class StoreTests(unittest.TestCase):
             second = Store(path)
             try:
                 self.assertEqual(second.schema_version, 5)
-                self.assertEqual(second.token_totals(), {"calls": 1, "tokens_in": 3, "tokens_out": 4})
+                self.assertEqual(second.token_totals(), TokenTotals(calls=1, tokens_in=3, tokens_out=4))
             finally:
                 second.close()
 
