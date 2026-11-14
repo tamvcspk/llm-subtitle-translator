@@ -33,7 +33,7 @@ class FakeHTTP:
         key = (url, tuple(sorted((params or {}).items())))
         return self.responses[key]
 
-    def request_json(self, method, url, params=None, headers=None):
+    def request_json(self, method, url, params=None, headers=None, timeout=None):
         self.calls.append((method, url, params or {}, headers or {}))
         return {"ok": True}
 

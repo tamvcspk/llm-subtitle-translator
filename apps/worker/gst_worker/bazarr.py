@@ -10,6 +10,11 @@ from .http import HTTPClient, first_data
 from .ports import EpisodeListing, MediaDetails
 
 
+# Bazarr answers a scan-disk call only when it has scanned the whole series: 31 s for a series of 150 episodes,
+# well past the default HTTP timeout.
+REFRESH_TIMEOUT_SECONDS = 180
+
+
 def refresh_bazarr(job: dict[str, Any], http: HTTPClient, bazarr_url: str, api_key: str) -> None:
     headers = {"X-API-KEY": api_key}
     media_type = job.get("media_type")
@@ -19,6 +24,7 @@ def refresh_bazarr(job: dict[str, Any], http: HTTPClient, bazarr_url: str, api_k
             f"{bazarr_url}/api/series",
             params={"seriesid": str(job["series_id"]), "action": "scan-disk"},
             headers=headers,
+            timeout=REFRESH_TIMEOUT_SECONDS,
         )
     elif media_type == "movie" and job.get("media_id"):
         http.request_json(
@@ -26,6 +32,7 @@ def refresh_bazarr(job: dict[str, Any], http: HTTPClient, bazarr_url: str, api_k
             f"{bazarr_url}/api/movies",
             params={"radarrid": str(job["media_id"]), "action": "scan-disk"},
             headers=headers,
+            timeout=REFRESH_TIMEOUT_SECONDS,
         )
     else:
         taskid = "series_full_scan_subtitles" if media_type == "series" else "movies_full_scan_subtitles"

@@ -81,11 +81,12 @@ class HTTPClient:
         url: str,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> Any:
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
         request = urllib.request.Request(url, headers=headers or {}, method=method)
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout or self.timeout) as response:
             payload = response.read()
         if not payload:
             return {}

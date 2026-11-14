@@ -42,6 +42,7 @@ class FakeBazarrHttp:
 
     def __init__(self):
         self.sent = []
+        self.timeouts = []
 
     def get_json(self, url, params=None, headers=None):
         if url.endswith("/api/series"):
@@ -57,8 +58,9 @@ class FakeBazarrHttp:
             {"season": 1, "episode": 2, "title": "Two", "sonarrEpisodeId": 12, "path": "/m/S01E02.mkv", "subtitles": []},
         ]}
 
-    def request_json(self, method, url, params=None, headers=None):
+    def request_json(self, method, url, params=None, headers=None, timeout=None):
         self.sent.append((method, url, dict(params or {})))
+        self.timeouts.append(timeout)
         return {}
 
 
@@ -141,6 +143,11 @@ class BazarrMediaTests(MediaLibraryContract, unittest.TestCase):
     def test_a_refresh_of_a_series_episode_scans_that_series_on_disk(self):
         self.repo.refresh({"media_type": "series", "series_id": "7", "media_id": "9"})
         self.assertEqual(self.http.sent, [("PATCH", "http://bazarr/api/series", {"seriesid": "7", "action": "scan-disk"})])
+
+    def test_a_rescan_waits_longer_than_the_default_timeout(self):
+        # Bazarr answers scan-disk only after scanning the whole series (31 s for 150 episodes on the first trial).
+        self.repo.refresh({"media_type": "series", "series_id": "7", "media_id": "9"})
+        self.assertEqual(self.http.timeouts, [180])
 
     def test_an_unreachable_target_check_raises_nothing_and_says_nothing(self):
         class Down:
