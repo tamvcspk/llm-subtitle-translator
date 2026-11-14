@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from subcore import srt
 
-from .store import Store
+from .ports import VersionRepo
 
 SKIPPED_EXISTING = "skipped-existing-output"
 AUTO = "auto"
@@ -46,7 +45,7 @@ class Published:
 
 
 class TranslationVersions:
-    def __init__(self, store: Store, backup_dir: str | Path) -> None:
+    def __init__(self, store: VersionRepo, backup_dir: str | Path) -> None:
         self.store = store
         self.backup_dir = Path(backup_dir)
 
@@ -71,7 +70,7 @@ class TranslationVersions:
         return bool(
             current
             and path.is_file()
-            and hmac.compare_digest(sha256_file(path), str(current["sha256"]))
+            and hmac.compare_digest(sha256_file(path), current.sha256)
         )
 
     def _keep_external(self, output_path: str) -> None:
@@ -90,12 +89,12 @@ class TranslationVersions:
     def cached_text(self, source_sha256: str, target_lang: str, context_hash: str) -> str | None:
         """Text of an earlier result for the same input and context, if its stored copy is intact."""
         for row in self.store.cached_versions(source_sha256, target_lang, context_hash):
-            stored = Path(str(row["stored_path"]))
+            stored = Path(row.stored_path)
             try:
                 data = stored.read_bytes()
             except OSError:
                 continue
-            if hmac.compare_digest(sha256_bytes(data), str(row["sha256"])):
+            if hmac.compare_digest(sha256_bytes(data), row.sha256):
                 return data.decode("utf-8")
         return None
 
@@ -141,7 +140,7 @@ class TranslationVersions:
             source_sha256=source_sha256,
             target_lang=target_lang,
             context_hash=context_hash,
-            parent_version=int(parent["version"]) if parent else None,
+            parent_version=parent.version if parent else None,
             model=model,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
@@ -158,9 +157,9 @@ class TranslationVersions:
         target = self.store.get_version(output_path, version)
         if target is None:
             raise ValueError(f"no version {version} for {output_path}")
-        stored = Path(str(target["stored_path"]))
+        stored = Path(target.stored_path)
         data = stored.read_bytes()
-        if not hmac.compare_digest(sha256_bytes(data), str(target["sha256"])):
+        if not hmac.compare_digest(sha256_bytes(data), target.sha256):
             raise ValueError(f"stored copy of version {version} is damaged")
         self._keep_external(output_path)
         new_version = self.store.next_version(output_path)
@@ -172,18 +171,18 @@ class TranslationVersions:
             output_path,
             version=new_version,
             stored_path=str(copy),
-            sha256=str(target["sha256"]),
+            sha256=target.sha256,
             trigger=REVERT,
-            source_path=str(target["source_path"]),
-            source_sha256=str(target["source_sha256"]),
-            target_lang=str(target["target_lang"]),
-            context_hash=str(target["context_hash"]),
+            source_path=target.source_path,
+            source_sha256=target.source_sha256,
+            target_lang=target.target_lang,
+            context_hash=target.context_hash,
             parent_version=version,
-            model=str(target["model"]),
-            unit_id=target.get("unit_id"),
-            glossary_hash=str(target.get("glossary_hash") or ""),
-            memory_hash=str(target.get("memory_hash") or ""),
-            context_complete=bool(target.get("context_complete", 1)),
-            missing_units=json.loads(str(target.get("missing_units_json") or "[]")),
+            model=target.model,
+            unit_id=target.unit_id,
+            glossary_hash=target.glossary_hash,
+            memory_hash=target.memory_hash,
+            context_complete=target.context_complete,
+            missing_units=target.missing_units,
         )
         return Published("reverted", new_version)

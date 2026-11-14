@@ -11,7 +11,6 @@ file or episode corrections changed; FR-5.5). Staleness is only ever flagged, ne
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 from dataclasses import dataclass
@@ -236,14 +235,14 @@ class Library:
             info["modified_outside"] = exists and current is None  # a file we did not make
             return info
         stale = not self.stale_ignored(unit) and (
-            current["glossary_hash"] != self.unit_rules(unit, lang, glossary=glossary, cache=cache).hash
+            current.glossary_hash != self.unit_rules(unit, lang, glossary=glossary, cache=cache).hash
             or (self.memory is not None and self.memory.is_stale(unit, current, cache))
         )
         info.update(
-            version=current["version"], trigger=current["trigger"], model=current["model"],
-            missing_units=json.loads(current["missing_units_json"] or "[]"),
-            updated_at=current["created_at"], modified_outside=not self.versions.is_system_file(output_path),
-            status="stale" if stale else ("current" if current["context_complete"] else "incomplete"),
+            version=current.version, trigger=current.trigger, model=current.model,
+            missing_units=list(current.missing_units),
+            updated_at=current.created_at, modified_outside=not self.versions.is_system_file(output_path),
+            status="stale" if stale else ("current" if current.context_complete else "incomplete"),
         )
         return info
 

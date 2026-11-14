@@ -52,7 +52,7 @@ class Env:
             )
 
         self.versions = TranslationVersions(self.store, self.root / "data" / "backups") if versions else None
-        self.attempt = TranslationAttempt(versions=self.versions, provider_factory=factory)
+        self.attempt = TranslationAttempt(versions=self.versions, usage=self.store if versions else None, provider_factory=factory)
 
     def job(self, **extra):
         return {

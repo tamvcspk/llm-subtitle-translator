@@ -11,6 +11,7 @@ While ``Store`` still implements several ports at once, a port's method names ca
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -44,6 +45,38 @@ class TokenTotals:
     calls: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
+
+
+CURRENT = "current"
+SUPERSEDED = "superseded"
+
+
+@dataclass(frozen=True)
+class TranslationVersion:
+    """One stored version of a target subtitle file (FR-8.1). ``status`` is ``current`` or ``superseded``;
+    ``trigger`` is auto | retranslate | revert | external | cue_edit. ``missing_units`` lists the earlier
+    units that had no usable facts when this was made (``context_complete`` is then False)."""
+
+    output_path: str
+    version: int
+    stored_path: str
+    sha256: str
+    trigger: str
+    status: str
+    created_at: float
+    source_path: str = ""
+    source_sha256: str = ""
+    target_lang: str = ""
+    context_hash: str = ""
+    parent_version: int | None = None
+    model: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    unit_id: int | None = None
+    glossary_hash: str = ""
+    context_complete: bool = True
+    memory_hash: str = ""
+    missing_units: tuple[str, ...] = ()
 
 
 @runtime_checkable
@@ -84,3 +117,48 @@ class UsageLog(Protocol):
 
     def token_totals(self, since: float = 0.0) -> TokenTotals:
         """Number of calls and token sums for calls at or after ``since`` (epoch seconds)."""
+
+
+@runtime_checkable
+class VersionRepo(Protocol):
+    """History of every target subtitle file, keyed by output path, plus the result cache (NFR-3)."""
+
+    def current_version(self, output_path: str) -> TranslationVersion | None:
+        """The version whose ``status`` is ``current``, if any."""
+
+    def versions(self, output_path: str) -> list[TranslationVersion]:
+        """All versions of one file, oldest first."""
+
+    def get_version(self, output_path: str, version: int) -> TranslationVersion | None:
+        """One version by number."""
+
+    def next_version(self, output_path: str) -> int:
+        """Number the next version of this file should get (1 for a new file)."""
+
+    def add_version(
+        self,
+        output_path: str,
+        *,
+        version: int,
+        stored_path: str,
+        sha256: str,
+        trigger: str,
+        make_current: bool = True,
+        source_path: str = "",
+        source_sha256: str = "",
+        target_lang: str = "",
+        context_hash: str = "",
+        parent_version: int | None = None,
+        model: str = "",
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        unit_id: int | None = None,
+        glossary_hash: str = "",
+        context_complete: bool = True,
+        memory_hash: str = "",
+        missing_units: Iterable[str] = (),
+    ) -> None:
+        """Record a version. With ``make_current`` it atomically supersedes the file's previous current one."""
+
+    def cached_versions(self, source_sha256: str, target_lang: str, context_hash: str) -> list[TranslationVersion]:
+        """Auto and retranslate versions made from the same input and context, newest first."""

@@ -43,6 +43,7 @@ from subcore.memory import (
 )
 from subcore.providers import Provider
 
+from .ports import TranslationVersion
 from .store import Store
 from .translation import ContextGapError
 from .versions import RETRANSLATE, sha256_file
@@ -320,15 +321,15 @@ class StoryMemory:
         prior = [UnitFacts(unit_label(u), facts[u["id"]]) for u in self.prior_units(unit, units, series) if u["id"] in facts]
         return fingerprint(prior, facts.get(int(unit["id"])))
 
-    def is_stale(self, unit: dict[str, Any], version: dict[str, Any], cache: dict | None = None) -> bool:
+    def is_stale(self, unit: dict[str, Any], version: TranslationVersion, cache: dict | None = None) -> bool:
         """Was ``version`` made with different story memory than ``unit`` has now? (flag only)"""
-        used = str(version.get("memory_hash") or "")
+        used = version.memory_hash
         if not used or not self.enabled_for(unit):
             return False  # made without memory, or memory is off for this series
         if self.fingerprint(unit, cache) != used:
             return True
         # A unit that was missing when this was translated has a source subtitle now.
-        wanted = json.loads(str(version.get("missing_units_json") or "[]"))
+        wanted = version.missing_units
         if not wanted:
             return False
         units, _ = self._series_view(int(unit["series_id"]), cache)

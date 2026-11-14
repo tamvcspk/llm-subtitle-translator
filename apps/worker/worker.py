@@ -806,7 +806,7 @@ def main() -> int:
 
     memory = StoryMemory(store, settings_source=live_settings, catalog=bazarr_catalog)
     library = Library(store, glossaries, versions, memory=memory)
-    attempt = TranslationAttempt(versions=versions, library=library, memory=memory)
+    attempt = TranslationAttempt(versions=versions, usage=store, library=library, memory=memory)
     worker = QueueWorker(queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt)
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
     units = UnitService(

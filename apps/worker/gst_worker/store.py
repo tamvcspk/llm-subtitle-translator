@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from .ports import Account, LlmCall, TokenTotals
+from .ports import Account, LlmCall, TokenTotals, TranslationVersion
 
 _MIGRATIONS: tuple[str, ...] = (
     """
@@ -156,6 +156,18 @@ _MIGRATIONS: tuple[str, ...] = (
 )
 
 
+def _version_from_row(row: sqlite3.Row) -> TranslationVersion:
+    return TranslationVersion(
+        output_path=row["output_path"], version=row["version"], stored_path=row["stored_path"],
+        sha256=row["sha256"], trigger=row["trigger"], status=row["status"], created_at=row["created_at"],
+        source_path=row["source_path"], source_sha256=row["source_sha256"], target_lang=row["target_lang"],
+        context_hash=row["context_hash"], parent_version=row["parent_version"], model=row["model"],
+        tokens_in=row["tokens_in"], tokens_out=row["tokens_out"], unit_id=row["unit_id"],
+        glossary_hash=row["glossary_hash"], context_complete=bool(row["context_complete"]),
+        memory_hash=row["memory_hash"], missing_units=tuple(json.loads(row["missing_units_json"] or "[]")),
+    )
+
+
 class Store:
     """One connection guarded by a lock: the worker thread and HTTP threads share it."""
 
@@ -268,26 +280,26 @@ class Store:
         return TokenTotals(calls=int(row["calls"]), tokens_in=int(row["tokens_in"]), tokens_out=int(row["tokens_out"]))
 
     # -- translations ------------------------------------------------------
-    def current_version(self, output_path: str) -> dict[str, Any] | None:
+    def current_version(self, output_path: str) -> TranslationVersion | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT * FROM translations WHERE output_path = ? AND status = 'current'", (output_path,)
             ).fetchone()
-        return dict(row) if row else None
+        return _version_from_row(row) if row else None
 
-    def versions(self, output_path: str) -> list[dict[str, Any]]:
+    def versions(self, output_path: str) -> list[TranslationVersion]:
         with self._lock:
             rows = self._db.execute(
                 "SELECT * FROM translations WHERE output_path = ? ORDER BY version", (output_path,)
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [_version_from_row(row) for row in rows]
 
-    def get_version(self, output_path: str, version: int) -> dict[str, Any] | None:
+    def get_version(self, output_path: str, version: int) -> TranslationVersion | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT * FROM translations WHERE output_path = ? AND version = ?", (output_path, version)
             ).fetchone()
-        return dict(row) if row else None
+        return _version_from_row(row) if row else None
 
     def next_version(self, output_path: str) -> int:
         with self._lock:
@@ -568,7 +580,7 @@ class Store:
             ).fetchone()
         return [(str(a), str(b)) for a, b in json.loads(row["sections_json"])] if row else None
 
-    def cached_versions(self, source_sha256: str, target_lang: str, context_hash: str) -> Iterable[dict[str, Any]]:
+    def cached_versions(self, source_sha256: str, target_lang: str, context_hash: str) -> list[TranslationVersion]:
         """Versions made from the same input and context, newest first (NFR-3)."""
         with self._lock:
             rows = self._db.execute(
@@ -576,4 +588,4 @@ class Store:
                 " AND trigger IN ('auto', 'retranslate') ORDER BY id DESC",
                 (source_sha256, target_lang, context_hash),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [_version_from_row(row) for row in rows]

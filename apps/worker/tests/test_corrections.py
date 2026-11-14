@@ -56,7 +56,7 @@ class Env:
         self.prefix = "[vi] "
         self.fake = FakeProvider(handler=self.handler)
         self.attempt = TranslationAttempt(
-            versions=self.versions, library=self.library, provider_factory=lambda settings, model, **kw: self.fake
+            versions=self.versions, usage=self.store, library=self.library, provider_factory=lambda settings, model, **kw: self.fake
         )
         self.queue_dir = str(self.root / "queue")
         self.refreshed = []
@@ -148,7 +148,7 @@ class StoreMigrationTests(unittest.TestCase):
             try:
                 self.assertEqual(store.schema_version, 5)
                 row = store.current_version("/m/a.vi.srt")
-                self.assertEqual((row["sha256"], row["unit_id"], row["glossary_hash"]), ("abc", None, ""))
+                self.assertEqual((row.sha256, row.unit_id, row.glossary_hash), ("abc", None, ""))
             finally:
                 store.close()
 
@@ -162,7 +162,7 @@ class RegistrationTests(unittest.TestCase):
         unit = env.store.get_unit(env.unit(1))
         self.assertEqual((unit["season"], unit["episode"], unit["bazarr_id"]), (1, 1, "101"))
         self.assertEqual(env.store.outputs(unit["id"])[0]["output_path"], env.output(1))
-        self.assertEqual(env.store.current_version(env.output(1))["unit_id"], unit["id"])
+        self.assertEqual(env.store.current_version(env.output(1)).unit_id, unit["id"])
 
     def test_a_skipped_foreign_target_is_still_listed_without_being_touched(self):
         env = Env(self)

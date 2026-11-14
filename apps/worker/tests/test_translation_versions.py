@@ -30,7 +30,7 @@ class PublishTests(VersionsTestCase):
         result = self.versions.publish(self.output, "one\n", trigger=AUTO)
         self.assertEqual((result.status, result.version), ("translated", 1))
         current = self.store.current_version(self.output)
-        self.assertEqual(current["sha256"], sha(self.output))
+        self.assertEqual(current.sha256, sha(self.output))
         self.assertTrue(self.versions.is_system_file(self.output))
 
     def test_auto_publish_never_overwrites_any_existing_file(self):
@@ -55,29 +55,29 @@ class PublishTests(VersionsTestCase):
         self.assertEqual(result.version, 2)
         self.assertEqual(Path(self.output).read_text(encoding="utf-8"), "new\n")
         first = self.store.get_version(self.output, 1)
-        self.assertEqual(Path(first["stored_path"]).read_text(encoding="utf-8"), "old\n")
-        self.assertEqual(first["status"], "superseded")
-        self.assertEqual(self.store.current_version(self.output)["version"], 2)
+        self.assertEqual(Path(first.stored_path).read_text(encoding="utf-8"), "old\n")
+        self.assertEqual(first.status, "superseded")
+        self.assertEqual(self.store.current_version(self.output).version, 2)
 
     def test_retranslate_keeps_a_hand_edited_file_as_an_external_version(self):
         self.versions.publish(self.output, "system\n", trigger=AUTO)
         Path(self.output).write_text("my careful edits\n", encoding="utf-8")
         self.versions.publish(self.output, "new\n", trigger=RETRANSLATE)
-        triggers = [row["trigger"] for row in self.store.versions(self.output)]
+        triggers = [row.trigger for row in self.store.versions(self.output)]
         self.assertEqual(triggers, [AUTO, EXTERNAL, RETRANSLATE])
         external = self.store.get_version(self.output, 2)
-        self.assertEqual(Path(external["stored_path"]).read_text(encoding="utf-8"), "my careful edits\n")
+        self.assertEqual(Path(external.stored_path).read_text(encoding="utf-8"), "my careful edits\n")
 
     def test_retranslate_keeps_a_foreign_file_with_no_history(self):
         Path(self.output).write_text("foreign\n", encoding="utf-8")
         self.versions.publish(self.output, "new\n", trigger=RETRANSLATE)
         kept = self.store.get_version(self.output, 1)
-        self.assertEqual(kept["trigger"], EXTERNAL)
-        self.assertEqual(Path(kept["stored_path"]).read_text(encoding="utf-8"), "foreign\n")
+        self.assertEqual(kept.trigger, EXTERNAL)
+        self.assertEqual(Path(kept.stored_path).read_text(encoding="utf-8"), "foreign\n")
 
     def test_backups_live_outside_the_media_directory(self):
         self.versions.publish(self.output, "x\n", trigger=AUTO)
-        stored = Path(self.store.current_version(self.output)["stored_path"])
+        stored = Path(self.store.current_version(self.output).stored_path)
         self.assertTrue(stored.is_relative_to(self.root / "backups"))
         self.assertNotEqual(stored.parent, Path(self.output).parent)
 
@@ -95,7 +95,7 @@ class RevertTests(VersionsTestCase):
         self.assertEqual(result.status, "reverted")
         self.assertEqual(sha(self.output), before)
         current = self.store.current_version(self.output)
-        self.assertEqual((current["version"], current["trigger"], current["parent_version"]), (3, REVERT, 1))
+        self.assertEqual((current.version, current.trigger, current.parent_version), (3, REVERT, 1))
         self.assertTrue(self.versions.is_system_file(self.output))
 
     def test_revert_can_go_back_and_forth(self):
@@ -110,8 +110,8 @@ class RevertTests(VersionsTestCase):
         self.versions.publish(self.output, "b\n", trigger=RETRANSLATE)
         Path(self.output).write_text("edited b\n", encoding="utf-8")
         self.versions.revert(self.output, 1)
-        edits = [r for r in self.store.versions(self.output) if r["trigger"] == EXTERNAL]
-        self.assertEqual(Path(edits[0]["stored_path"]).read_text(encoding="utf-8"), "edited b\n")
+        edits = [r for r in self.store.versions(self.output) if r.trigger == EXTERNAL]
+        self.assertEqual(Path(edits[0].stored_path).read_text(encoding="utf-8"), "edited b\n")
 
     def test_revert_restores_a_deleted_target(self):
         self.versions.publish(self.output, "a\n", trigger=AUTO)
@@ -123,7 +123,7 @@ class RevertTests(VersionsTestCase):
         self.versions.publish(self.output, "a\n", trigger=AUTO)
         with self.assertRaises(ValueError):
             self.versions.revert(self.output, 9)
-        Path(self.store.get_version(self.output, 1)["stored_path"]).write_text("rot", encoding="utf-8")
+        Path(self.store.get_version(self.output, 1).stored_path).write_text("rot", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "damaged"):
             self.versions.revert(self.output, 1)
         self.assertEqual(Path(self.output).read_text(encoding="utf-8"), "a\n")

@@ -28,8 +28,8 @@ from .config import DEFAULT_MODEL
 from .library import Library
 from .llm import MissingApiKey, build_provider
 from .memory import StoryMemory
+from .ports import UsageLog
 from .rules import UnitRules
-from .store import Store
 from .subtitles import target_output_path
 from .translation import ERROR_TAIL_LENGTH, DailyQuotaExceededError, HardJobError, ProviderUnavailableError, redact
 from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, TranslationVersions, sha256_bytes
@@ -67,7 +67,7 @@ def _temperature(settings: dict[str, Any]) -> float | None:
 
 
 class TranslationAttempt:
-    """Runs one translation job. Wired with a store/versions pair, or bare (no history, no cache).
+    """Runs one translation job. Wired with versions and a usage log, or bare (no history, no cache, no call log).
 
     With a ``library`` the attempt also knows which episode it is translating, so the glossary and the
     episode's corrections shape the prompt and the published version is linked to its unit (P3).
@@ -76,13 +76,13 @@ class TranslationAttempt:
     def __init__(
         self,
         versions: TranslationVersions | None = None,
-        store: Store | None = None,
+        usage: UsageLog | None = None,
         provider_factory: ProviderFactory = build_provider,
         library: Library | None = None,
         memory: StoryMemory | None = None,
     ) -> None:
         self.versions = versions
-        self.store = store if store is not None else (versions.store if versions else None)
+        self.usage = usage
         self.provider_factory = provider_factory
         self.library = library
         self.memory = memory
@@ -114,8 +114,8 @@ class TranslationAttempt:
         job_id = str(job.get("job_id") or "")
 
         def record(log: CallLog) -> None:
-            if self.store is not None:
-                self.store.record_llm_call(
+            if self.usage is not None:
+                self.usage.record_llm_call(
                     job_id, provider=log.provider, model=log.model, task=log.task,
                     tokens_in=log.tokens_in, tokens_out=log.tokens_out,
                     latency_ms=log.latency_ms, outcome=log.outcome,

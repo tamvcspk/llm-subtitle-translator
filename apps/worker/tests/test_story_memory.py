@@ -78,7 +78,7 @@ class Env:
         self.library = Library(self.store, self.glossaries, self.versions, memory=self.memory)
         self.fake = FakeProvider(handler=self.handler)
         self.attempt = TranslationAttempt(
-            versions=self.versions, library=self.library, memory=self.memory,
+            versions=self.versions, usage=self.store, library=self.library, memory=self.memory,
             provider_factory=lambda settings, model, **kw: self.fake,
         )
         self.service = UnitService(
@@ -233,8 +233,8 @@ class Criterion2GapTests(unittest.TestCase):
         env.now += 1801
         self.assertEqual(env.translate(4, gap_since=waiting.exception.since), "translated")
         current = env.store.current_version(env.job(4)["output_path"])
-        self.assertEqual(current["context_complete"], 0)
-        self.assertEqual(json.loads(current["missing_units_json"]), ["S01E03"])
+        self.assertFalse(current.context_complete)
+        self.assertEqual(current.missing_units, ("S01E03",))
         self.assertEqual(env.status(4), "incomplete")
         prompt = env.translate_prompts()[-1]
         self.assertIn("EP1-SUMMARY-MARK", prompt)
@@ -293,7 +293,7 @@ class Criterion2GapTests(unittest.TestCase):
         env.remove_source(2)
         env.translate(4)  # episode 2 is gone from disk but its facts are still stored: nothing to wait for
         current = env.store.current_version(env.job(4)["output_path"])
-        self.assertEqual(current["context_complete"], 1)
+        self.assertTrue(current.context_complete)
         self.assertIn("EP2-SUMMARY-MARK", env.translate_prompts()[-1])
 
 
@@ -305,7 +305,7 @@ class MemorySwitchTests(unittest.TestCase):
         self.assertEqual([c.task for c in env.fake.calls], ["translate"])
         self.assertNotIn("Story so far", env.translate_prompts()[0])
         row = env.store.current_version(env.job(3)["output_path"])
-        self.assertEqual((row["memory_hash"], row["context_complete"]), ("", 1))
+        self.assertEqual((row.memory_hash, row.context_complete), ("", True))
         self.assertEqual(env.status(3), "current")
 
     def test_a_series_can_turn_memory_on_or_off_against_the_global_setting(self):
@@ -368,8 +368,8 @@ class FactsAreCachedTests(unittest.TestCase):
         env.settings["memory_gap_wait_seconds"] = 0
         self.assertEqual(env.translate(2), "translated")
         current = env.store.current_version(env.job(2)["output_path"])
-        self.assertEqual(json.loads(current["missing_units_json"]), ["S01E01"])
-        self.assertEqual(current["context_complete"], 0)
+        self.assertEqual(current.missing_units, ("S01E01",))
+        self.assertFalse(current.context_complete)
 
     def test_quota_exhaustion_during_extraction_pauses_like_a_translation_would(self):
         env = all_sources(self)

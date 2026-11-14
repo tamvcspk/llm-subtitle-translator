@@ -22,6 +22,7 @@ from subcore.providers import ProviderError
 from .config import DEFAULT_MODEL
 from .glossaries import GlossaryFiles
 from .library import Library
+from .ports import CURRENT
 from .llm import MissingApiKey, build_provider
 from .memory import MEMORY_MODES, StoryMemory, parse_anchor, unit_label
 from .queue import enqueue_retranslation
@@ -301,13 +302,13 @@ class UnitService:
                 warnings.append(f"cue {ordinal}: {problem}")
             parsed[ordinal] = text
         edited = [cue.with_text(parsed.get(n, cue.text)) for n, cue in enumerate(target, start=1)]
-        current = self.store.current_version(output_path) or {}
+        current = self.store.current_version(output_path)
         published = self.versions.publish(
             output_path, srt.serialize(edited), trigger=CUE_EDIT,
-            source_path=str(unit["source_path"]), source_sha256=str(current.get("source_sha256") or ""),
-            target_lang=lang, context_hash=str(current.get("context_hash") or ""),
-            model=str(current.get("model") or ""), unit_id=int(unit["id"]),
-            glossary_hash=str(current.get("glossary_hash") or ""),
+            source_path=str(unit["source_path"]), source_sha256=current.source_sha256 if current else "",
+            target_lang=lang, context_hash=current.context_hash if current else "",
+            model=current.model if current else "", unit_id=int(unit["id"]),
+            glossary_hash=current.glossary_hash if current else "",
         )
         ids = []
         for ordinal, text in sorted(parsed.items()):
@@ -398,10 +399,10 @@ class UnitService:
             "modified_outside": self.library.target_info(unit, out)["modified_outside"],
             "versions": [
                 {
-                    "version": r["version"], "trigger": r["trigger"], "status": r["status"],
-                    "parent_version": r["parent_version"], "model": r["model"], "sha256": r["sha256"],
-                    "tokens_in": r["tokens_in"], "tokens_out": r["tokens_out"], "created_at": r["created_at"],
-                    "current": r["status"] == "current" and on_disk,
+                    "version": r.version, "trigger": r.trigger, "status": r.status,
+                    "parent_version": r.parent_version, "model": r.model, "sha256": r.sha256,
+                    "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "created_at": r.created_at,
+                    "current": r.status == CURRENT and on_disk,
                 }
                 for r in reversed(rows)
             ],
@@ -412,7 +413,7 @@ class UnitService:
         if row is None:
             raise LookupError(f"no version {version}")
         try:
-            return srt.parse(Path(row["stored_path"]).read_text(encoding="utf-8-sig"))
+            return srt.parse(Path(row.stored_path).read_text(encoding="utf-8-sig"))
         except OSError:
             raise ValueError(f"the stored copy of version {version} is missing") from None
 
@@ -421,7 +422,7 @@ class UnitService:
         unit = self.unit(unit_id)
         out = self.output(unit, lang)
         if against is None:
-            earlier = [r["version"] for r in self.store.versions(out["output_path"]) if r["version"] < version]
+            earlier = [r.version for r in self.store.versions(out["output_path"]) if r.version < version]
             if not earlier:
                 raise ValueError(f"version {version} has no earlier version to compare with")
             against = earlier[-1]
@@ -477,14 +478,14 @@ class UnitService:
         current = self.store.current_version(out["output_path"]) if out else None
         now = self.memory.preview(unit, self._settings())
         used = None
-        if current and current["memory_hash"]:
-            sections = self.store.get_snapshot(current["memory_hash"])
+        if current and current.memory_hash:
+            sections = self.store.get_snapshot(current.memory_hash)
             used = {
-                "version": current["version"],
-                "complete": bool(current["context_complete"]),
-                "missing": json.loads(current["missing_units_json"] or "[]"),
+                "version": current.version,
+                "complete": current.context_complete,
+                "missing": list(current.missing_units),
                 "sections": [{"title": t, "body": b} for t, b in sections] if sections is not None else None,
-                "changed": current["memory_hash"] != now["fingerprint"],
+                "changed": current.memory_hash != now["fingerprint"],
             }
         return {
             "applicable": True,

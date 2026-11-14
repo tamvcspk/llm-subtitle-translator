@@ -40,11 +40,9 @@ KNOWN_VIOLATIONS = {
     ("library", "gst_worker.store"): "CatalogRepo",
     ("library", "gst_worker.http"): "MediaLibrary port (lazy import of first_data)",
     ("memory", "gst_worker.store"): "MemoryRepo",
-    ("translation_attempt", "gst_worker.store"): "VersionRepo / UsageLog",
     ("translation_attempt", "gst_worker.llm"): "ProviderFactory port",
     ("units", "gst_worker.llm"): "ProviderFactory port",
     ("units", "gst_worker.queue"): "JobQueue port",
-    ("versions", "gst_worker.store"): "VersionRepo",
 }
 
 
