@@ -6,8 +6,9 @@ Copy `.env.example` to `.env` and edit values for your host.
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `CONSOLE_USER` | Yes | empty | Username for the web console and API (HTTP Basic Auth). |
-| `CONSOLE_PASSWORD` | Yes | empty | Password for the web console and API. Read from the environment only; never stored in `config.json`, never returned by the API. |
+| `CONSOLE_USER` | First run | empty | User name of the console account. Only seeds the account on the first run (or under `CONSOLE_PASSWORD_RESET`). |
+| `CONSOLE_PASSWORD` | First run | empty | Initial password. Stored only as a scrypt hash in `app.db`; after that the password is changed in Settings and this variable is ignored. Never stored in `config.json`, never returned by the API. |
+| `CONSOLE_PASSWORD_RESET` | No | empty | Set to `1` together with `CONSOLE_USER` / `CONSOLE_PASSWORD` and restart to overwrite the stored account (forgotten password). Remove it afterwards: while it is set, every restart resets the account again. |
 | `CONSOLE_AUTH` | No | empty | Set to `off` to disable authentication. Any other value keeps it on. |
 | `GEMINI_API_KEY` | No | empty | Primary Gemini API key; can also be set in the web console. |
 | `GEMINI_API_KEY1` | No | empty | Alias for the primary Gemini key. |
@@ -38,23 +39,36 @@ Copy `.env.example` to `.env` and edit values for your host.
 
 ## Console Authentication
 
-Every request to the web console (static files and `/api/*`, all methods) needs
-HTTP Basic Auth. There are no exempt paths.
+There is one console account and two ways in: the login form at `/login`
+(browsers, cookie session) and HTTP Basic Auth (scripts, `curl -u user:password`).
+Every request needs one of them, except `GET /login` and `POST /api/auth/login`.
 
-- `CONSOLE_USER` and `CONSOLE_PASSWORD` both set: requests without the matching
-  `Authorization` header get `401` with `WWW-Authenticate: Basic`. Browsers
-  remember the login, so the console has no separate login page; scripts send
-  the header (`curl -u user:password ...`).
-- Either one missing (and no `CONSOLE_AUTH=off`): the console and API answer
-  `503` with instructions. The queue worker keeps processing jobs, and an error
-  is logged at every start.
+- First run: with `CONSOLE_USER` and `CONSOLE_PASSWORD` set, the account is
+  created in `app.db` (password as a scrypt hash). From then on the stored
+  account wins and the variables are ignored, so changing `CONSOLE_PASSWORD`
+  and restarting does nothing.
+- Change the password in **Settings → Console password** (current password
+  required, at least 8 characters). Every other session is signed out, and
+  scripts must use the new password.
+- Forgot it: set `CONSOLE_PASSWORD_RESET=1` with the new `CONSOLE_USER` /
+  `CONSOLE_PASSWORD`, restart once, then remove the flag (a warning is logged
+  while it is set).
+- No stored account and the variables not both set (and no `CONSOLE_AUTH=off`):
+  the console and API answer `503` with instructions. The queue worker keeps
+  processing jobs, and an error is logged at every start.
 - `CONSOLE_AUTH=off`: no authentication, with a warning logged at every start.
   Use only on a trusted network.
+- Five wrong logins in a row from one address (form, Basic Auth and password
+  change count together) lock that address for five minutes (`429`).
+- The session cookie is `HttpOnly`, `SameSite=Strict`, gets `Secure` behind a
+  proxy that sends `X-Forwarded-Proto: https`, expires after 7 days without use,
+  and is kept in memory: restarting the worker signs everyone out. Writes made
+  with a cookie must carry a matching `Origin`.
 
 Credentials are compared in constant time and are never logged. The Bazarr
 post-processing script only writes queue files and does not call the HTTP API,
-so it needs no credentials. Basic Auth is not encrypted; keep the port on the
-LAN or place a TLS reverse proxy in front.
+so it needs no credentials. Neither the form nor Basic Auth is encrypted; keep
+the port on the LAN or place a TLS reverse proxy in front.
 
 The Docker web port is fixed as `6789:6789` in `docker-compose.yml` so the
 container listen port and host port stay aligned.

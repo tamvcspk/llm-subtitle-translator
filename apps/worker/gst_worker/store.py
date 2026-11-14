@@ -137,6 +137,15 @@ _MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE translations ADD COLUMN memory_hash TEXT NOT NULL DEFAULT '';
     ALTER TABLE translations ADD COLUMN missing_units_json TEXT NOT NULL DEFAULT '[]';
     """,
+    # Schema 4: the single console account (P0c); password_hash is "scrypt$N$r$p$salt$hash".
+    """
+    CREATE TABLE auth (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        user TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    """,
 )
 
 
@@ -177,6 +186,21 @@ class Store:
     def schema_version(self) -> int:
         with self._lock:
             return int(self._db.execute("PRAGMA user_version").fetchone()[0])
+
+    # -- auth --------------------------------------------------------------
+    def auth_account(self) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute("SELECT user, password_hash FROM auth WHERE id = 1").fetchone()
+        return dict(row) if row else None
+
+    def save_auth_account(self, user: str, password_hash: str) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO auth (id, user, password_hash, updated_at) VALUES (1, ?, ?, ?)"
+                " ON CONFLICT(id) DO UPDATE SET user = excluded.user,"
+                " password_hash = excluded.password_hash, updated_at = excluded.updated_at",
+                (user, password_hash, time.time()),
+            )
 
     # -- llm_calls ---------------------------------------------------------
     def record_llm_call(

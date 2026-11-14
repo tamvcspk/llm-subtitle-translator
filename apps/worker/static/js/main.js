@@ -1,5 +1,6 @@
 // Console entry point: hash routing, the shared poll, and chrome that every
 // view shares (sidebar badges and health, quota banner, theme).
+import { get, post } from "./api.js";
 import { formatDateTime, nowSeconds } from "./format.js";
 import { refreshQueue, refreshStatus, store, subscribe } from "./store.js";
 import { hydrateIcons, icon, toast, updateClocks } from "./ui.js";
@@ -140,6 +141,18 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
     // Theme still applies for this page load.
   }
   applyTheme(next);
+});
+
+// ---- Sign out (form-login session only; Basic Auth has no session to end) ----
+
+const signOut = document.getElementById("sign-out");
+get("/api/auth/me").then((me) => { signOut.hidden = me.via !== "session"; }).catch(() => {});
+signOut.addEventListener("click", async () => {
+  try {
+    await post("/api/auth/logout");
+  } finally {
+    location.assign("/login");
+  }
 });
 
 // ---- Polling ------------------------------------------------------------

@@ -1,4 +1,13 @@
 # Unreleased
+- **P0c: console login form.** Browsers now sign in at `/login` (cookie session,
+  Sign out in the sidebar); Basic Auth keeps working for scripts. The account is
+  created from `CONSOLE_USER`/`CONSOLE_PASSWORD` on the first run and stored as a
+  scrypt hash (schema 4, table `auth`); from then on the stored account wins and the
+  password is changed in Settings (this signs out every other session).
+  `CONSOLE_PASSWORD_RESET=1` overwrites it after a forgotten password. Five wrong
+  logins lock an address for five minutes. **Upgrade note:** changing
+  `CONSOLE_PASSWORD` and restarting no longer changes the password. Sessions live
+  in memory, so a restart signs everyone out.
 - **P4: story memory (off by default).** Before an episode is translated the worker
   can read the source subtitles of the episodes before it and tell the model who the
   characters are, how each pair stands to each other and what happened lately, so

@@ -15,6 +15,11 @@ export async function api(path, { method = "GET", body, headers = {} } = {}) {
   } catch {
     // Non-JSON error pages fall through to the status text below.
   }
+  // The session ended (expired, signed out elsewhere, worker restarted): back to the login form.
+  if (response.status === 401 && path !== "/api/auth/login") {
+    location.assign("/login");
+    throw new Error("Signed out");
+  }
   if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
   return payload;
 }

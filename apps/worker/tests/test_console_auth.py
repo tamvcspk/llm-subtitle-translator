@@ -183,7 +183,13 @@ class ConsoleAuthServerTests(unittest.TestCase):
 
 
 class ConsoleAuthStartupTests(unittest.TestCase):
-    def run_main(self, extra_env):
+    def run_main(self, extra_env, probe=None):
+        """Run main() with the web server stubbed; ``probe(ctx, auth)`` runs while the store is still open."""
+        results = []
+
+        def fake_server(ctx, host, port, auth):
+            results.append(probe(ctx, auth) if probe else None)
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env = {
@@ -199,24 +205,23 @@ class ConsoleAuthStartupTests(unittest.TestCase):
                 patch("sys.argv", ["worker.py", "--no-worker"]),
                 patch.object(worker, "configure_logging"),
                 patch.object(worker.threading, "Thread"),
-                patch.object(worker, "start_web_server") as server,
+                patch.object(worker, "start_web_server", side_effect=fake_server),
             ):
                 self.assertEqual(worker.main(), 0)
-                return server.call_args
+        return results[0]
 
     def test_main_passes_env_auth_to_server_and_keeps_it_out_of_context(self):
-        call = self.run_main({"CONSOLE_USER": USER, "CONSOLE_PASSWORD": PASSWORD})
-        ctx, auth = call.args[0], call.args[3]
-        self.assertEqual(auth.check(basic(USER, PASSWORD)), ALLOW)
-        self.assertNotIn(PASSWORD, repr(ctx))
+        result = self.run_main(
+            {"CONSOLE_USER": USER, "CONSOLE_PASSWORD": PASSWORD},
+            lambda ctx, auth: (auth.check(basic(USER, PASSWORD)), PASSWORD in repr(ctx)),
+        )
+        self.assertEqual(result, (ALLOW, False))
 
     def test_main_without_credentials_still_starts_in_unconfigured_mode(self):
-        call = self.run_main({})
-        self.assertEqual(call.args[3].check(None), UNCONFIGURED)
+        self.assertEqual(self.run_main({}, lambda ctx, auth: auth.check(None)), UNCONFIGURED)
 
     def test_main_auth_off(self):
-        call = self.run_main({"CONSOLE_AUTH": "off"})
-        self.assertEqual(call.args[3].check(None), ALLOW)
+        self.assertEqual(self.run_main({"CONSOLE_AUTH": "off"}, lambda ctx, auth: auth.check(None)), ALLOW)
 
 
 if __name__ == "__main__":

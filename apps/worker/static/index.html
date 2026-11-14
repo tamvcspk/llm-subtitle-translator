@@ -57,6 +57,7 @@
         <span class="dot"></span><span class="health-label">Bazarr</span><span class="health-value">…</span>
       </div>
       <button id="theme-toggle" type="button" class="btn btn-ghost btn-sm theme-toggle"></button>
+      <button id="sign-out" type="button" class="btn btn-ghost btn-sm" hidden>Sign out</button>
     </div>
   </aside>
 
@@ -490,6 +491,35 @@
             <button id="settings-save" type="submit" class="btn btn-primary">Save changes</button>
           </div>
         </div>
+      </form>
+
+      <!-- Separate from the settings form: the password never goes through /api/settings. -->
+      <form id="password-form" class="settings" autocomplete="off" novalidate hidden style="margin-top: 16px">
+        <section class="settings-card">
+          <div class="settings-intro">
+            <h2>Console password</h2>
+            <p>Changing it signs out every other browser. Scripts using Basic Auth must switch to the new password.</p>
+          </div>
+          <div class="field-grid">
+            <div class="field field-wide">
+              <label for="pw-current">Current password</label>
+              <input id="pw-current" class="input" type="password" autocomplete="current-password" required>
+            </div>
+            <div class="field">
+              <label for="pw-new">New password</label>
+              <input id="pw-new" class="input" type="password" autocomplete="new-password" minlength="8" required>
+              <p class="hint">At least 8 characters.</p>
+            </div>
+            <div class="field">
+              <label for="pw-confirm">Repeat new password</label>
+              <input id="pw-confirm" class="input" type="password" autocomplete="new-password" required>
+            </div>
+            <div class="field field-wide">
+              <p id="pw-note" class="hint" role="status"></p>
+              <button id="pw-save" type="submit" class="btn btn-primary">Change password</button>
+            </div>
+          </div>
+        </section>
       </form>
     </section>
 

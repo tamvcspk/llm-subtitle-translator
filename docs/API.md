@@ -6,19 +6,48 @@ reverse proxy that adds TLS.
 
 ## Authentication
 
-Every endpoint, and every static file, requires HTTP Basic Auth
-(`Authorization: Basic base64(user:password)`) using `CONSOLE_USER` and
-`CONSOLE_PASSWORD`. See [CONFIGURATION.md](CONFIGURATION.md#console-authentication).
+Every endpoint, and every static file, needs the console account, either as a
+login-form session cookie (`gst_session`, browsers) or as HTTP Basic Auth
+(`Authorization: Basic base64(user:password)`, scripts). The only requests that
+need nothing are `GET /login` and `POST /api/auth/login`. See
+[CONFIGURATION.md](CONFIGURATION.md#console-authentication).
 
 | Situation | Response |
 | --- | --- |
-| Missing or wrong credentials | `401` `{"error": "authentication required"}` with `WWW-Authenticate: Basic realm="LLM Subtitle Translator"` |
-| `CONSOLE_USER` / `CONSOLE_PASSWORD` not configured | `503` `{"error": "..."}` with setup instructions |
+| Browser page request without a session | `302` to `/login` |
+| Browser API call without a session | `401` `{"error": "authentication required"}`, no `WWW-Authenticate` |
+| Script without or with wrong Basic credentials | `401` with `WWW-Authenticate: Basic realm="LLM Subtitle Translator"` |
+| 5 wrong logins in a row from one address (form, Basic, or password change) | `429` with `Retry-After` (5 minutes) |
+| Write (`POST`/`PUT`/`DELETE`) with a cookie and a foreign `Origin` | `403` |
+| No account yet (`CONSOLE_USER` / `CONSOLE_PASSWORD` never set) | `503` `{"error": "..."}` with setup instructions |
 | `CONSOLE_AUTH=off` | No check |
 
 ```bash
 curl -u "$CONSOLE_USER:$CONSOLE_PASSWORD" http://<host>:6789/api/status
 ```
+
+### POST /api/auth/login
+
+`{"user": "...", "password": "..."}` → `200 {"ok": true, "user": "..."}` and a
+`Set-Cookie: gst_session=...; HttpOnly; SameSite=Strict; Max-Age=604800` (plus
+`Secure` when the request carries `X-Forwarded-Proto: https`). Wrong
+credentials: `401`, no cookie. A session expires after 7 days without use.
+
+### POST /api/auth/logout
+
+Ends the caller's session and clears the cookie. Always `200`.
+
+### GET /api/auth/me
+
+`{"user": "admin" | null, "via": "session" | "basic" | "off", "can_change_password": true}`.
+
+### POST /api/auth/password
+
+`{"current": "...", "new": "..."}`. The new password must be 8–256 characters.
+`200 {"ok": true}` ends every session; a caller using a cookie gets a fresh one
+and stays signed in. A wrong current password is `403` (not `401`, so the
+console does not take it for a dead session) and counts towards the lockout;
+a bad new password is `400`; with `CONSOLE_AUTH=off` it is `409`.
 
 ## GET /api/status
 

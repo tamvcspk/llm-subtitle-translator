@@ -147,6 +147,34 @@ async function testConnection(button) {
   }
 }
 
+async function changePassword() {
+  const note = document.getElementById("pw-note");
+  const current = document.getElementById("pw-current");
+  const next = document.getElementById("pw-new");
+  const confirm = document.getElementById("pw-confirm");
+  const fail = (message) => { note.className = "hint hint-warn"; note.textContent = message; };
+  if (next.value.length < 8) return fail("The new password must be at least 8 characters.");
+  if (next.value !== confirm.value) return fail("The two new passwords differ.");
+  try {
+    await post("/api/auth/password", { current: current.value, new: next.value });
+  } catch (error) {
+    return fail(error.message);
+  }
+  for (const input of [current, next, confirm]) input.value = "";
+  note.className = "hint";
+  note.textContent = "";
+  toast("Password changed", "success");
+}
+
+async function showPasswordForm() {
+  try {
+    const me = await get("/api/auth/me");
+    document.getElementById("password-form").hidden = !me.can_change_password || me.via === "basic";
+  } catch {
+    // Not signed in or the call failed: the form stays hidden.
+  }
+}
+
 export default {
   title: "Settings",
   subtitle: "Bazarr connection, translator options, languages and library scan.",
@@ -180,6 +208,10 @@ export default {
     form.querySelectorAll("[data-secret]").forEach((input) => {
       input.addEventListener("focus", () => { if (input.value === SECRET_MASK) input.select(); });
     });
+    document.getElementById("password-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      runAction(document.getElementById("pw-save"), changePassword);
+    });
     window.addEventListener("beforeunload", (event) => {
       if (dirty) event.preventDefault();
     });
@@ -192,6 +224,7 @@ export default {
     ].map((promise) => promise.catch((error) => toast(`Could not load choices: ${error.message}`, "error")));
     // Keep unsaved edits when coming back to this view.
     if (!loaded || !dirty) await loadSettings();
+    showPasswordForm();
     await Promise.all(extras);
   },
 };

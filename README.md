@@ -111,8 +111,10 @@ docker run -d \
 The container already defaults to `/state`, `/queue`,
 `/bazarr-postprocess/targets.json`, and web port `6789`, so the direct
 `docker run` form only needs the host paths and public settings.
-The console requires a login (`CONSOLE_USER` / `CONSOLE_PASSWORD`, HTTP Basic
-Auth); without them it answers `503` while the queue worker keeps running. See
+The console requires a login (a form for browsers, HTTP Basic Auth for scripts).
+`CONSOLE_USER` / `CONSOLE_PASSWORD` create the account on the first run; change
+the password in Settings afterwards. Without them (and no stored account) it
+answers `503` while the queue worker keeps running. See
 [Console Authentication](docs/CONFIGURATION.md#console-authentication).
 Open `http://<docker-host>:6789/`, sign in, and enter the Bazarr, Gemini, and
 TMDB settings in the web console.
@@ -214,8 +216,8 @@ They include:
 - `/bazarr-postprocess/targets.json`
 - `backup.json` metadata
 
-Because the console currently has no authentication, keep it on a trusted
-network. Backup archives can be downloaded from the UI and imported back through
+The login is not encrypted, so keep the console on a trusted network or behind
+a TLS reverse proxy. Backup archives can be downloaded from the UI and imported back through
 the System page. Import restores `/state/config.json` and
 `/bazarr-postprocess/targets.json`, creates a `pre-import` backup first, and
 does not restore queue files, logs, or caches.
