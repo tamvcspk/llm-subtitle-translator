@@ -18,7 +18,6 @@ a bundle is built and when staleness is checked, so the two can never disagree.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -169,7 +168,7 @@ class StoryMemory:
     # -- facts --------------------------------------------------------------------
     def _stored(self, units: list[dict[str, Any]]) -> dict[int, Facts]:
         rows = self.store.latest_facts([int(u["id"]) for u in units], EXTRACT_PROMPT_VERSION)
-        return {uid: Facts.from_dict(json.loads(row["json"])) for uid, row in rows.items()}
+        return {uid: row.facts for uid, row in rows.items()}
 
     def ensure_facts(
         self, unit: dict[str, Any], title: str, settings: dict[str, Any], provider_for: ProviderFor | None
@@ -181,7 +180,7 @@ class StoryMemory:
         """
         unit_id = int(unit["id"])
         latest = self.store.latest_facts([unit_id], EXTRACT_PROMPT_VERSION).get(unit_id)
-        kept = Facts.from_dict(json.loads(latest["json"])) if latest else None
+        kept = latest.facts if latest else None
         if not self.has_source(unit):
             return (kept, "stored") if kept is not None else (None, "no-source")
         path = Path(str(unit["source_path"]))
@@ -189,9 +188,9 @@ class StoryMemory:
             sha = sha256_file(path)
         except OSError:
             return (kept, "stored") if kept is not None else (None, "failed")
-        row = self.store.facts_row(unit_id, sha, EXTRACT_PROMPT_VERSION, touch=True)
+        row = self.store.get_facts(unit_id, sha, EXTRACT_PROMPT_VERSION, touch=True)
         if row is not None:
-            return Facts.from_dict(json.loads(row["json"])), "cached"
+            return row.facts, "cached"
         if provider_for is None:
             return (kept, "stored") if kept is not None else (None, "failed")
         try:
@@ -206,8 +205,8 @@ class StoryMemory:
             logging.warning("Could not extract story facts for %s %s: %s", title or "unit", unit_label(unit), exc)
             return (kept, "stored") if kept is not None else (None, "failed")
         self.store.save_facts(
-            unit_id, sha, EXTRACT_PROMPT_VERSION, model=result.model, facts=result.facts.to_dict(),
-            facts_hash=result.facts.hash, tokens_in=result.tokens_in, tokens_out=result.tokens_out,
+            unit_id, sha, EXTRACT_PROMPT_VERSION, model=result.model, facts=result.facts,
+            tokens_in=result.tokens_in, tokens_out=result.tokens_out,
         )
         logging.info("Extracted story facts for %s %s (%s tokens in)", title or "unit", unit_label(unit), result.tokens_in)
         return result.facts, "extracted"

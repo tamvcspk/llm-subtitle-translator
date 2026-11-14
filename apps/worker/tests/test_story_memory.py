@@ -606,8 +606,8 @@ class ExtractionVersionTests(unittest.TestCase):
         env.translate(2)
         uid = env.unit_id(1)
         row = env.store.latest_facts([uid], EXTRACT_PROMPT_VERSION)[uid]
-        self.assertEqual(row["prompt_version"], EXTRACT_PROMPT_VERSION)
-        self.assertEqual(len(row["source_sha256"]), 64)
+        self.assertEqual(row.prompt_version, EXTRACT_PROMPT_VERSION)
+        self.assertEqual(len(row.source_sha256), 64)
         self.assertEqual(env.store.latest_facts([uid], "older-version"), {})
 
 

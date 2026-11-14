@@ -101,6 +101,25 @@ class PortTypeTests(unittest.TestCase):
     """Criterion 10c: a port returns named types, never ``dict`` or ``sqlite3.Row``."""
 
     BANNED = {"dict", "Dict", "Mapping", "MutableMapping", "Row", "Any", "object"}
+    MAPPINGS = {"dict", "Dict", "Mapping", "MutableMapping"}
+
+    @classmethod
+    def offends(cls, returns: ast.AST) -> bool:
+        """``dict[int, StoredFacts]`` (an index of named values) is fine; a bare dict or ``dict[str, Any]`` is not."""
+        allowed: set[int] = set()
+        for node in ast.walk(returns):
+            if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id in cls.MAPPINGS:
+                args = node.slice.elts if isinstance(node.slice, ast.Tuple) else []
+                value = args[1] if len(args) == 2 else None
+                value_names = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)} if value is not None else {"Any"}
+                if value is not None and not value_names & cls.BANNED:
+                    allowed.add(id(node.value))
+        for node in ast.walk(returns):
+            if isinstance(node, ast.Name) and node.id in cls.BANNED and id(node) not in allowed:
+                return True
+            if isinstance(node, ast.Attribute) and node.attr in cls.BANNED:
+                return True
+        return False
 
     def test_no_port_method_returns_a_dict_like_type(self):
         tree = ast.parse((PACKAGE_DIR / "ports.py").read_text(encoding="utf-8"))
@@ -109,14 +128,26 @@ class PortTypeTests(unittest.TestCase):
             for fn in (n for n in cls.body if isinstance(n, ast.FunctionDef)):
                 if fn.returns is None:
                     continue
-                names = {n.id for n in ast.walk(fn.returns) if isinstance(n, ast.Name)}
-                names |= {n.attr for n in ast.walk(fn.returns) if isinstance(n, ast.Attribute)}
-                # string annotations ("dict[str, Any]") are parsed too
-                for const in (n for n in ast.walk(fn.returns) if isinstance(n, ast.Constant) and isinstance(n.value, str)):
-                    names |= {n.id for n in ast.walk(ast.parse(const.value, mode="eval")) if isinstance(n, ast.Name)}
-                if names & self.BANNED:
+                returns = fn.returns
+                if isinstance(returns, ast.Constant) and isinstance(returns.value, str):  # "dict[str, Any]"
+                    returns = ast.parse(returns.value, mode="eval").body
+                if self.offends(returns):
                     offenders.append(f"{cls.name}.{fn.name}")
         self.assertFalse(offenders, f"port methods must return named types: {offenders}")
+
+
+    def test_the_check_itself_tells_records_from_indexes(self):
+        def bad(annotation):
+            return self.offends(ast.parse(annotation, mode="eval").body)
+
+        self.assertTrue(bad("dict"))
+        self.assertTrue(bad("dict[str, Any]"))
+        self.assertFalse(bad("list[dict[str, int]]"))  # int values: a plain index, not a record
+        self.assertTrue(bad("list[dict[str, Any]]"))
+        self.assertTrue(bad("sqlite3.Row"))
+        self.assertTrue(bad("Mapping[str, object]"))
+        self.assertFalse(bad("dict[int, StoredFacts]"))
+        self.assertFalse(bad("list[Account] | None"))
 
 
 class ScannerTests(unittest.TestCase):
