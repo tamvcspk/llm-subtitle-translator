@@ -18,7 +18,7 @@ from typing import Any, Iterable
 
 from subcore.memory import Facts
 
-from .ports import Account, LlmCall, StoredFacts, TokenTotals, TranslationVersion
+from .ports import Account, Correction, LlmCall, Output, Series, StoredFacts, TokenTotals, TranslationVersion, Unit
 
 _MIGRATIONS: tuple[str, ...] = (
     """
@@ -167,6 +167,37 @@ def _version_from_row(row: sqlite3.Row) -> TranslationVersion:
         tokens_in=row["tokens_in"], tokens_out=row["tokens_out"], unit_id=row["unit_id"],
         glossary_hash=row["glossary_hash"], context_complete=bool(row["context_complete"]),
         memory_hash=row["memory_hash"], missing_units=tuple(json.loads(row["missing_units_json"] or "[]")),
+    )
+
+
+def _series_from_row(row: sqlite3.Row) -> Series:
+    return Series(
+        id=row["id"], key=row["key"], title=row["title"], bazarr_id=row["bazarr_id"],
+        stale_policy=row["stale_policy"], memory=row["memory"], specials_after=row["specials_after"],
+        created_at=row["created_at"],
+    )
+
+
+def _unit_from_row(row: sqlite3.Row) -> Unit:
+    return Unit(
+        id=row["id"], series_id=row["series_id"], movie_key=row["movie_key"], season=row["season"],
+        episode=row["episode"], title=row["title"], media_type=row["media_type"], bazarr_id=row["bazarr_id"],
+        video_path=row["video_path"], source_path=row["source_path"], source_code=row["source_code"],
+        source_language=row["source_language"], created_at=row["created_at"], updated_at=row["updated_at"],
+    )
+
+
+def _output_from_row(row: sqlite3.Row) -> Output:
+    return Output(
+        unit_id=row["unit_id"], target_lang=row["target_lang"], output_path=row["output_path"],
+        target_language=row["target_language"],
+    )
+
+
+def _correction_from_row(row: sqlite3.Row) -> Correction:
+    return Correction(
+        id=row["id"], unit_id=row["unit_id"], target_lang=row["target_lang"], kind=row["kind"],
+        payload=json.loads(row["payload_json"]), created_at=row["created_at"], active=bool(row["active"]),
     )
 
 
@@ -384,15 +415,15 @@ class Store:
                 )
             return int(row["id"])
 
-    def get_series(self, series_id: int) -> dict[str, Any] | None:
+    def get_series(self, series_id: int) -> Series | None:
         with self._lock:
             row = self._db.execute("SELECT * FROM series WHERE id = ?", (series_id,)).fetchone()
-        return dict(row) if row else None
+        return _series_from_row(row) if row else None
 
-    def list_series(self) -> list[dict[str, Any]]:
+    def list_series(self) -> list[Series]:
         with self._lock:
             rows = self._db.execute("SELECT * FROM series ORDER BY title COLLATE NOCASE, id").fetchall()
-        return [dict(row) for row in rows]
+        return [_series_from_row(row) for row in rows]
 
     def upsert_unit(
         self,
@@ -441,12 +472,12 @@ class Store:
                 )
             return int(row["id"])
 
-    def get_unit(self, unit_id: int) -> dict[str, Any] | None:
+    def get_unit(self, unit_id: int) -> Unit | None:
         with self._lock:
             row = self._db.execute("SELECT * FROM units WHERE id = ?", (unit_id,)).fetchone()
-        return dict(row) if row else None
+        return _unit_from_row(row) if row else None
 
-    def list_units(self, series_id: int | None = None, *, movies: bool = False) -> list[dict[str, Any]]:
+    def list_units(self, series_id: int | None = None, *, movies: bool = False) -> list[Unit]:
         with self._lock:
             if movies:
                 rows = self._db.execute(
@@ -456,7 +487,7 @@ class Store:
                 rows = self._db.execute(
                     "SELECT * FROM units WHERE series_id = ? ORDER BY season, episode, id", (series_id,)
                 ).fetchall()
-        return [dict(row) for row in rows]
+        return [_unit_from_row(row) for row in rows]
 
     def set_output(self, unit_id: int, target_lang: str, output_path: str, target_language: str = "") -> None:
         with self._lock:
@@ -468,12 +499,12 @@ class Store:
                 (unit_id, target_lang, target_language, output_path),
             )
 
-    def outputs(self, unit_id: int) -> list[dict[str, Any]]:
+    def outputs(self, unit_id: int) -> list[Output]:
         with self._lock:
             rows = self._db.execute(
                 "SELECT * FROM unit_outputs WHERE unit_id = ? ORDER BY target_lang", (unit_id,)
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [_output_from_row(row) for row in rows]
 
     # -- corrections (episode scope; wider scopes live in the glossary YAML) -----
     def add_correction(self, unit_id: int, target_lang: str, kind: str, payload: dict[str, Any]) -> int:
@@ -484,25 +515,18 @@ class Store:
             )
             return int(cursor.lastrowid)
 
-    @staticmethod
-    def _correction(row: sqlite3.Row) -> dict[str, Any]:
-        item = dict(row)
-        item["payload"] = json.loads(item.pop("payload_json"))
-        item["active"] = bool(item["active"])
-        return item
-
-    def corrections(self, unit_id: int, target_lang: str, *, active_only: bool = True) -> list[dict[str, Any]]:
+    def corrections(self, unit_id: int, target_lang: str, *, active_only: bool = True) -> list[Correction]:
         query = "SELECT * FROM corrections WHERE unit_id = ? AND target_lang = ?"
         if active_only:
             query += " AND active = 1"
         with self._lock:
             rows = self._db.execute(query + " ORDER BY id", (unit_id, target_lang)).fetchall()
-        return [self._correction(row) for row in rows]
+        return [_correction_from_row(row) for row in rows]
 
-    def get_correction(self, correction_id: int) -> dict[str, Any] | None:
+    def get_correction(self, correction_id: int) -> Correction | None:
         with self._lock:
             row = self._db.execute("SELECT * FROM corrections WHERE id = ?", (correction_id,)).fetchone()
-        return self._correction(row) if row else None
+        return _correction_from_row(row) if row else None
 
     def deactivate_correction(self, correction_id: int) -> bool:
         with self._lock:
@@ -510,12 +534,12 @@ class Store:
             return cursor.rowcount > 0
 
     # -- story memory (P4) ------------------------------------------------------------
-    def find_unit(self, series_id: int, season: int, episode: int) -> dict[str, Any] | None:
+    def find_unit(self, series_id: int, season: int, episode: int) -> Unit | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT * FROM units WHERE series_id = ? AND season = ? AND episode = ?", (series_id, season, episode)
             ).fetchone()
-        return dict(row) if row else None
+        return _unit_from_row(row) if row else None
 
     def set_series_memory(self, series_id: int, *, memory: str | None = None, specials_after: str | None = None) -> None:
         with self._lock:

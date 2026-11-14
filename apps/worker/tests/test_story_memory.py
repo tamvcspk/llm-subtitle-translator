@@ -19,8 +19,10 @@ from gst_worker import library_api
 from gst_worker import queue as gst_queue
 from gst_worker.bazarr import list_series_episodes
 from gst_worker.glossaries import GlossaryFiles
+from gst_worker.queue import FileJobQueue
 from gst_worker.library import Library
 from gst_worker.memory import StoryMemory, parse_anchor, unit_label
+from gst_worker.ports import EpisodeListing, Series, Unit
 from gst_worker.store import Store
 from gst_worker.translation import ContextGapError, DailyQuotaExceededError
 from gst_worker.translation_attempt import TranslationAttempt
@@ -73,7 +75,7 @@ class Env:
         self.glossaries = GlossaryFiles(self.data)
         self.settings = dict(SETTINGS)
         self.memory = StoryMemory(
-            self.store, settings_source=lambda: self.settings, catalog=self.catalog, clock=lambda: self.now
+            self.store, self.store, settings_source=lambda: self.settings, media=self, clock=lambda: self.now
         )
         self.library = Library(self.store, self.glossaries, self.versions, memory=self.memory)
         self.fake = FakeProvider(handler=self.handler)
@@ -82,7 +84,7 @@ class Env:
             provider_factory=lambda settings, model, **kw: self.fake,
         )
         self.service = UnitService(
-            self.library, self.glossaries, self.versions, str(self.root / "queue"), memory=self.memory,
+            self.library, self.glossaries, self.versions, FileJobQueue(str(self.root / "queue")), memory=self.memory,
             settings_source=lambda: self.settings, provider_factory=lambda settings, model, **kw: self.fake,
         )
         self.episodes = range(1, 7)
@@ -115,11 +117,17 @@ class Env:
         self.source(episode).unlink(missing_ok=True)
         self.available.discard(episode)
 
-    def catalog(self, series, source_code):
+    # the MediaLibrary port, as this fake Bazarr answers it
+    def describe(self, media_type, series_id, media_id):
+        return None
+
+    def series_episodes(self, series_id, source_code):
         return [
-            {"season": 1, "episode": n, "title": f"Ep {n}", "bazarr_id": str(100 + n),
-             "video_path": str(self.media / f"Show.S01E{n:02d}.mkv"),
-             "source_path": str(self.source(n)) if n in self.available else ""}
+            EpisodeListing(
+                season=1, episode=n, title=f"Ep {n}", bazarr_id=str(100 + n),
+                video_path=str(self.media / f"Show.S01E{n:02d}.mkv"),
+                source_path=str(self.source(n)) if n in self.available else "",
+            )
             for n in self.episodes
         ]
 
@@ -138,11 +146,11 @@ class Env:
 
     def unit_id(self, episode):
         series = self.store.list_series()[0]
-        return self.store.find_unit(series["id"], 1, episode)["id"]
+        return self.store.find_unit(series.id, 1, episode).id
 
     def status(self, episode):
         series = self.store.list_series()[0]
-        rows = self.library.series_units(series["id"])["units"]
+        rows = self.library.series_units(series.id)["units"]
         row = next(u for u in rows if u["episode"] == episode)
         return row["status"]
 
@@ -264,7 +272,7 @@ class Criterion2GapTests(unittest.TestCase):
         # Episode 3's subtitle arrives; the worker has registered it but not yet read it.
         env.add_source(3)
         env.store.upsert_unit(
-            series_id=env.store.list_series()[0]["id"], season=1, episode=3, source_path=str(env.source(3))
+            series_id=env.store.list_series()[0].id, season=1, episode=3, source_path=str(env.source(3))
         )
         self.assertEqual(env.calls("extract")[-1].meta["episode"], 4)  # still no facts for episode 3
         self.assertEqual(env.status(4), "stale")
@@ -312,7 +320,7 @@ class MemorySwitchTests(unittest.TestCase):
         env = all_sources(self)
         env.settings["memory_enabled"] = False
         env.translate(1)
-        series_id = env.store.list_series()[0]["id"]
+        series_id = env.store.list_series()[0].id
 
         env.service.set_series_memory(series_id, {"policy": "on"})
         env.translate(2)
@@ -439,7 +447,7 @@ class ContextEndpointTests(unittest.TestCase):
     def test_series_memory_settings_are_validated(self):
         env = all_sources(self)
         env.translate(1)
-        series_id = env.store.list_series()[0]["id"]
+        series_id = env.store.list_series()[0].id
         result = env.service.set_series_memory(series_id, {"policy": "on", "specials_after": "s02e05"})
         self.assertEqual((result["policy"], result["specials_after"]), ("on", "S02E05"))
         with self.assertRaises(ValueError):
@@ -467,14 +475,14 @@ class ContextEndpointTests(unittest.TestCase):
         job["video_path"] = str(env.media / "Heat (1995).mkv")
         env.attempt.run(job, "", env.settings)
         movie = env.store.list_units(movies=True)[0]
-        self.assertEqual(env.service.context(movie["id"]), {"applicable": False, "enabled": False})
+        self.assertEqual(env.service.context(movie.id), {"applicable": False, "enabled": False})
 
 
 class RoutesTests(unittest.TestCase):
     def test_memory_routes(self):
         env = all_sources(self)
         env.translate(2)
-        unit, series = env.unit_id(2), env.store.list_series()[0]["id"]
+        unit, series = env.unit_id(2), env.store.list_series()[0].id
         handle = lambda method, path, body=None: library_api.handle(env.service, method, path, {}, body)  # noqa: E731
 
         status, payload = handle("GET", f"/api/units/{unit}/context")
@@ -504,15 +512,16 @@ class RoutesTests(unittest.TestCase):
 
 class StoryOrderTests(unittest.TestCase):
     def units(self):
-        return [{"id": i, "season": s, "episode": e, "series_id": 1} for i, (s, e) in enumerate(
+        return [Unit(id=i, season=s, episode=e, series_id=1) for i, (s, e) in enumerate(
             [(0, 1), (1, 1), (1, 2), (2, 1), (2, 2)], start=1)]
 
     def prior(self, season, episode, anchor=""):
-        memory = StoryMemory(Store(":memory:"))
-        self.addCleanup(memory.store.close)
+        store = Store(":memory:")
+        memory = StoryMemory(store, store)
+        self.addCleanup(store.close)
         units = self.units()
-        unit = next(u for u in units if (u["season"], u["episode"]) == (season, episode))
-        return [unit_label(u) for u in memory.prior_units(unit, units, {"specials_after": anchor})]
+        unit = next(u for u in units if (u.season, u.episode) == (season, episode))
+        return [unit_label(u) for u in memory.prior_units(unit, units, Series(id=1, key="s", specials_after=anchor))]
 
     def test_story_order_is_season_then_episode_and_never_includes_later_units(self):
         self.assertEqual(self.prior(1, 1), [])
@@ -548,17 +557,18 @@ class CatalogTests(unittest.TestCase):
         http = Http()
         episodes = list_series_episodes(http, "http://bazarr", "key", "7", "en")
         self.assertEqual(http.params, {"seriesid[]": "7"})
-        self.assertEqual([(e["season"], e["episode"], e["source_path"]) for e in episodes],
+        self.assertEqual([(e.season, e.episode, e.source_path) for e in episodes],
                          [(1, 1, "/m/S01E01.en.srt"), (1, 2, "")])
-        self.assertEqual(episodes[0]["bazarr_id"], "11")
+        self.assertEqual(episodes[0].bazarr_id, "11")
 
     def test_a_catalogue_failure_never_stops_a_translation(self):
         env = all_sources(self)
 
-        def broken(series, code):
-            raise OSError("bazarr is down")
+        class Down:
+            def series_episodes(self, series_id, source_code):
+                raise OSError("bazarr is down")
 
-        env.memory.catalog = broken
+        env.memory.media = Down()
         self.assertEqual(env.translate(2), "translated")
 
 

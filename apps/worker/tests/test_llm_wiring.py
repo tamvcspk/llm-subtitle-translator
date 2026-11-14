@@ -35,6 +35,17 @@ class BuildProviderTests(unittest.TestCase):
         with self.assertRaises(llm.MissingApiKey):
             llm.build_provider({}, "gemini-3.5-flash")
 
+    def test_the_missing_key_error_belongs_to_the_core_port(self):
+        from gst_worker.ports import MissingApiKey
+
+        self.assertIs(llm.MissingApiKey, MissingApiKey)
+        with self.assertRaises(MissingApiKey):
+            llm.build_provider({"gemini_api_key": "  "}, "m", deadline=1.0, on_call=lambda log: None)
+
+    def test_the_adapter_takes_the_port_s_keyword_arguments(self):
+        provider = llm.build_provider({"gemini_api_key": "k"}, "m", deadline=123.0, on_call=lambda log: None)
+        self.assertEqual(provider.deadline, 123.0)
+
     def test_one_key_gives_one_limited_provider(self):
         provider = llm.build_provider({"gemini_api_key": "k1"}, "gemini-3.5-flash")
         self.assertIsInstance(provider, ResilientProvider)

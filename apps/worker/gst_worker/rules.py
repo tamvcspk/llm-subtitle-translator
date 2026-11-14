@@ -16,6 +16,8 @@ from typing import Any
 from subcore import glossary as g
 from subcore import srt
 
+from .ports import Correction
+
 RULE_KINDS = ("term", "address", "note")
 
 
@@ -68,7 +70,7 @@ def build_rules(
     *,
     season: int | None,
     episode: int | None,
-    corrections: list[dict[str, Any]] | None = None,
+    corrections: list[Correction] | None = None,
     cues: list[srt.Cue] | None = None,
 ) -> UnitRules:
     """Merge the glossary file with an episode's active corrections.
@@ -85,7 +87,7 @@ def build_rules(
     fingerprint: list[Any] = []
 
     for correction in corrections or []:
-        kind, payload = correction["kind"], correction["payload"]
+        kind, payload = correction.kind, correction.payload
         if kind == "term":
             term = _term(payload)
             terms = [t for t in terms if t.source.casefold() != term.source.casefold()] + [term]

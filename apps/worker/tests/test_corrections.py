@@ -14,9 +14,12 @@ from subcore import srt
 from subcore.providers import FakeProvider
 
 from gst_worker import library_api
+from gst_worker.bazarr import BazarrMedia
 from gst_worker import queue as gst_queue
 from gst_worker.glossaries import GlossaryFiles
+from gst_worker.queue import FileJobQueue
 from gst_worker.library import Library, identify_job
+from gst_worker.ports import Correction
 from gst_worker.store import _MIGRATIONS, Store
 from gst_worker.translation_attempt import TranslationAttempt
 from gst_worker.units import UnitService, parse_time_ms
@@ -61,7 +64,7 @@ class Env:
         self.queue_dir = str(self.root / "queue")
         self.refreshed = []
         self.service = UnitService(
-            self.library, self.glossaries, self.versions, self.queue_dir, refresh_bazarr=self.refreshed.append
+            self.library, self.glossaries, self.versions, FileJobQueue(self.queue_dir), refresh_bazarr=self.refreshed.append
         )
 
     def handler(self, req, call_no):
@@ -87,7 +90,7 @@ class Env:
 
     def unit(self, episode):
         series = self.store.list_series()[0]
-        return next(u for u in self.store.list_units(series["id"]) if u["episode"] == episode)["id"]
+        return next(u for u in self.store.list_units(series.id) if u.episode == episode).id
 
     def output(self, episode):
         return str(self.media / f"Show.S01E{episode:02d}.vi.srt")
@@ -158,17 +161,17 @@ class RegistrationTests(unittest.TestCase):
         env = Env(self)
         env.translate(1)
         series = env.store.list_series()
-        self.assertEqual([(s["key"], s["title"], s["bazarr_id"]) for s in series], [("bazarr-7", "Show", "7")])
+        self.assertEqual([(s.key, s.title, s.bazarr_id) for s in series], [("bazarr-7", "Show", "7")])
         unit = env.store.get_unit(env.unit(1))
-        self.assertEqual((unit["season"], unit["episode"], unit["bazarr_id"]), (1, 1, "101"))
-        self.assertEqual(env.store.outputs(unit["id"])[0]["output_path"], env.output(1))
-        self.assertEqual(env.store.current_version(env.output(1)).unit_id, unit["id"])
+        self.assertEqual((unit.season, unit.episode, unit.bazarr_id), (1, 1, "101"))
+        self.assertEqual(env.store.outputs(unit.id)[0].output_path, env.output(1))
+        self.assertEqual(env.store.current_version(env.output(1)).unit_id, unit.id)
 
     def test_a_skipped_foreign_target_is_still_listed_without_being_touched(self):
         env = Env(self)
         Path(env.output(1)).write_text("foreign", encoding="utf-8")
         self.assertEqual(env.translate(1), "skipped-existing-output")
-        listed = env.library.series_units(env.store.list_series()[0]["id"])["units"][0]
+        listed = env.library.series_units(env.store.list_series()[0].id)["units"][0]
         self.assertEqual(listed["targets"][0]["status"], "untranslated")
         self.assertTrue(listed["targets"][0]["modified_outside"])
         self.assertEqual(Path(env.output(1)).read_text(encoding="utf-8"), "foreign")
@@ -227,7 +230,7 @@ class Criterion7Tests(unittest.TestCase):
         env = Env(self)
         for episode in (2, 3, 4):
             env.translate(episode)
-        series_id = env.store.list_series()[0]["id"]
+        series_id = env.store.list_series()[0].id
         self.assertEqual(env.library.series_list()[0]["counts"]["current"], 3)
 
         result = env.service.add_correction(env.unit(3), {
@@ -505,7 +508,7 @@ class GlossaryPageTests(unittest.TestCase):
         self.env = Env(self)
         for episode in (1, 2):
             self.env.translate(episode)
-        self.series = self.env.store.list_series()[0]["id"]
+        self.series = self.env.store.list_series()[0].id
 
     def test_save_validates_backs_up_and_reports_how_many_translations_go_stale(self):
         first = "terms:\n  - {source: Kyber crystal, target: tinh thể Kyber, locked: true}\n"
@@ -551,7 +554,7 @@ class ApiRoutingTests(unittest.TestCase):
         env = Env(self)
         env.translate(1)
         unit = env.unit(1)
-        series = env.store.list_series()[0]["id"]
+        series = env.store.list_series()[0].id
 
         status, payload = self.call(env, "GET", "/api/library/series")
         self.assertEqual((status, payload["items"][0]["title"]), (200, "Show"))
@@ -571,7 +574,7 @@ class ApiRoutingTests(unittest.TestCase):
         env = Env(self)
         env.translate(1)
         unit = env.unit(1)
-        series = env.store.list_series()[0]["id"]
+        series = env.store.list_series()[0].id
 
         status, payload = self.call(env, "POST", f"/api/units/{unit}/corrections", body={
             "lang": "vi", "kind": "cue_edit", "payload": {"cue": 2, "text": "hai"}})
@@ -603,7 +606,9 @@ class RulesTests(unittest.TestCase):
 
         glossary = g.loads("address_rules:\n  - {a: Alice, b: Bob, a_to_b: 'tôi–anh', from: S01E01}\n"
                            "  - {a: Carol, b: Dan, a_to_b: 'chị–em'}\n")
-        correction = {"kind": "address", "payload": {"a": "Bob", "b": "Alice", "a_to_b": "anh–em", "from_cue": 6}}
+        correction = Correction(
+            1, 1, "vi", "address", {"a": "Bob", "b": "Alice", "a_to_b": "anh–em", "from_cue": 6}
+        )
 
         rules = build_rules(glossary, season=1, episode=2, corrections=[correction])
 
@@ -611,7 +616,7 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(shown, [("Alice", "tôi–anh", None, 6), ("Carol", "chị–em", None, None), ("Bob", "anh–em", 6, None)])
         whole_episode = build_rules(
             glossary, season=1, episode=2,
-            corrections=[{"kind": "address", "payload": {"a": "Bob", "b": "Alice", "a_to_b": "anh–em"}}],
+            corrections=[Correction(2, 1, "vi", "address", {"a": "Bob", "b": "Alice", "a_to_b": "anh–em"})],
         )
         self.assertEqual([(r.rule.a, r.from_cue) for r in whole_episode.active_rules], [("Carol", None), ("Bob", None)])
 
@@ -621,9 +626,9 @@ class RulesTests(unittest.TestCase):
 
         plain = build_rules(g.Glossary(), season=1, episode=1)
         with_edit = build_rules(g.Glossary(), season=1, episode=1,
-                                corrections=[{"kind": "cue_edit", "payload": {"cue": 1, "text": "x"}}])
+                                corrections=[Correction(1, 1, "vi", "cue_edit", {"cue": 1, "text": "x"})])
         with_note = build_rules(g.Glossary(), season=1, episode=1,
-                                corrections=[{"kind": "note", "payload": {"text": "x"}}])
+                                corrections=[Correction(2, 1, "vi", "note", {"text": "x"})])
         self.assertEqual(plain.hash, with_edit.hash)
         self.assertNotEqual(plain.hash, with_note.hash)
         self.assertEqual(with_edit.locked, {1: "x"})
@@ -644,7 +649,7 @@ class HttpRoutingTests(unittest.TestCase):
         env = Env(self)
         env.translate(1)
         unit = env.unit(1)
-        series = env.store.list_series()[0]["id"]
+        series = env.store.list_series()[0].id
         server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
         server.ctx = {"units": env.service, "static_dir": str(env.root), "queue_dir": env.queue_dir}
         server.auth = ConsoleAuth.from_env({"CONSOLE_USER": "u", "CONSOLE_PASSWORD": "p"})
@@ -681,6 +686,9 @@ class HttpRoutingTests(unittest.TestCase):
         self.assertEqual(request("GET", "/api/units/999")[0], 404)
 
 
+BAZARR = {"bazarr_url": "http://bazarr", "bazarr_api_key": "key"}
+
+
 class WorkerWiringTests(unittest.TestCase):
     def test_process_job_enriches_the_identity_from_bazarr_when_it_can(self):
         from gst_worker.library import enrich_job_identity
@@ -692,7 +700,7 @@ class WorkerWiringTests(unittest.TestCase):
                 return {"data": [{"season": 1, "episode": 1, "title": "Pilot"}]}
 
         job = {"media_type": "series", "series_id": "7", "media_id": "9", "video_path": "/m/odd name.mkv"}
-        enrich_job_identity(job, Bazarr(), "http://bazarr", "key")
+        enrich_job_identity(job, BazarrMedia(Bazarr(), lambda: BAZARR))
         ident = identify_job(job)
         self.assertEqual((ident.series_key, ident.series_title, ident.season, ident.episode, ident.title),
                          ("tvdb-70327", "Malcolm in the Middle", 1, 1, "Pilot"))
@@ -705,7 +713,7 @@ class WorkerWiringTests(unittest.TestCase):
                 raise OSError("connection refused")
 
         job = {"media_type": "series", "series_id": "7", "media_id": "9", "video_path": "/m/Show.S01E02.mkv"}
-        enrich_job_identity(job, Down(), "http://bazarr", "key")
+        enrich_job_identity(job, BazarrMedia(Down(), lambda: BAZARR))
         self.assertEqual(identify_job(job).episode, 2)
 
 

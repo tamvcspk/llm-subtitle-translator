@@ -22,10 +22,8 @@ from subcore.providers import ProviderError
 from .config import DEFAULT_MODEL
 from .glossaries import GlossaryFiles
 from .library import Library
-from .ports import CURRENT
-from .llm import MissingApiKey, build_provider
+from .ports import CURRENT, Correction, JobQueue, MissingApiKey, Output, ProviderFactory, Unit, UsageLog
 from .memory import MEMORY_MODES, StoryMemory, parse_anchor, unit_label
-from .queue import enqueue_retranslation
 from .rules import correction_position
 from .translation import redact
 from .versions import CUE_EDIT, TranslationVersions
@@ -60,66 +58,77 @@ def _text(payload: dict[str, Any], key: str, what: str) -> str:
     return value.strip()
 
 
+def _correction_json(c: Correction) -> dict[str, Any]:
+    """A correction as the HTTP API shows it."""
+    return {
+        "id": c.id, "unit_id": c.unit_id, "target_lang": c.target_lang, "kind": c.kind,
+        "created_at": c.created_at, "active": c.active, "payload": c.payload,
+    }
+
+
 class UnitService:
     def __init__(
         self,
         library: Library,
         glossaries: GlossaryFiles,
         versions: TranslationVersions,
-        queue_dir: str,
+        jobs: JobQueue,
         refresh_bazarr: Callable[[dict[str, Any]], None] | None = None,
         memory: StoryMemory | None = None,
         settings_source: Callable[[], dict[str, Any]] | None = None,
-        provider_factory: Callable[..., Any] = build_provider,
+        provider_factory: ProviderFactory | None = None,
+        usage: UsageLog | None = None,
     ) -> None:
         self.library = library
-        self.store = library.store
+        self.catalog = library.catalog
+        self.version_repo = versions.store
+        self.usage = usage
         self.glossaries = glossaries
         self.versions = versions
-        self.queue_dir = queue_dir
+        self.jobs = jobs
         self._refresh = refresh_bazarr
         self.memory = memory
         self._settings = settings_source or (lambda: {})
         self._provider_factory = provider_factory
 
     # -- lookups -----------------------------------------------------------------
-    def unit(self, unit_id: int) -> dict[str, Any]:
-        unit = self.store.get_unit(unit_id)
+    def unit(self, unit_id: int) -> Unit:
+        unit = self.catalog.get_unit(unit_id)
         if unit is None:
             raise LookupError(f"no unit {unit_id}")
         return unit
 
-    def output(self, unit: dict[str, Any], lang: str | None) -> dict[str, Any]:
-        outputs = self.store.outputs(int(unit["id"]))
+    def output(self, unit: Unit, lang: str | None) -> Output:
+        outputs = self.catalog.outputs(unit.id)
         if lang:
             for out in outputs:
-                if out["target_lang"] == lang:
+                if out.target_lang == lang:
                     return out
             raise LookupError(f"this unit has no '{lang}' target")
         if len(outputs) == 1:
             return outputs[0]
         raise ValueError("lang is required: this unit has " + ("no targets" if not outputs else "several targets"))
 
-    def _source(self, unit: dict[str, Any]) -> list[srt.Cue]:
+    def _source(self, unit: Unit) -> list[srt.Cue]:
         return self.library.source_cues(unit)
 
-    def _target(self, out: dict[str, Any]) -> list[srt.Cue]:
+    def _target(self, out: Output) -> list[srt.Cue]:
         try:
-            return srt.parse_file(out["output_path"])
+            return srt.parse_file(out.output_path)
         except OSError:
             raise LookupError("the target subtitle is not on disk") from None
         except srt.SrtError as exc:
             raise ValueError(f"the target subtitle cannot be read: {exc}") from None
 
-    def _bazarr_refresh(self, unit: dict[str, Any]) -> None:
+    def _bazarr_refresh(self, unit: Unit) -> None:
         if self._refresh is None:
             return
-        series = self.store.get_series(int(unit["series_id"])) if unit["series_id"] is not None else None
+        series = self.catalog.get_series(unit.series_id) if unit.series_id is not None else None
         try:
             self._refresh({
-                "media_type": unit["media_type"] or ("series" if series else "movie"),
-                "series_id": series["bazarr_id"] if series else "",
-                "media_id": unit["bazarr_id"],
+                "media_type": unit.media_type or ("series" if series else "movie"),
+                "series_id": series.bazarr_id if series else "",
+                "media_id": unit.bazarr_id,
             })
         except Exception as exc:  # noqa: BLE001 - the file is already published; Bazarr rescans on its own schedule
             logging.warning("Bazarr scan after a subtitle change failed (%s)", type(exc).__name__)
@@ -128,11 +137,11 @@ class UnitService:
     def detail(self, unit_id: int) -> dict[str, Any]:
         unit = self.unit(unit_id)
         summary = self.library.unit_summary(unit)
-        series = self.store.get_series(int(unit["series_id"])) if unit["series_id"] is not None else None
+        series = self.catalog.get_series(unit.series_id) if unit.series_id is not None else None
         return {
             **summary,
-            "series": {"id": series["id"], "title": series["title"]} if series else None,
-            "source_exists": bool(unit["source_path"]) and Path(unit["source_path"]).is_file(),
+            "series": {"id": series.id, "title": series.title} if series else None,
+            "source_exists": bool(unit.source_path) and Path(unit.source_path).is_file(),
             "memory_applicable": series is not None and self.memory is not None,
         }
 
@@ -155,7 +164,7 @@ class UnitService:
         except LookupError:
             target = []
         locked = {
-            int(c["payload"]["cue"]) for c in self.store.corrections(unit_id, out["target_lang"]) if c["kind"] == "cue_edit"
+            int(c.payload["cue"]) for c in self.catalog.corrections(unit_id, out.target_lang) if c.kind == "cue_edit"
         }
         rows = [
             {
@@ -181,7 +190,7 @@ class UnitService:
             offset = max(0, focus - 1 - limit // 2)
         offset = max(0, int(offset))
         return {
-            "lang": out["target_lang"], "total": total, "offset": offset, "focus": focus,
+            "lang": out.target_lang, "total": total, "offset": offset, "focus": focus,
             "aligned": len(target) == len(source), "has_target": bool(target),
             "rows": rows[offset : offset + limit],
         }
@@ -190,19 +199,19 @@ class UnitService:
     def list_corrections(self, unit_id: int, lang: str | None = None) -> list[dict[str, Any]]:
         unit = self.unit(unit_id)
         out = self.output(unit, lang)
-        return self.store.corrections(unit_id, out["target_lang"])
+        return [_correction_json(c) for c in self.catalog.corrections(unit_id, out.target_lang)]
 
     def remove_correction(self, unit_id: int, correction_id: int) -> bool:
-        correction = self.store.get_correction(correction_id)
-        if correction is None or correction["unit_id"] != unit_id:
+        correction = self.catalog.get_correction(correction_id)
+        if correction is None or correction.unit_id != unit_id:
             raise LookupError(f"no correction {correction_id} for this unit")
-        return self.store.deactivate_correction(correction_id)
+        return self.catalog.deactivate_correction(correction_id)
 
     def add_correction(self, unit_id: int, body: dict[str, Any]) -> dict[str, Any]:
         """Record a correction. ``cue_edit`` publishes a new version at once; the other kinds act on the next retranslation."""
         unit = self.unit(unit_id)
         out = self.output(unit, body.get("lang"))
-        lang = out["target_lang"]
+        lang = out.target_lang
         kind = str(body.get("kind") or "")
         scope = str(body.get("scope") or "episode")
         payload = body.get("payload")
@@ -220,7 +229,7 @@ class UnitService:
             raise ValueError("a note applies to one episode; use a term or an address rule for a wider scope")
         clean = self._validate_payload(kind, payload)
         if scope == "episode":
-            correction_id = self.store.add_correction(unit_id, lang, kind, clean)
+            correction_id = self.catalog.add_correction(unit_id, lang, kind, clean)
             return {"ok": True, "scope": scope, "ids": [correction_id]}
         return self._glossary_correction(unit, lang, kind, scope, clean)
 
@@ -248,11 +257,11 @@ class UnitService:
             return clean
         return {"text": _text(payload, "text", what)}
 
-    def _glossary_correction(self, unit, lang: str, kind: str, scope: str, clean: dict[str, Any]) -> dict[str, Any]:
+    def _glossary_correction(self, unit: Unit, lang: str, kind: str, scope: str, clean: dict[str, Any]) -> dict[str, Any]:
         """``forward``/``series`` corrections live in the glossary YAML (FR-11.2.3)."""
         gkind, key = self.library.owner(unit)
         glossary = self.glossaries.load(gkind, key, lang)
-        forward = scope == "forward" and unit["series_id"] is not None
+        forward = scope == "forward" and unit.series_id is not None
         cue = None
         if kind == "address" and clean.get("from_cue") and forward:
             source = self._source(unit)
@@ -260,7 +269,7 @@ class UnitService:
             if not 1 <= ordinal <= len(source):
                 raise ValueError(f"from_cue must be between 1 and {len(source)}")
             cue = source[ordinal - 1]
-        start = correction_position(unit["season"], unit["episode"], cue) if forward else None
+        start = correction_position(unit.season, unit.episode, cue) if forward else None
         if kind == "term":
             glossary = glossary.with_term(g.Term(
                 source=clean["source"], target=clean["target"], aliases=tuple(clean.get("aliases", ())),
@@ -272,18 +281,18 @@ class UnitService:
                 start=start, note=clean.get("note", ""),
             ))
         impact = None
-        if unit["series_id"] is not None:
-            impact = self.library.glossary_impact(int(unit["series_id"]), lang, glossary)
+        if unit.series_id is not None:
+            impact = self.library.glossary_impact(unit.series_id, lang, glossary)
         self.glossaries.save(gkind, key, lang, glossary)
         return {"ok": True, "scope": scope, "ids": [], "impact": impact,
                 "from": str(start) if start else None}
 
-    def _cue_edits(self, unit: dict[str, Any], out: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    def _cue_edits(self, unit: Unit, out: Output, payload: dict[str, Any]) -> dict[str, Any]:
         edits = payload.get("edits") if isinstance(payload.get("edits"), list) else [payload]
         source, target = self._source(unit), self._target(out)
         if len(target) != len(source):
             raise ValueError("the target has a different number of cues than the source; retranslate the episode first")
-        lang, output_path = out["target_lang"], out["output_path"]
+        lang, output_path = out.target_lang, out.output_path
         parsed: dict[int, str] = {}
         warnings: list[str] = []
         for edit in edits:
@@ -302,21 +311,21 @@ class UnitService:
                 warnings.append(f"cue {ordinal}: {problem}")
             parsed[ordinal] = text
         edited = [cue.with_text(parsed.get(n, cue.text)) for n, cue in enumerate(target, start=1)]
-        current = self.store.current_version(output_path)
+        current = self.version_repo.current_version(output_path)
         published = self.versions.publish(
             output_path, srt.serialize(edited), trigger=CUE_EDIT,
-            source_path=str(unit["source_path"]), source_sha256=current.source_sha256 if current else "",
+            source_path=unit.source_path, source_sha256=current.source_sha256 if current else "",
             target_lang=lang, context_hash=current.context_hash if current else "",
-            model=current.model if current else "", unit_id=int(unit["id"]),
+            model=current.model if current else "", unit_id=unit.id,
             glossary_hash=current.glossary_hash if current else "",
         )
         ids = []
         for ordinal, text in sorted(parsed.items()):
-            for old in self.store.corrections(int(unit["id"]), lang):
-                if old["kind"] == "cue_edit" and int(old["payload"]["cue"]) == ordinal:
-                    self.store.deactivate_correction(old["id"])
-            ids.append(self.store.add_correction(
-                int(unit["id"]), lang, "cue_edit",
+            for old in self.catalog.corrections(unit.id, lang):
+                if old.kind == "cue_edit" and int(old.payload["cue"]) == ordinal:
+                    self.catalog.deactivate_correction(old.id)
+            ids.append(self.catalog.add_correction(
+                unit.id, lang, "cue_edit",
                 {"cue": ordinal, "text": text, "source_text": source[ordinal - 1].text},
             ))
         self._bazarr_refresh(unit)
@@ -326,10 +335,10 @@ class UnitService:
     def retranslate(self, unit_id: int, body: dict[str, Any]) -> dict[str, Any]:
         unit = self.unit(unit_id)
         out = self.output(unit, body.get("lang"))
-        lang = out["target_lang"]
+        lang = out.target_lang
         source = self._source(unit)  # also proves the source is still there
         window = self._range(body.get("range"), source)
-        if window and not Path(out["output_path"]).is_file():
+        if window and not Path(out.output_path).is_file():
             raise ValueError("there is no target subtitle yet; retranslate the whole episode")
 
         created: list[int] = []
@@ -340,23 +349,23 @@ class UnitService:
 
         ids = body.get("correction_ids")
         if ids is not None:
-            valid = {c["id"] for c in self.store.corrections(unit_id, lang)}
+            valid = {c.id for c in self.catalog.corrections(unit_id, lang)}
             wanted = [int(i) for i in ids] + created
             unknown = [i for i in wanted if i not in valid]
             if unknown:
                 raise ValueError(f"unknown or inactive correction(s): {', '.join(map(str, unknown))}")
             ids = sorted(set(wanted))
 
-        series = self.store.get_series(int(unit["series_id"])) if unit["series_id"] is not None else None
-        job_id = enqueue_retranslation(self.queue_dir, {
+        series = self.catalog.get_series(unit.series_id) if unit.series_id is not None else None
+        job_id = self.jobs.enqueue_retranslation({
             "provider": "gemini-console",
-            "video_path": unit["video_path"], "subtitle_path": unit["source_path"],
-            "output_path": out["output_path"], "source_code": unit["source_code"],
-            "source_language": unit["source_language"] or unit["source_code"],
-            "target_code": lang, "target_language": out["target_language"] or lang,
-            "media_type": unit["media_type"] or ("series" if series else "movie"),
-            "series_id": series["bazarr_id"] if series else "", "media_id": unit["bazarr_id"],
-            "unit_id": unit["id"], "retranslate": {"range": window, "correction_ids": ids},
+            "video_path": unit.video_path, "subtitle_path": unit.source_path,
+            "output_path": out.output_path, "source_code": unit.source_code,
+            "source_language": unit.source_language or unit.source_code,
+            "target_code": lang, "target_language": out.target_language or lang,
+            "media_type": unit.media_type or ("series" if series else "movie"),
+            "series_id": series.bazarr_id if series else "", "media_id": unit.bazarr_id,
+            "unit_id": unit.id, "retranslate": {"range": window, "correction_ids": ids},
         })
         return {"ok": True, "job_id": job_id, "range": window, "correction_ids": ids}
 
@@ -392,10 +401,10 @@ class UnitService:
     def list_versions(self, unit_id: int, lang: str | None = None) -> dict[str, Any]:
         unit = self.unit(unit_id)
         out = self.output(unit, lang)
-        rows = self.store.versions(out["output_path"])
-        on_disk = Path(out["output_path"]).is_file()
+        rows = self.version_repo.versions(out.output_path)
+        on_disk = Path(out.output_path).is_file()
         return {
-            "lang": out["target_lang"],
+            "lang": out.target_lang,
             "modified_outside": self.library.target_info(unit, out)["modified_outside"],
             "versions": [
                 {
@@ -408,8 +417,8 @@ class UnitService:
             ],
         }
 
-    def _version_cues(self, out: dict[str, Any], version: int) -> list[srt.Cue]:
-        row = self.store.get_version(out["output_path"], version)
+    def _version_cues(self, out: Output, version: int) -> list[srt.Cue]:
+        row = self.version_repo.get_version(out.output_path, version)
         if row is None:
             raise LookupError(f"no version {version}")
         try:
@@ -422,7 +431,7 @@ class UnitService:
         unit = self.unit(unit_id)
         out = self.output(unit, lang)
         if against is None:
-            earlier = [r.version for r in self.store.versions(out["output_path"]) if r.version < version]
+            earlier = [r.version for r in self.version_repo.versions(out.output_path) if r.version < version]
             if not earlier:
                 raise ValueError(f"version {version} has no earlier version to compare with")
             against = earlier[-1]
@@ -438,7 +447,7 @@ class UnitService:
             for op, a0, a1, b0, b1 in matcher.get_opcodes() if op != "equal"
         ]
         return {
-            "version": version, "against": against, "lang": out["target_lang"],
+            "version": version, "against": against, "lang": out.target_lang,
             "cues_before": len(old), "cues_after": len(new), "changes": changes,
             "changed_cues": sum(max(len(c["before"]), len(c["after"])) for c in changes),
         }
@@ -446,23 +455,23 @@ class UnitService:
     def revert(self, unit_id: int, version: int, lang: str | None = None) -> dict[str, Any]:
         unit = self.unit(unit_id)
         out = self.output(unit, lang)
-        row = self.store.get_version(out["output_path"], version)
+        row = self.version_repo.get_version(out.output_path, version)
         if row is None:
             raise LookupError(f"no version {version}")
-        published = self.versions.revert(out["output_path"], version)
+        published = self.versions.revert(out.output_path, version)
         # Cue edits that the restored text no longer contains are undone, so they stop locking their cues.
         restored = self._target(out)
-        for correction in self.store.corrections(int(unit["id"]), out["target_lang"]):
-            if correction["kind"] != "cue_edit":
+        for correction in self.catalog.corrections(unit.id, out.target_lang):
+            if correction.kind != "cue_edit":
                 continue
-            ordinal = int(correction["payload"]["cue"])
-            if not 1 <= ordinal <= len(restored) or restored[ordinal - 1].text != correction["payload"]["text"]:
-                self.store.deactivate_correction(correction["id"])
+            ordinal = int(correction.payload["cue"])
+            if not 1 <= ordinal <= len(restored) or restored[ordinal - 1].text != correction.payload["text"]:
+                self.catalog.deactivate_correction(correction.id)
         self._bazarr_refresh(unit)
         return {"ok": True, "version": published.version, "restored": version}
 
     # -- story memory (P4) ----------------------------------------------------------------
-    def _target_or_none(self, unit: dict[str, Any], lang: str | None) -> dict[str, Any] | None:
+    def _target_or_none(self, unit: Unit, lang: str | None) -> Output | None:
         try:
             return self.output(unit, lang)
         except (LookupError, ValueError):
@@ -471,15 +480,15 @@ class UnitService:
     def context(self, unit_id: int, lang: str | None = None) -> dict[str, Any]:
         """What the story memory gave this translation, and what it would give now (FR-5.2, ADR-7 Context tab)."""
         unit = self.unit(unit_id)
-        if unit["series_id"] is None or self.memory is None:
+        if unit.series_id is None or self.memory is None:
             return {"applicable": False, "enabled": False}
-        series = self.store.get_series(int(unit["series_id"]))
+        series = self.catalog.get_series(unit.series_id)
         out = self._target_or_none(unit, lang)
-        current = self.store.current_version(out["output_path"]) if out else None
+        current = self.version_repo.current_version(out.output_path) if out else None
         now = self.memory.preview(unit, self._settings())
         used = None
         if current and current.memory_hash:
-            sections = self.store.get_snapshot(current.memory_hash)
+            sections = self.memory.snapshot(current.memory_hash)
             used = {
                 "version": current.version,
                 "complete": current.context_complete,
@@ -490,31 +499,31 @@ class UnitService:
         return {
             "applicable": True,
             "enabled": self.memory.enabled_for(unit, self._settings()),
-            "policy": series["memory"],
-            "specials_after": series["specials_after"],
+            "policy": series.memory,
+            "specials_after": series.specials_after,
             "label": unit_label(unit),
-            "special": (unit["season"] or 0) == 0,
-            "lang": out["target_lang"] if out else None,
+            "special": (unit.season or 0) == 0,
+            "lang": out.target_lang if out else None,
             "used": used,
             "now": now,
         }
 
     def series_memory(self, series_id: int) -> dict[str, Any]:
-        series = self.store.get_series(series_id)
+        series = self.catalog.get_series(series_id)
         if series is None or self.memory is None:
             raise LookupError(f"no series {series_id}")
         settings = self._settings()
         return {
-            "series": {"id": series["id"], "title": series["title"]},
-            "policy": series["memory"],
-            "specials_after": series["specials_after"],
+            "series": {"id": series.id, "title": series.title},
+            "policy": series.memory,
+            "specials_after": series.specials_after,
             "global_enabled": self.memory.options(settings).enabled,
             "units": self.memory.coverage(series_id),
         }
 
     def set_series_memory(self, series_id: int, body: dict[str, Any]) -> dict[str, Any]:
         """Switch memory on or off for one series, or let it follow the global setting; anchor its specials."""
-        series = self.store.get_series(series_id)
+        series = self.catalog.get_series(series_id)
         if series is None or self.memory is None:
             raise LookupError(f"no series {series_id}")
         policy = body.get("policy")
@@ -525,13 +534,13 @@ class UnitService:
             anchor = str(anchor).strip().upper()
             if anchor and parse_anchor(anchor) is None:
                 raise ValueError("specials_after must look like S02E05")
-        self.store.set_series_memory(series_id, memory=policy, specials_after=anchor)
+        self.catalog.set_series_memory(series_id, memory=policy, specials_after=anchor)
         return self.series_memory(series_id)
 
     def refresh_context(self, unit_id: int) -> dict[str, Any]:
         """Extract facts now for this episode and the earlier ones that have a source subtitle (spends calls)."""
         unit = self.unit(unit_id)
-        if unit["series_id"] is None or self.memory is None:
+        if unit.series_id is None or self.memory is None:
             raise ValueError("story memory applies to episodes of a series only")
         settings = self._settings()
         model = str(settings.get("gst_model") or DEFAULT_MODEL)
@@ -540,12 +549,15 @@ class UnitService:
         def provider_for(task: str):
             name = model if task == "translate" else (str(settings.get("memory_model") or "").strip() or model)
             if name not in providers:
+                if self._provider_factory is None:
+                    raise RuntimeError("no provider factory is wired into the unit service")
                 def record(log) -> None:
-                    self.store.record_llm_call(
-                        "console-context", provider=log.provider, model=log.model, task=log.task,
-                        tokens_in=log.tokens_in, tokens_out=log.tokens_out, latency_ms=log.latency_ms,
-                        outcome=log.outcome,
-                    )
+                    if self.usage is not None:
+                        self.usage.record_llm_call(
+                            "console-context", provider=log.provider, model=log.model, task=log.task,
+                            tokens_in=log.tokens_in, tokens_out=log.tokens_out, latency_ms=log.latency_ms,
+                            outcome=log.outcome,
+                        )
                 providers[name] = self._provider_factory(settings, name, deadline=time.monotonic() + 600, on_call=record)
             return providers[name]
 
@@ -559,19 +571,19 @@ class UnitService:
 
     # -- glossary -------------------------------------------------------------------------
     def glossary(self, series_id: int, lang: str) -> dict[str, Any]:
-        series = self.store.get_series(series_id)
+        series = self.catalog.get_series(series_id)
         if series is None:
             raise LookupError(f"no series {series_id}")
-        text = self.glossaries.read_text("series", series["key"], lang)
+        text = self.glossaries.read_text("series", series.key, lang)
         impact = self.library.glossary_impact(series_id, lang, g.loads(text) if text.strip() else g.Glossary())
         return {"lang": lang, "exists": bool(text.strip()), "yaml": text, "stale_units": impact["stale_now"]}
 
     def save_glossary(self, series_id: int, lang: str, text: str, *, dry_run: bool = False) -> dict[str, Any]:
-        series = self.store.get_series(series_id)
+        series = self.catalog.get_series(series_id)
         if series is None:
             raise LookupError(f"no series {series_id}")
         parsed = g.loads(text) if text.strip() else g.Glossary()  # GlossaryError is a ValueError
         impact = self.library.glossary_impact(series_id, lang, parsed)
         if not dry_run:
-            self.glossaries.write("series", series["key"], lang, text)
+            self.glossaries.write("series", series.key, lang, text)
         return {"ok": True, "saved": not dry_run, **impact}

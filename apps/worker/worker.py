@@ -26,7 +26,7 @@ from gst_worker import auth as console_auth
 from gst_worker.auth import ConsoleAuth
 from gst_worker.bazarr import (
     BazarrIntegration,
-    list_series_episodes,
+    BazarrMedia,
     list_wanted_items,
     read_bazarr_api_key,
     refresh_bazarr,
@@ -51,6 +51,7 @@ from gst_worker.gemini import gemini_models
 from gst_worker.logs import clear_logs, configure_logging, read_log_snapshot
 from gst_worker.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache, describe_http_error
 from gst_worker.queue import (
+    FileJobQueue,
     JobQueue,
     layer_report,
     queue_snapshot,
@@ -64,12 +65,16 @@ from gst_worker.library import Library, enrich_job_identity
 from gst_worker.memory import StoryMemory
 from gst_worker.queue_policy import configured_models
 from gst_worker.store import Store
-from gst_worker.translation_attempt import DEFAULT_ATTEMPT, TranslationAttempt
+from gst_worker.llm import build_provider
+from gst_worker.translation_attempt import TranslationAttempt
 from gst_worker.units import UnitService
 from gst_worker.versions import TranslationVersions
 from gst_worker.subtitles import scan_source_subtitles
 from gst_worker.runtime import RuntimeContext
 from gst_worker.tmdb import build_tmdb_description
+
+# Used when `process_job` is called without an explicit attempt (no history, no library): the legacy entry point.
+DEFAULT_ATTEMPT = TranslationAttempt(provider_factory=build_provider)
 
 
 def load_settings(config_path: str | None = None) -> dict[str, Any]:
@@ -177,7 +182,7 @@ def process_job(
     if status_callback:
         status_callback("Resolving movie details")
     if not job.get("unit_id"):
-        enrich_job_identity(job, http, settings["bazarr_url"], settings["bazarr_api_key"])
+        enrich_job_identity(job, BazarrMedia(http, lambda: settings))
     description = build_tmdb_description(
         job,
         bazarr=http,
@@ -219,7 +224,7 @@ class QueueWorker:
         self.cache = cache
         self.http = http
         self.attempt = attempt
-        self.console = ConsoleActions(queue_dir)
+        self.console = ConsoleActions(FileJobQueue(queue_dir))
         self.queue.recover_interrupted_jobs()
 
     def models(self) -> tuple[str, ...]:
@@ -798,20 +803,16 @@ def main() -> int:
     def live_settings() -> dict[str, Any]:
         return worker.settings  # the worker adopts new settings when they are saved
 
-    def bazarr_catalog(series: dict[str, Any], source_code: str) -> list[dict[str, Any]]:
-        current = live_settings()
-        if not current.get("bazarr_api_key") or not series["bazarr_id"]:
-            return []
-        return list_series_episodes(http, current["bazarr_url"], current["bazarr_api_key"], series["bazarr_id"], source_code)
-
-    memory = StoryMemory(store, settings_source=live_settings, catalog=bazarr_catalog)
+    memory = StoryMemory(store, store, settings_source=live_settings, media=BazarrMedia(http, live_settings))
     library = Library(store, glossaries, versions, memory=memory)
-    attempt = TranslationAttempt(versions=versions, usage=store, library=library, memory=memory)
+    attempt = TranslationAttempt(
+        versions=versions, usage=store, provider_factory=build_provider, library=library, memory=memory
+    )
     worker = QueueWorker(queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt)
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
     units = UnitService(
-        library, glossaries, versions, queue_dir, refresh_bazarr=bazarr.refresh,
-        memory=memory, settings_source=live_settings,
+        library, glossaries, versions, worker.console.jobs, refresh_bazarr=bazarr.refresh,
+        memory=memory, settings_source=live_settings, usage=store, provider_factory=build_provider,
     )
     backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path)
 

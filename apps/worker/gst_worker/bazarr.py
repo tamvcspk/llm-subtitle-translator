@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .config import enabled_source_languages, enabled_target_languages
 from .http import HTTPClient, first_data
+from .ports import EpisodeListing, MediaDetails
 
 
 def refresh_bazarr(job: dict[str, Any], http: HTTPClient, bazarr_url: str, api_key: str) -> None:
@@ -98,9 +99,33 @@ def target_still_missing(job: dict[str, Any], http: HTTPClient, bazarr_url: str,
     return str(job.get("target_code") or "").lower() in codes
 
 
+def describe_media(
+    http: HTTPClient, bazarr_url: str, api_key: str, media_type: str, series_id: str, media_id: str
+) -> MediaDetails | None:
+    """Title, season and episode of an item from Bazarr; None when there is nothing to ask about."""
+    if not api_key or not media_id:
+        return None
+    headers = {"X-API-KEY": api_key}
+    if media_type == "series" and series_id:
+        series = first_data(http.get_json(f"{bazarr_url}/api/series", params={"seriesid[]": series_id}, headers=headers))
+        episode = first_data(http.get_json(f"{bazarr_url}/api/episodes", params={"episodeid[]": media_id}, headers=headers))
+        has_numbers = episode.get("season") is not None and episode.get("episode") is not None
+        return MediaDetails(
+            series_title=str(series.get("title") or ""),
+            tvdb_id=str(series.get("tvdbId") or ""),
+            season=int(episode["season"]) if has_numbers else None,
+            episode=int(episode["episode"]) if has_numbers else None,
+            episode_title=str(episode.get("title") or ""),
+        )
+    if media_type == "movie":
+        movie = first_data(http.get_json(f"{bazarr_url}/api/movies", params={"radarrid[]": media_id}, headers=headers))
+        return MediaDetails(movie_title=str(movie.get("title") or ""))
+    return None
+
+
 def list_series_episodes(
     http: HTTPClient, bazarr_url: str, api_key: str, series_id: str, source_code: str
-) -> list[dict[str, Any]]:
+) -> list[EpisodeListing]:
     """Every episode Bazarr lists for a series, with its source subtitle if there is one (FR-8.3).
 
     ``source_path`` is empty for an episode with no external subtitle in ``source_code``; the worker treats
@@ -111,19 +136,19 @@ def list_series_episodes(
     )
     data = response.get("data") if isinstance(response, dict) else None
     wanted = [{"code": source_code, "language": source_code}] if source_code else []
-    episodes: list[dict[str, Any]] = []
+    episodes: list[EpisodeListing] = []
     for item in data if isinstance(data, list) else []:
         if not isinstance(item, dict) or item.get("season") is None or item.get("episode") is None:
             continue
         found = find_source_subtitle(item.get("subtitles"), wanted) if wanted else {}
-        episodes.append({
-            "season": int(item["season"]),
-            "episode": int(item["episode"]),
-            "title": str(item.get("title") or ""),
-            "bazarr_id": str(item.get("sonarrEpisodeId") or ""),
-            "video_path": str(item.get("path") or ""),
-            "source_path": found.get("path", ""),
-        })
+        episodes.append(EpisodeListing(
+            season=int(item["season"]),
+            episode=int(item["episode"]),
+            title=str(item.get("title") or ""),
+            bazarr_id=str(item.get("sonarrEpisodeId") or ""),
+            video_path=str(item.get("path") or ""),
+            source_path=found.get("path", ""),
+        ))
     return episodes
 
 
@@ -219,6 +244,29 @@ def list_wanted_items(
     return items
 
 
+class BazarrMedia:
+    """The :class:`~gst_worker.ports.MediaLibrary` port over Bazarr. It reads the live settings on every call,
+    so a URL or key saved in the console takes effect without a restart."""
+
+    def __init__(self, http: HTTPClient, settings_source: Callable[[], dict[str, Any]]) -> None:
+        self.http = http
+        self._settings = settings_source
+
+    def _access(self) -> tuple[str, str]:
+        settings = self._settings()
+        return str(settings.get("bazarr_url") or "").rstrip("/"), str(settings.get("bazarr_api_key") or "")
+
+    def describe(self, media_type: str, series_id: str, media_id: str) -> MediaDetails | None:
+        url, key = self._access()
+        return describe_media(self.http, url, key, media_type, series_id, media_id)
+
+    def series_episodes(self, series_id: str, source_code: str) -> list[EpisodeListing]:
+        url, key = self._access()
+        if not key or not series_id:
+            return []
+        return list_series_episodes(self.http, url, key, series_id, source_code)
+
+
 class BazarrIntegration:
     """Narrow interface for wanted discovery and subtitle refresh."""
     def __init__(self, http: HTTPClient, bazarr_url: str, api_key: str) -> None:
@@ -227,5 +275,5 @@ class BazarrIntegration:
         return list_wanted_items(self.http, self.bazarr_url, self.api_key, source_languages, targets, limit)
     def refresh(self, job: dict[str, Any]) -> None:
         refresh_bazarr(job, self.http, self.bazarr_url, self.api_key)
-    def series_episodes(self, series_id: str, source_code: str) -> list[dict[str, Any]]:
+    def series_episodes(self, series_id: str, source_code: str) -> list[EpisodeListing]:
         return list_series_episodes(self.http, self.bazarr_url, self.api_key, series_id, source_code)

@@ -36,13 +36,6 @@ FORBIDDEN_EXTERNAL = (
 
 # (core module, imported module) -> the P0d step that removes it. Only ever delete entries.
 KNOWN_VIOLATIONS = {
-    ("console", "gst_worker.queue"): "JobQueue port + use case layer",
-    ("library", "gst_worker.store"): "CatalogRepo",
-    ("library", "gst_worker.http"): "MediaLibrary port (lazy import of first_data)",
-    ("memory", "gst_worker.store"): "MemoryRepo",
-    ("translation_attempt", "gst_worker.llm"): "ProviderFactory port",
-    ("units", "gst_worker.llm"): "ProviderFactory port",
-    ("units", "gst_worker.queue"): "JobQueue port",
 }
 
 

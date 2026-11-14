@@ -16,12 +16,10 @@ from subcore.providers import (
     ResilientProvider,
 )
 
+from .ports import MissingApiKey  # noqa: F401 - defined by the core; re-exported for callers of this module
+
 # Free-tier default; paid projects set LLM_RPM=0 (unlimited) or their own number.
 FREE_TIER_RPM = 10
-
-
-class MissingApiKey(RuntimeError):
-    """No Gemini API key is configured."""
 
 
 def _int(value: Any, default: int) -> int:

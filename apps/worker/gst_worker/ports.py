@@ -11,11 +11,16 @@ While ``Store`` still implements several ports at once, a port's method names ca
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from subcore.memory import Facts
+from subcore.providers import CallLog, Provider
+
+
+class MissingApiKey(RuntimeError):
+    """No provider API key is configured."""
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,65 @@ class StoredFacts:
     tokens_in: int
     tokens_out: int
     created_at: float
+
+
+@dataclass(frozen=True)
+class Series:
+    """A TV series the worker has met. ``memory`` is '' (follow the global setting), 'on' or 'off';
+    ``specials_after`` is an ``S02E05`` anchor for season 0; ``stale_policy`` is flag | ignore."""
+
+    id: int
+    key: str
+    title: str = ""
+    bazarr_id: str = ""
+    stale_policy: str = "flag"
+    memory: str = ""
+    specials_after: str = ""
+    created_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class Unit:
+    """One episode (``series_id``, ``season``, ``episode``) or one movie (``movie_key``) (FR-10)."""
+
+    id: int
+    series_id: int | None = None
+    movie_key: str | None = None
+    season: int | None = None
+    episode: int | None = None
+    title: str = ""
+    media_type: str = ""
+    bazarr_id: str = ""
+    video_path: str = ""
+    source_path: str = ""
+    source_code: str = ""
+    source_language: str = ""
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class Output:
+    """The target subtitle file of a unit in one language."""
+
+    unit_id: int
+    target_lang: str
+    output_path: str
+    target_language: str = ""
+
+
+@dataclass(frozen=True)
+class Correction:
+    """An episode-scope correction (FR-11.2): kind is term | address | note | cue_edit; ``payload`` is
+    the kind's own fields. ``active`` is False once it was removed or superseded."""
+
+    id: int
+    unit_id: int
+    target_lang: str
+    kind: str
+    payload: dict[str, Any]
+    created_at: float = 0.0
+    active: bool = True
 
 
 @runtime_checkable
@@ -218,3 +282,140 @@ class MemoryRepo(Protocol):
 
     def get_snapshot(self, memory_hash: str) -> list[tuple[str, str]] | None:
         """The sections kept for a fingerprint, or None."""
+
+
+@runtime_checkable
+class CatalogRepo(Protocol):
+    """The library: series, units (episodes and movies), their target files and episode corrections."""
+
+    def upsert_series(self, key: str, *, title: str = "", bazarr_id: str = "") -> int:
+        """Id of the series with this key, created if new. A non-blank ``title``/``bazarr_id`` refreshes it."""
+
+    def get_series(self, series_id: int) -> Series | None:
+        """One series by id."""
+
+    def list_series(self) -> list[Series]:
+        """All series by title (case-insensitive), then id."""
+
+    def set_series_memory(self, series_id: int, *, memory: str | None = None, specials_after: str | None = None) -> None:
+        """Set the story-memory policy and/or the season-0 anchor; a field left as None stays as it is."""
+
+    def upsert_unit(
+        self,
+        *,
+        series_id: int | None = None,
+        movie_key: str | None = None,
+        season: int | None = None,
+        episode: int | None = None,
+        title: str = "",
+        media_type: str = "",
+        bazarr_id: str = "",
+        video_path: str = "",
+        source_path: str = "",
+        source_code: str = "",
+        source_language: str = "",
+    ) -> int:
+        """Id of the unit, created if new. Identity is (series, season, episode) or the movie key (exactly one
+        of ``series_id`` and ``movie_key``). A blank field never erases a known value."""
+
+    def get_unit(self, unit_id: int) -> Unit | None:
+        """One unit by id."""
+
+    def find_unit(self, series_id: int, season: int, episode: int) -> Unit | None:
+        """The episode of a series, if known."""
+
+    def list_units(self, series_id: int | None = None, *, movies: bool = False) -> list[Unit]:
+        """Episodes of a series by season and episode, or (``movies``) all movies by title."""
+
+    def set_output(self, unit_id: int, target_lang: str, output_path: str, target_language: str = "") -> None:
+        """Record a unit's target file for a language; a blank ``target_language`` keeps the known one."""
+
+    def outputs(self, unit_id: int) -> list[Output]:
+        """The target files of a unit, by language."""
+
+    def add_correction(self, unit_id: int, target_lang: str, kind: str, payload: dict[str, Any]) -> int:
+        """Store an active correction; returns its id."""
+
+    def get_correction(self, correction_id: int) -> Correction | None:
+        """One correction by id, active or not."""
+
+    def corrections(self, unit_id: int, target_lang: str, *, active_only: bool = True) -> list[Correction]:
+        """Corrections of a unit in a language, oldest first."""
+
+    def deactivate_correction(self, correction_id: int) -> bool:
+        """Turn an active correction off; False when it was not active (or does not exist)."""
+
+
+class ProviderFactory(Protocol):
+    """Builds the model provider for one attempt from the worker settings (FR-9)."""
+
+    def __call__(
+        self,
+        settings: dict[str, Any],
+        model: str,
+        *,
+        deadline: float | None = None,
+        on_call: Callable[[CallLog], None] | None = None,
+    ) -> Provider:
+        """A provider for ``model`` that stops at the monotonic ``deadline`` and reports each call to
+        ``on_call``. Raises :class:`MissingApiKey` when the settings hold no key."""
+
+
+@dataclass(frozen=True)
+class MediaDetails:
+    """What the media library knows about one item, to identify it (FR-10). Empty fields are unknown."""
+
+    series_title: str = ""
+    tvdb_id: str = ""
+    season: int | None = None
+    episode: int | None = None
+    episode_title: str = ""
+    movie_title: str = ""
+
+
+@dataclass(frozen=True)
+class EpisodeListing:
+    """One episode of a series as the media library lists it. ``source_path`` is empty without a source subtitle."""
+
+    season: int
+    episode: int
+    title: str = ""
+    bazarr_id: str = ""
+    video_path: str = ""
+    source_path: str = ""
+
+
+@runtime_checkable
+class MediaLibrary(Protocol):
+    """The media manager (Bazarr): what an item is and which episodes a series has."""
+
+    def describe(self, media_type: str, series_id: str, media_id: str) -> MediaDetails | None:
+        """Details of an episode or movie; None when the library cannot say (no access, unknown type or ids).
+        Raises when it cannot be reached."""
+
+    def series_episodes(self, series_id: str, source_code: str) -> list[EpisodeListing]:
+        """Every episode of the series, each with its source subtitle in ``source_code`` if it has one.
+        Empty when the library cannot be asked; raises when it cannot be reached."""
+
+
+@runtime_checkable
+class JobQueue(Protocol):
+    """How the core submits and manages translation jobs. The queue's own life cycle (claiming a job, deferring
+    it, quota pauses, recovery) belongs to the adapter and the worker loop, not to the core."""
+
+    def enqueue(self, base_job: dict[str, Any], targets: list[dict[str, Any]]) -> list[str]:
+        """Queue one automatic job per enabled target language that is still missing; returns what was queued.
+        Raises when the daily quota pause is active."""
+
+    def enqueue_retranslation(self, job: dict[str, Any]) -> str:
+        """Queue one explicit retranslation ahead of automatic work; returns its job id. Raises ``ValueError``
+        when one for the same target is already waiting."""
+
+    def retry(self, job_id: str) -> bool:
+        """Put a failed job back in line; False when there is no such failed job."""
+
+    def cancel(self, job_id: str) -> bool:
+        """Remove a failed job for good; False when there is no such job."""
+
+    def delete(self, state: str, job_id: str) -> bool:
+        """Remove a job that is in ``state``; False when there is none."""

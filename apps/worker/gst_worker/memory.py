@@ -42,8 +42,7 @@ from subcore.memory import (
 )
 from subcore.providers import Provider
 
-from .ports import TranslationVersion
-from .store import Store
+from .ports import CatalogRepo, MediaLibrary, MemoryRepo, Series, TranslationVersion, Unit
 from .translation import ContextGapError
 from .versions import RETRANSLATE, sha256_file
 
@@ -52,13 +51,11 @@ GAP_RECHECK_SECONDS = 300  # while waiting, look again this often: the missing s
 MEMORY_MODES = ("", "on", "off")
 
 ProviderFor = Callable[[str], Provider]
-Catalog = Callable[[dict[str, Any], str], list[dict[str, Any]]]
-
 _ANCHOR = re.compile(r"^\s*S(\d{1,3})E(\d{1,4})\s*$", re.IGNORECASE)
 
 
-def unit_label(unit: dict[str, Any]) -> str:
-    return f"S{int(unit['season'] or 0):02d}E{int(unit['episode'] or 0):02d}"
+def unit_label(unit: Unit) -> str:
+    return f"S{unit.season or 0:02d}E{unit.episode or 0:02d}"
 
 
 def parse_anchor(text: str) -> tuple[int, int] | None:
@@ -107,15 +104,17 @@ class MemoryPlan:
 class StoryMemory:
     def __init__(
         self,
-        store: Store,
+        facts: MemoryRepo,
+        units: CatalogRepo,
         *,
         settings_source: Callable[[], dict[str, Any]] | None = None,
-        catalog: Catalog | None = None,
+        media: MediaLibrary | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self.store = store
+        self.facts = facts
+        self.units = units
         self._settings_source = settings_source
-        self.catalog = catalog
+        self.media = media
         self.clock = clock
 
     # -- policy ------------------------------------------------------------------
@@ -124,12 +123,12 @@ class StoryMemory:
             settings = self._settings_source()
         return MemoryOptions.from_settings(settings)
 
-    def enabled_for(self, unit: dict[str, Any], settings: dict[str, Any] | None = None) -> bool:
+    def enabled_for(self, unit: Unit, settings: dict[str, Any] | None = None) -> bool:
         """Memory applies to episodes only; a series can follow the global switch or override it."""
-        if unit["series_id"] is None:
+        if unit.series_id is None:
             return False
-        series = self.store.get_series(int(unit["series_id"]))
-        policy = str(series["memory"]) if series else ""
+        series = self.units.get_series(unit.series_id)
+        policy = series.memory if series else ""
         if policy == "on":
             return True
         if policy == "off":
@@ -138,57 +137,56 @@ class StoryMemory:
 
     # -- story order ----------------------------------------------------------------
     @staticmethod
-    def _chain(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _chain(units: list[Unit]) -> list[Unit]:
         """The main storyline: seasons 1 and up in Bazarr order. Specials (season 0) are outside it."""
         return sorted(
-            (u for u in units if (u["season"] or 0) >= 1 and u["episode"] is not None),
-            key=lambda u: (u["season"], u["episode"], u["id"]),
+            (u for u in units if (u.season or 0) >= 1 and u.episode is not None),
+            key=lambda u: (u.season, u.episode, u.id),
         )
 
-    def prior_units(self, unit: dict[str, Any], units: list[dict[str, Any]], series: dict[str, Any] | None) -> list[dict[str, Any]]:
+    def prior_units(self, unit: Unit, units: list[Unit], series: Series | None) -> list[Unit]:
         """Units whose facts form the story state at the start of ``unit`` (never a later unit)."""
         chain = self._chain(units)
-        if (unit["season"] or 0) >= 1:
-            here = (unit["season"], unit["episode"])
-            return [u for u in chain if (u["season"], u["episode"]) < here and u["id"] != unit["id"]]
+        if (unit.season or 0) >= 1:
+            here = (unit.season, unit.episode)
+            return [u for u in chain if (u.season, u.episode) < here and u.id != unit.id]
         # A special: the state at the configured point, by default after the first season (FR-5.7).
-        anchor = parse_anchor(str(series["specials_after"]) if series else "")
+        anchor = parse_anchor(series.specials_after if series else "")
         if anchor is None:
             if not chain:
                 return []
-            first = chain[0]["season"]
-            return [u for u in chain if u["season"] == first]
-        return [u for u in chain if (u["season"], u["episode"]) <= anchor]
+            first = chain[0].season
+            return [u for u in chain if u.season == first]
+        return [u for u in chain if (u.season, u.episode) <= anchor]
 
     @staticmethod
-    def has_source(unit: dict[str, Any]) -> bool:
-        path = str(unit.get("source_path") or "")
-        return bool(path) and Path(path).is_file()
+    def has_source(unit: Unit) -> bool:
+        return bool(unit.source_path) and Path(unit.source_path).is_file()
 
     # -- facts --------------------------------------------------------------------
-    def _stored(self, units: list[dict[str, Any]]) -> dict[int, Facts]:
-        rows = self.store.latest_facts([int(u["id"]) for u in units], EXTRACT_PROMPT_VERSION)
+    def _stored(self, units: list[Unit]) -> dict[int, Facts]:
+        rows = self.facts.latest_facts([u.id for u in units], EXTRACT_PROMPT_VERSION)
         return {uid: row.facts for uid, row in rows.items()}
 
     def ensure_facts(
-        self, unit: dict[str, Any], title: str, settings: dict[str, Any], provider_for: ProviderFor | None
+        self, unit: Unit, title: str, settings: dict[str, Any], provider_for: ProviderFor | None
     ) -> tuple[Facts | None, str]:
         """Facts for ``unit``: from the cache, or extracted now. Returns ``(facts, how)``.
 
         ``how`` is ``cached``, ``extracted``, ``stored`` (source gone or unreadable; older facts kept),
         ``no-source`` or ``failed``. Provider errors (quota, outage) propagate to the queue.
         """
-        unit_id = int(unit["id"])
-        latest = self.store.latest_facts([unit_id], EXTRACT_PROMPT_VERSION).get(unit_id)
+        unit_id = unit.id
+        latest = self.facts.latest_facts([unit_id], EXTRACT_PROMPT_VERSION).get(unit_id)
         kept = latest.facts if latest else None
         if not self.has_source(unit):
             return (kept, "stored") if kept is not None else (None, "no-source")
-        path = Path(str(unit["source_path"]))
+        path = Path(unit.source_path)
         try:
             sha = sha256_file(path)
         except OSError:
             return (kept, "stored") if kept is not None else (None, "failed")
-        row = self.store.get_facts(unit_id, sha, EXTRACT_PROMPT_VERSION, touch=True)
+        row = self.facts.get_facts(unit_id, sha, EXTRACT_PROMPT_VERSION, touch=True)
         if row is not None:
             return row.facts, "cached"
         if provider_for is None:
@@ -198,13 +196,13 @@ class StoryMemory:
             if not cues:
                 raise FactsError("the source subtitle has no cues")
             result = extract_facts(
-                provider_for("extract"), cues, title=title, season=unit["season"], episode=unit["episode"],
-                source_lang=str(unit.get("source_language") or unit.get("source_code") or "") or None,
+                provider_for("extract"), cues, title=title, season=unit.season, episode=unit.episode,
+                source_lang=unit.source_language or unit.source_code or None,
             )
         except (FactsError, srt.SrtError, OSError) as exc:
             logging.warning("Could not extract story facts for %s %s: %s", title or "unit", unit_label(unit), exc)
             return (kept, "stored") if kept is not None else (None, "failed")
-        self.store.save_facts(
+        self.facts.save_facts(
             unit_id, sha, EXTRACT_PROMPT_VERSION, model=result.model, facts=result.facts,
             tokens_in=result.tokens_in, tokens_out=result.tokens_out,
         )
@@ -212,43 +210,41 @@ class StoryMemory:
         return result.facts, "extracted"
 
     # -- the series catalogue (FR-8.3) --------------------------------------------------
-    def refresh_catalog(self, unit: dict[str, Any], series: dict[str, Any], source_code: str) -> None:
+    def refresh_catalog(self, unit: Unit, series: Series, source_code: str) -> None:
         """Learn the episodes Bazarr lists for the series, with their source subtitles (best effort)."""
-        if self.catalog is None or not series["bazarr_id"]:
+        if self.media is None or not series.bazarr_id:
             return
         try:
-            episodes = self.catalog(series, source_code)
+            episodes = self.media.series_episodes(series.bazarr_id, source_code)
         except Exception as exc:  # noqa: BLE001 - the catalogue only improves gap detection
-            logging.warning("Could not list the episodes of %s from Bazarr (%s)", series["title"], type(exc).__name__)
+            logging.warning("Could not list the episodes of %s from Bazarr (%s)", series.title, type(exc).__name__)
             return
         for item in episodes:
-            season, episode = item.get("season"), item.get("episode")
-            if season is None or episode is None or (season, episode) == (unit["season"], unit["episode"]):
+            if (item.season, item.episode) == (unit.season, unit.episode):
                 continue
-            path = str(item.get("source_path") or "")
-            self.store.upsert_unit(
-                series_id=int(series["id"]), season=int(season), episode=int(episode),
-                title=str(item.get("title") or ""), media_type="series", bazarr_id=str(item.get("bazarr_id") or ""),
-                video_path=str(item.get("video_path") or ""), source_path=path, source_code=source_code if path else "",
+            self.units.upsert_unit(
+                series_id=series.id, season=item.season, episode=item.episode, title=item.title,
+                media_type="series", bazarr_id=item.bazarr_id, video_path=item.video_path,
+                source_path=item.source_path, source_code=source_code if item.source_path else "",
             )
 
     # -- the bundle for one translation --------------------------------------------------
     def _compressor(self, series_id: int, up_to_unit: int, provider_for: ProviderFor | None):
         def compress(entries: list[tuple[str, str]]) -> str:
             key = entries_hash(entries)
-            cached = self.store.get_summary(key)
+            cached = self.facts.get_summary(key)
             if cached is not None:
                 return cached
             if provider_for is None:
                 return ""  # a preview never spends a call
             text = compress_arc(provider_for("summarize"), entries)
-            self.store.put_summary(series_id, up_to_unit, key, text)
+            self.facts.put_summary(series_id, up_to_unit, key, text)
             return text
 
         return compress
 
     def _context(
-        self, prior: list[tuple[dict[str, Any], Facts]], own: Facts | None, series_id: int, unit_id: int,
+        self, prior: list[tuple[Unit, Facts]], own: Facts | None, series_id: int, unit_id: int,
         options: MemoryOptions, provider_for: ProviderFor | None,
     ) -> StoryContext:
         return build_context(
@@ -259,7 +255,7 @@ class StoryMemory:
 
     def plan(
         self,
-        unit: dict[str, Any],
+        unit: Unit,
         job: dict[str, Any],
         settings: dict[str, Any],
         provider_for: ProviderFor,
@@ -270,12 +266,12 @@ class StoryMemory:
         has not passed (never for an explicit retranslation, which runs with what exists).
         """
         options = self.options(settings)
-        series = self.store.get_series(int(unit["series_id"]))
-        title = str(series["title"])
-        self.refresh_catalog(unit, series, str(job.get("source_code") or unit.get("source_code") or ""))
-        units = self.store.list_units(int(series["id"]))
+        series = self.units.get_series(unit.series_id)
+        title = series.title
+        self.refresh_catalog(unit, series, str(job.get("source_code") or unit.source_code or ""))
+        units = self.units.list_units(series.id)
 
-        prior: list[tuple[dict[str, Any], Facts]] = []
+        prior: list[tuple[Unit, Facts]] = []
         missing: list[str] = []
         gap: list[str] = []
         for earlier in self.prior_units(unit, units, series):
@@ -298,29 +294,33 @@ class StoryMemory:
                 )
 
         own, _ = self.ensure_facts(unit, title, settings, provider_for)
-        context = self._context(prior, own, int(series["id"]), int(unit["id"]), options, provider_for)
-        self.store.put_snapshot(context.fingerprint, context.sections)
+        context = self._context(prior, own, series.id, unit.id, options, provider_for)
+        self.facts.put_snapshot(context.fingerprint, context.sections)
         return MemoryPlan(context.sections, context.fingerprint, not missing, missing, context.compressed)
 
     # -- staleness (FR-5.5) ------------------------------------------------------------------
-    def _series_view(self, series_id: int, cache: dict | None) -> tuple[list[dict[str, Any]], dict[int, Facts]]:
+    def _series_view(self, series_id: int, cache: dict | None) -> tuple[list[Unit], dict[int, Facts]]:
         slot = ("memory", series_id)
         if cache is not None and slot in cache:
             return cache[slot]
-        units = self.store.list_units(series_id)
+        units = self.units.list_units(series_id)
         view = (units, self._stored(units))
         if cache is not None:
             cache[slot] = view
         return view
 
-    def fingerprint(self, unit: dict[str, Any], cache: dict | None = None) -> str:
+    def fingerprint(self, unit: Unit, cache: dict | None = None) -> str:
         """The fingerprint a translation of ``unit`` made right now would carry (no model call)."""
-        series = self.store.get_series(int(unit["series_id"]))
-        units, facts = self._series_view(int(series["id"]), cache)
-        prior = [UnitFacts(unit_label(u), facts[u["id"]]) for u in self.prior_units(unit, units, series) if u["id"] in facts]
-        return fingerprint(prior, facts.get(int(unit["id"])))
+        series = self.units.get_series(unit.series_id)
+        units, facts = self._series_view(series.id, cache)
+        prior = [UnitFacts(unit_label(u), facts[u.id]) for u in self.prior_units(unit, units, series) if u.id in facts]
+        return fingerprint(prior, facts.get(unit.id))
 
-    def is_stale(self, unit: dict[str, Any], version: TranslationVersion, cache: dict | None = None) -> bool:
+    def snapshot(self, memory_hash: str) -> list[tuple[str, str]] | None:
+        """The context sections a fingerprint stood for, if they were kept."""
+        return self.facts.get_snapshot(memory_hash)
+
+    def is_stale(self, unit: Unit, version: TranslationVersion, cache: dict | None = None) -> bool:
         """Was ``version`` made with different story memory than ``unit`` has now? (flag only)"""
         used = version.memory_hash
         if not used or not self.enabled_for(unit):
@@ -331,7 +331,7 @@ class StoryMemory:
         wanted = version.missing_units
         if not wanted:
             return False
-        units, _ = self._series_view(int(unit["series_id"]), cache)
+        units, _ = self._series_view(unit.series_id, cache)
         by_label = {unit_label(u): u for u in units}
         return any(label in by_label and self.has_source(by_label[label]) for label in wanted)
 
@@ -340,44 +340,44 @@ class StoryMemory:
         units, facts = self._series_view(series_id, cache)
         return [
             {
-                "id": u["id"], "label": unit_label(u), "season": u["season"], "episode": u["episode"],
-                "has_source": self.has_source(u), "has_facts": int(u["id"]) in facts,
-                "facts_hash": facts[int(u["id"])].hash[:12] if int(u["id"]) in facts else "",
+                "id": u.id, "label": unit_label(u), "season": u.season, "episode": u.episode,
+                "has_source": self.has_source(u), "has_facts": u.id in facts,
+                "facts_hash": facts[u.id].hash[:12] if u.id in facts else "",
             }
-            for u in sorted(units, key=lambda u: (u["season"] or 0, u["episode"] or 0, u["id"]))
+            for u in sorted(units, key=lambda u: (u.season or 0, u.episode or 0, u.id))
         ]
 
-    def preview(self, unit: dict[str, Any], settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    def preview(self, unit: Unit, settings: dict[str, Any] | None = None) -> dict[str, Any]:
         """The bundle ``unit`` would get from the facts stored now. Reads only: never extracts or compresses."""
-        series = self.store.get_series(int(unit["series_id"]))
+        series = self.units.get_series(unit.series_id)
         options = self.options(settings)
-        units = self.store.list_units(int(series["id"]))
+        units = self.units.list_units(series.id)
         facts = self._stored(units)
         prior_units = self.prior_units(unit, units, series)
-        prior = [(u, facts[u["id"]]) for u in prior_units if u["id"] in facts]
-        own = facts.get(int(unit["id"]))
-        context = self._context(prior, own, int(series["id"]), int(unit["id"]), options, None)
+        prior = [(u, facts[u.id]) for u in prior_units if u.id in facts]
+        own = facts.get(unit.id)
+        context = self._context(prior, own, series.id, unit.id, options, None)
         return {
             "fingerprint": context.fingerprint,
             "sections": [{"title": t, "body": b} for t, b in context.sections],
             "approximate": context.compressed == "truncated",
             "prior": [
-                {"label": unit_label(u), "has_source": self.has_source(u), "has_facts": u["id"] in facts}
+                {"label": unit_label(u), "has_source": self.has_source(u), "has_facts": u.id in facts}
                 for u in prior_units
             ],
-            "missing": [unit_label(u) for u in prior_units if u["id"] not in facts],
+            "missing": [unit_label(u) for u in prior_units if u.id not in facts],
             "own_facts": own.to_dict() if own else None,
             "own_has_source": self.has_source(unit),
         }
 
-    def refresh(self, unit: dict[str, Any], settings: dict[str, Any], provider_for: ProviderFor) -> dict[str, Any]:
+    def refresh(self, unit: Unit, settings: dict[str, Any], provider_for: ProviderFor) -> dict[str, Any]:
         """Extract the facts of ``unit`` and of every earlier unit that has a source (spends model calls)."""
-        series = self.store.get_series(int(unit["series_id"]))
-        title = str(series["title"])
-        self.refresh_catalog(unit, series, str(unit.get("source_code") or ""))
-        units = self.store.list_units(int(series["id"]))
+        series = self.units.get_series(unit.series_id)
+        title = series.title
+        self.refresh_catalog(unit, series, unit.source_code)
+        units = self.units.list_units(series.id)
         results: dict[str, str] = {}
-        for target in [*self.prior_units(unit, units, series), self.store.get_unit(int(unit["id"])) or unit]:
+        for target in [*self.prior_units(unit, units, series), self.units.get_unit(unit.id) or unit]:
             _, how = self.ensure_facts(target, title, settings, provider_for)
             results[unit_label(target)] = how
         return {"extracted": [k for k, v in results.items() if v == "extracted"], "results": results}

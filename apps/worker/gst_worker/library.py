@@ -21,8 +21,8 @@ from subcore import glossary as g
 from subcore import srt
 
 from .glossaries import MOVIES, SERIES, GlossaryFiles
+from .ports import CatalogRepo, MediaLibrary, Output, Unit
 from .rules import UnitRules, build_rules
-from .store import Store
 from .versions import TranslationVersions
 
 STATUSES = ("current", "stale", "incomplete", "untranslated")
@@ -99,38 +99,36 @@ def identify_job(job: dict[str, Any]) -> Identity:
     return Identity(movie_key=key, title=title or key)
 
 
-def enrich_job_identity(job: dict[str, Any], http: Any, bazarr_url: str, api_key: str) -> None:
-    """Add Bazarr's title/season/episode to ``job`` (best effort; the file name is the fallback)."""
-    if not api_key or not job.get("media_id"):
+def enrich_job_identity(job: dict[str, Any], media: MediaLibrary) -> None:
+    """Add the media library's title/season/episode to ``job`` (best effort; the file name is the fallback)."""
+    if not job.get("media_id"):
         return
-    from .http import first_data
-
-    headers = {"X-API-KEY": api_key}
     try:
-        if job.get("media_type") == "series" and job.get("series_id"):
-            series = first_data(http.get_json(f"{bazarr_url}/api/series", params={"seriesid[]": str(job["series_id"])}, headers=headers))
-            episode = first_data(http.get_json(f"{bazarr_url}/api/episodes", params={"episodeid[]": str(job["media_id"])}, headers=headers))
-            if series.get("title"):
-                job["series_title"] = str(series["title"])
-            if series.get("tvdbId"):
-                job["tvdb_id"] = str(series["tvdbId"])
-            if episode.get("season") is not None and episode.get("episode") is not None:
-                job["season"], job["episode"] = int(episode["season"]), int(episode["episode"])
-            if episode.get("title"):
-                job["episode_title"] = str(episode["title"])
-        elif job.get("media_type") == "movie":
-            movie = first_data(http.get_json(f"{bazarr_url}/api/movies", params={"radarrid[]": str(job["media_id"])}, headers=headers))
-            if movie.get("title"):
-                job["movie_title"] = str(movie["title"])
+        details = media.describe(
+            str(job.get("media_type") or ""), str(job.get("series_id") or ""), str(job["media_id"])
+        )
     except Exception as exc:  # noqa: BLE001 - identity is a convenience; never fail a job over it
         logging.warning("Could not read media details from Bazarr (%s); using the file name", type(exc).__name__)
+        return
+    if details is None:
+        return
+    if details.series_title:
+        job["series_title"] = details.series_title
+    if details.tvdb_id:
+        job["tvdb_id"] = details.tvdb_id
+    if details.season is not None and details.episode is not None:
+        job["season"], job["episode"] = details.season, details.episode
+    if details.episode_title:
+        job["episode_title"] = details.episode_title
+    if details.movie_title:
+        job["movie_title"] = details.movie_title
 
 
 class Library:
     def __init__(
-        self, store: Store, glossaries: GlossaryFiles, versions: TranslationVersions, memory: Any = None
+        self, catalog: CatalogRepo, glossaries: GlossaryFiles, versions: TranslationVersions, memory: Any = None
     ) -> None:
-        self.store = store
+        self.catalog = catalog
         self.glossaries = glossaries
         self.versions = versions
         self.memory = memory  # StoryMemory | None: when set, story memory also decides staleness (FR-5.5)
@@ -152,29 +150,29 @@ class Library:
                 source_language=str(job.get("source_language") or ""),
             )
             if ident.series_key:
-                series_id = self.store.upsert_series(
+                series_id = self.catalog.upsert_series(
                     ident.series_key, title=ident.series_title, bazarr_id=str(job.get("series_id") or "")
                 )
-                unit_id = self.store.upsert_unit(
+                unit_id = self.catalog.upsert_unit(
                     series_id=series_id, season=ident.season, episode=ident.episode, **common
                 )
             else:
-                unit_id = self.store.upsert_unit(movie_key=ident.movie_key, **common)
+                unit_id = self.catalog.upsert_unit(movie_key=ident.movie_key, **common)
         output = str(job.get("output_path") or "")
         if output and job.get("target_code"):
-            self.store.set_output(unit_id, str(job["target_code"]), output, str(job.get("target_language") or ""))
+            self.catalog.set_output(unit_id, str(job["target_code"]), output, str(job.get("target_language") or ""))
         return unit_id
 
     # -- rules ---------------------------------------------------------------
-    def owner(self, unit: dict[str, Any]) -> tuple[str, str]:
-        if unit["series_id"] is not None:
-            series = self.store.get_series(int(unit["series_id"]))
-            return SERIES, str(series["key"])
-        return MOVIES, str(unit["movie_key"])
+    def owner(self, unit: Unit) -> tuple[str, str]:
+        if unit.series_id is not None:
+            series = self.catalog.get_series(unit.series_id)
+            return SERIES, series.key
+        return MOVIES, str(unit.movie_key)
 
     def unit_rules(
         self,
-        unit: dict[str, Any],
+        unit: Unit,
         lang: str,
         *,
         cues: list[srt.Cue] | None = None,
@@ -192,36 +190,34 @@ class Library:
                 glossary = self.glossaries.load(kind, key, lang)
                 if cache is not None:
                     cache[slot] = glossary
-        corrections = self.store.corrections(int(unit["id"]), lang)
+        corrections = self.catalog.corrections(unit.id, lang)
         if correction_ids is not None:
             wanted = set(correction_ids)
-            corrections = [c for c in corrections if c["kind"] == "cue_edit" or c["id"] in wanted]
-        return build_rules(
-            glossary, season=unit["season"], episode=unit["episode"], corrections=corrections, cues=cues
-        )
+            corrections = [c for c in corrections if c.kind == "cue_edit" or c.id in wanted]
+        return build_rules(glossary, season=unit.season, episode=unit.episode, corrections=corrections, cues=cues)
 
-    def source_cues(self, unit: dict[str, Any]) -> list[srt.Cue]:
-        path = Path(str(unit["source_path"]))
-        if not unit["source_path"] or not path.is_file():
+    def source_cues(self, unit: Unit) -> list[srt.Cue]:
+        path = Path(unit.source_path)
+        if not unit.source_path or not path.is_file():
             raise LookupError("the source subtitle of this episode is no longer on disk")
         return srt.parse_file(path)
 
     # -- status --------------------------------------------------------------
-    def stale_ignored(self, unit: dict[str, Any]) -> bool:
-        if unit["series_id"] is None:
+    def stale_ignored(self, unit: Unit) -> bool:
+        if unit.series_id is None:
             return False
-        series = self.store.get_series(int(unit["series_id"]))
-        return bool(series and series["stale_policy"] == "ignore")
+        series = self.catalog.get_series(unit.series_id)
+        return bool(series and series.stale_policy == "ignore")
 
     def target_info(
-        self, unit: dict[str, Any], output: dict[str, Any], *, glossary: g.Glossary | None = None, cache: dict | None = None
+        self, unit: Unit, output: Output, *, glossary: g.Glossary | None = None, cache: dict | None = None
     ) -> dict[str, Any]:
-        lang, output_path = str(output["target_lang"]), str(output["output_path"])
+        lang, output_path = output.target_lang, output.output_path
         exists = Path(output_path).is_file()
-        current = self.store.current_version(output_path)
+        current = self.versions.store.current_version(output_path)
         info: dict[str, Any] = {
             "lang": lang,
-            "language": output["target_language"] or lang,
+            "language": output.target_language or lang,
             "exists": exists,
             "status": "untranslated",
             "version": None,
@@ -246,43 +242,43 @@ class Library:
         )
         return info
 
-    def unit_summary(self, unit: dict[str, Any], *, cache: dict | None = None) -> dict[str, Any]:
-        targets = [self.target_info(unit, out, cache=cache) for out in self.store.outputs(int(unit["id"]))]
+    def unit_summary(self, unit: Unit, *, cache: dict | None = None) -> dict[str, Any]:
+        targets = [self.target_info(unit, out, cache=cache) for out in self.catalog.outputs(unit.id)]
         status = min((t["status"] for t in targets), key=_ATTENTION.__getitem__, default="untranslated")
         return {
-            "id": unit["id"], "series_id": unit["series_id"], "season": unit["season"], "episode": unit["episode"],
-            "title": unit["title"], "source_code": unit["source_code"], "targets": targets, "status": status,
+            "id": unit.id, "series_id": unit.series_id, "season": unit.season, "episode": unit.episode,
+            "title": unit.title, "source_code": unit.source_code, "targets": targets, "status": status,
         }
 
     # -- listings ------------------------------------------------------------
     def series_list(self) -> list[dict[str, Any]]:
         out = []
         cache: dict = {}
-        for series in self.store.list_series():
+        for series in self.catalog.list_series():
             counts = dict.fromkeys(STATUSES, 0)
-            units = self.store.list_units(int(series["id"]))
+            units = self.catalog.list_units(series.id)
             for unit in units:
                 counts[self.unit_summary(unit, cache=cache)["status"]] += 1
             out.append({
-                "id": series["id"], "key": series["key"], "title": series["title"],
-                "stale_policy": series["stale_policy"], "units": len(units), "counts": counts,
+                "id": series.id, "key": series.key, "title": series.title,
+                "stale_policy": series.stale_policy, "units": len(units), "counts": counts,
             })
         return out
 
     def series_units(self, series_id: int, status: str | None = None) -> dict[str, Any]:
-        series = self.store.get_series(series_id)
+        series = self.catalog.get_series(series_id)
         if series is None:
             raise LookupError(f"no series {series_id}")
         if status and status not in STATUSES:
             raise ValueError(f"status must be one of {', '.join(STATUSES)}")
         cache: dict = {}
-        units = [self.unit_summary(u, cache=cache) for u in self.store.list_units(series_id)]
+        units = [self.unit_summary(u, cache=cache) for u in self.catalog.list_units(series_id)]
         languages = sorted({t["lang"] for u in units for t in u["targets"]})
         if status:
             units = [u for u in units if u["status"] == status]
         return {
-            "series": {"id": series["id"], "key": series["key"], "title": series["title"],
-                       "stale_policy": series["stale_policy"]},
+            "series": {"id": series.id, "key": series.key, "title": series.title,
+                       "stale_policy": series.stale_policy},
             "languages": languages,
             "units": units,
         }
@@ -291,16 +287,16 @@ class Library:
         if status and status not in STATUSES:
             raise ValueError(f"status must be one of {', '.join(STATUSES)}")
         cache: dict = {}
-        units = [self.unit_summary(u, cache=cache) for u in self.store.list_units(movies=True)]
+        units = [self.unit_summary(u, cache=cache) for u in self.catalog.list_units(movies=True)]
         return [u for u in units if not status or u["status"] == status]
 
     # -- glossary preview (how many translations a save would make stale) ---------
     def glossary_impact(self, series_id: int, lang: str, candidate: g.Glossary) -> dict[str, int]:
         series_cache: dict = {}
         now = after = would = 0
-        for unit in self.store.list_units(series_id):
-            for out in self.store.outputs(int(unit["id"])):
-                if out["target_lang"] != lang:
+        for unit in self.catalog.list_units(series_id):
+            for out in self.catalog.outputs(unit.id):
+                if out.target_lang != lang:
                     continue
                 before = self.target_info(unit, out, cache=series_cache)["status"]
                 later = self.target_info(unit, out, glossary=candidate)["status"]

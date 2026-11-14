@@ -26,9 +26,8 @@ from subcore.translate import PromptContext, TranslateOptions, TranslationError,
 
 from .config import DEFAULT_MODEL
 from .library import Library
-from .llm import MissingApiKey, build_provider
 from .memory import StoryMemory
-from .ports import UsageLog
+from .ports import MissingApiKey, ProviderFactory, Unit, UsageLog
 from .rules import UnitRules
 from .subtitles import target_output_path
 from .translation import ERROR_TAIL_LENGTH, DailyQuotaExceededError, HardJobError, ProviderUnavailableError, redact
@@ -38,7 +37,6 @@ from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, TranslationVersions, 
 PROMPT_VERSION = "p3-1"
 DEFAULT_JOB_TIMEOUT_SECONDS = 1800  # NFR-2 watchdog
 
-ProviderFactory = Callable[..., Provider]
 
 
 def job_timeout_seconds() -> float:
@@ -77,7 +75,7 @@ class TranslationAttempt:
         self,
         versions: TranslationVersions | None = None,
         usage: UsageLog | None = None,
-        provider_factory: ProviderFactory = build_provider,
+        provider_factory: ProviderFactory | None = None,
         library: Library | None = None,
         memory: StoryMemory | None = None,
     ) -> None:
@@ -128,6 +126,8 @@ class TranslationAttempt:
             """One provider (and rate limiter) per model; extraction may use a cheaper model (FR-9.3)."""
             name = model if task == "translate" else (str(settings.get("memory_model") or "").strip() or model)
             if name not in providers:
+                if self.provider_factory is None:
+                    raise RuntimeError("no provider factory is wired into this translation attempt")
                 providers[name] = self.provider_factory(settings, name, deadline=deadline, on_call=record)
             return providers[name]
 
@@ -141,7 +141,7 @@ class TranslationAttempt:
         published = dict(
             trigger=trigger, source_path=str(source), source_sha256=source_sha,
             target_lang=target_code, context_hash=ctx_hash, model=model,
-            unit_id=int(unit["id"]) if unit else None, glossary_hash=rules.hash,
+            unit_id=unit.id if unit else None, glossary_hash=rules.hash,
             memory_hash=plan.fingerprint if plan else "",
             context_complete=plan.complete if plan else True,
             missing_units=plan.missing if plan else [],
@@ -166,8 +166,8 @@ class TranslationAttempt:
                 active_rules=rules.active_rules,
                 # Corrections come before the machine's story so they win; both follow the glossary.
                 extra_sections=[*rules.extra_sections, *(plan.sections if plan else [])],
-                season=unit["season"] if unit else None,
-                episode=unit["episode"] if unit else None,
+                season=unit.season if unit else None,
+                episode=unit.episode if unit else None,
                 title=self._title(unit),  # the series, or the movie
             )
             result = translate(
@@ -210,11 +210,11 @@ class TranslationAttempt:
             raise RuntimeError(self._message("Translation failed", exc, settings)) from None
 
     # -- library ---------------------------------------------------------------
-    def _register(self, job: dict[str, Any]) -> dict[str, Any] | None:
+    def _register(self, job: dict[str, Any]) -> Unit | None:
         if self.library is None:
             return None
         unit_id = self.library.register_job(job)
-        return self.library.store.get_unit(unit_id)
+        return self.library.catalog.get_unit(unit_id)
 
     def _rules(self, unit, target_code: str, cues, correction_ids) -> UnitRules:
         if self.library is None or unit is None:
@@ -224,10 +224,10 @@ class TranslationAttempt:
     def _title(self, unit) -> str:
         if not unit:
             return ""
-        if unit["series_id"] is not None and self.library is not None:
-            series = self.library.store.get_series(int(unit["series_id"]))
-            return str(series["title"]) if series else ""
-        return str(unit["title"] or "")
+        if unit.series_id is not None and self.library is not None:
+            series = self.library.catalog.get_series(unit.series_id)
+            return series.title if series else ""
+        return unit.title
 
     @staticmethod
     def _plan(retranslate: dict[str, Any], rules: UnitRules, cues, output: str):
@@ -260,5 +260,3 @@ class TranslationAttempt:
         detail = redact(f"{type(exc).__name__}: {exc}", settings)
         return f"{prefix}: {detail}"[-ERROR_TAIL_LENGTH:]
 
-
-DEFAULT_ATTEMPT = TranslationAttempt()
