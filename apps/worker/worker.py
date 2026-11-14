@@ -78,7 +78,13 @@ def process_job(
     status = (attempt or DEFAULT_ATTEMPT).run(job, description, settings, on_progress=report_progress)
     if status_callback:
         status_callback("Refreshing Bazarr")
-    media.refresh(job)
+    # The subtitle is already published: a Bazarr that is slow or down must not turn a finished translation into a
+    # failed job (a rescan of a large series can outlast the HTTP timeout). Bazarr finds the file on its next scan.
+    try:
+        media.refresh(job)
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("Translated %s, but Bazarr could not be asked to rescan (%s: %s)",
+                        job.get("subtitle_path"), type(exc).__name__, exc)
     return status
 
 

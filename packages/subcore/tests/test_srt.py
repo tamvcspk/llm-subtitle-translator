@@ -91,6 +91,18 @@ class WriteAtomicTests(unittest.TestCase):
             self.assertEqual(target.read_bytes().count("Xin chào".encode()), 2)
             self.assertEqual(os.listdir(tmp), ["out.vi.srt"])
 
+    @unittest.skipIf(os.name == "nt", "POSIX file modes")
+    def test_the_file_is_readable_by_other_users_not_the_private_temp_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fresh = Path(tmp, "new.vi.srt")
+            srt.write_atomic(fresh, "1\n")
+            self.assertEqual(fresh.stat().st_mode & 0o777, 0o644)
+            kept = Path(tmp, "kept.vi.srt")
+            kept.write_text("old", encoding="utf-8")
+            kept.chmod(0o664)
+            srt.write_atomic(kept, "new")
+            self.assertEqual(kept.stat().st_mode & 0o777, 0o664)
+
     def test_failed_write_keeps_existing_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp, "out.srt")

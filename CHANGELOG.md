@@ -1,4 +1,9 @@
 # Unreleased
+- **Fixes from the first real Bazarr trial.** A translated subtitle was written with mode 0600 (the
+  private mode of the temporary file), so Bazarr and media servers running as another user could not
+  read it; it now keeps the mode of the file it replaces, or 0644, and a worker running as root gives it
+  the owner of the folder. A Bazarr rescan that times out (a large series outlasts the 20 s HTTP timeout)
+  no longer fails a job whose subtitle is already written; it is logged as a warning.
 - **P0d part 2: hold mode and job approval (FR-12).** New setting `admission_mode`
   (`auto`, the default, behaves as before; `hold`). In `hold`, the worker sets the jobs the
   Bazarr script queues aside as *held*: no model call, no quota. Queue → Held (sidebar badge,

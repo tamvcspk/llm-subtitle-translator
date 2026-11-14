@@ -214,6 +214,22 @@ class BazarrAuthorityTests(unittest.TestCase):
             self.assertEqual(len(media.refreshed), 1)
 
 
+class RescanFailureTests(unittest.TestCase):
+    def test_a_bazarr_that_cannot_rescan_does_not_fail_a_finished_translation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subtitle = Path(tmp) / "Show.S01E01.en.srt"
+            subtitle.write_text("subtitle", encoding="utf-8")
+            job = {"subtitle_path": str(subtitle), "source_code": "en", "target_code": "vi", "unit_id": 1}
+            attempt = Mock()
+            attempt.run.return_value = "translated"
+            media = FakeMedia(missing=None)
+            media.refresh = Mock(side_effect=TimeoutError("timed out"))
+            with self.assertLogs(level="WARNING") as logs:
+                status = worker.process_job(job, {}, None, None, None, attempt, media=media, metadata=NoMetadata())
+            self.assertEqual(status, "translated")
+            self.assertIn("could not be asked to rescan", logs.output[0])
+
+
 class EscalationTests(Workdir):
     def setUp(self):
         super().setUp()

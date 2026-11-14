@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import tempfile
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -135,7 +136,12 @@ def serialize(cues: list[Cue]) -> str:
 
 
 def write_atomic(path: str | os.PathLike[str], text: str) -> None:
-    """Write ``text`` as UTF-8 via a temp file in the same directory then rename (FR-3.4)."""
+    """Write ``text`` as UTF-8 via a temp file in the same directory then rename (FR-3.4).
+
+    ``mkstemp`` creates a private (0600) file, which a media server or Bazarr running as another user
+    cannot read. The result keeps the mode of the file it replaces, or is 0644 when new; a process running as
+    root also gives it the owner of the directory, so the user who owns the media can edit or delete it.
+    """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
@@ -144,6 +150,13 @@ def write_atomic(path: str | os.PathLike[str], text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(tmp_name, stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644)
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            owner = target.parent.stat()
+            try:
+                os.chown(tmp_name, owner.st_uid, owner.st_gid)
+            except OSError:
+                pass  # not permitted on this filesystem: the file stays readable, which is what matters
         os.replace(tmp_name, target)
     except BaseException:
         try:
