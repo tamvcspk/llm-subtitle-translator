@@ -96,7 +96,51 @@ second layer is not paying for itself.
 
 ## GET /api/queue
 
-Returns all queue states and counts.
+Returns all queue states and counts. Besides `pending`, `processing`, `deferred`,
+`done` and `failed`, there are `held` (waiting for approval) and `rejected`; each
+list is the latest 100 jobs of its state, `counts` has the real numbers. Use
+`/api/queue/held` for the whole inbox.
+
+## GET /api/queue/held
+
+Jobs the Bazarr script queued while `admission_mode` is `hold`, oldest first and
+without a limit. A held job is stored but never run: no model call, no quota.
+
+```json
+{"count": 1, "items": [{
+  "job_id": "7fefefb6fdb4f200bbb5fcac70e917492cea4d8f",
+  "subtitle_path": "/media/Show/S01/Show.S01E01.en.srt", "video_path": "/media/Show/S01/Show.S01E01.mkv",
+  "source_code": "en", "source_language": "English", "target_code": "vi", "target_language": "Vietnamese",
+  "series_id": "144", "media_type": "series", "cue_count": 612,
+  "created_at": 1790355000, "held_at": 1790355020.4
+}]}
+```
+
+`GET /api/queue/rejected` returns the same shape for jobs that were rejected.
+
+## POST /api/queue/approve
+
+Releases held jobs: each moves to `pending` and then runs like any job, so it is
+still skipped (no model call) when its target subtitle appeared in the meantime.
+`GST_MAX_PENDING` does not apply. Name the jobs in exactly one way:
+
+```json
+{"job_ids": ["7fefefb6fdb4f200bbb5fcac70e917492cea4d8f"]}
+{"series_id": "144"}
+{"all": true}
+```
+
+Returns `{"ok": true, "count": 1, "jobs": ["..."]}`. Ids that are not held are
+ignored. Fails with `400` while the daily quota pause is active.
+
+## POST /api/queue/reject
+
+Same body as approve. Rejected jobs never run, and the script or a scan cannot
+queue them again.
+
+## POST /api/queue/restore
+
+`{"job_ids": [...]}` or `{"all": true}`: takes rejected jobs back to held.
 
 Both `/api/queue` and `/api/status` include `daily_quota_pause`: `null` when
 inactive, or `{"retry_at": 1790355039.786}` while paused (Unix seconds).
@@ -162,6 +206,7 @@ current stored key.
   "gst_thinking_budget": "2048",
   "gst_no_thinking": false,
   "job_settle_seconds": 600,
+  "admission_mode": "auto",
   "memory_enabled": false,
   "memory_model": "",
   "memory_gap_wait_seconds": 1800,
@@ -227,7 +272,8 @@ Moves a failed job back to pending.
 
 ## POST /api/queue/delete
 
-Deletes one job from a queue state.
+Deletes one job from a queue state. A `held` job cannot be deleted this way
+(approve or reject it); deleting a `rejected` job forgets the refusal.
 
 ```json
 {"state": "failed", "job_id": "7fefefb6fdb4f200bbb5fcac70e917492cea4d8f"}

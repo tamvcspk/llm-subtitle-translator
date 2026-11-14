@@ -9,6 +9,7 @@ import json
 import logging
 import mimetypes
 import urllib.parse
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -286,6 +287,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self.send_json(self.api_status())
             elif parsed.path == "/api/queue":
                 self.send_json(queue_snapshot(self.ctx["queue_dir"]))
+            elif parsed.path in {"/api/queue/held", "/api/queue/rejected"}:
+                jobs = self.ctx["console"].held() if parsed.path.endswith("held") else self.ctx["console"].rejected()
+                self.send_json({"count": len(jobs), "items": [asdict(job) for job in jobs]})
             elif parsed.path == "/api/settings":
                 self.send_json(public_app_config(self.ctx["config_path"], self.ctx["settings"]))
             elif parsed.path == "/api/languages":
@@ -403,6 +407,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                         "ok": self.ctx["console"].delete(str(body.get("state", "")), str(body.get("job_id", "")))
                     }
                 )
+            elif parsed.path in {"/api/queue/approve", "/api/queue/reject", "/api/queue/restore"}:
+                action = parsed.path.rsplit("/", 1)[1]
+                ids = body.get("job_ids")
+                if ids is not None and (not isinstance(ids, list) or not all(isinstance(item, str) for item in ids)):
+                    raise ValueError("job_ids must be a list of job ids")
+                everything = body.get("all") is True
+                if action == "restore":
+                    moved = self.ctx["console"].restore(job_ids=ids, everything=everything)
+                else:
+                    moved = getattr(self.ctx["console"], action)(
+                        job_ids=ids, series_id=str(body.get("series_id") or "") or None, everything=everything,
+                    )
+                self.send_json({"ok": True, "count": len(moved), "jobs": moved})
             elif parsed.path == "/api/backups":
                 self.send_json(
                     {

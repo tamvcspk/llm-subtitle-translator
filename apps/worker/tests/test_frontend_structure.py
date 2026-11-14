@@ -66,7 +66,7 @@ class FrontendStructureTests(unittest.TestCase):
         # Only settings the in-process engine reads are offered (P3 dropped the old `gst` CLI options).
         self.assertEqual(names, {
             "bazarr_url", "bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key",
-            "gst_model", "gst_fallback_model", "job_settle_seconds", "gst_paid_quota",
+            "gst_model", "gst_fallback_model", "job_settle_seconds", "admission_mode", "gst_paid_quota",
             "gst_temperature", "gst_thinking_budget", "gst_no_thinking",
             "media_roots", "scan_limit",
             "memory_enabled", "memory_model", "memory_gap_wait_seconds", "memory_budget_tokens",

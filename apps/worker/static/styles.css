@@ -1068,6 +1068,49 @@ textarea.input {
   color: var(--danger);
 }
 
+.tab-count-warn {
+  color: var(--warn);
+}
+
+.badge-warn {
+  background: var(--warn);
+  color: #fff;
+}
+
+/* Held inbox: jobs grouped by series, each row selectable */
+.held-group {
+  border-bottom: 1px solid var(--border);
+}
+
+.held-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 16px;
+  background: var(--sunken);
+  font-weight: 600;
+}
+
+.held-group-head .held-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-held {
+  align-items: center;
+}
+
+.job-held input[type="checkbox"],
+.held-group-head input[type="checkbox"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
 /* ==========================================================================
    Rows (wanted, scan, backups)
    ========================================================================== */

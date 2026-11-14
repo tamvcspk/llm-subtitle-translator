@@ -1,6 +1,6 @@
 # ARCHITECTURE — LLM Subtitle Translator for Bazarr
 
-> Trạng thái: **Draft v0.9** · 2026-11-14 (v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8; v0.9: ADR-8 ranh giới và port chuyển từ SPEC mục 9 sang §1 và §2, theo số phiên bản của SPEC) · Hiện thực hoá [SPEC.md](SPEC.md)
+> Trạng thái: **Draft v0.9** · 2026-11-14 (v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8; v0.9: ADR-8 ranh giới và port chuyển từ SPEC mục 9 sang §1 và §2, theo số phiên bản của SPEC; thêm ADR-9 chế độ `hold` ở §1, P0d phần 2) · Hiện thực hoá [SPEC.md](SPEC.md)
 > Tài liệu này mô tả kiến trúc **đích**. Kiến trúc hiện tại kế thừa từ upstream nằm ở [docs/ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
@@ -174,7 +174,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 | `VersionRepo` | phiên bản bản dịch, cache theo `context_hash` (NFR-3) | `Store` (`translations`) |
 | `CatalogRepo` | series, unit, output, correction, cấu hình memory theo series | `Store` |
 | `MemoryRepo` | facts, summary nén, snapshot context | `Store` |
-| `JobQueue` | enqueue, enqueue dịch lại, retry, cancel, delete | `queue.FileJobQueue` (cây thư mục JSON) |
+| `JobQueue` | enqueue, enqueue dịch lại, retry, cancel, delete; job `held`/`rejected` (ADR-9) | `queue.FileJobQueue` (cây thư mục JSON) |
 | `MediaLibrary` | mô tả tập, liệt kê tập và source subtitle, `missing_subtitles`, yêu cầu scan lại | `bazarr.BazarrMedia` (đọc settings sống) |
 | `Metadata` | mô tả phim/series cho prompt | `tmdb.TmdbMetadata` (đọc settings sống) |
 | `ProviderFactory` | dựng provider theo model và key | `llm.build_provider` (`subcore.providers`) |
@@ -184,6 +184,19 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 **Đánh đổi chấp nhận:** nhiều file hơn và thêm một lớp gián tiếp; với một người dùng và một SQLite, phần lớn port chỉ có một adapter thật, lợi ích chính là test không cần hạ tầng và cửa để đổi storage sau này. `Store` chưa tách thành một file mỗi port: không có người gọi nào còn phụ thuộc vào nó, nên việc tách chỉ là dọn dẹp và được hoãn cho tới khi có lý do (một adapter thứ hai).
 
 **Không làm (trong ADR-8):** chuyển hàng đợi vào SQLite; đổi schema; bọc filesystem bằng port; thêm DB khác (Postgres chỉ là cửa để ngỏ, theo ADR-4); đổi `subcore`.
+
+### ADR-9 · Chế độ `hold`: worker quyết định lúc nhận job (FR-12)
+
+**Quyết định:** script Bazarr không đổi (nó không đọc được cài đặt của worker, FR-12.3) và vẫn ghi thẳng vào `pending/`; **worker** áp chế độ ngay trước mỗi lần claim (`QueueWorker.process_once` → `queue.JobQueue.admit_new_jobs`). Đã làm xong ở P0d phần 2.
+
+1. **Hai trạng thái thư mục mới:** `held/` (đã nhận, chưa chạy) và `rejected/` (dấu từ chối, giữ nguyên file job để khôi phục được). Cả hai không bao giờ được claim, không bị `_fail_waiting_quota_jobs` đụng vào, không bị `recover_interrupted_jobs` thả (FR-12.8), và không tính vào `GST_MAX_PENDING` (script chỉ đếm `pending/processing/deferred`). Từ chối nhớ theo **job id** (sha1 của đường dẫn nguồn, đường dẫn đích, ngôn ngữ), nên script hay scan gặp lại cùng mục đều dính dấu này.
+2. **Phân biệt job của script với job đã được nhận bằng trường `admission` trong file job.** Job do script ghi không có trường này. Worker ghi `admin` khi tạo job (Enqueue, Scan, dịch lại, retry), `auto` khi bắt đầu chạy một job hoặc khi bật `hold` lên cho các job đang chờ, `approved` khi duyệt. Ở `hold`, job `pending` chưa có `admission` (và không nằm ngoài `GST_ONLY_PATHS`) chuyển sang `held` kèm `held_at`. Định dạng file job mà script ghi không đổi; chỉ phía worker thêm một trường. Ở `auto` worker không sửa file nào, vì thế hành vi cũ không đổi (tiêu chí 11a).
+3. **Đổi chế độ không đụng job đang có (FR-12.8):** `QueueWorker.apply_settings` thấy `auto → hold` thì gắn `admission: auto` cho job `pending`/`deferred` đang có (giữ nguyên thời gian file để không đổi thứ tự) *trước khi* áp chế độ mới; `hold → auto` không thả gì. Chạy một job cũng gắn `admission: auto`, nên job bị ngắt rồi khôi phục không bị giữ.
+4. **Script ghi lại job đang `held` hoặc `rejected`:** bản `pending` trùng id bị xoá (ở cả hai chế độ; một lần kiểm tra thư mục mỗi tick). Admin enqueue/scan bỏ qua id đang `held` hoặc `rejected` (nên `Enqueue` đúng một mục đang held trả `count: 0`; khôi phục hoặc duyệt nó thay vì tạo lại).
+5. **Duyệt** chuyển `held → pending` (`admission: approved`) và từ đó đi qua đúng đường cũ: `skip_reason` và `target_still_missing` chặn khi đích đã có (FR-12.6), `GST_ONLY_PATHS` vẫn chặn, `GST_MAX_PENDING` không áp (FR-12.7). Duyệt bị từ chối khi đang nghỉ quota ngày (giống enqueue). Use case `ConsoleActions.approve/reject/restore` chọn job theo đúng một cách (`job_ids`, `series_id` hoặc `all`); port `JobQueue` chỉ có `held`, `rejected`, `approve`, `reject`, `restore` theo danh sách id, kiểu trả về `HeldJob`. Job id đi vào tên file nên bị chặn nếu không phải tên file thuần.
+6. **Console:** `GET /api/queue/held` không giới hạn (snapshot `/api/queue` vẫn chỉ trả 100 job mỗi trạng thái); tab Held nhóm theo series (`series_id`, hoặc thư mục cho phim) và xin xác nhận khi duyệt/từ chối nhiều job.
+
+**Đánh đổi:** không có bảng `jobs` nên "trạng thái" vẫn là thư mục; số cue của một job `held` đọc từ file phụ đề (cache theo mtime). Chọn `auto`/`hold` theo từng series để v1.1 (SPEC).
 
 ---
 

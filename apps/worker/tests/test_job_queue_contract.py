@@ -1,10 +1,12 @@
 """Contract of the JobQueue port (SPEC criterion 10b): the same checks on the queue directory and on a fake."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from gst_worker.ports import JobQueue
+from gst_worker.ports import HeldJob, JobQueue
+from gst_worker import queue
 from gst_worker.queue import FileJobQueue
 
 TARGETS = [{"code": "vi", "language": "Vietnamese", "enabled": True}, {"code": "de", "language": "German", "enabled": True}]
@@ -52,10 +54,35 @@ class InMemoryJobQueue:
         return self.delete("failed", job_id)
 
     def delete(self, state, job_id):
-        if self.states.get(job_id) != state:
+        if state == "held" or self.states.get(job_id) != state:
             return False
         del self.states[job_id]
         return True
+
+    def _listing(self, state):
+        return [HeldJob(job_id=job_id, subtitle_path="", source_code="en", target_code="vi")
+                for job_id, current in self.states.items() if current == state]
+
+    def held(self):
+        return self._listing("held")
+
+    def rejected(self):
+        return self._listing("rejected")
+
+    def _move(self, job_ids, source, destination):
+        moved = [job_id for job_id in dict.fromkeys(job_ids) if self.states.get(job_id) == source]
+        for job_id in moved:
+            self.states[job_id] = destination
+        return moved
+
+    def approve(self, job_ids):
+        return self._move(job_ids, "held", "pending")
+
+    def reject(self, job_ids):
+        return self._move(job_ids, "held", "rejected")
+
+    def restore(self, job_ids):
+        return self._move(job_ids, "rejected", "held")
 
 
 class JobQueueContract:
@@ -106,6 +133,29 @@ class JobQueueContract:
         self.assertTrue(self.repo.delete("pending", job_id))
         self.assertFalse(self.repo.delete("pending", job_id))
 
+    def test_a_held_job_is_decided_not_deleted(self):
+        job_id = self.hold("a")
+        self.assertEqual([job.job_id for job in self.repo.held()], [job_id])
+        self.assertFalse(self.repo.delete("held", job_id))
+        self.assertEqual(self.state(job_id), "held")
+
+    def test_approve_moves_only_held_jobs_to_pending(self):
+        job_id = self.hold("a")
+        self.assertEqual(self.repo.approve([job_id, "unknown", job_id]), [job_id])
+        self.assertEqual(self.state(job_id), "pending")
+        self.assertEqual(self.repo.held(), [])
+        self.assertEqual(self.repo.approve([job_id]), [])  # no longer held
+
+    def test_reject_remembers_the_job_and_restore_returns_it_to_held(self):
+        job_id = self.hold("a")
+        self.assertEqual(self.repo.reject([job_id]), [job_id])
+        self.assertEqual(self.state(job_id), "rejected")
+        self.assertEqual([job.job_id for job in self.repo.rejected()], [job_id])
+        self.assertEqual(self.repo.approve([job_id]), [])  # a rejected job needs restoring first
+        self.assertEqual(self.repo.restore([job_id]), [job_id])
+        self.assertEqual(self.state(job_id), "held")
+        self.assertEqual(self.repo.restore([job_id]), [])
+
 
 class FileJobQueueTests(JobQueueContract, unittest.TestCase):
     def setUp(self):
@@ -116,6 +166,7 @@ class FileJobQueueTests(JobQueueContract, unittest.TestCase):
         self.subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
         self.queue_dir = str(self.root / "queue")
         self.repo = FileJobQueue(self.queue_dir)
+        queue.ensure_queue_dirs(self.queue_dir)
 
     def state(self, job_id):
         found = [p.parent.name for p in Path(self.queue_dir).glob(f"*/{job_id}.json")]
@@ -123,6 +174,13 @@ class FileJobQueueTests(JobQueueContract, unittest.TestCase):
 
     def fail_job(self, job_id):
         (Path(self.queue_dir) / "pending" / f"{job_id}.json").replace(Path(self.queue_dir) / "failed" / f"{job_id}.json")
+
+    def hold(self, name):
+        """What the worker does to a script job in `hold` mode: a file in held/."""
+        (Path(self.queue_dir) / "held" / f"{name}.json").write_text(json.dumps({
+            "job_id": name, "subtitle_path": str(self.subtitle), "source_code": "en", "target_code": "vi", "held_at": 1,
+        }), encoding="utf-8")
+        return name
 
 
 class InMemoryJobQueueTests(JobQueueContract, unittest.TestCase):
@@ -138,6 +196,10 @@ class InMemoryJobQueueTests(JobQueueContract, unittest.TestCase):
 
     def fail_job(self, job_id):
         self.repo.states[job_id] = "failed"
+
+    def hold(self, name):
+        self.repo.states[name] = "held"
+        return name
 
 
 if __name__ == "__main__":

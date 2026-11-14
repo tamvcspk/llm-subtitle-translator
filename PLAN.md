@@ -90,13 +90,13 @@ SPEC mục 9 (ADR-8), NFR-10, tiêu chí 10, quyết định #9; FR-12, tiêu ch
 
 Chỉ bắt đầu sau mốc CI xanh của phần 1.
 
-- [ ] Vòng đời hàng đợi thêm `held` và `rejected` (thể hiện cụ thể do `JobQueue` quyết định, ghi lại trong ARCHITECTURE và `CONTEXT.md`); khôi phục khi khởi động worker **không** thả job `held` (FR-12.8); từ chối nhớ theo job id để script/scan không đưa lại, khôi phục được (FR-12.5).
-- [ ] Cài đặt `admission_mode` (`auto` mặc định | `hold`) trong settings; worker áp dụng khi nhận job từ script, job do admin tạo (Enqueue, Scan, dịch lại, sửa cue, hoàn tác) không bị giữ (FR-12.2, 12.3). `gst_enqueue.sh` và định dạng file job không đổi; kiểm bằng test chạy với bản script hiện tại.
-- [ ] Use case: liệt kê `held`, duyệt (job / nhiều job / series / tất cả), từ chối, khôi phục. Duyệt vẫn qua FR-9.6 và NFR-4, và không bị giới hạn bởi `GST_MAX_PENDING`; `GST_ONLY_PATHS` vẫn chặn ở lúc nhận (FR-12.6, 12.7).
-- [ ] HTTP API cho các use case trên (FR-12.9) + `docs/API.md`.
-- [ ] Console: tab **Held** trong Queue, nhóm theo series, chọn nhiều, badge trên thanh điều hướng, xác nhận khi duyệt hàng loạt có số job; dùng được trên điện thoại (FR-12.4, 12.5).
-- [ ] Test tiêu chí 11 (a–j) bằng fake provider, gồm kiểm `auto` y như cũ với bản `gst_enqueue.sh` cũ.
-- [ ] Docs: `docs/CONFIGURATION.md` (`admission_mode`), `docs/API.md`, `docs/BAZARR.md` (mục "Manual Wanted Workflow"), `CONTEXT.md` (Held job, vòng đời), `AGENTS.md` (held không gọi model; duyệt không bỏ qua kiểm tra thiếu ngôn ngữ), `CHANGELOG.md`; chuyển phần thiết kế FR-12 vào ARCHITECTURE.
+- [x] Vòng đời hàng đợi thêm `held` và `rejected` (thể hiện cụ thể do `JobQueue` quyết định, ghi lại trong ARCHITECTURE và `CONTEXT.md`); khôi phục khi khởi động worker **không** thả job `held` (FR-12.8); từ chối nhớ theo job id để script/scan không đưa lại, khôi phục được (FR-12.5).
+- [x] Cài đặt `admission_mode` (`auto` mặc định | `hold`) trong settings; worker áp dụng khi nhận job từ script, job do admin tạo (Enqueue, Scan, dịch lại, sửa cue, hoàn tác) không bị giữ (FR-12.2, 12.3). `gst_enqueue.sh` và định dạng file job không đổi; kiểm bằng test chạy với bản script hiện tại.
+- [x] Use case: liệt kê `held`, duyệt (job / nhiều job / series / tất cả), từ chối, khôi phục. Duyệt vẫn qua FR-9.6 và NFR-4, và không bị giới hạn bởi `GST_MAX_PENDING`; `GST_ONLY_PATHS` vẫn chặn ở lúc nhận (FR-12.6, 12.7).
+- [x] HTTP API cho các use case trên (FR-12.9) + `docs/API.md`.
+- [x] Console: tab **Held** (chưa thử trên trình duyệt thật; chỉ có test cấu trúc) trong Queue, nhóm theo series, chọn nhiều, badge trên thanh điều hướng, xác nhận khi duyệt hàng loạt có số job; dùng được trên điện thoại (FR-12.4, 12.5).
+- [x] Test tiêu chí 11 (a–j; `apps/worker/tests/test_admission_hold.py` + hợp đồng port trong `test_job_queue_contract.py`) bằng fake provider, gồm kiểm `auto` y như cũ với bản `gst_enqueue.sh` cũ.
+- [x] Docs: `docs/CONFIGURATION.md` (`admission_mode`), `docs/API.md`, `docs/BAZARR.md` (mục "Manual Wanted Workflow"), `CONTEXT.md` (Held job, vòng đời), `AGENTS.md` (held không gọi model; duyệt không bỏ qua kiểm tra thiếu ngôn ngữ), `CHANGELOG.md`; chuyển phần thiết kế FR-12 vào ARCHITECTURE.
 - [ ] Thử trên Bazarr thật: `hold` + `GST_ONLY_PATHS` một series, xem job `held` xuất hiện, duyệt một job và đọc bản dịch.
 - [ ] (Tuỳ chọn, sau cùng) CLI cho worker làm adapter vào thứ hai của tầng use case: lệnh ghi (duyệt, từ chối, enqueue, dịch lại) đi qua HTTP API khi worker đang chạy (ADR-4, một writer), lệnh đọc có thể đọc trực tiếp.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P0d phần 2.

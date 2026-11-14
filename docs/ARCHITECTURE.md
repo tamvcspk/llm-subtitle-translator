@@ -198,7 +198,7 @@ so the worker serves `.js` as `text/javascript` with `Cache-Control: no-cache`.
 
 ## Queue Layout
 
-The queue is a set of JSON files in five directories:
+The queue is a set of JSON files in seven directories:
 
 ```text
 queue/
@@ -207,7 +207,13 @@ queue/
   deferred/
   done/
   failed/
+  held/       # received in admission_mode=hold, waiting for approval; never claimed
+  rejected/   # refused held jobs, kept so the script and scans do not queue them again
 ```
+
+Jobs the Bazarr script writes carry no `admission` field; the worker adds one (`admin`,
+`auto`, `approved`) as a job is admitted, and in `hold` mode moves an unmarked pending job
+to `held/` before each claim (`JobQueue.admit_new_jobs`). Design: `docs/design/ARCHITECTURE.md` ADR-9.
 
 A job file is moved between directories as state changes. Deferred and failed
 jobs may also have a sibling `.error` file containing the exception text.

@@ -50,6 +50,11 @@ MEMORY_INT_CONFIG_KEYS = {
     "memory_budget_tokens": (8000, 500),
     "memory_recent_episodes": (3, 0),
 }
+# How the worker receives the jobs Bazarr's script queues (FR-12): `auto` runs them, `hold` sets them aside
+# until the admin approves. Jobs the admin makes in the console are never held.
+ADMISSION_AUTO = "auto"
+ADMISSION_HOLD = "hold"
+ADMISSION_MODES = (ADMISSION_AUTO, ADMISSION_HOLD)
 DEFAULT_APP_CONFIG = {
     "source_languages": DEFAULT_SOURCE_LANGUAGES,
     "target_languages": DEFAULT_TARGET_LANGUAGES,
@@ -67,6 +72,7 @@ DEFAULT_APP_CONFIG = {
     "gst_thinking_budget": "2048",
     "gst_no_thinking": False,
     "job_settle_seconds": 600,
+    "admission_mode": ADMISSION_AUTO,
     "memory_enabled": False,
     "memory_model": "",
     **{key: default for key, (default, _) in MEMORY_INT_CONFIG_KEYS.items()},
@@ -131,6 +137,9 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
         normalized["job_settle_seconds"] = max(0, int(normalized.get("job_settle_seconds", 600)))
     except (TypeError, ValueError):
         normalized["job_settle_seconds"] = 600
+    normalized["admission_mode"] = str(normalized.get("admission_mode") or "").strip().lower()
+    if normalized["admission_mode"] not in ADMISSION_MODES:
+        normalized["admission_mode"] = ADMISSION_AUTO
     for key in MEMORY_BOOL_CONFIG_KEYS:
         normalized[key] = bool(normalized.get(key))
     for key in MEMORY_STRING_CONFIG_KEYS:

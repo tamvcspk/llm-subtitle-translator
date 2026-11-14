@@ -73,6 +73,20 @@ Scan -> Load Scan -> Enqueue All
 
 This avoids running a timer that constantly walks the whole media library.
 
+### Choosing what gets translated: hold mode
+
+If Bazarr reports hundreds of missing subtitles and runs the script for each, set
+**Jobs from Bazarr** to *Hold for my approval* in Settings (`admission_mode`: `hold`).
+The script still writes its jobs, but the worker sets them aside as *held*: nothing
+is sent to the model. Open Queue → Held (the sidebar badge shows how many wait), where
+jobs are grouped by series, and approve one job, the selected ones, a series, or all.
+A rejected job is remembered, so Bazarr running the script again for the same item does
+not bring it back; restore it from the Rejected tab to reconsider.
+
+Approving does not skip the usual checks: a job whose target language already exists
+(or that Bazarr no longer lists as missing) ends as skipped without a model call.
+The script is unchanged, so switching modes needs no Bazarr change.
+
 ## Refresh Behavior
 
 After translation, the worker asks Bazarr to rescan the item:

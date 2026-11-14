@@ -10,19 +10,43 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .config import enabled_target_languages
+from .config import ADMISSION_AUTO, ADMISSION_HOLD, enabled_target_languages
+from .ports import HeldJob
 from .subtitles import existing_target_subtitle, target_output_path
 from .translation import ContextGapError, DailyQuotaExceededError, HardJobError, ProviderUnavailableError
 from .queue_policy import PROVIDER_RETRY_DELAYS, daily_quota_retry_at, provider_retry_decision, select_model
 
 
-QUEUE_STATES = ("pending", "processing", "deferred", "done", "failed")
+# `held` and `rejected` are the admission states of FR-12: a held job is received and stored but never claimed
+# or run (no model call, no quota); a rejected job is the remembered "no" that keeps the Bazarr script and scans
+# from queueing the same job again. Neither is picked up by `_ready_job_path`, quota failing or recovery.
+HELD = "held"
+REJECTED = "rejected"
+QUEUE_STATES = ("pending", "processing", "deferred", "done", "failed", HELD, REJECTED)
+
+# A job that already went through admission carries an `admission` field: "admin" (made by the console),
+# "auto" (running or open when `hold` was switched on), "approved" (released from held). The script's own
+# jobs have none, which is how the worker tells "new from Bazarr" from "already admitted" (FR-12.2, 12.3).
+ADMISSION_FIELD = "admission"
 
 
 def _write_job(path: Path, job: dict[str, Any]) -> None:
     temporary = path.with_name(f".{path.stem}.tmp")
     temporary.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
     temporary.replace(path)
+
+
+def _read_job(path: Path) -> dict[str, Any] | None:
+    try:
+        job = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return None
+    return job if isinstance(job, dict) else None
+
+
+def _safe_job_id(job_id: str) -> bool:
+    """A job id names a file in the queue directory; anything that is not a plain file name is refused."""
+    return bool(job_id) and job_id == Path(job_id).name and job_id not in {".", ".."}
 
 
 def _move_job(source: Path, destination: Path, error: str | None = None) -> None:
@@ -190,6 +214,7 @@ def retry_failed_job(queue_dir: str, job_id: str) -> bool:
         _reset_retry(job)
         job.pop("escalated_from", None)
         job.pop("escalation_reason", None)
+        job[ADMISSION_FIELD] = "admin"  # the admin asked for this run, so `hold` does not catch it
         _write_job(failed, job)
     except (OSError, TypeError, ValueError):
         pass
@@ -203,7 +228,8 @@ def cancel_failed_job(queue_dir: str, job_id: str) -> bool:
 
 
 def delete_queue_job(queue_dir: str, state: str, job_id: str) -> bool:
-    if state not in QUEUE_STATES:
+    # A held job leaves through approve or reject (so the "no" is remembered), never by plain deletion.
+    if state not in QUEUE_STATES or state == HELD or not _safe_job_id(job_id):
         return False
     path = Path(queue_dir) / state / f"{job_id}.json"
     if not path.exists():
@@ -246,6 +272,9 @@ def enqueue_translation_jobs(
         deferred = Path(queue_dir) / "deferred" / f"{jid}.json"
         if pending.exists() or processing.exists() or deferred.exists():
             continue
+        # Waiting for approval, or refused: not queued again (FR-12.5), even by a scan.
+        if (Path(queue_dir) / HELD / pending.name).exists() or (Path(queue_dir) / REJECTED / pending.name).exists():
+            continue
         if queue_is_full(queue_dir):
             logging.warning("Not queueing %s (%s): GST_MAX_PENDING=%s jobs are already waiting",
                             subtitle_path, target_code, max_open_jobs())
@@ -263,6 +292,7 @@ def enqueue_translation_jobs(
             "target_code": target_code,
             "target_language": str(target["language"]),
             "output_path": output_path,
+            ADMISSION_FIELD: "admin",
         }
         _write_job(pending, job)
         created.append(str(pending))
@@ -287,9 +317,103 @@ def enqueue_retranslation(queue_dir: str, job: dict[str, Any]) -> str:
     pending = root / "pending" / f"{jid}.json"
     _write_job(pending, {
         **job, "job_id": jid, "trigger": "retranslate", "priority": RETRANSLATE_PRIORITY,
-        "created_at": int(time.time()),
+        "created_at": int(time.time()), ADMISSION_FIELD: "admin",
     })
     return jid
+
+
+def _job_files(queue_dir: str, state: str) -> list[Path]:
+    return sorted((Path(queue_dir) / state).glob("*.json"), key=lambda path: (path.stat().st_mtime, path.name))
+
+
+def list_jobs(queue_dir: str, state: str) -> list[dict[str, Any]]:
+    """Every job in `state`, oldest first, without the limit `queue_snapshot` applies (the Held inbox can be long)."""
+    ensure_queue_dirs(queue_dir)
+    jobs: list[dict[str, Any]] = []
+    for path in _job_files(queue_dir, state):
+        job = _read_job(path)
+        if job is not None:
+            jobs.append({**job, "job_id": str(job.get("job_id") or path.stem)})
+    return jobs
+
+
+def approve_jobs(queue_dir: str, job_ids: list[str]) -> list[str]:
+    """Release held jobs into the normal queue (FR-12.5); returns the ids that moved to pending.
+
+    Approval is only an admission: the job still meets `skip_reason` (target already present, FR-12.6)
+    and the language check when it runs, and `GST_MAX_PENDING` does not apply to it (FR-12.7).
+    """
+    reject_daily_quota(queue_dir)
+    ensure_queue_dirs(queue_dir)
+    root = Path(queue_dir)
+    approved: list[str] = []
+    for job_id in dict.fromkeys(job_ids):
+        if not _safe_job_id(job_id):
+            continue
+        source = root / HELD / f"{job_id}.json"
+        job = _read_job(source) if source.exists() else None
+        if job is None:
+            continue
+        if any((root / state / source.name).exists() for state in ("pending", "processing", "deferred")):
+            source.unlink(missing_ok=True)  # already open under that id: the held copy is a leftover
+            continue
+        job[ADMISSION_FIELD] = "approved"
+        job["approved_at"] = time.time()
+        _write_job(source, job)
+        _move_job(source, root / "pending" / source.name)
+        approved.append(job_id)
+    return approved
+
+
+def _move_between(queue_dir: str, job_ids: list[str], source_state: str, destination_state: str, **stamp: Any) -> list[str]:
+    ensure_queue_dirs(queue_dir)
+    root = Path(queue_dir)
+    moved: list[str] = []
+    for job_id in dict.fromkeys(job_ids):
+        if not _safe_job_id(job_id):
+            continue
+        source = root / source_state / f"{job_id}.json"
+        job = _read_job(source) if source.exists() else None
+        if job is None:
+            continue
+        destination = root / destination_state / source.name
+        if destination.exists():
+            source.unlink(missing_ok=True)
+            continue
+        _write_job(source, {**job, **stamp, "decided_at": time.time()})
+        _move_job(source, destination)
+        moved.append(job_id)
+    return moved
+
+
+def reject_jobs(queue_dir: str, job_ids: list[str]) -> list[str]:
+    """Refuse held jobs: they never run, and the script or a scan cannot bring them back (FR-12.5)."""
+    return _move_between(queue_dir, job_ids, HELD, REJECTED)
+
+
+def restore_jobs(queue_dir: str, job_ids: list[str]) -> list[str]:
+    """Take rejected jobs back to the inbox (held), where they can be approved."""
+    return _move_between(queue_dir, job_ids, REJECTED, HELD)
+
+
+def stamp_open_jobs(queue_dir: str) -> int:
+    """Mark the jobs already waiting as admitted, at the moment `hold` is switched on (FR-12.8).
+
+    Changing the mode does not touch what is in line: jobs without an admission mark are the script's new
+    arrivals, and these are not new. File times are kept so the order of the line does not change.
+    """
+    ensure_queue_dirs(queue_dir)
+    stamped = 0
+    for state in ("pending", "deferred"):
+        for path in _job_files(queue_dir, state):
+            job = _read_job(path)
+            if job is None or ADMISSION_FIELD in job:
+                continue
+            times = (path.stat().st_atime, path.stat().st_mtime)
+            _write_job(path, {**job, ADMISSION_FIELD: ADMISSION_AUTO})
+            os.utime(path, times)
+            stamped += 1
+    return stamped
 
 
 def queue_snapshot(queue_dir: str, limit: int = 100) -> dict[str, Any]:
@@ -372,6 +496,33 @@ class JobQueue:
                 pass
             _move_job(processing_path, pending_path)
             logging.info("Recovered interrupted job %s to pending", processing_path.name)
+
+    def admit_new_jobs(self, mode: str) -> int:
+        """Apply the admission mode to what the Bazarr script just wrote (FR-12.2, 12.3); returns how many were held.
+
+        The script writes straight into ``pending/`` and knows nothing of this mode, so the worker decides on
+        receipt: in ``hold`` a job without an admission mark moves to ``held/``. Whatever the mode, a job the
+        script queues again under an id that is held or rejected is dropped (the "no" is remembered, FR-12.5).
+        A job outside ``GST_ONLY_PATHS`` is not held: it is left to end as skipped (FR-12.7).
+        """
+        held = 0
+        for path in sorted((self.queue_dir / "pending").glob("*.json")):
+            if (self.queue_dir / HELD / path.name).exists() or (self.queue_dir / REJECTED / path.name).exists():
+                path.unlink(missing_ok=True)
+                logging.info("Dropped %s: the same job is held or was rejected", path.name)
+                continue
+            if mode != ADMISSION_HOLD:
+                continue
+            job = _read_job(path)
+            if job is None or ADMISSION_FIELD in job or outside_allowed_paths(str(job.get("subtitle_path", ""))):
+                continue
+            destination = self.queue_dir / HELD / path.name
+            _write_job(destination, {**job, "held_at": time.time()})
+            path.unlink(missing_ok=True)
+            held += 1
+            logging.info("Held job %s | %s -> %s | waiting for approval", path.stem,
+                         Path(str(job.get("subtitle_path", ""))).name, job.get("target_code", "?"))
+        return held
 
     def _fail_waiting_quota_jobs(self) -> None:
         for state in ("pending", "deferred"):
@@ -472,6 +623,8 @@ class JobQueue:
         error = None
         try:
             job = json.loads(processing_path.read_text(encoding="utf-8"))
+            # Once it runs a job is admitted for good: recovery after a restart must not hold it.
+            job.setdefault(ADMISSION_FIELD, ADMISSION_AUTO)
             model = select_model(
                 models,
                 model_quota_pauses(str(self.queue_dir), current_time),
@@ -634,3 +787,56 @@ class FileJobQueue:
 
     def delete(self, state: str, job_id: str) -> bool:
         return delete_queue_job(self.queue_dir, state, job_id)
+
+    def held(self) -> list[HeldJob]:
+        return [_held_job(job) for job in list_jobs(self.queue_dir, HELD)]
+
+    def rejected(self) -> list[HeldJob]:
+        return [_held_job(job) for job in list_jobs(self.queue_dir, REJECTED)]
+
+    def approve(self, job_ids: list[str]) -> list[str]:
+        return approve_jobs(self.queue_dir, list(job_ids))
+
+    def reject(self, job_ids: list[str]) -> list[str]:
+        return reject_jobs(self.queue_dir, list(job_ids))
+
+    def restore(self, job_ids: list[str]) -> list[str]:
+        return restore_jobs(self.queue_dir, list(job_ids))
+
+
+_CUE_COUNTS: dict[tuple[str, float], int] = {}
+
+
+def _cue_count(subtitle_path: str) -> int:
+    """How many cues a source subtitle has (timecode lines); 0 when it cannot be read. Cached by file time."""
+    try:
+        key = (subtitle_path, Path(subtitle_path).stat().st_mtime)
+    except OSError:
+        return 0
+    if key not in _CUE_COUNTS:
+        try:
+            text = Path(subtitle_path).read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            return 0
+        if len(_CUE_COUNTS) > 4096:
+            _CUE_COUNTS.clear()
+        _CUE_COUNTS[key] = sum(1 for line in text.splitlines() if "-->" in line)
+    return _CUE_COUNTS[key]
+
+
+def _held_job(job: dict[str, Any]) -> HeldJob:
+    subtitle_path = str(job.get("subtitle_path") or "")
+    return HeldJob(
+        job_id=str(job.get("job_id") or ""),
+        subtitle_path=subtitle_path,
+        video_path=str(job.get("video_path") or ""),
+        source_code=str(job.get("source_code") or ""),
+        target_code=str(job.get("target_code") or ""),
+        source_language=str(job.get("source_language") or ""),
+        target_language=str(job.get("target_language") or ""),
+        series_id=str(job.get("series_id") or ""),
+        media_type=str(job.get("media_type") or ""),
+        created_at=float(job.get("created_at") or 0),
+        held_at=float(job.get("held_at") or 0),
+        cue_count=_cue_count(subtitle_path) if subtitle_path else 0,
+    )

@@ -1,4 +1,14 @@
 # Unreleased
+- **P0d part 2: hold mode and job approval (FR-12).** New setting `admission_mode`
+  (`auto`, the default, behaves as before; `hold`). In `hold`, the worker sets the jobs the
+  Bazarr script queues aside as *held*: no model call, no quota. Queue → Held (sidebar badge,
+  grouped by series, works on a phone) approves one job, the selected ones, a series or all, or
+  rejects them; a rejected job is remembered so the script and scans do not queue it again, and can
+  be restored. Approved jobs still skip a language that appeared meanwhile. Jobs made in the console
+  are never held, and switching the mode does not move jobs already waiting or held. New API:
+  `GET /api/queue/held`, `GET /api/queue/rejected`, `POST /api/queue/approve|reject|restore`;
+  `/api/queue` gains `held` and `rejected`. `gst_enqueue.sh` and the job file format are unchanged
+  (jobs written by the worker get an `admission` field).
 - **P0d part 1 (in progress): worker ports.** Internal refactor, no behaviour change: the
   media manager port (`MediaLibrary`) now also answers "is the target still missing" and
   runs the Bazarr rescan, and a new `Metadata` port (TMDB descriptions) is passed into

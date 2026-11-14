@@ -221,6 +221,15 @@ The Settings page writes these options into app config:
 - `job_settle_seconds`: queue settle window before a new job can run. Default
   is `600` seconds so Bazarr has time to finish extracting other embedded
   subtitles from the same media file.
+- `admission_mode`: what the worker does with jobs the Bazarr script queues.
+  `auto` (default) translates them. `hold` receives and stores them as *held*
+  jobs without calling the model; you approve or reject them in Queue → Held.
+  Jobs you create in the console (Enqueue, Scan, retranslate, cue edit, revert)
+  are never held. Changing the mode does not move jobs already waiting or held:
+  switching to `auto` does not release held jobs, and switching to `hold` does
+  not hold what is already pending. `GST_ONLY_PATHS` still applies; held jobs
+  are not counted by `GST_MAX_PENDING`, and approving is not limited by it.
+  `gst_enqueue.sh` is the same in both modes.
 
 ## Story Memory
 

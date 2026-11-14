@@ -15,7 +15,8 @@ from gst_worker.bazarr import BazarrIntegration, BazarrMedia
 from gst_worker.config import normalize_app_config, save_app_config
 from gst_worker.logs import configure_logging
 from gst_worker.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
-from gst_worker.queue import FileJobQueue, JobQueue, skip_reason, sync_daily_quota_pause
+from gst_worker.config import ADMISSION_AUTO, ADMISSION_HOLD
+from gst_worker.queue import FileJobQueue, JobQueue, skip_reason, stamp_open_jobs, sync_daily_quota_pause
 from gst_worker.console import ConsoleActions
 from gst_worker.glossaries import GlossaryFiles
 from gst_worker.library import Library, enrich_job_identity
@@ -111,10 +112,18 @@ class QueueWorker:
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
         """Adopt new settings; a newly configured model with quota left lifts the daily quota pause."""
+        was = self.admission_mode()
+        if was != ADMISSION_HOLD and str(settings.get("admission_mode") or "") == ADMISSION_HOLD:
+            # Switching to `hold` leaves the line as it is (FR-12.8): what the script queued before now counts as admitted.
+            stamp_open_jobs(str(self.queue.queue_dir))
         self.settings = settings
         sync_daily_quota_pause(str(self.queue.queue_dir), self.models())
 
+    def admission_mode(self) -> str:
+        return ADMISSION_HOLD if str(self.settings.get("admission_mode") or "") == ADMISSION_HOLD else ADMISSION_AUTO
+
     def process_once(self, now: float | None = None) -> bool:
+        self.queue.admit_new_jobs(self.admission_mode())
         return self.queue.process_once(
             lambda job, update_status: process_job(
                 job, self.settings, self.cache, self.http, update_status, self.attempt,

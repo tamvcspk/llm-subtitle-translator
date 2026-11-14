@@ -93,6 +93,7 @@ function renderWorkerHealth() {
   if (!counts) return;
   setBadge("nav-active-count", (counts.pending || 0) + (counts.processing || 0) + (counts.deferred || 0));
   setBadge("nav-failed-count", counts.failed || 0);
+  setBadge("nav-held-count", counts.held || 0);
   if (activePause()) setHealth("health-worker", "warn", "Quota paused");
   else if (counts.processing) setHealth("health-worker", "busy", "Translating");
   else if (counts.pending) setHealth("health-worker", "ok", "Starting soon");

@@ -413,6 +413,26 @@ class Metadata(Protocol):
         """The description for the job's item; ``""`` when there is no key, no match, or the lookup failed."""
 
 
+@dataclass(frozen=True)
+class HeldJob:
+    """A job waiting for the admin's decision (FR-12.4), or one that was refused. ``created_at`` is when the
+    script queued it, ``held_at`` when the worker received and set it aside; ``cue_count`` is the cues in the
+    source subtitle (0 when it cannot be read). ``series_id`` is Bazarr's, empty for a movie."""
+
+    job_id: str
+    subtitle_path: str
+    source_code: str
+    target_code: str
+    video_path: str = ""
+    source_language: str = ""
+    target_language: str = ""
+    series_id: str = ""
+    media_type: str = ""
+    created_at: float = 0.0
+    held_at: float = 0.0
+    cue_count: int = 0
+
+
 @runtime_checkable
 class JobQueue(Protocol):
     """How the core submits and manages translation jobs. The queue's own life cycle (claiming a job, deferring
@@ -433,4 +453,21 @@ class JobQueue(Protocol):
         """Remove a failed job for good; False when there is no such job."""
 
     def delete(self, state: str, job_id: str) -> bool:
-        """Remove a job that is in ``state``; False when there is none."""
+        """Remove a job that is in ``state``; False when there is none. A held job is not deleted this way
+        (approve or reject it, so a refusal is remembered)."""
+
+    def held(self) -> list[HeldJob]:
+        """The jobs waiting for approval (FR-12), oldest first."""
+
+    def rejected(self) -> list[HeldJob]:
+        """The jobs the admin refused, oldest first."""
+
+    def approve(self, job_ids: list[str]) -> list[str]:
+        """Release held jobs into the queue; returns the ids that moved. Unknown or not-held ids are ignored.
+        Raises when the daily quota pause is active."""
+
+    def reject(self, job_ids: list[str]) -> list[str]:
+        """Refuse held jobs for good: they never run and are not queued again; returns the ids that moved."""
+
+    def restore(self, job_ids: list[str]) -> list[str]:
+        """Take rejected jobs back to the held inbox; returns the ids that moved."""

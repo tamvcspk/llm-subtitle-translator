@@ -33,6 +33,21 @@ default model. It moves to the strong model once; if that fails too the job fail
 A target language Bazarr still lists in an item's `missing_subtitles` and that no
 sibling subtitle already provides. Only wanted languages are translated.
 
+**Admission mode** (setting `admission_mode`):
+How the worker receives the translation jobs the Bazarr script queues: `auto`
+runs them, `hold` sets them aside until the admin decides. Jobs the admin makes in
+the console are never held. Changing the mode does not touch jobs already waiting.
+
+**Held job**:
+A job the script queued while the admission mode was `hold`: received and stored,
+not run, no model call, no quota. The admin approves it (it becomes pending and then
+meets every normal check, including a target that appeared meanwhile) or rejects it.
+A held job survives a restart and a switch back to `auto`.
+
+**Rejected job**:
+A held job the admin refused. It is remembered by job id so neither the script nor a
+scan queues it again; restoring it returns it to held.
+
 **Queue lifecycle**:
 The rules that move a translation job through the job queue, including settling,
 recovery, retries, quota pauses, and terminal outcomes.

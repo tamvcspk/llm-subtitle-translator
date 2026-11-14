@@ -34,6 +34,7 @@
       <a class="nav-item" href="#queue" data-view="queue" data-icon="queue">
         <span>Queue</span>
         <span class="nav-badges">
+          <span class="badge badge-warn" id="nav-held-count" title="Jobs waiting for your approval" hidden></span>
           <span class="badge" id="nav-active-count" hidden></span>
           <span class="badge badge-danger" id="nav-failed-count" hidden></span>
         </span>
@@ -153,10 +154,16 @@
             <a class="tab" href="#queue/deferred" data-state="deferred">Deferred <span class="tab-count" data-count="deferred">0</span></a>
             <a class="tab" href="#queue/done" data-state="done">Done <span class="tab-count" data-count="done">0</span></a>
             <a class="tab" href="#queue/failed" data-state="failed">Failed <span class="tab-count" data-count="failed">0</span></a>
+            <a class="tab" href="#queue/held" data-state="held">Held <span class="tab-count tab-count-warn" data-count="held">0</span></a>
+            <a class="tab" href="#queue/rejected" data-state="rejected">Rejected <span class="tab-count" data-count="rejected">0</span></a>
           </nav>
           <div class="toolbar">
             <input id="queue-filter" class="input input-search" type="search" placeholder="Filter by path or language" aria-label="Filter jobs">
             <button id="queue-retry-all" type="button" class="btn" data-icon="retry" hidden>Retry all</button>
+            <button id="queue-approve-selected" type="button" class="btn btn-primary" hidden>Approve selected</button>
+            <button id="queue-reject-selected" type="button" class="btn btn-danger" hidden>Reject selected</button>
+            <button id="queue-approve-all" type="button" class="btn" hidden>Approve all</button>
+            <button id="queue-restore-all" type="button" class="btn" hidden>Restore all</button>
           </div>
         </header>
         <div id="queue-list" class="job-list"></div>
@@ -381,6 +388,14 @@
               <label for="f-job_settle_seconds">Queue settle seconds</label>
               <input id="f-job_settle_seconds" name="job_settle_seconds" class="input" type="number" min="0" max="3600" data-type="int" data-default="0">
               <p class="hint">How long a new job waits before the worker picks it up.</p>
+            </div>
+            <div class="field field-wide">
+              <label for="f-admission_mode">Jobs from Bazarr</label>
+              <select id="f-admission_mode" name="admission_mode" class="input">
+                <option value="auto">Translate automatically</option>
+                <option value="hold">Hold for my approval</option>
+              </select>
+              <p class="hint">With <em>Hold</em>, jobs queued by the Bazarr script wait in Queue → Held until you approve them; nothing is sent to the model before that. Jobs you create here are never held. Changing this does not move jobs already waiting or held.</p>
             </div>
             <div class="checks field-wide">
               <label class="check"><input type="checkbox" name="gst_paid_quota"><span>Paid quota</span></label>

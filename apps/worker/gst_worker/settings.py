@@ -9,6 +9,7 @@ from typing import Any
 
 from .bazarr import read_bazarr_api_key
 from .config import (
+    ADMISSION_AUTO,
     DEFAULT_MODEL,
     GST_BOOL_CONFIG_KEYS,
     GST_STRING_CONFIG_KEYS,
@@ -52,6 +53,7 @@ def load_settings(config_path: str | None = None) -> dict[str, Any]:
         settings[key] = bool(app_config.get(key))
     settings["gst_model"] = str(app_config.get("gst_model") or os.getenv("GST_MODEL", DEFAULT_MODEL))
     settings["job_settle_seconds"] = int(app_config.get("job_settle_seconds") or 0)
+    settings["admission_mode"] = str(app_config.get("admission_mode") or ADMISSION_AUTO)
     for key in MEMORY_BOOL_CONFIG_KEYS:
         settings[key] = bool(app_config.get(key))
     for key in MEMORY_STRING_CONFIG_KEYS:
