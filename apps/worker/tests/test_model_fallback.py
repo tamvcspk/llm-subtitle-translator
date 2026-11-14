@@ -164,6 +164,21 @@ class ModelFallbackQueueTests(unittest.TestCase):
             self.assertIsNone(queue.daily_quota_pause_until(self.queue_dir))
 
 
+class _NoBazarr:
+    """MediaLibrary double: Bazarr cannot say whether the language is missing and nothing is rescanned."""
+
+    def target_still_missing(self, job):
+        return None
+
+    def refresh(self, job):
+        return None
+
+
+class _NoTmdb:
+    def description(self, job):
+        return ""
+
+
 class ProcessJobModelTests(unittest.TestCase):
     def test_process_job_runs_the_model_selected_by_the_queue(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -171,10 +186,8 @@ class ProcessJobModelTests(unittest.TestCase):
             subtitle.write_text("subtitle", encoding="utf-8")
             job = {"subtitle_path": str(subtitle), "source_code": "en", "target_code": "zh", "gst_model": FALLBACK}
             settings = {"gst_model": PRIMARY, "bazarr_url": "", "bazarr_api_key": "", "tmdb_api_key": ""}
-            with patch("worker.build_tmdb_description", return_value=""), \
-                    patch("worker.refresh_bazarr"), \
-                    patch.object(worker.DEFAULT_ATTEMPT, "run", return_value="translated") as run:
-                worker.process_job(job, settings, None, None)
+            with patch.object(worker.DEFAULT_ATTEMPT, "run", return_value="translated") as run:
+                worker.process_job(job, settings, None, None, media=_NoBazarr(), metadata=_NoTmdb())
 
             self.assertEqual(run.call_args.args[2]["gst_model"], FALLBACK)
             self.assertEqual(settings["gst_model"], PRIMARY)

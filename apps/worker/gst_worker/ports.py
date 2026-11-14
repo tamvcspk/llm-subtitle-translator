@@ -397,6 +397,21 @@ class MediaLibrary(Protocol):
         """Every episode of the series, each with its source subtitle in ``source_code`` if it has one.
         Empty when the library cannot be asked; raises when it cannot be reached."""
 
+    def target_still_missing(self, job: dict[str, Any]) -> bool | None:
+        """Whether the library still lists the job's target language as missing for its item. False: the
+        language is there (or not wanted), spend no model call. None: the library cannot say."""
+
+    def refresh(self, job: dict[str, Any]) -> None:
+        """Ask the library to rescan the item's subtitles. Raises when it cannot be reached."""
+
+
+@runtime_checkable
+class Metadata(Protocol):
+    """Descriptive text about the item of a job (TMDB), prepended to the prompt as context. Empty when unknown."""
+
+    def description(self, job: dict[str, Any]) -> str:
+        """The description for the job's item; ``""`` when there is no key, no match, or the lookup failed."""
+
 
 @runtime_checkable
 class JobQueue(Protocol):

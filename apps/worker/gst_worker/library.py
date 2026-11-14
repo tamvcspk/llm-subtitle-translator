@@ -214,7 +214,7 @@ class Library:
     ) -> dict[str, Any]:
         lang, output_path = output.target_lang, output.output_path
         exists = Path(output_path).is_file()
-        current = self.versions.store.current_version(output_path)
+        current = self.versions.repo.current_version(output_path)
         info: dict[str, Any] = {
             "lang": lang,
             "language": output.target_language or lang,

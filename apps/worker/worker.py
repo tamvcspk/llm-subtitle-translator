@@ -29,8 +29,6 @@ from gst_worker.bazarr import (
     BazarrMedia,
     list_wanted_items,
     read_bazarr_api_key,
-    refresh_bazarr,
-    target_still_missing,
 )
 from gst_worker.config import (
     DEFAULT_MODEL,
@@ -71,7 +69,8 @@ from gst_worker.units import UnitService
 from gst_worker.versions import TranslationVersions
 from gst_worker.subtitles import scan_source_subtitles
 from gst_worker.runtime import RuntimeContext
-from gst_worker.tmdb import build_tmdb_description
+from gst_worker.ports import MediaLibrary, Metadata
+from gst_worker.tmdb import TmdbMetadata
 
 # Used when `process_job` is called without an explicit attempt (no history, no library): the legacy entry point.
 DEFAULT_ATTEMPT = TranslationAttempt(provider_factory=build_provider)
@@ -166,15 +165,18 @@ def process_job(
     http: HTTPClient,
     status_callback: Callable[..., None] | None = None,
     attempt: TranslationAttempt | None = None,
+    media: MediaLibrary | None = None,
+    metadata: Metadata | None = None,
 ) -> str:
+    # The ports default to the adapters over the settings this job runs with (composition done here, not in core).
+    media = media or BazarrMedia(http, lambda: settings)
+    metadata = metadata or TmdbMetadata(http, cache, lambda: settings)
     reason = skip_reason(job)
     if reason:
         logging.info("Skipping job for %s: %s", job.get("subtitle_path"), reason)
         return "skipped"
     # Bazarr decides what is wanted: when it says the language is not missing, spend no model call.
-    if job.get("trigger") != "retranslate" and target_still_missing(
-        job, http, settings["bazarr_url"], settings["bazarr_api_key"]
-    ) is False:
+    if job.get("trigger") != "retranslate" and media.target_still_missing(job) is False:
         logging.info("Skipping job for %s: Bazarr does not list %s as missing",
                      job.get("subtitle_path"), job.get("target_code"))
         return "skipped-not-wanted"
@@ -182,16 +184,8 @@ def process_job(
     if status_callback:
         status_callback("Resolving movie details")
     if not job.get("unit_id"):
-        enrich_job_identity(job, BazarrMedia(http, lambda: settings))
-    description = build_tmdb_description(
-        job,
-        bazarr=http,
-        tmdb=http,
-        bazarr_url=settings["bazarr_url"],
-        bazarr_api_key=settings["bazarr_api_key"],
-        tmdb_api_key=settings["tmdb_api_key"],
-        cache=cache,
-    )
+        enrich_job_identity(job, media)
+    description = metadata.description(job)
     if status_callback:
         status_callback("Sending subtitle batches to Gemini")
     # The queue picks primary or fallback per attempt; the configured model is the default.
@@ -204,7 +198,7 @@ def process_job(
     status = (attempt or DEFAULT_ATTEMPT).run(job, description, settings, on_progress=report_progress)
     if status_callback:
         status_callback("Refreshing Bazarr")
-    refresh_bazarr(job, http=http, bazarr_url=settings["bazarr_url"], api_key=settings["bazarr_api_key"])
+    media.refresh(job)
     return status
 
 
@@ -218,12 +212,16 @@ class QueueWorker:
         cache: MemoryCache,
         http: HTTPClient,
         attempt: TranslationAttempt | None = None,
+        media: MediaLibrary | None = None,
+        metadata: Metadata | None = None,
     ) -> None:
         self.queue = JobQueue(queue_dir)
         self.settings = settings
         self.cache = cache
         self.http = http
         self.attempt = attempt
+        self.media = media
+        self.metadata = metadata
         self.console = ConsoleActions(FileJobQueue(queue_dir))
         self.queue.recover_interrupted_jobs()
 
@@ -240,7 +238,8 @@ class QueueWorker:
     def process_once(self, now: float | None = None) -> bool:
         return self.queue.process_once(
             lambda job, update_status: process_job(
-                job, self.settings, self.cache, self.http, update_status, self.attempt
+                job, self.settings, self.cache, self.http, update_status, self.attempt,
+                media=self.media, metadata=self.metadata,
             ),
             settle_seconds=max(0, int(self.settings.get("job_settle_seconds") or 0)),
             now=now,
@@ -803,15 +802,20 @@ def main() -> int:
     def live_settings() -> dict[str, Any]:
         return worker.settings  # the worker adopts new settings when they are saved
 
-    memory = StoryMemory(store, store, settings_source=live_settings, media=BazarrMedia(http, live_settings))
+    media = BazarrMedia(http, live_settings)
+    metadata = TmdbMetadata(http, cache, live_settings)
+    memory = StoryMemory(store, store, settings_source=live_settings, media=media)
     library = Library(store, glossaries, versions, memory=memory)
     attempt = TranslationAttempt(
         versions=versions, usage=store, provider_factory=build_provider, library=library, memory=memory
     )
-    worker = QueueWorker(queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt)
+    worker = QueueWorker(
+        queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt,
+        media=media, metadata=metadata,
+    )
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
     units = UnitService(
-        library, glossaries, versions, worker.console.jobs, refresh_bazarr=bazarr.refresh,
+        library, glossaries, versions, worker.console.jobs, refresh_bazarr=media.refresh,
         memory=memory, settings_source=live_settings, usage=store, provider_factory=build_provider,
     )
     backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path)

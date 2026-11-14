@@ -45,8 +45,8 @@ class Published:
 
 
 class TranslationVersions:
-    def __init__(self, store: VersionRepo, backup_dir: str | Path) -> None:
-        self.store = store
+    def __init__(self, repo: VersionRepo, backup_dir: str | Path) -> None:
+        self.repo = repo  # the VersionRepo port; callers outside this module read versions through it
         self.backup_dir = Path(backup_dir)
 
     # -- paths -------------------------------------------------------------
@@ -66,7 +66,7 @@ class TranslationVersions:
     # -- state -------------------------------------------------------------
     def is_system_file(self, output_path: str) -> bool:
         path = Path(output_path)
-        current = self.store.current_version(output_path)
+        current = self.repo.current_version(output_path)
         return bool(
             current
             and path.is_file()
@@ -79,16 +79,16 @@ class TranslationVersions:
         if not path.is_file() or self.is_system_file(output_path):
             return
         data = path.read_bytes()
-        version = self.store.next_version(output_path)
+        version = self.repo.next_version(output_path)
         stored = self._write_copy(output_path, version, data)
-        self.store.add_version(
+        self.repo.add_version(
             output_path, version=version, stored_path=str(stored), sha256=sha256_bytes(data), trigger=EXTERNAL
         )
 
     # -- cache (NFR-3) -----------------------------------------------------
     def cached_text(self, source_sha256: str, target_lang: str, context_hash: str) -> str | None:
         """Text of an earlier result for the same input and context, if its stored copy is intact."""
-        for row in self.store.cached_versions(source_sha256, target_lang, context_hash):
+        for row in self.repo.cached_versions(source_sha256, target_lang, context_hash):
             stored = Path(row.stored_path)
             try:
                 data = stored.read_bytes()
@@ -124,13 +124,13 @@ class TranslationVersions:
         if path.exists():
             self._keep_external(output_path)
         data = text.encode("utf-8")
-        parent = self.store.current_version(output_path)
-        version = self.store.next_version(output_path)
+        parent = self.repo.current_version(output_path)
+        version = self.repo.next_version(output_path)
         stored = self._write_copy(output_path, version, data)
         if trigger == AUTO and path.exists():  # appeared while the copy was written
             return Published(SKIPPED_EXISTING)
         srt.write_atomic(path, text)
-        self.store.add_version(
+        self.repo.add_version(
             output_path,
             version=version,
             stored_path=str(stored),
@@ -154,7 +154,7 @@ class TranslationVersions:
 
     def revert(self, output_path: str, version: int) -> Published:
         """Restore an earlier version byte for byte; the restore is itself a new version."""
-        target = self.store.get_version(output_path, version)
+        target = self.repo.get_version(output_path, version)
         if target is None:
             raise ValueError(f"no version {version} for {output_path}")
         stored = Path(target.stored_path)
@@ -162,12 +162,12 @@ class TranslationVersions:
         if not hmac.compare_digest(sha256_bytes(data), target.sha256):
             raise ValueError(f"stored copy of version {version} is damaged")
         self._keep_external(output_path)
-        new_version = self.store.next_version(output_path)
+        new_version = self.repo.next_version(output_path)
         copy = self._write_copy(output_path, new_version, data)
         temporary = Path(output_path).with_name(f".{Path(output_path).name}.revert.tmp")
         temporary.write_bytes(data)
         temporary.replace(output_path)
-        self.store.add_version(
+        self.repo.add_version(
             output_path,
             version=new_version,
             stored_path=str(copy),

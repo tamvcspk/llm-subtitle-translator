@@ -81,7 +81,7 @@ class UnitService:
     ) -> None:
         self.library = library
         self.catalog = library.catalog
-        self.version_repo = versions.store
+        self.version_repo = versions.repo
         self.usage = usage
         self.glossaries = glossaries
         self.versions = versions

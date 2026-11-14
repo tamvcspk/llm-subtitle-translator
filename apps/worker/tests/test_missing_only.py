@@ -129,6 +129,27 @@ class AdmissionGuardTests(Workdir):
         self.assertEqual(queue.open_job_count(self.queue_dir), 2)
 
 
+class FakeMedia:
+    """MediaLibrary port double: records what the job asked and what was rescanned."""
+
+    def __init__(self, missing):
+        self.missing = missing
+        self.asked = []
+        self.refreshed = []
+
+    def target_still_missing(self, job):
+        self.asked.append(job)
+        return self.missing
+
+    def refresh(self, job):
+        self.refreshed.append(job)
+
+
+class NoMetadata:
+    def description(self, job):
+        return ""
+
+
 class BazarrAuthorityTests(unittest.TestCase):
     def ask(self, item, job=None):
         http = Mock()
@@ -168,21 +189,29 @@ class BazarrAuthorityTests(unittest.TestCase):
                    "media_type": "series", "media_id": "7", "unit_id": 1}
             settings = {"bazarr_url": "http://bazarr", "bazarr_api_key": "k", "tmdb_api_key": ""}
             attempt = Mock()
-            with patch("worker.target_still_missing", return_value=False), patch("worker.refresh_bazarr") as refresh:
-                self.assertEqual(worker.process_job(job, settings, None, None, None, attempt), "skipped-not-wanted")
+            media = FakeMedia(missing=False)
+            self.assertEqual(
+                worker.process_job(job, settings, None, None, None, attempt, media=media, metadata=NoMetadata()),
+                "skipped-not-wanted",
+            )
             attempt.run.assert_not_called()
-            refresh.assert_not_called()
+            self.assertEqual(media.refreshed, [])
 
             attempt.run.return_value = "translated"
-            with patch("worker.target_still_missing", return_value=None), patch("worker.refresh_bazarr"), \
-                    patch("worker.build_tmdb_description", return_value=""):
-                self.assertEqual(worker.process_job(job, settings, None, None, None, attempt), "translated")
+            media = FakeMedia(missing=None)
+            self.assertEqual(
+                worker.process_job(job, settings, None, None, None, attempt, media=media, metadata=NoMetadata()),
+                "translated",
+            )
 
             retranslate = {**job, "trigger": "retranslate"}
-            with patch("worker.target_still_missing", return_value=False) as asked, patch("worker.refresh_bazarr"), \
-                    patch("worker.build_tmdb_description", return_value=""):
-                self.assertEqual(worker.process_job(retranslate, settings, None, None, None, attempt), "translated")
-            asked.assert_not_called()
+            media = FakeMedia(missing=False)
+            self.assertEqual(
+                worker.process_job(retranslate, settings, None, None, None, attempt, media=media, metadata=NoMetadata()),
+                "translated",
+            )
+            self.assertEqual(media.asked, [])  # a retranslation is not asked about; Bazarr is only told to rescan
+            self.assertEqual(len(media.refreshed), 1)
 
 
 class EscalationTests(Workdir):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 
 from .http import HTTPClient, MemoryCache, cached_get_json, first_data
 
@@ -53,6 +53,28 @@ def tmdb_find_tv_id(series: dict[str, Any], tmdb: HTTPClient, tmdb_api_key: str,
         if results:
             return str(results[0].get("id", ""))
     return ""
+
+
+class TmdbMetadata:
+    """The :class:`~gst_worker.ports.Metadata` port over TMDB and Bazarr. Reads the live settings on every call,
+    so a key saved in the console takes effect without a restart."""
+
+    def __init__(self, http: HTTPClient, cache: MemoryCache, settings_source: Callable[[], dict[str, Any]]) -> None:
+        self.http = http
+        self.cache = cache
+        self._settings = settings_source
+
+    def description(self, job: dict[str, Any]) -> str:
+        settings = self._settings()
+        return build_tmdb_description(
+            job,
+            bazarr=self.http,
+            tmdb=self.http,
+            bazarr_url=str(settings.get("bazarr_url") or ""),
+            bazarr_api_key=str(settings.get("bazarr_api_key") or ""),
+            tmdb_api_key=str(settings.get("tmdb_api_key") or ""),
+            cache=self.cache,
+        )
 
 
 def build_tmdb_description(

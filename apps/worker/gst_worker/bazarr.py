@@ -266,6 +266,14 @@ class BazarrMedia:
             return []
         return list_series_episodes(self.http, url, key, series_id, source_code)
 
+    def target_still_missing(self, job: dict[str, Any]) -> bool | None:
+        url, key = self._access()
+        return target_still_missing(job, self.http, url, key)
+
+    def refresh(self, job: dict[str, Any]) -> None:
+        url, key = self._access()
+        refresh_bazarr(job, self.http, url, key)
+
 
 class BazarrIntegration:
     """Narrow interface for wanted discovery and subtitle refresh."""

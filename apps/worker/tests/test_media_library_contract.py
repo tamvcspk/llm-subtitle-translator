@@ -7,7 +7,11 @@ from gst_worker.ports import EpisodeListing, MediaDetails, MediaLibrary
 
 
 class InMemoryMediaLibrary:
-    """Fake MediaLibrary: one series (id "7") with two episodes and one movie (id "5")."""
+    """Fake MediaLibrary: one series (id "7") with two episodes and one movie (id "5"). Bazarr lists "vi" as
+    missing for episode 9 only; every rescan is recorded."""
+
+    def __init__(self):
+        self.refreshed = []
 
     def describe(self, media_type, series_id, media_id):
         if media_type == "series" and series_id == "7" and media_id == "9":
@@ -24,9 +28,20 @@ class InMemoryMediaLibrary:
             EpisodeListing(1, 2, "Two", "12", "/m/S01E02.mkv", ""),
         ]
 
+    def target_still_missing(self, job):
+        if job.get("media_id") != "9" or job.get("media_type") != "series":
+            return None
+        return job.get("target_code") == "vi"
+
+    def refresh(self, job):
+        self.refreshed.append(job)
+
 
 class FakeBazarrHttp:
-    """Answers the three Bazarr endpoints the adapter reads."""
+    """Answers the Bazarr endpoints the adapter reads, and records the requests it is sent."""
+
+    def __init__(self):
+        self.sent = []
 
     def get_json(self, url, params=None, headers=None):
         if url.endswith("/api/series"):
@@ -34,12 +49,17 @@ class FakeBazarrHttp:
         if url.endswith("/api/movies"):
             return {"data": [{"title": "Heat"}]}
         if params and "episodeid[]" in params:
-            return {"data": [{"season": 1, "episode": 2, "title": "Two"}]}
+            return {"data": [{"season": 1, "episode": 2, "title": "Two",
+                              "missing_subtitles": [{"code2": "vi"}]}]}
         return {"data": [
             {"season": 1, "episode": 1, "title": "One", "sonarrEpisodeId": 11, "path": "/m/S01E01.mkv",
              "subtitles": [{"code2": "en", "path": "/m/S01E01.en.srt"}]},
             {"season": 1, "episode": 2, "title": "Two", "sonarrEpisodeId": 12, "path": "/m/S01E02.mkv", "subtitles": []},
         ]}
+
+    def request_json(self, method, url, params=None, headers=None):
+        self.sent.append((method, url, dict(params or {})))
+        return {}
 
 
 class MediaLibraryContract:
@@ -72,15 +92,28 @@ class MediaLibraryContract:
     def test_no_series_id_means_no_episodes(self):
         self.assertEqual(self.repo.series_episodes("", "en"), [])
 
+    def test_the_library_says_whether_the_target_language_is_still_missing(self):
+        self.assertIs(self.repo.target_still_missing({"media_type": "series", "media_id": "9", "target_code": "vi"}), True)
+        self.assertIs(self.repo.target_still_missing({"media_type": "series", "media_id": "9", "target_code": "fr"}), False)
+
+    def test_a_job_it_cannot_identify_gets_no_answer(self):
+        self.assertIsNone(self.repo.target_still_missing({"media_id": "", "target_code": "vi"}))
+
+    def test_refresh_asks_for_a_rescan_of_the_item(self):
+        # Must not raise for a job the library knows; the file is already on disk either way.
+        self.repo.refresh({"media_type": "series", "series_id": "7", "media_id": "9"})
+
 
 class BazarrMediaTests(MediaLibraryContract, unittest.TestCase):
     def setUp(self):
-        self.repo = BazarrMedia(FakeBazarrHttp(), lambda: {"bazarr_url": "http://bazarr/", "bazarr_api_key": "key"})
+        self.http = FakeBazarrHttp()
+        self.repo = BazarrMedia(self.http, lambda: {"bazarr_url": "http://bazarr/", "bazarr_api_key": "key"})
 
     def test_without_an_api_key_it_cannot_say_anything(self):
         media = BazarrMedia(FakeBazarrHttp(), lambda: {"bazarr_url": "http://bazarr", "bazarr_api_key": ""})
         self.assertIsNone(media.describe("series", "7", "9"))
         self.assertEqual(media.series_episodes("7", "en"), [])
+        self.assertIsNone(media.target_still_missing({"media_type": "series", "media_id": "9", "target_code": "vi"}))
 
     def test_a_key_saved_later_takes_effect_without_a_new_adapter(self):
         settings = {"bazarr_url": "http://bazarr", "bazarr_api_key": ""}
@@ -94,11 +127,28 @@ class BazarrMediaTests(MediaLibraryContract, unittest.TestCase):
             def get_json(self, *args, **kwargs):
                 raise OSError("connection refused")
 
+            def request_json(self, *args, **kwargs):
+                raise OSError("connection refused")
+
         media = BazarrMedia(Down(), lambda: {"bazarr_url": "http://bazarr", "bazarr_api_key": "key"})
         with self.assertRaises(OSError):
             media.describe("series", "7", "9")
         with self.assertRaises(OSError):
             media.series_episodes("7", "en")
+        with self.assertRaises(OSError):
+            media.refresh({"media_type": "series", "series_id": "7", "media_id": "9"})
+
+    def test_a_refresh_of_a_series_episode_scans_that_series_on_disk(self):
+        self.repo.refresh({"media_type": "series", "series_id": "7", "media_id": "9"})
+        self.assertEqual(self.http.sent, [("PATCH", "http://bazarr/api/series", {"seriesid": "7", "action": "scan-disk"})])
+
+    def test_an_unreachable_target_check_raises_nothing_and_says_nothing(self):
+        class Down:
+            def get_json(self, *args, **kwargs):
+                raise OSError("connection refused")
+
+        media = BazarrMedia(Down(), lambda: {"bazarr_url": "http://bazarr", "bazarr_api_key": "key"})
+        self.assertIsNone(media.target_still_missing({"media_type": "series", "media_id": "9", "target_code": "vi"}))
 
 
 class InMemoryMediaLibraryTests(MediaLibraryContract, unittest.TestCase):
