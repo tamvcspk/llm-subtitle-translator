@@ -1,6 +1,6 @@
 # SPEC — LLM Subtitle Translator for Bazarr (tên tạm)
 
-> Trạng thái: **Draft v0.8** · 2026-11-14
+> Trạng thái: **Draft v0.9** · 2026-11-14
 > Thay thế bản SRS ban đầu. Những chỗ khác SRS gốc được đánh dấu **[Đổi]** kèm lý do.
 > v0.2: chốt các câu hỏi mở của v0.1 (mục 7), thêm FR-11 (duyệt, dịch lại, correction).
 > v0.3: chốt 2 câu hỏi mở của v0.2 — thông báo để v1.1; Basic Auth bật ngay từ đầu (NFR-5).
@@ -8,6 +8,7 @@
 > v0.6: thêm kiến trúc đích cho worker — ranh giới và port (ADR-8, mục 9), NFR-10, tiêu chí nghiệm thu 10, quyết định #9, ba thuật ngữ (Port, Adapter, Use case). Chỉ SPEC đổi: ARCHITECTURE vẫn v0.5 và chỉ nhận nội dung này khi PLAN P0d xong.
 > v0.7: thêm FR-12 (chế độ nhận job `hold` và duyệt job), tiêu chí nghiệm thu 11, quyết định #10, thuật ngữ "Held job"; làm cùng phase P0d, sau phần ranh giới (ADR-8).
 > v0.8: thêm FR-13 (dọn file: file job đã xong, bản sao phiên bản và glossary, file tạm mồ côi), tiêu chí nghiệm thu 12, quyết định #11; làm cùng phase P0d.
+> v0.9: ADR-8 (ranh giới và port) chuyển từ mục 9 sang ARCHITECTURE §1, §2 vì phần 1 của P0d đã làm xong; mục 9 còn một con trỏ. ARCHITECTURE lên v0.9 theo SPEC.
 
 ---
 
@@ -278,51 +279,4 @@ Chưa có.
 
 ## 9. Kiến trúc đích: ranh giới và port (ADR-8)
 
-> Trạng thái: **đang làm** theo [PLAN.md](../../PLAN.md) P0d. Đây là kiến trúc đích của `apps/worker`; [ARCHITECTURE.md](ARCHITECTURE.md) chưa đổi vì nó mô tả cái đã làm. Khi P0d xong, ADR-8 và sơ đồ chuyển sang ARCHITECTURE (§1, §2) và mục này chỉ còn một con trỏ.
-
-### ADR-8 · Core của worker không biết hạ tầng; DB nằm sau port
-
-**Hiện trạng** (đọc từ code, 2026-11-14):
-
-- `Store` (`store.py`, SQLite) là một class hơn 30 method trộn sáu mối quan tâm: tài khoản, log lời gọi LLM, phiên bản bản dịch, catalog (series/unit/output/correction), facts/summary/snapshot của memory, cache. Có khoảng 85 chỗ tham chiếu trong 6 module (`units`, `memory`, `library`, `versions`, `translation_attempt`, `auth`) cộng với test.
-- Method của `Store` trả `dict[str, Any]`, nên người gọi biết tên cột. Bọc bằng một Protocol mà vẫn trả `dict` thì chưa tách được khỏi schema.
-- SQLite đã đóng gói tốt: ngoài `store.py` không có `sqlite3` hay `.execute`. Đây là chỗ cắt rẻ nhất.
-- Use case `units.py` import thẳng `queue.enqueue_retranslation` và `llm.build_provider` (hạ tầng).
-- Có 5 cơ chế lưu trữ song song: SQLite, cây thư mục JSON của hàng đợi (kèm `provider-pause.json`), `config.json`/`targets.json`, glossary YAML, file `.srt` kèm backups.
-- CLI `subcore` chỉ chạm engine; HTTP là đường duy nhất tới hàng đợi, library và dịch lại.
-- `subcore` đã đúng hướng: `Provider` là port, core thuần, không biết Bazarr/queue/HTTP.
-
-**Quyết định:** kiến trúc cổng–adapter có chọn lọc cho `apps/worker`; `subcore` giữ nguyên.
-
-1. **Ba lớp.** Adapter vào (HTTP handler, `gst_enqueue.sh`, CLI) → **use case** + domain thuần (`rules`, `queue_policy`, story memory, quy tắc phiên bản) → **port** (`Protocol`) ← adapter ra (SQLite, hàng đợi file, Bazarr, TMDB, `subcore.providers`).
-2. **Port hẹp theo nơi dùng, không có một `Store` Protocol chung** (bảng dưới). Mỗi nơi chỉ thấy phần nó cần, nên test dựng fake nhỏ.
-3. **Chỉ tạo port ở ranh giới thật:** lưu trữ bền, hàng đợi, dịch vụ ngoài, provider. Filesystem (`pathlib`, ghi atomic) không bọc port; test dùng thư mục tạm.
-4. **Port trả kiểu có tên** (dataclass bất biến), không trả `dict`/`sqlite3.Row`. Tên cột chỉ tồn tại trong adapter SQLite.
-5. **Port nằm ở core, adapter nằm riêng**; core không import adapter. Việc nối dây chỉ ở `RuntimeContext` (composition root).
-6. **Hai đường vào, một tầng use case.** HTTP và CLI gọi cùng use case; handler và CLI không chứa nghiệp vụ. CLI `subcore` giữ nguyên (adapter vào của engine). Nếu thêm CLI cho worker: khi worker đang chạy, thao tác **ghi** đi qua HTTP API, không mở SQLite trực tiếp (ADR-4: một writer); lệnh chỉ đọc có thể đọc trực tiếp.
-7. **Hàng đợi vẫn là cây thư mục JSON** (giao thức `gst_enqueue.sh` không đổi), chỉ được bọc bằng port `JobQueue`. Bảng `jobs` vẫn hoãn (PLAN P2); khi làm thì chỉ thêm adapter, không sửa core.
-
-| Port | Phụ trách | Adapter hôm nay |
-|---|---|---|
-| `AuthRepo` | tài khoản duy nhất, bí mật phiên | SQLite (`auth`) |
-| `UsageLog` | lời gọi LLM, tổng token (NFR-7) | SQLite (`llm_calls`) |
-| `VersionRepo` | phiên bản bản dịch, cache theo `context_hash` (NFR-3) | SQLite (`translations`) |
-| `CatalogRepo` | series, unit, output, correction, cấu hình memory theo series | SQLite |
-| `MemoryRepo` | facts, summary nén, snapshot context | SQLite |
-| `JobQueue` | nhận job, claim, hoãn, thử lại, huỷ, tạm dừng theo quota | cây thư mục JSON (`queue.py`) |
-| `MediaLibrary` | liệt kê tập và source subtitle, `missing_subtitles`, yêu cầu scan lại | Bazarr |
-| `Metadata` | tên và mô tả phim/series | TMDB |
-| `ProviderFactory` | dựng provider theo model và key | `subcore.providers` |
-
-Danh sách này là dự kiến: khi làm, một port có thể gộp hoặc tách nếu đọc code thấy ranh giới khác.
-
-**Ràng buộc khi làm:**
-
-- Hành vi không đổi: schema SQLite, định dạng queue JSON, `gst_enqueue.sh` và HTTP API giữ nguyên; không có migration.
-- Từng port một, mỗi port một commit, CI xanh sau từng bước; đi từ nhỏ đến lớn (`AuthRepo` trước, `CatalogRepo` sau cùng).
-- Test ranh giới (tiêu chí 10a) vào **trước**, với danh sách ngoại lệ là các vi phạm hiện có; mỗi bước thu hẹp danh sách cho tới khi rỗng.
-- Mỗi port có test hợp đồng chạy trên adapter thật và trên fake trong bộ nhớ (tiêu chí 10b).
-
-**Đánh đổi chấp nhận:** nhiều file hơn và thêm một lớp gián tiếp; với một người dùng và một SQLite, phần lớn port chỉ có một adapter thật, lợi ích chính là test không cần hạ tầng và cửa để đổi storage sau này. Nếu một port nào (ví dụ `Metadata`) không bù được chi phí khi làm, được phép gộp vào port khác.
-
-**Không làm (trong ADR-8):** chuyển hàng đợi vào SQLite; đổi schema; bọc filesystem bằng port; thêm DB khác (Postgres chỉ là cửa để ngỏ, theo ADR-4); đổi `subcore`; thêm yêu cầu chức năng trong chính phần ranh giới (FR-12 làm riêng, sau phần ranh giới, cùng phase P0d).
+ADR-8 (core của worker không biết hạ tầng; DB nằm sau port) đã làm xong ở PLAN P0d phần 1 và chuyển sang [ARCHITECTURE.md](ARCHITECTURE.md) §1 (quyết định, bảng port và adapter) và §2 (sơ đồ ranh giới). Yêu cầu giữ ở đây: NFR-10 và tiêu chí nghiệm thu 10 (mục 5, 6), quyết định #9 (mục 7).

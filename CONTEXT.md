@@ -37,6 +37,21 @@ sibling subtitle already provides. Only wanted languages are translated.
 The rules that move a translation job through the job queue, including settling,
 recovery, retries, quota pauses, and terminal outcomes.
 
+**Port**:
+A narrow interface (`Protocol`, in `gst_worker/ports.py`) for something the worker core
+needs from outside: storage, the job queue, Bazarr, TMDB, the model provider. It returns
+named immutable types, never a `dict` or a database row.
+
+**Adapter**:
+The code behind a port that touches the outside world (SQLite, the queue directory,
+Bazarr's API, the HTTP handler). Core modules never import an adapter; `worker.py`
+wires them together.
+
+**Use case**:
+One thing the console or a script can ask the worker to do (enqueue, retranslate,
+revert, retry, cancel), written once in the core (`ConsoleActions`, `UnitService`) so
+the HTTP handler only parses, authenticates and formats.
+
 **Glossary**:
 Human-owned YAML rules for one series and target language: terms, characters,
 and address rules. It always overrides anything the machine infers.

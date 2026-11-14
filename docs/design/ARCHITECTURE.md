@@ -1,6 +1,6 @@
 # ARCHITECTURE — LLM Subtitle Translator for Bazarr
 
-> Trạng thái: **Draft v0.5** · 2026-11-14 (v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8) · Hiện thực hoá [SPEC.md](SPEC.md)
+> Trạng thái: **Draft v0.9** · 2026-11-14 (v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8; v0.9: ADR-8 ranh giới và port chuyển từ SPEC mục 9 sang §1 và §2, theo số phiên bản của SPEC) · Hiện thực hoá [SPEC.md](SPEC.md)
 > Tài liệu này mô tả kiến trúc **đích**. Kiến trúc hiện tại kế thừa từ upstream nằm ở [docs/ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
@@ -155,6 +155,36 @@ Yêu cầu UI: responsive (điện thoại), không phụ thuộc CDN (homelab c
 
 Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nhập, mật khẩu băm `scrypt` kèm salt, bí mật phiên. Khởi động: nếu chưa có dòng nào mà có `CONSOLE_USER` + `CONSOLE_PASSWORD` thì tạo từ env; nếu đã có thì **bỏ qua env**, trừ khi `CONSOLE_PASSWORD_RESET=1` (ghi đè bằng env, xoay bí mật phiên, log cảnh báo bỏ cờ). Chưa có dòng nào và thiếu env ⇒ `503` như P0b; không có trang "đặt mật khẩu lần đầu" vì nó mở cho cả LAN trước khi ai đó kịp đặt. `CONSOLE_AUTH=off` vẫn là cách tắt duy nhất (log cảnh báo mỗi lần khởi động). Đổi mật khẩu: `POST /api/auth/password` cần mật khẩu hiện tại, mật khẩu mới ≥ 8 ký tự. Đăng nhập sai 5 lần liên tiếp từ một địa chỉ ⇒ khoá 5 phút (đếm chung cho form và Basic Auth, trong bộ nhớ). So sánh bằng `hmac.compare_digest`; mật khẩu, cookie và `Authorization` không bao giờ vào log, `config.json`, `/api/settings` hay `RuntimeContext` dưới dạng serialize được. Tên đăng nhập không đổi được qua console (đổi bằng reset). Backup (`backups.py`) hiện chỉ gồm `config.json` và `targets.json`, nên không mang theo mật khẩu băm; nếu sau này backup mở rộng sang `app.db` thì phải loại bảng `auth`, và restore không bao giờ ghi đè nó.
 
+### ADR-8 · Core của worker không biết hạ tầng; DB nằm sau port
+
+**Quyết định:** kiến trúc cổng–adapter có chọn lọc cho `apps/worker`; `subcore` giữ nguyên (đã đúng hướng: `Provider` là port, core thuần, không biết Bazarr/queue/HTTP). Lý do: `Store` từng là một class hơn 30 method trộn sáu mối quan tâm (tài khoản, log lời gọi LLM, phiên bản bản dịch, catalog, facts/summary của memory, cache), trả `dict[str, Any]` nên người gọi biết tên cột; use case `units.py` import thẳng `queue.enqueue_retranslation` và `llm.build_provider`. Đã làm xong ở P0d phần 1, hành vi không đổi.
+
+1. **Ba lớp.** Adapter vào (HTTP handler `web.py`, `gst_enqueue.sh`, CLI) → **use case** + domain thuần (`ConsoleActions`, `UnitService`, `rules`, `queue_policy`, story memory, quy tắc phiên bản) → **port** (`Protocol` trong `gst_worker/ports.py`) ← adapter ra (SQLite, hàng đợi file, Bazarr, TMDB, `subcore.providers`).
+2. **Port hẹp theo nơi dùng, không có một `Store` Protocol chung.** Mỗi nơi chỉ thấy phần nó cần, nên test dựng fake nhỏ. `Store` (SQLite) vẫn là một class cài năm port lưu trữ, vì chúng dùng chung một kết nối và một chuỗi migration; không ai ngoài `worker.py` biết nó là `Store`.
+3. **Chỉ tạo port ở ranh giới thật:** lưu trữ bền, hàng đợi, dịch vụ ngoài, provider. Filesystem (`pathlib`, ghi atomic) không bọc port; test dùng thư mục tạm.
+4. **Port trả kiểu có tên** (dataclass bất biến: `Account`, `LlmCall`, `TokenTotals`, `TranslationVersion`, `StoredFacts`, `Series`, `Unit`, `Output`, `Correction`, `MediaDetails`, `EpisodeListing`), không trả `dict`/`sqlite3.Row`. Tên cột chỉ tồn tại trong adapter SQLite. Test 10c quét kiểu trả về trong `ports.py`.
+5. **Port nằm ở core, adapter nằm riêng; core không import adapter.** Việc nối dây ở `worker.py` và `RuntimeContext` (composition root). Adapter là các module liệt kê trong `tests/test_core_boundary.py` (`store`, `queue`, `http`, `bazarr`, `tmdb`, `gemini`, `llm`, `backups`, `connection_tests`, `settings`, `web`); module nào không có trong danh sách là core và bị kiểm mặc định. `worker.py` được phép import adapter nhưng không được import `sqlite3`, socket hay `http.server` trực tiếp.
+6. **Hai đường vào, một tầng use case.** HTTP và CLI gọi cùng use case; handler chỉ parse, xác thực, gọi use case, định dạng phản hồi (việc dựng job của `/api/enqueue` nằm ở `ConsoleActions`, không ở handler). CLI `subcore` giữ nguyên (adapter vào của engine). Nếu thêm CLI cho worker: khi worker đang chạy, thao tác **ghi** đi qua HTTP API, không mở SQLite trực tiếp (ADR-4: một writer); lệnh chỉ đọc có thể đọc trực tiếp. Các route quản trị không thuộc miền (cài đặt, trạng thái, backup, log, test kết nối) vẫn gọi thẳng module từ handler.
+7. **Hàng đợi vẫn là cây thư mục JSON** (giao thức `gst_enqueue.sh` không đổi), chỉ được bọc bằng port `JobQueue` ở phía gửi và quản lý job. Phía tiêu thụ (claim, hoãn, quota, recover) là lớp `queue.JobQueue` của adapter, cùng tên nhưng khác module, và `process_job` vẫn ở `worker.py` vì dùng `skip_reason` của adapter. Bảng `jobs` vẫn hoãn (PLAN P2); khi làm thì chỉ thêm adapter, không sửa core.
+
+| Port | Phụ trách | Adapter |
+|---|---|---|
+| `AuthRepo` | tài khoản duy nhất, bí mật phiên | `Store` (`auth`) |
+| `UsageLog` | lời gọi LLM, tổng token (NFR-7) | `Store` (`llm_calls`) |
+| `VersionRepo` | phiên bản bản dịch, cache theo `context_hash` (NFR-3) | `Store` (`translations`) |
+| `CatalogRepo` | series, unit, output, correction, cấu hình memory theo series | `Store` |
+| `MemoryRepo` | facts, summary nén, snapshot context | `Store` |
+| `JobQueue` | enqueue, enqueue dịch lại, retry, cancel, delete | `queue.FileJobQueue` (cây thư mục JSON) |
+| `MediaLibrary` | mô tả tập, liệt kê tập và source subtitle, `missing_subtitles`, yêu cầu scan lại | `bazarr.BazarrMedia` (đọc settings sống) |
+| `Metadata` | mô tả phim/series cho prompt | `tmdb.TmdbMetadata` (đọc settings sống) |
+| `ProviderFactory` | dựng provider theo model và key | `llm.build_provider` (`subcore.providers`) |
+
+**Kiểm bằng test, không bằng quy ước (tiêu chí 10):** `tests/test_core_boundary.py` (10a: core không import hạ tầng, danh sách ngoại lệ đã rỗng và chỉ được thu hẹp; 10c: port không trả `dict`/`Any`/`Row`) và một bộ test hợp đồng cho mỗi port chạy trên adapter thật và trên fake trong bộ nhớ (10b: `tests/test_*_contract.py`).
+
+**Đánh đổi chấp nhận:** nhiều file hơn và thêm một lớp gián tiếp; với một người dùng và một SQLite, phần lớn port chỉ có một adapter thật, lợi ích chính là test không cần hạ tầng và cửa để đổi storage sau này. `Store` chưa tách thành một file mỗi port: không có người gọi nào còn phụ thuộc vào nó, nên việc tách chỉ là dọn dẹp và được hoãn cho tới khi có lý do (một adapter thứ hai).
+
+**Không làm (trong ADR-8):** chuyển hàng đợi vào SQLite; đổi schema; bọc filesystem bằng port; thêm DB khác (Postgres chỉ là cửa để ngỏ, theo ADR-4); đổi `subcore`.
+
 ---
 
 ## 2. Tổng quan thành phần
@@ -189,6 +219,37 @@ flowchart LR
   M <--> DB
   G <--> GY
   H <--> DB
+```
+
+Ranh giới của worker (ADR-8) nằm trong khối `subtitle-translator container` ở trên:
+
+```mermaid
+flowchart LR
+  subgraph IN[Adapter vào]
+    WEB[web.py: HTTP handler + auth]
+    SH[gst_enqueue.sh]
+  end
+  subgraph CORE[Core: use case + domain thuần]
+    UC[ConsoleActions · UnitService]
+    DOM[rules · queue_policy · memory · versions · library]
+  end
+  subgraph PORTS[ports.py]
+    P[AuthRepo · UsageLog · VersionRepo · MemoryRepo · CatalogRepo · JobQueue · MediaLibrary · Metadata · ProviderFactory]
+  end
+  subgraph OUT[Adapter ra]
+    ST[Store / SQLite]
+    FQ[FileJobQueue]
+    BZ[BazarrMedia]
+    TM[TmdbMetadata]
+    LL[llm.build_provider]
+  end
+  WEB --> UC
+  UC --> DOM
+  UC --> P
+  DOM --> P
+  P -.-> ST & FQ & BZ & TM & LL
+  SH -->|JSON file| FQ
+  ROOT[worker.py + RuntimeContext] -. nối dây .-> OUT
 ```
 
 ---
