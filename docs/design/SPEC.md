@@ -1,10 +1,13 @@
 # SPEC — LLM Subtitle Translator for Bazarr (tên tạm)
 
-> Trạng thái: **Draft v0.5** · 2026-11-14
+> Trạng thái: **Draft v0.8** · 2026-11-14
 > Thay thế bản SRS ban đầu. Những chỗ khác SRS gốc được đánh dấu **[Đổi]** kèm lý do.
 > v0.2: chốt các câu hỏi mở của v0.1 (mục 7), thêm FR-11 (duyệt, dịch lại, correction).
 > v0.3: chốt 2 câu hỏi mở của v0.2 — thông báo để v1.1; Basic Auth bật ngay từ đầu (NFR-5).
 > v0.5: NFR-5 — thêm form đăng nhập và đổi mật khẩu trong Settings cho tài khoản duy nhất, giữ Basic Auth cho script; thêm tiêu chí nghiệm thu 9 và quyết định #8. (Số v0.4 được ARCHITECTURE dùng trước đó; hai tài liệu cùng v0.5 từ đây.)
+> v0.6: thêm kiến trúc đích cho worker — ranh giới và port (ADR-8, mục 9), NFR-10, tiêu chí nghiệm thu 10, quyết định #9, ba thuật ngữ (Port, Adapter, Use case). Chỉ SPEC đổi: ARCHITECTURE vẫn v0.5 và chỉ nhận nội dung này khi PLAN P0d xong.
+> v0.7: thêm FR-12 (chế độ nhận job `hold` và duyệt job), tiêu chí nghiệm thu 11, quyết định #10, thuật ngữ "Held job"; làm cùng phase P0d, sau phần ranh giới (ADR-8).
+> v0.8: thêm FR-13 (dọn file: file job đã xong, bản sao phiên bản và glossary, file tạm mồ côi), tiêu chí nghiệm thu 12, quyết định #11; làm cùng phase P0d.
 
 ---
 
@@ -26,6 +29,7 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
 - Không liên kết bối cảnh giữa các phim trong một franchise (movie là đơn vị độc lập).
 - Không multi-user, không quản lý user, không phân quyền, không OAuth/SSO (homelab, mạng tin cậy) — chỉ một tài khoản, vào bằng form đăng nhập hoặc Basic Auth (NFR-5). Đổi tên đăng nhập qua console và xác thực hai bước: để sau v1 nếu cần.
 - Không gửi thông báo (ntfy/Apprise/Telegram) khi có mục `pending` hoặc job fail — để **v1.1**. Console vẫn hiện badge `pending` và danh sách job lỗi (FR-11.1.1).
+- Chế độ `hold` (FR-12) chỉ có một công tắc toàn cục; chọn `auto`/`hold` theo từng series để **v1.1** nếu cần.
 
 ---
 
@@ -42,6 +46,10 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
 | **Context bundle** | Toàn bộ ngữ cảnh đưa vào prompt khi dịch unit N. Có `context_hash`. |
 | **Context complete** | Mọi unit đứng trước N (có trong thư viện) đều đã có facts. |
 | **Stale translation** | Bản dịch đã xuất mà `context_hash` hiện tại khác `context_hash` lúc dịch. |
+| **Port** | Interface (`Protocol`) do core của worker định nghĩa cho thứ nó cần từ bên ngoài: lưu trữ, hàng đợi, Bazarr, TMDB, provider. Trả kiểu có tên, không trả `dict` (ADR-8). |
+| **Adapter** | Cài đặt cụ thể của một port (SQLite, hàng đợi file, Bazarr HTTP…), hoặc điểm vào gọi vào core (HTTP handler, CLI, `gst_enqueue.sh`). |
+| **Use case** | Một hành động của hệ thống ở tầng ứng dụng (enqueue, retranslate, revert, edit cue, cancel…). HTTP và CLI cùng gọi một use case, không chứa nghiệp vụ riêng. |
+| **Held job** | Job do script Bazarr tạo khi `admission_mode = hold`: đã nhận, chưa gọi model, chờ admin duyệt (FR-12). |
 
 ---
 
@@ -172,6 +180,41 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
 - FR-11.3.4 Job dịch lại được ưu tiên cao hơn job tự động trong queue.
 - FR-11.3.5 Dịch lại dùng context bundle hiện tại (facts + glossary mới nhất) ⇒ cũng là cách xử lý bản dịch `stale`.
 
+### FR-12 Chế độ nhận job và duyệt job
+
+Bazarr có thể báo hàng trăm mục thiếu phụ đề và chạy script cho từng mục; ở chế độ `auto` (hiện tại) mọi job đó được dịch ngay. FR-12 cho phép Bazarr vẫn đẩy job vào, nhưng **admin chọn job nào được dịch**. Người duyệt là admin duy nhất, thao tác trong console (cùng lý do ADR-7).
+
+- FR-12.1 Cài đặt toàn cục `admission_mode`: `auto` (mặc định, hành vi hiện tại, không đổi) | `hold`.
+- FR-12.2 Ở `hold`, **job do script Bazarr tạo** vào trạng thái `held`: worker nhận và lưu job nhưng không lấy ra chạy, không gọi model, không tốn quota. Job do **chính admin** tạo (Enqueue/Scan trên console, `/api/enqueue`, dịch lại, sửa cue, hoàn tác) **không** bị giữ, vì thao tác đó đã là sự chấp thuận.
+- FR-12.3 Chế độ do **worker** áp dụng khi nhận job; script và định dạng file job không đổi (FR-1.1: script không cần mạng hay phụ thuộc, nên không đọc được cài đặt của worker).
+- FR-12.4 Hộp duyệt job trên console (một tab của Queue): job `held` nhóm theo series, mỗi job hiện unit, ngôn ngữ đích, ngôn ngữ nguồn, số cue, thời điểm đến; badge số job `held` trên thanh điều hướng (như FR-11.1.1); dùng được trên điện thoại.
+- FR-12.5 Thao tác: **Duyệt** (một job, nhiều job đã chọn, cả series, tất cả) → job thành `pending` như job thường · **Từ chối** → job không chạy và **không bị đưa lại** khi script hoặc scan gặp lại cùng mục (khôi phục được) · Duyệt hàng loạt hiện số job sẽ chạy và phải xác nhận.
+- FR-12.6 Duyệt không bỏ qua các kiểm tra khác: khi duyệt, job vẫn qua FR-9.6 (chỉ dịch ngôn ngữ còn thiếu) và NFR-4 (không ghi đè); nếu trong lúc chờ phụ đề đích đã có thì job kết thúc `skipped`, không gọi model.
+- FR-12.7 `GST_ONLY_PATHS` vẫn áp dụng cho job ở `hold` (ngoài thư mục → không được nhận). `GST_MAX_PENDING` không tính job `held`; duyệt không bị giới hạn bởi nó (thao tác của admin), nên bảo vệ ở đây là bước xác nhận của FR-12.5.
+- FR-12.8 Đổi `admission_mode` **không** làm đổi job đang có: chuyển `auto` → `hold` không giữ job đang `pending`; chuyển `hold` → `auto` không thả job `held` (phải duyệt tường minh). Job `held` sống qua khởi động lại worker.
+- FR-12.9 Mọi thao tác có HTTP API tương ứng (FR-10.3); các use case dùng chung cho console và CLI (ADR-8).
+
+### FR-13 Dọn file
+
+Worker chạy lâu thì tự tạo ngày càng nhiều file. Hiện (2026-11-14) chỉ backup cấu hình (30 ngày) và log (xoay vòng) có giới hạn; trong code không thấy cơ chế dọn cho file job đã xong, bản sao phiên bản bản dịch hay bản sao glossary.
+
+- FR-13.1 Đối tượng và quy tắc mặc định. Chỉ dọn trong `QUEUE_DIR` và `DATA_DIR`:
+
+  | Đối tượng | Quy tắc | Cài đặt (mặc định) |
+  |---|---|---|
+  | File job ở `done/` (kèm `.error`) | xoá khi quá hạn | `retention_done_days` (30) |
+  | File job ở `failed/` (kèm `.error`) | xoá khi quá hạn | `retention_failed_days` (90) |
+  | Bản sao phiên bản bản dịch (`backups/subtitles/`) | mỗi file đích giữ phiên bản `current`, phiên bản đầu tiên (bản gốc hoặc `external`) và N phiên bản mới nhất; xoá bản sao của phần còn lại | `retention_versions_keep` (5) |
+  | Bản sao glossary (`backups/glossary/`) | mỗi series giữ N bản mới nhất | `retention_glossary_keep` (20) |
+  | File tạm mồ côi do worker tạo (`.*.tmp`) trong queue và `DATA_DIR` | xoá khi cũ hơn 1 ngày | — |
+
+  Backup cấu hình `.zip` và log giữ nguyên cơ chế hiện có. Đặt một cài đặt `retention_*` về `0` thì **tắt** nhóm đó (giữ mãi).
+- FR-13.2 **Không bao giờ dọn:** file job `pending`/`processing`/`deferred`/`held`; dấu từ chối (FR-12.5); phiên bản `current`; **mọi file trong thư mục media** (NFR-4) — file tạm mồ côi cạnh media chỉ được liệt kê cảnh báo trên console, không xoá; facts, summary, snapshot (cache tốn quota, NFR-3) và nội dung SQLite.
+- FR-13.3 Xoá bản sao phiên bản không xoá lịch sử: dòng phiên bản còn, đánh dấu `pruned`; Hoàn tác về phiên bản `pruned` bị từ chối với lý do rõ ràng (không có bản sao), diff không có. Hoàn tác về phiên bản còn bản sao vẫn đúng từng byte (tiêu chí 8).
+- FR-13.4 Chạy tự động mỗi ngày cùng bảo trì backup, và có nút **Dọn ngay** trong Settings. Luôn có **xem trước (dry run)**: số file và dung lượng sẽ xoá theo từng nhóm; "Dọn ngay" hiện xem trước rồi mới xác nhận.
+- FR-13.5 Mỗi lần dọn ghi log tóm tắt (nhóm, số file, dung lượng; không ghi nội dung). Có HTTP API (`dry_run`) tương ứng (FR-10.3); use case dùng chung cho console và CLI (ADR-8).
+- FR-13.6 Thống kê `model_layers` được tính từ file job `done/`/`failed/` nên bị giới hạn bởi cửa sổ `retention_done_days`/`retention_failed_days`; console và API ghi rõ điều đó. v1 không chuyển thống kê này sang SQLite.
+
 ---
 
 ## 5. Yêu cầu phi chức năng
@@ -187,6 +230,7 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
 | NFR-7 Quan sát | Mỗi job ghi: số lời gọi, token vào/ra, model, thời gian, `context_hash`, `context_complete`. Console hiển thị tổng token theo ngày. |
 | NFR-8 Kiểm thử | Test không gọi mạng (fake provider). Bắt buộc có test tình huống FR-5 (tập 6 trước tập 1). |
 | NFR-9 Triển khai | Một Docker image multi-arch (amd64/arm64), một container; state trong một volume. |
+| NFR-10 Ranh giới | Core của worker (use case + domain) không import `sqlite3`, adapter lưu trữ, `urllib`/HTTP client hay module hạ tầng của hàng đợi; nó chỉ biết port và kiểu có tên (ADR-8, mục 9). Ranh giới được kiểm bằng test import (tiêu chí 10), không bằng quy ước. `subcore` vẫn không biết Bazarr, queue, HTTP (ADR-2). |
 
 ---
 
@@ -203,6 +247,9 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
 7. **Correction:** thêm `cue_edit` cho cue 10 rồi dịch lại cả tập → cue 10 giữ nguyên byte-by-byte; thêm `term` scope `forward` ở tập 3 → prompt tập 2 không chứa term đó, prompt tập 4 có.
 8. **Hoàn tác:** dịch lại → hoàn tác → file đích trùng sha256 với bản trước khi dịch lại.
 9. **Đăng nhập:** chưa đăng nhập → trình duyệt được chuyển tới form, `/api/*` trả `401`; đăng nhập đúng → cookie phiên dùng được console, đăng xuất → `401`; đổi mật khẩu trong Settings (nhập đúng mật khẩu hiện tại) → phiên cũ mất hiệu lực, mật khẩu env cũ không còn vào được, Basic Auth dùng mật khẩu mới; `CONSOLE_PASSWORD_RESET=1` ghi đè mật khẩu đã lưu bằng env; sai 5 lần liên tiếp → bị khoá; mật khẩu, cookie, header `Authorization` không có trong log và không trả qua API.
+10. **Ranh giới (ADR-8):** (a) test import quét mã nguồn của core worker: không có `sqlite3`, adapter lưu trữ hay HTTP client nào ngoài danh sách adapter; danh sách ngoại lệ tạm thời chỉ được thu hẹp, và rỗng khi P0d xong; (b) mỗi port có test hợp đồng chạy trên adapter thật **và** trên fake trong bộ nhớ, cùng một bộ kiểm; (c) không port nào trả `dict` hay `sqlite3.Row`; (d) khi kết thúc phần ranh giới của P0d (trước FR-12): toàn bộ test hiện có vẫn pass, `schema_version` của SQLite, định dạng queue JSON, `gst_enqueue.sh` và HTTP API không đổi; FR-12 chỉ được thêm API và trạng thái queue sau mốc này.
+11. **Hold và duyệt job (FR-12):** với `admission_mode = hold` và fake provider: (a) script thả job → job `held`, không có lời gọi provider nào, không có file đích; (b) duyệt một job → chỉ job đó chạy, các job `held` khác vẫn `held`; (c) duyệt theo series chỉ chạy job của series đó; (d) từ chối rồi chạy lại script/scan cho cùng mục → không có job mới; khôi phục → job quay lại `held`; (e) duyệt job mà phụ đề đích đã xuất hiện → `skipped`, không ghi đè, không gọi model; (f) đổi `hold` → `auto` không thả job `held`, đổi `auto` → `hold` không giữ job đang `pending`; (g) Enqueue/dịch lại do admin tạo không bị giữ; (h) job ngoài `GST_ONLY_PATHS` không được nhận kể cả ở `hold`; (i) khởi động lại worker giữ nguyên job `held`; (j) `auto` (mặc định) cho kết quả y như trước FR-12, kể cả khi dùng bản `gst_enqueue.sh` cũ.
+12. **Dọn file (FR-13):** (a) file job `done/` quá hạn bị xoá, chưa quá hạn thì giữ; `pending`, `processing`, `deferred`, `held` và dấu từ chối không bao giờ bị xoá dù cũ đến đâu; (b) với một file đích có nhiều phiên bản, chỉ `current`, phiên bản đầu và N phiên bản mới nhất còn bản sao; Hoàn tác về phiên bản còn bản sao cho đúng sha256, về phiên bản đã dọn bị từ chối và lịch sử vẫn hiện nó là `pruned`; (c) dry run không xoá gì và số file/dung lượng khớp với lần dọn thật ngay sau đó; (d) trên một cây thư mục media giả có phụ đề và file `.tmp` mồ côi, không file nào trong media bị sửa hay xoá, file tạm mồ côi chỉ được liệt kê; (e) cài đặt `0` tắt đúng nhóm đó; (f) file tạm mồ côi cũ hơn 1 ngày trong queue và `DATA_DIR` bị dọn, file tạm mới thì không.
 
 ---
 
@@ -219,7 +266,63 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
 | 6 | Thông báo (ntfy/Apprise/Telegram) khi có mục `pending` mới hoặc job fail | Để **v1.1**, kèm link tới trang duyệt. v1 chỉ có badge/danh sách trên console. |
 | 7 | Basic Auth cho console | **Bật ngay từ đầu**, mặc định bắt buộc; chỉ tắt tường minh bằng `CONSOLE_AUTH=off` (NFR-5). Làm ở phase P0b, trước P1. Mở rộng bởi #8. |
 | 8 | Form đăng nhập thay vì chỉ Basic Auth; đổi mật khẩu; quên mật khẩu; Basic Auth cho script | **Một tài khoản**, hai cách vào: form đăng nhập (cookie phiên) cho trình duyệt, Basic Auth cho script. Tài khoản khởi tạo từ env `CONSOLE_USER`/`CONSOLE_PASSWORD`; người dùng đổi mật khẩu trong Settings và mật khẩu đã lưu thắng env. Quên mật khẩu: `CONSOLE_PASSWORD_RESET=1` + env, khởi động lại. Giữ Basic Auth song song (FR-10.3). Làm ở phase P0c. |
+| 9 | Refactor worker sang kiến trúc cổng–adapter (hexagon): DB là phụ thuộc cụ thể hay nằm sau interface | **Nằm sau port**, có chọn lọc (ADR-8, mục 9): `Store` tách thành port hẹp trả kiểu có tên; tầng use case dùng chung cho HTTP và CLI; `subcore` giữ nguyên. Hàng đợi vẫn là cây thư mục JSON, chỉ bọc bằng port `JobQueue` (bảng `jobs` vẫn hoãn). Port trả kiểu có tên ngay từ đầu, không có giai đoạn trả `dict`. Ưu tiên cao: làm ở phase P0d, trước P5. |
+| 10 | Chế độ "manual": để Bazarr đẩy job vào nhưng admin chọn job nào được dịch | **Chế độ `hold`** (FR-12): `admission_mode = auto \| hold`, toàn cục, mặc định `auto`. Job từ script Bazarr thành `held` chờ duyệt (duyệt một/nhiều/theo series/tất cả, từ chối nhớ để không đưa lại); thao tác của admin không bị giữ. Worker áp dụng chế độ, script và giao thức file không đổi. Làm cùng phase P0d, **sau** phần ranh giới vì cần tầng use case và port `JobQueue`. |
+| 11 | Dọn file tự sinh (file job đã xong, bản sao phiên bản/glossary, file tạm) | **Có dọn tự động** (FR-13) theo cửa sổ giữ cấu hình được (`retention_*`), kèm xem trước và nút Dọn ngay; không bao giờ đụng thư mục media, job chưa kết thúc, job `held`/từ chối, phiên bản `current` hay cache facts. Xoá bản sao phiên bản giữ lại dòng lịch sử (`pruned`). Làm cùng phase P0d (phần 3), độc lập với `hold`. |
 
 ## 8. Câu hỏi mở
 
 Chưa có.
+
+---
+
+## 9. Kiến trúc đích: ranh giới và port (ADR-8)
+
+> Trạng thái: **đang làm** theo [PLAN.md](../../PLAN.md) P0d. Đây là kiến trúc đích của `apps/worker`; [ARCHITECTURE.md](ARCHITECTURE.md) chưa đổi vì nó mô tả cái đã làm. Khi P0d xong, ADR-8 và sơ đồ chuyển sang ARCHITECTURE (§1, §2) và mục này chỉ còn một con trỏ.
+
+### ADR-8 · Core của worker không biết hạ tầng; DB nằm sau port
+
+**Hiện trạng** (đọc từ code, 2026-11-14):
+
+- `Store` (`store.py`, SQLite) là một class hơn 30 method trộn sáu mối quan tâm: tài khoản, log lời gọi LLM, phiên bản bản dịch, catalog (series/unit/output/correction), facts/summary/snapshot của memory, cache. Có khoảng 85 chỗ tham chiếu trong 6 module (`units`, `memory`, `library`, `versions`, `translation_attempt`, `auth`) cộng với test.
+- Method của `Store` trả `dict[str, Any]`, nên người gọi biết tên cột. Bọc bằng một Protocol mà vẫn trả `dict` thì chưa tách được khỏi schema.
+- SQLite đã đóng gói tốt: ngoài `store.py` không có `sqlite3` hay `.execute`. Đây là chỗ cắt rẻ nhất.
+- Use case `units.py` import thẳng `queue.enqueue_retranslation` và `llm.build_provider` (hạ tầng).
+- Có 5 cơ chế lưu trữ song song: SQLite, cây thư mục JSON của hàng đợi (kèm `provider-pause.json`), `config.json`/`targets.json`, glossary YAML, file `.srt` kèm backups.
+- CLI `subcore` chỉ chạm engine; HTTP là đường duy nhất tới hàng đợi, library và dịch lại.
+- `subcore` đã đúng hướng: `Provider` là port, core thuần, không biết Bazarr/queue/HTTP.
+
+**Quyết định:** kiến trúc cổng–adapter có chọn lọc cho `apps/worker`; `subcore` giữ nguyên.
+
+1. **Ba lớp.** Adapter vào (HTTP handler, `gst_enqueue.sh`, CLI) → **use case** + domain thuần (`rules`, `queue_policy`, story memory, quy tắc phiên bản) → **port** (`Protocol`) ← adapter ra (SQLite, hàng đợi file, Bazarr, TMDB, `subcore.providers`).
+2. **Port hẹp theo nơi dùng, không có một `Store` Protocol chung** (bảng dưới). Mỗi nơi chỉ thấy phần nó cần, nên test dựng fake nhỏ.
+3. **Chỉ tạo port ở ranh giới thật:** lưu trữ bền, hàng đợi, dịch vụ ngoài, provider. Filesystem (`pathlib`, ghi atomic) không bọc port; test dùng thư mục tạm.
+4. **Port trả kiểu có tên** (dataclass bất biến), không trả `dict`/`sqlite3.Row`. Tên cột chỉ tồn tại trong adapter SQLite.
+5. **Port nằm ở core, adapter nằm riêng**; core không import adapter. Việc nối dây chỉ ở `RuntimeContext` (composition root).
+6. **Hai đường vào, một tầng use case.** HTTP và CLI gọi cùng use case; handler và CLI không chứa nghiệp vụ. CLI `subcore` giữ nguyên (adapter vào của engine). Nếu thêm CLI cho worker: khi worker đang chạy, thao tác **ghi** đi qua HTTP API, không mở SQLite trực tiếp (ADR-4: một writer); lệnh chỉ đọc có thể đọc trực tiếp.
+7. **Hàng đợi vẫn là cây thư mục JSON** (giao thức `gst_enqueue.sh` không đổi), chỉ được bọc bằng port `JobQueue`. Bảng `jobs` vẫn hoãn (PLAN P2); khi làm thì chỉ thêm adapter, không sửa core.
+
+| Port | Phụ trách | Adapter hôm nay |
+|---|---|---|
+| `AuthRepo` | tài khoản duy nhất, bí mật phiên | SQLite (`auth`) |
+| `UsageLog` | lời gọi LLM, tổng token (NFR-7) | SQLite (`llm_calls`) |
+| `VersionRepo` | phiên bản bản dịch, cache theo `context_hash` (NFR-3) | SQLite (`translations`) |
+| `CatalogRepo` | series, unit, output, correction, cấu hình memory theo series | SQLite |
+| `MemoryRepo` | facts, summary nén, snapshot context | SQLite |
+| `JobQueue` | nhận job, claim, hoãn, thử lại, huỷ, tạm dừng theo quota | cây thư mục JSON (`queue.py`) |
+| `MediaLibrary` | liệt kê tập và source subtitle, `missing_subtitles`, yêu cầu scan lại | Bazarr |
+| `Metadata` | tên và mô tả phim/series | TMDB |
+| `ProviderFactory` | dựng provider theo model và key | `subcore.providers` |
+
+Danh sách này là dự kiến: khi làm, một port có thể gộp hoặc tách nếu đọc code thấy ranh giới khác.
+
+**Ràng buộc khi làm:**
+
+- Hành vi không đổi: schema SQLite, định dạng queue JSON, `gst_enqueue.sh` và HTTP API giữ nguyên; không có migration.
+- Từng port một, mỗi port một commit, CI xanh sau từng bước; đi từ nhỏ đến lớn (`AuthRepo` trước, `CatalogRepo` sau cùng).
+- Test ranh giới (tiêu chí 10a) vào **trước**, với danh sách ngoại lệ là các vi phạm hiện có; mỗi bước thu hẹp danh sách cho tới khi rỗng.
+- Mỗi port có test hợp đồng chạy trên adapter thật và trên fake trong bộ nhớ (tiêu chí 10b).
+
+**Đánh đổi chấp nhận:** nhiều file hơn và thêm một lớp gián tiếp; với một người dùng và một SQLite, phần lớn port chỉ có một adapter thật, lợi ích chính là test không cần hạ tầng và cửa để đổi storage sau này. Nếu một port nào (ví dụ `Metadata`) không bù được chi phí khi làm, được phép gộp vào port khác.
+
+**Không làm (trong ADR-8):** chuyển hàng đợi vào SQLite; đổi schema; bọc filesystem bằng port; thêm DB khác (Postgres chỉ là cửa để ngỏ, theo ADR-4); đổi `subcore`; thêm yêu cầu chức năng trong chính phần ranh giới (FR-12 làm riêng, sau phần ranh giới, cùng phase P0d).
