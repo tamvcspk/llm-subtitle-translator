@@ -49,15 +49,13 @@ class SessionStoreTests(unittest.TestCase):
         self.assertIsNone(store.lookup("nope"))
         self.assertIsNone(store.lookup(None))
 
-    def test_expires_after_ttl_without_use_but_use_extends(self):
+    def test_expires_ttl_seconds_after_it_was_issued(self):
         clock = FakeClock()
         store = SessionStore(ttl=100, clock=clock)
         token = store.create("a")
-        clock.now += 60
+        clock.now += 99
         self.assertEqual(store.lookup(token), "a")
-        clock.now += 60  # 120 s after creation but only 60 s after last use
-        self.assertEqual(store.lookup(token), "a")
-        clock.now += 100
+        clock.now += 1
         self.assertIsNone(store.lookup(token))
 
     def test_revoke_and_revoke_all(self):
@@ -69,10 +67,84 @@ class SessionStoreTests(unittest.TestCase):
         store.revoke_all()
         self.assertIsNone(store.lookup(two))
 
-    def test_store_does_not_hold_the_raw_token(self):
+    def test_store_keeps_no_per_session_state(self):
         store = SessionStore()
         token = store.create("a")
         self.assertNotIn(token, repr(store.__dict__))
+        self.assertEqual(store._revoked, {})
+
+    def test_tampered_or_foreign_tokens_are_refused(self):
+        store, other = SessionStore(), SessionStore()
+        token = store.create("a")
+        user, token_id, issued, signature = token.split(".")
+        forged_user = ".".join([base64.urlsafe_b64encode(b"root").decode().rstrip("="), token_id, issued, signature])
+        later = ".".join([user, token_id, str(int(issued) + 99999), signature])
+        for bad in (forged_user, later, token[:-2] + "xx", token + ".x", "a.b.c.d", "....", "x" * 5000):
+            with self.subTest(bad=bad[:30]):
+                self.assertIsNone(store.lookup(bad))
+        self.assertIsNone(other.lookup(token))  # signed with a different secret
+
+    def test_token_from_the_future_is_refused(self):
+        clock = FakeClock()
+        store = SessionStore(clock=clock)
+        token = store.create("a")
+        clock.now -= 3600
+        self.assertIsNone(store.lookup(token))
+
+    def test_resolve_hands_back_a_fresh_token_after_an_hour_and_it_slides_the_expiry(self):
+        clock = FakeClock()
+        store = SessionStore(ttl=100000, clock=clock)
+        token = store.create("a")
+        clock.now += 60
+        self.assertEqual(store.resolve(token), ("a", None))
+        clock.now += 3600
+        user, fresh = store.resolve(token)
+        self.assertEqual(user, "a")
+        self.assertNotEqual(fresh, token)
+        clock.now += 99000  # past the first token's expiry, within the refreshed one's
+        self.assertIsNone(store.lookup(token))
+        self.assertEqual(store.lookup(fresh), "a")
+
+    def test_logout_denies_the_token_and_its_refreshed_copies(self):
+        clock = FakeClock()
+        store = SessionStore(clock=clock)
+        token = store.create("a")
+        clock.now += 7200
+        _, fresh = store.resolve(token)
+        store.revoke(token)
+        self.assertIsNone(store.lookup(token))
+        self.assertIsNone(store.lookup(fresh))
+        self.assertIsNotNone(store.lookup(store.create("a")))
+
+    def test_stored_secret_survives_a_restart_and_rotates_on_password_change(self):
+        db = Store(":memory:")
+        self.addCleanup(db.close)
+        auth = ConsoleAuth.from_env({"CONSOLE_USER": "a", "CONSOLE_PASSWORD": "password-1"}, db)
+        token = SessionStore.for_auth(auth).create("a")
+        restarted = SessionStore.for_auth(ConsoleAuth.from_env({}, db))  # a new process: same database
+        self.assertEqual(restarted.lookup(token), "a")
+        auth.change_password("password-2")
+        self.assertIsNone(restarted.lookup(token))
+        reset = SessionStore.for_auth(auth).create("a")
+        ConsoleAuth.from_env({"CONSOLE_USER": "a", "CONSOLE_PASSWORD": "password-3",
+                              "CONSOLE_PASSWORD_RESET": "1"}, db)
+        self.assertIsNone(SessionStore.for_auth(auth).lookup(reset))
+
+    def test_account_from_before_schema_5_gets_a_secret_on_first_use(self):
+        db = Store(":memory:")
+        self.addCleanup(db.close)
+        db._db.execute("INSERT INTO auth (id, user, password_hash, updated_at) VALUES (1, 'a', 'h', 1.0)")
+        first = db.auth_session_secret()
+        self.assertEqual(len(first), 64)
+        self.assertEqual(db.auth_session_secret(), first)
+
+    def test_no_account_means_no_sessions(self):
+        db = Store(":memory:")
+        self.addCleanup(db.close)
+        sessions = SessionStore.for_auth(ConsoleAuth.from_env({}, db))
+        with self.assertRaises(RuntimeError):
+            sessions.create("a")
+        self.assertIsNone(sessions.lookup("a.b.1.c"))
 
 
 class LoginThrottleTests(unittest.TestCase):
@@ -139,8 +211,9 @@ class LoginServerTests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
         server.ctx = self.ctx
         server.auth = self.make_auth()
-        server.sessions = SessionStore()
+        server.sessions = SessionStore.for_auth(server.auth)
         server.throttle = LoginThrottle()
+        self.server = server
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 5)
@@ -403,6 +476,29 @@ class StoredAccountServerTests(LoginServerTests):
         for secret in ("wrong-current-xyz", PASSWORD, NEW_PASSWORD):
             self.assertNotIn(secret, text)
         self.assertIn("password changed", text)
+
+    def test_session_survives_a_worker_restart(self):
+        mine = self.cookie()
+        self.server.sessions = SessionStore.for_auth(self.server.auth)  # a new process: same database, empty memory
+        self.assertEqual(self.request("GET", "/api/auth/me", {"Cookie": mine, "Sec-Fetch-Mode": "cors"})[0], 200)
+
+    def test_an_old_session_gets_a_fresh_cookie_and_an_expired_one_is_refused(self):
+        clock = FakeClock()
+        self.server.sessions = SessionStore.for_auth(self.server.auth, clock=clock)
+        mine = self.cookie()
+        token = mine.split("=", 1)[1]
+        clock.now += 60
+        self.assertNotIn("Set-Cookie", self.request("GET", "/api/auth/me", {"Cookie": mine})[1])
+        clock.now += 7200
+        status, headers, _ = self.request("GET", "/api/auth/me", {"Cookie": mine})
+        self.assertEqual(status, 200)
+        refreshed = headers["Set-Cookie"]
+        self.assertIn("HttpOnly", refreshed)
+        self.assertIn("SameSite=Strict", refreshed)
+        self.assertNotIn(token, refreshed)
+        clock.now += 8 * 24 * 3600
+        self.assertEqual(self.request("GET", "/api/auth/me", {"Cookie": refreshed.split(";", 1)[0],
+                                                              "Sec-Fetch-Mode": "cors"})[0], 401)
 
     def test_with_auth_off_there_is_nothing_to_change(self):
         server_auth = ConsoleAuth.from_env({"CONSOLE_AUTH": "off"})

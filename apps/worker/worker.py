@@ -312,6 +312,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if not super().parse_request():
             return False
         self.auth_via = "none"
+        self.refreshed_token: str | None = None
         auth = getattr(self.server, "auth", None)
         sessions = getattr(self.server, "sessions", None)
         throttle = getattr(self.server, "throttle", None)
@@ -345,7 +346,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         # Cookie session (browser). Writes must come from this very host (CSRF on top of SameSite=Strict).
         cookie_token = console_auth.session_token(self.headers.get("Cookie")) if sessions is not None else None
-        if sessions is not None and sessions.lookup(cookie_token):
+        resolved = sessions.resolve(cookie_token) if sessions is not None else None
+        if resolved:
+            self.refreshed_token = resolved[1]  # sliding expiry: sent back with whatever this request answers
             if self.command not in {"GET", "HEAD", "OPTIONS"} and not console_auth.same_origin(
                 self.headers.get("Origin"), self.headers.get("Host")
             ):
@@ -399,6 +402,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 headers={"WWW-Authenticate": f'Basic realm="{console_auth.REALM}", charset="UTF-8"'},
             )
         return False
+
+    def end_headers(self) -> None:
+        token = getattr(self, "refreshed_token", None)
+        if token:
+            self.send_header("Set-Cookie", console_auth.session_cookie(token, secure=self.is_https()))
+        super().end_headers()
 
     def is_https(self) -> bool:
         # TLS ends at a reverse proxy; trust its header only to add the Secure flag.
@@ -463,7 +472,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         if throttle is not None:
             throttle.success(address)
-        auth.change_password(new)
+        auth.change_password(new)  # also rotates the session secret: every session, this one too, is dead
+        self.refreshed_token = None
         headers: dict[str, str] = {}
         if sessions is not None:
             sessions.revoke_all()
@@ -595,6 +605,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 sessions = getattr(self.server, "sessions", None)
                 if sessions is not None:
                     sessions.revoke(console_auth.session_token(self.headers.get("Cookie")))
+                self.refreshed_token = None
                 self.send_json({"ok": True}, headers={"Set-Cookie": console_auth.session_cookie("", secure=self.is_https(), max_age=0)})
             elif parsed.path == "/api/settings":
                 saved = save_app_config(self.ctx["config_path"], body, self.ctx["postprocess_targets_path"])
@@ -746,7 +757,7 @@ def start_web_server(ctx: dict[str, Any], host: str, port: int, auth: ConsoleAut
     server = ThreadingHTTPServer((host, port), ConsoleHandler)
     server.ctx = ctx  # type: ignore[attr-defined]
     server.auth = auth  # type: ignore[attr-defined]
-    server.sessions = console_auth.SessionStore()  # type: ignore[attr-defined]
+    server.sessions = console_auth.SessionStore.for_auth(auth)  # type: ignore[attr-defined]
     server.throttle = console_auth.LoginThrottle()  # type: ignore[attr-defined]
     auth.log_startup()
     logging.info("Gemini SRT Translator for Bazarr listening on http://%s:%s", host, port)

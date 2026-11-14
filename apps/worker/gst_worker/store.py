@@ -9,6 +9,7 @@ Queue job files stay on disk for now, so there is no ``jobs`` table yet.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 import threading
 import time
@@ -146,6 +147,10 @@ _MIGRATIONS: tuple[str, ...] = (
         updated_at REAL NOT NULL
     );
     """,
+    # Schema 5: the key console sessions are signed with; rotated whenever the account is written.
+    """
+    ALTER TABLE auth ADD COLUMN session_secret TEXT NOT NULL DEFAULT '';
+    """,
 )
 
 
@@ -194,13 +199,26 @@ class Store:
         return dict(row) if row else None
 
     def save_auth_account(self, user: str, password_hash: str) -> None:
+        """Create or overwrite the account. A fresh session secret goes with it, so every session ends."""
         with self._lock:
             self._db.execute(
-                "INSERT INTO auth (id, user, password_hash, updated_at) VALUES (1, ?, ?, ?)"
+                "INSERT INTO auth (id, user, password_hash, session_secret, updated_at) VALUES (1, ?, ?, ?, ?)"
                 " ON CONFLICT(id) DO UPDATE SET user = excluded.user,"
-                " password_hash = excluded.password_hash, updated_at = excluded.updated_at",
-                (user, password_hash, time.time()),
+                " password_hash = excluded.password_hash, session_secret = excluded.session_secret,"
+                " updated_at = excluded.updated_at",
+                (user, password_hash, secrets.token_hex(32), time.time()),
             )
+
+    def auth_session_secret(self) -> str | None:
+        """Hex session secret of the account; None without an account (a row from before schema 5 gets one)."""
+        with self._lock:
+            row = self._db.execute("SELECT session_secret FROM auth WHERE id = 1").fetchone()
+            if row is None:
+                return None
+            if not row["session_secret"]:
+                self._db.execute("UPDATE auth SET session_secret = ? WHERE id = 1", (secrets.token_hex(32),))
+                row = self._db.execute("SELECT session_secret FROM auth WHERE id = 1").fetchone()
+            return row["session_secret"]
 
     # -- llm_calls ---------------------------------------------------------
     def record_llm_call(

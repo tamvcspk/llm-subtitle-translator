@@ -150,7 +150,7 @@ Yêu cầu UI: responsive (điện thoại), không phụ thuộc CDN (homelab c
 
 | Cách vào | Dùng cho | Cơ chế |
 |---|---|---|
-| Form đăng nhập | Trình duyệt | `POST /api/auth/login` → cookie phiên `gst_session` (`HttpOnly`, `SameSite=Strict`, thêm `Secure` khi `X-Forwarded-Proto: https`), token ký HMAC bằng bí mật phiên trong `app.db`, hết hạn sau 7 ngày không dùng, đổi mật khẩu thì bí mật xoay và mọi phiên cũ mất hiệu lực. Request ghi (POST/PUT) bằng cookie bị kiểm `Origin`/`Host` khớp. Chưa đăng nhập: `GET` trang HTML → chuyển tới `/login`; `/api/*` → `401` JSON **không** kèm `WWW-Authenticate` (để trình duyệt không bật hộp Basic Auth). |
+| Form đăng nhập | Trình duyệt | `POST /api/auth/login` → cookie phiên `gst_session` (`HttpOnly`, `SameSite=Strict`, thêm `Secure` khi `X-Forwarded-Proto: https`), token ký HMAC bằng bí mật phiên trong `app.db`, hết hạn sau 7 ngày không dùng (token được cấp lại khi đã quá 1 giờ tuổi, nên không cần trạng thái từng phiên), đổi mật khẩu thì bí mật xoay và mọi phiên cũ mất hiệu lực. Đăng xuất đưa id token vào danh sách chặn trong bộ nhớ (mất khi restart). Request ghi (POST/PUT) bằng cookie bị kiểm `Origin`/`Host` khớp. Chưa đăng nhập: `GET` trang HTML → chuyển tới `/login`; `/api/*` → `401` JSON **không** kèm `WWW-Authenticate` (để trình duyệt không bật hộp Basic Auth). |
 | Basic Auth | Script, Home Assistant (FR-10.3) | Header `Authorization`, cùng tài khoản; `401` kèm `WWW-Authenticate` chỉ khi request không mang cookie và không xin HTML. |
 
 Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nhập, mật khẩu băm `scrypt` kèm salt, bí mật phiên. Khởi động: nếu chưa có dòng nào mà có `CONSOLE_USER` + `CONSOLE_PASSWORD` thì tạo từ env; nếu đã có thì **bỏ qua env**, trừ khi `CONSOLE_PASSWORD_RESET=1` (ghi đè bằng env, xoay bí mật phiên, log cảnh báo bỏ cờ). Chưa có dòng nào và thiếu env ⇒ `503` như P0b; không có trang "đặt mật khẩu lần đầu" vì nó mở cho cả LAN trước khi ai đó kịp đặt. `CONSOLE_AUTH=off` vẫn là cách tắt duy nhất (log cảnh báo mỗi lần khởi động). Đổi mật khẩu: `POST /api/auth/password` cần mật khẩu hiện tại, mật khẩu mới ≥ 8 ký tự. Đăng nhập sai 5 lần liên tiếp từ một địa chỉ ⇒ khoá 5 phút (đếm chung cho form và Basic Auth, trong bộ nhớ). So sánh bằng `hmac.compare_digest`; mật khẩu, cookie và `Authorization` không bao giờ vào log, `config.json`, `/api/settings` hay `RuntimeContext` dưới dạng serialize được. Tên đăng nhập không đổi được qua console (đổi bằng reset). Backup (`backups.py`) hiện chỉ gồm `config.json` và `targets.json`, nên không mang theo mật khẩu băm; nếu sau này backup mở rộng sang `app.db` thì phải loại bảng `auth`, và restore không bao giờ ghi đè nó.
@@ -318,7 +318,7 @@ suggestions(id PK, series_id FK, target_lang, kind /* term|address_rule|characte
 corrections(id PK, unit_id FK, target_lang, kind /* term|address|note|cue_edit */,
             payload_json /* cue_edit: {cue, text} */, created_at, active)
             -- chỉ scope=episode; scope forward/series ghi vào glossary YAML
-auth(id PK CHECK (id = 1), username, password_hash /* scrypt + salt */, session_secret, updated_at)
+auth(id PK CHECK (id = 1), user, password_hash /* scrypt + salt */, session_secret /* hex; xoay mỗi lần ghi tài khoản */, updated_at)
      -- một dòng duy nhất; xem ADR-7 "Xác thực"
 jobs(id PK, kind /* translate|extract|research|retranslate */, unit_id, target_lang,
      priority, params_json /* range, correction ids */, state, attempts,

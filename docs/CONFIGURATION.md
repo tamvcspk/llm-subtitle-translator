@@ -61,9 +61,11 @@ Every request needs one of them, except `GET /login` and `POST /api/auth/login`.
 - Five wrong logins in a row from one address (form, Basic Auth and password
   change count together) lock that address for five minutes (`429`).
 - The session cookie is `HttpOnly`, `SameSite=Strict`, gets `Secure` behind a
-  proxy that sends `X-Forwarded-Proto: https`, expires after 7 days without use,
-  and is kept in memory: restarting the worker signs everyone out. Writes made
-  with a cookie must carry a matching `Origin`.
+  proxy that sends `X-Forwarded-Proto: https`, and expires after 7 days without
+  use. It is a signed token (HMAC under a secret stored in `app.db`), so
+  sessions survive a worker restart; changing or resetting the password rotates
+  the secret and ends every session. Signing out also blocks that cookie until
+  the worker restarts. Writes made with a cookie must carry a matching `Origin`.
 
 Credentials are compared in constant time and are never logged. The Bazarr
 post-processing script only writes queue files and does not call the HTTP API,

@@ -132,7 +132,15 @@ class ConsoleAuth:
     def can_change_password(self) -> bool:
         return self.enabled and self.accounts is not None
 
+    def session_secret(self) -> bytes:
+        """The key sessions are signed with ('' bytes when there is no account yet)."""
+        if self.accounts is None:
+            return b""
+        secret = self.accounts.auth_session_secret()
+        return bytes.fromhex(secret) if secret else b""
+
     def change_password(self, new_password: str) -> None:
+        """Store the new hash; the store also rotates the session secret, which ends every session."""
         if not self.can_change_password:
             raise RuntimeError("the password is managed outside the console")
         account = self.accounts.auth_account()
@@ -209,56 +217,118 @@ MAX_FAILURES = 5
 LOCK_SECONDS = 300
 
 
-class SessionStore:
-    """In-memory login sessions for the form login (POC: they do not survive a restart).
+SESSION_REFRESH_SECONDS = 3600
 
-    The cookie carries a random token; only its SHA-256 is kept, so a memory dump
-    or a debug print of the store cannot be replayed as a cookie. A session expires
-    after ``ttl`` seconds without use (sliding).
+
+def _b64u(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _unb64u(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+class SessionStore:
+    """Login sessions as signed, stateless cookies (ARCHITECTURE ADR-7).
+
+    A token is ``user.id.issued.signature``; the signature is an HMAC-SHA256 under the
+    session secret, which lives in the ``auth`` table. So sessions survive a restart,
+    and rotating the secret (password change or reset) ends every session at once.
+    A session expires ``ttl`` seconds after it was last issued; ``resolve`` hands back
+    a re-issued token once the current one is older than an hour, which makes the
+    expiry sliding without keeping any per-session state. Logging out also puts the
+    token id on an in-memory deny list until the token would have expired anyway, so a
+    copied cookie dies with the logout (the list is lost on restart, which at worst
+    lets a logged-out cookie live until the next rotation or its expiry).
     """
 
-    def __init__(self, ttl: float = SESSION_TTL_SECONDS, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        ttl: float = SESSION_TTL_SECONDS,
+        clock: Callable[[], float] = time.time,
+        secret: Callable[[], bytes] | None = None,
+    ) -> None:
         self._ttl = ttl
         self._clock = clock
+        self._secret_fn = secret
+        self._local_secret = secrets.token_bytes(32)
         self._lock = threading.Lock()
-        self._sessions: dict[str, tuple[str, float]] = {}  # token hash -> (user, last seen)
+        self._revoked: dict[str, float] = {}  # token id -> when the token expires anyway
 
-    @staticmethod
-    def _key(token: str) -> str:
-        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+    @classmethod
+    def for_auth(cls, auth: "ConsoleAuth", **kwargs: Any) -> "SessionStore":
+        """Sign with the account's stored secret when there is a store, else with a process-local one."""
+        return cls(secret=auth.session_secret if auth.accounts is not None else None, **kwargs)
+
+    def _secret(self) -> bytes:
+        return self._secret_fn() if self._secret_fn else self._local_secret
+
+    def _sign(self, secret: bytes, body: str) -> str:
+        return _b64u(hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest())
+
+    def _issue(self, user: str, token_id: str, now: float) -> str:
+        body = f"{_b64u(user.encode('utf-8'))}.{token_id}.{int(now)}"
+        secret = self._secret()
+        if not secret:
+            raise RuntimeError("there is no session secret (no console account yet)")
+        return f"{body}.{self._sign(secret, body)}"
 
     def create(self, user: str) -> str:
-        token = secrets.token_urlsafe(32)
+        return self._issue(user, secrets.token_urlsafe(12), self._clock())
+
+    def _parse(self, token: str | None) -> tuple[str, str, float] | None:
+        """(user, token id, issued at) of a token with a valid signature, else None."""
+        if not token or len(token) > 1024:
+            return None
+        parts = token.split(".")
+        if len(parts) != 4:
+            return None
+        secret = self._secret()
+        if not secret:
+            return None
+        body = ".".join(parts[:3])
+        if not hmac.compare_digest(self._sign(secret, body).encode("ascii"), parts[3].encode("ascii", "replace")):
+            return None
+        try:
+            return _unb64u(parts[0]).decode("utf-8"), parts[1], float(int(parts[2]))
+        except (ValueError, UnicodeDecodeError, binascii.Error):
+            return None
+
+    def resolve(self, token: str | None) -> tuple[str, str | None] | None:
+        """``(user, fresh token or None)`` for a live session, else None."""
+        parsed = self._parse(token)
+        if parsed is None:
+            return None
+        user, token_id, issued = parsed
         now = self._clock()
+        if now - issued >= self._ttl or issued - now > 60:
+            return None
         with self._lock:
-            self._sessions = {k: v for k, v in self._sessions.items() if now - v[1] < self._ttl}
-            self._sessions[self._key(token)] = (user, now)
-        return token
+            if token_id in self._revoked:
+                return None
+        fresh = self._issue(user, token_id, now) if now - issued >= SESSION_REFRESH_SECONDS else None
+        return user, fresh
 
     def lookup(self, token: str | None) -> str | None:
-        """The user a token belongs to, or None; a hit refreshes the expiry."""
-        if not token:
-            return None
-        key = self._key(token)
-        now = self._clock()
-        with self._lock:
-            entry = self._sessions.get(key)
-            if entry is None:
-                return None
-            if now - entry[1] >= self._ttl:
-                del self._sessions[key]
-                return None
-            self._sessions[key] = (entry[0], now)
-            return entry[0]
+        resolved = self.resolve(token)
+        return resolved[0] if resolved else None
 
     def revoke(self, token: str | None) -> None:
-        if token:
-            with self._lock:
-                self._sessions.pop(self._key(token), None)
+        parsed = self._parse(token)
+        if parsed is None:
+            return
+        now = self._clock()
+        with self._lock:
+            self._revoked = {k: v for k, v in self._revoked.items() if v > now}
+            # Counted from now, not from the token's age: a refreshed copy of the same id must stay dead too.
+            self._revoked[parsed[1]] = now + self._ttl
 
     def revoke_all(self) -> None:
+        """Local secrets are replaced here; a stored secret is rotated by ``ConsoleAuth.change_password``."""
         with self._lock:
-            self._sessions.clear()
+            self._revoked.clear()
+            if self._secret_fn is None:
+                self._local_secret = secrets.token_bytes(32)
 
 
 class LoginThrottle:

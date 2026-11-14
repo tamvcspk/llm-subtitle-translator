@@ -5,9 +5,10 @@
   scrypt hash (schema 4, table `auth`); from then on the stored account wins and the
   password is changed in Settings (this signs out every other session).
   `CONSOLE_PASSWORD_RESET=1` overwrites it after a forgotten password. Five wrong
-  logins lock an address for five minutes. **Upgrade note:** changing
-  `CONSOLE_PASSWORD` and restarting no longer changes the password. Sessions live
-  in memory, so a restart signs everyone out.
+  logins lock an address for five minutes. Sessions are signed cookies (secret in
+  `app.db`, schema 5) that survive a restart and end on a password change or
+  reset. **Upgrade note:** changing `CONSOLE_PASSWORD` and restarting no longer
+  changes the password.
 - **P4: story memory (off by default).** Before an episode is translated the worker
   can read the source subtitles of the episodes before it and tell the model who the
   characters are, how each pair stands to each other and what happened lately, so
