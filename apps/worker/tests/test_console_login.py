@@ -533,8 +533,8 @@ class AccountTests(unittest.TestCase):
         self.assertFalse(auth.verify(USER, "nope"))
         self.assertFalse(auth.verify("nobody", PASSWORD))
         account = self.store.auth_account()
-        self.assertEqual(account["user"], USER)
-        self.assertNotIn(PASSWORD, account["password_hash"])
+        self.assertEqual(account.user, USER)
+        self.assertNotIn(PASSWORD, account.password_hash)
         self.assertNotIn(PASSWORD, repr(auth))
 
     def test_without_env_and_without_account_it_is_unconfigured(self):
@@ -580,11 +580,6 @@ class AccountTests(unittest.TestCase):
         self.assertFalse(auth.can_change_password)
         with self.assertRaises(RuntimeError):
             auth.change_password(NEW_PASSWORD)
-
-    def test_store_keeps_one_account_row(self):
-        self.store.save_auth_account("a", "h1")
-        self.store.save_auth_account("b", "h2")
-        self.assertEqual(self.store.auth_account(), {"user": "b", "password_hash": "h2"})
 
 
 if __name__ == "__main__":

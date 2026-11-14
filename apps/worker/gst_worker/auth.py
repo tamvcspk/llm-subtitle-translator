@@ -23,6 +23,8 @@ from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import urlsplit
 
+from .ports import AuthRepo
+
 REALM = "LLM Subtitle Translator"
 
 ALLOW = "allow"
@@ -85,10 +87,10 @@ class ConsoleAuth:
     # repr=False keeps the secrets out of any accidental log/traceback of this object.
     user: str = field(default="", repr=False)
     password: str = field(default="", repr=False)
-    accounts: Any = field(default=None, repr=False, compare=False)
+    accounts: AuthRepo | None = field(default=None, repr=False, compare=False)
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str], store: Any = None) -> "ConsoleAuth":
+    def from_env(cls, env: Mapping[str, str], store: AuthRepo | None = None) -> "ConsoleAuth":
         if (env.get("CONSOLE_AUTH") or "").strip().lower() == "off":
             return cls(enabled=False)
         user = env.get("CONSOLE_USER") or ""
@@ -117,7 +119,7 @@ class ConsoleAuth:
         """The account's user name ('' when there is none yet)."""
         if self.accounts is not None:
             account = self.accounts.auth_account()
-            return account["user"] if account else ""
+            return account.user if account else ""
         return self.user
 
     @property
@@ -146,7 +148,7 @@ class ConsoleAuth:
         account = self.accounts.auth_account()
         if account is None:
             raise RuntimeError("there is no console account yet")
-        self.accounts.save_auth_account(account["user"], hash_password(new_password))
+        self.accounts.save_auth_account(account.user, hash_password(new_password))
 
     def log_startup(self) -> None:
         if not self.enabled:
@@ -177,7 +179,7 @@ class ConsoleAuth:
     def password_matches(self, password: str) -> bool:
         if self.accounts is not None:
             account = self.accounts.auth_account()
-            return bool(account) and check_password(password, account["password_hash"])
+            return bool(account) and check_password(password, account.password_hash)
         return bool(self.password) and hmac.compare_digest(password.encode("utf-8"), self.password.encode("utf-8"))
 
     def verify(self, user: str, password: str) -> bool:

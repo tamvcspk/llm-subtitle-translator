@@ -2,7 +2,7 @@
 
 > Lộ trình triển khai [docs/design/SPEC.md](docs/design/SPEC.md) (cái gì) theo [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) (như thế nào).
 > File này là **nguồn sự thật duy nhất** cho phase, phạm vi, trạng thái. Đổi yêu cầu → sửa SPEC/ARCHITECTURE; đổi thứ tự/tiến độ → sửa file này.
-> Cập nhật: 2026-11-13
+> Cập nhật: 2026-11-14
 
 Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa làm.
 "Tiêu chí N" = tiêu chí nghiệm thu SPEC §6.
@@ -14,13 +14,14 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P0** | Fork, uv workspace, CI xanh, chưa đổi hành vi | Test upstream vẫn pass | `[~]` CI + image xanh; còn kiểm tra Dependabot |
 | **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[x]` CI GitHub xanh (f9b8605) |
 | **P0c** | Form đăng nhập + đổi mật khẩu trong Settings cho tài khoản duy nhất; Basic Auth giữ cho script (NFR-5, tiêu chí 9) | Tiêu chí 9: chưa đăng nhập → chuyển tới form / `401`; đăng nhập, đăng xuất, đổi mật khẩu vô hiệu phiên cũ và mật khẩu env cũ; `CONSOLE_PASSWORD_RESET=1` ghi đè; sai 5 lần → khoá; không rò mật khẩu/cookie vào log, API | `[x]` |
+| **P0d** | **Ưu tiên cao.** Ba phần: (1) ranh giới và port cho core worker (ADR-8, SPEC mục 9): `Store` tách thành port hẹp trả kiểu có tên, tầng use case dùng chung cho HTTP/CLI, `JobQueue`/`MediaLibrary`/`Metadata`/`ProviderFactory` thành port; (2) chế độ `hold` và duyệt job (FR-12) xây trên phần 1; (3) dọn file tự sinh (FR-13) | Tiêu chí 10 (phần 1): test import không còn ngoại lệ; test hợp đồng mỗi port chạy trên adapter thật và fake; toàn bộ test cũ pass; `schema_version`, queue JSON, `gst_enqueue.sh`, HTTP API không đổi. Tiêu chí 11 (phần 2): hold/duyệt/từ chối/khôi phục đúng, `auto` y như cũ. Tiêu chí 12 (phần 3): dọn đúng nhóm, không đụng media/job chưa xong/`held`/phiên bản `current` | `[ ]` Đã ghi ADR-8, FR-12, FR-13 (SPEC v0.8); chưa làm code |
 | **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[x]` CI xanh; thử Gemini thật 4 file; 50 file thật hoãn (xem dưới) |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[~]` Code + test xong (xem dưới); còn bảng `jobs`/importer và chạy thật với Bazarr |
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong, CI xanh (e5babb1); còn thử giao diện trên trình duyệt thật |
 | **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[~]` Code + test xong (tiêu chí 1, 2 bằng fake provider); đã đo chất lượng trên 3 series, CI GitHub xanh (263c048); còn thử giao diện trên trình duyệt thật |
 | **P5** | Đề xuất + research grounding + Review inbox; provider `openai_compat` | FR-6, FR-7, FR-9.1, FR-11.1 | `[ ]` |
 
-**Vì sao thứ tự này:** P1 dùng được ngay bằng CLI trước khi động vào worker — cách nhanh nhất để đánh giá chất lượng dịch với glossary thật. P3 đứng trước memory vì correction + dịch lại là "lưới an toàn" chất lượng cần có trước khi tự động hoá thêm. P0b đứng đầu vì console hiện tại đã ghi được (settings, backup/restore, retry) và SPEC chốt Basic Auth "ngay từ đầu".
+**Vì sao thứ tự này:** P1 dùng được ngay bằng CLI trước khi động vào worker — cách nhanh nhất để đánh giá chất lượng dịch với glossary thật. P3 đứng trước memory vì correction + dịch lại là "lưới an toàn" chất lượng cần có trước khi tự động hoá thêm. P0b đứng đầu vì console hiện tại đã ghi được (settings, backup/restore, retry) và SPEC chốt Basic Auth "ngay từ đầu". P0d (đánh số theo nhóm hạ tầng P0x, nhưng làm **sau** P4 và **trước** P5): P5 thêm bảng `suggestions` và provider mới, nếu chưa có port thì chúng nằm tiếp vào `Store` hơn 30 method; mọi tính năng mới sau đó cũng cần đi qua tầng use case để có cả HTTP lẫn CLI. P0d không chặn việc "Chạy thật với Bazarr" của P2 (hai việc độc lập; chạy thật vẫn phải có `GST_ONLY_PATHS`/`GST_MAX_PENDING`). Chế độ `hold` (FR-12) nằm cùng P0d nhưng làm **sau** phần ranh giới: "duyệt job" là một use case phục vụ cả console lẫn CLI và chạm vòng đời hàng đợi, nên cần tầng use case và port `JobQueue` có trước. Khi `hold` xong, cách nối Bazarr an toàn nhất là `hold` kèm `GST_ONLY_PATHS`; hai rào cũ vẫn giữ.
 
 **Mỗi phase xong khi:** test của tiêu chí nghiệm thu pass bằng fake provider (không gọi mạng), CI xanh trên GitHub, docs liên quan đã cập nhật (`docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md`, `AGENTS.md`), có mục `CHANGELOG.md`, và trạng thái ở file này được đánh dấu. Quy trình chi tiết: skill `implement-phase`.
 
@@ -66,6 +67,53 @@ SPEC NFR-5, quyết định #8, tiêu chí 9; ARCHITECTURE ADR-7 "Xác thực", 
 - [x] Test (`apps/worker/tests/test_console_login.py`; `LoginServerTests` chạy lại với tài khoản trong DB ở `StoredAccountServerTests`): từng ý của tiêu chí 9, kể cả duyệt mọi route của router để chắc chắn không có đường dẫn nào ngoài danh sách ngoại lệ mở được khi chưa đăng nhập; log không chứa mật khẩu/cookie.
 - [x] Docs khi làm xong: `docs/API.md`, `docs/CONFIGURATION.md` (`CONSOLE_PASSWORD_RESET`, đổi mật khẩu), `AGENTS.md` (invariant xác thực không còn "chỉ từ env"), `README.md`, `.env.example`, `docker-compose.yml`, `CHANGELOG.md`.
 - [x] Workflow **CI** trên GitHub xanh cho commit P0c (f3c914c; image build xanh, thử bằng curl trên container local: đăng nhập, đổi mật khẩu, phiên sống qua restart, reset, khoá). Đã deploy thử trên homeserver (sha-f3c914c) và đăng nhập bằng form thành công; container đã dừng sau khi thử (2026-11-14).
+
+## P0d — Ranh giới và port cho core worker; hold và duyệt job; dọn file `[ ]`
+
+SPEC mục 9 (ADR-8), NFR-10, tiêu chí 10, quyết định #9; FR-12, tiêu chí 11, quyết định #10; FR-13, tiêu chí 12, quyết định #11. **Ưu tiên cao:** làm trước P5. Ba phần: phần 1 không đổi hành vi và làm trước; phần 2 (hold) và phần 3 (dọn file) thêm tính năng, độc lập nhau, đều sau mốc CI xanh của phần 1. Mỗi bước một commit, CI xanh sau từng bước. Danh sách port là dự kiến (SPEC mục 9), kiểm lại số chỗ gọi khi làm từng port.
+
+### Phần 1 — Ranh giới và port (hành vi không đổi)
+
+- [x] Ghi ADR-8, NFR-10, tiêu chí 10, quyết định #9 vào SPEC (v0.6, 2026-11-14).
+- [x] **Test ranh giới trước tiên** (quét AST mã nguồn core worker): không `sqlite3`, adapter lưu trữ, HTTP client, `urllib`. Bắt đầu với danh sách ngoại lệ chứa các vi phạm hiện có (ví dụ `units.py` import `queue` và `llm`); mỗi bước dưới đây thu hẹp danh sách, kết thúc khi rỗng. Đã có `apps/worker/tests/test_core_boundary.py`: mọi module `gst_worker` là core trừ adapter (`store`, `queue`, `http`, `bazarr`, `tmdb`, `gemini`, `llm`, `backups`, `connection_tests`) và `runtime` (composition root); 9 ngoại lệ hiện có (`console`, `library` ×2, `memory`, `translation_attempt` ×2, `units` ×2, `versions`); thêm vi phạm mới hoặc để sót ngoại lệ đã hết đều làm test đỏ. `urllib.parse`/`http.cookies` (xử lý chuỗi thuần) vẫn được phép. **Còn thiếu:** `worker.py` (HTTP handler) chưa được quét; sẽ thêm khi tầng use case tách handler.
+- [~] Kiểu có tên (dataclass bất biến) thay `dict` cho dữ liệu đi qua port (làm cùng từng port; xong: tài khoản): tài khoản, phiên bản, series, unit, output, correction, facts, summary. Tên cột chỉ còn trong adapter SQLite.
+- [~] `ports.py` (Protocol, nằm ở core; đã tạo, hiện có `AuthRepo`) và adapter SQLite tách khỏi core; `Store` hiện tại trở thành adapter cài nhiều port cho tới khi mọi nơi dùng đã chuyển sang port hẹp, rồi được tách theo port.
+- [~] Port theo thứ tự nhỏ đến lớn, mỗi port một commit. **Xong:** `AuthRepo` (`gst_worker/ports.py`: `Account` bất biến, hash ẩn khỏi `repr`; `Store` cài port, trả `Account` thay `dict`; `ConsoleAuth` chỉ biết port; khuôn: port trong `ports.py`, fake + bộ test hợp đồng chạy trên cả SQLite lẫn fake ở `tests/test_auth_repo_contract.py`, test 10c quét kiểu trả về trong `ports.py`; khi một `Store` cài nhiều port, tên method mang tiền tố port). **Còn:** `UsageLog` → `VersionRepo` (`versions.py`, `translation_attempt.py`) → `MemoryRepo` (`memory.py`) → `CatalogRepo` (`library.py`, `units.py`, lớn nhất).
+- [ ] `JobQueue` bọc `queue.py`; `ProviderFactory` bọc `llm.build_provider`; `MediaLibrary` bọc `bazarr.py`; `Metadata` bọc `tmdb.py`. Core không còn import trực tiếp các module này. Định dạng queue JSON và `gst_enqueue.sh` không đổi.
+- [ ] Tầng use case: `ConsoleActions`/`UnitService` và logic trong HTTP handler chuyển thành use case (enqueue, retranslate, revert, edit cue, cancel…); handler chỉ parse, auth, gọi use case, format phản hồi. `RuntimeContext` vẫn là nơi duy nhất nối dây.
+- [ ] Test hợp đồng cho từng port, một bộ kiểm chạy trên adapter thật (SQLite/thư mục tạm) **và** fake trong bộ nhớ.
+- [ ] Giữ nguyên: schema SQLite, định dạng queue JSON, `gst_enqueue.sh`, HTTP API, `subcore`; toàn bộ test hiện có pass (chỉ sửa chỗ khởi tạo).
+- [ ] Khi xong phần 1: chuyển ADR-8 và sơ đồ từ SPEC mục 9 sang ARCHITECTURE (§1, §2; cả hai cùng số phiên bản), SPEC mục 9 còn một con trỏ; cập nhật `docs/ARCHITECTURE.md` (mô tả code hiện tại), phần "Seams to respect" trong `AGENTS.md`, `CONTEXT.md` nếu có thuật ngữ mới, `CHANGELOG.md`.
+- [ ] Workflow **CI** trên GitHub xanh cho phần 1 (mốc để bắt đầu phần 2).
+
+### Phần 2 — Chế độ `hold` và duyệt job (FR-12)
+
+Chỉ bắt đầu sau mốc CI xanh của phần 1.
+
+- [ ] Vòng đời hàng đợi thêm `held` và `rejected` (thể hiện cụ thể do `JobQueue` quyết định, ghi lại trong ARCHITECTURE và `CONTEXT.md`); khôi phục khi khởi động worker **không** thả job `held` (FR-12.8); từ chối nhớ theo job id để script/scan không đưa lại, khôi phục được (FR-12.5).
+- [ ] Cài đặt `admission_mode` (`auto` mặc định | `hold`) trong settings; worker áp dụng khi nhận job từ script, job do admin tạo (Enqueue, Scan, dịch lại, sửa cue, hoàn tác) không bị giữ (FR-12.2, 12.3). `gst_enqueue.sh` và định dạng file job không đổi; kiểm bằng test chạy với bản script hiện tại.
+- [ ] Use case: liệt kê `held`, duyệt (job / nhiều job / series / tất cả), từ chối, khôi phục. Duyệt vẫn qua FR-9.6 và NFR-4, và không bị giới hạn bởi `GST_MAX_PENDING`; `GST_ONLY_PATHS` vẫn chặn ở lúc nhận (FR-12.6, 12.7).
+- [ ] HTTP API cho các use case trên (FR-12.9) + `docs/API.md`.
+- [ ] Console: tab **Held** trong Queue, nhóm theo series, chọn nhiều, badge trên thanh điều hướng, xác nhận khi duyệt hàng loạt có số job; dùng được trên điện thoại (FR-12.4, 12.5).
+- [ ] Test tiêu chí 11 (a–j) bằng fake provider, gồm kiểm `auto` y như cũ với bản `gst_enqueue.sh` cũ.
+- [ ] Docs: `docs/CONFIGURATION.md` (`admission_mode`), `docs/API.md`, `docs/BAZARR.md` (mục "Manual Wanted Workflow"), `CONTEXT.md` (Held job, vòng đời), `AGENTS.md` (held không gọi model; duyệt không bỏ qua kiểm tra thiếu ngôn ngữ), `CHANGELOG.md`; chuyển phần thiết kế FR-12 vào ARCHITECTURE.
+- [ ] Thử trên Bazarr thật: `hold` + `GST_ONLY_PATHS` một series, xem job `held` xuất hiện, duyệt một job và đọc bản dịch.
+- [ ] (Tuỳ chọn, sau cùng) CLI cho worker làm adapter vào thứ hai của tầng use case: lệnh ghi (duyệt, từ chối, enqueue, dịch lại) đi qua HTTP API khi worker đang chạy (ADR-4, một writer), lệnh đọc có thể đọc trực tiếp.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P0d phần 2.
+
+### Phần 3 — Dọn file (FR-13)
+
+Chỉ bắt đầu sau mốc CI xanh của phần 1; độc lập với phần 2. Riêng quy tắc "không dọn `held` và dấu từ chối" chỉ kiểm được khi phần 2 xong (trước đó các trạng thái này chưa tồn tại).
+
+- [ ] Use case dọn file với `dry_run`: quét `done/`, `failed/` (kèm `.error`), `backups/subtitles/`, `backups/glossary/`, file tạm mồ côi trong queue và `DATA_DIR`; trả số file và dung lượng theo nhóm (FR-13.1, 13.4).
+- [ ] Phiên bản bản dịch: đánh dấu `pruned` trong lịch sử khi xoá bản sao; giữ `current`, phiên bản đầu và N mới nhất; Hoàn tác về phiên bản `pruned` bị từ chối với lý do; tab Lịch sử hiện trạng thái `pruned` (FR-13.3).
+- [ ] Ranh giới an toàn: không đụng thư mục media (file tạm mồ côi cạnh media chỉ được liệt kê), job `pending`/`processing`/`deferred`/`held`, dấu từ chối, facts/summary/snapshot, SQLite (FR-13.2). Đi qua port `JobQueue` và `VersionRepo` của phần 1, không đụng file trực tiếp từ use case.
+- [ ] Cài đặt `retention_done_days`, `retention_failed_days`, `retention_versions_keep`, `retention_glossary_keep` (`0` tắt nhóm); chạy mỗi ngày cùng bảo trì backup (`BackupMaintenance`) và nút **Dọn ngay** trong Settings có xem trước rồi xác nhận (FR-13.4); log tóm tắt, không log nội dung (FR-13.5).
+- [ ] `model_layers` ghi rõ cửa sổ thống kê theo `retention_*` trên API và console (FR-13.6). **Lưu ý:** việc "đánh giá tầng thứ hai có đáng giữ không" ở P2 đọc `model_layers`, nên làm xong đánh giá đó (hoặc ghi lại số liệu) trước khi bật dọn `done/` với cửa sổ ngắn.
+- [ ] HTTP API (`dry_run`) + `docs/API.md`.
+- [ ] Test tiêu chí 12 (a–f), gồm cây thư mục media giả có phụ đề và `.tmp` mồ côi để chắc không file nào bị đụng.
+- [ ] Docs: `docs/CONFIGURATION.md` (`retention_*`), `docs/API.md`, `CONTEXT.md` nếu có thuật ngữ mới, `AGENTS.md` (dọn file không bao giờ đụng media), `CHANGELOG.md`; chuyển phần thiết kế FR-13 vào ARCHITECTURE.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P0d phần 3 (chỉ đánh dấu `[x]` cho cả phase P0d sau bước này, khi cả ba phần xong).
 
 ## P1 — Engine `subcore` + CLI `[x]`
 

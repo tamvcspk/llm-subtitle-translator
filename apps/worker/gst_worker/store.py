@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
+from .ports import Account
+
 _MIGRATIONS: tuple[str, ...] = (
     """
     CREATE TABLE translations (
@@ -193,10 +195,10 @@ class Store:
             return int(self._db.execute("PRAGMA user_version").fetchone()[0])
 
     # -- auth --------------------------------------------------------------
-    def auth_account(self) -> dict[str, Any] | None:
+    def auth_account(self) -> Account | None:
         with self._lock:
             row = self._db.execute("SELECT user, password_hash FROM auth WHERE id = 1").fetchone()
-        return dict(row) if row else None
+        return Account(user=row["user"], password_hash=row["password_hash"]) if row else None
 
     def save_auth_account(self, user: str, password_hash: str) -> None:
         """Create or overwrite the account. A fresh session secret goes with it, so every session ends."""
