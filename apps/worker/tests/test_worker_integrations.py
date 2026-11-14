@@ -178,7 +178,7 @@ class TestWorkerIntegrationsTests(unittest.TestCase):
             handler.end_headers = lambda: None
 
             # Windows registries can map .js to text/plain; module scripts would then fail to load.
-            with patch("worker.mimetypes.guess_type", return_value=("text/plain", None)):
+            with patch("gst_worker.web.mimetypes.guess_type", return_value=("text/plain", None)):
                 handler.serve_static("/js/main.js")
 
         self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")

@@ -5,6 +5,9 @@
   `process_job` from the composition root. Settings changed in the console now reach the
   Bazarr rescan after a subtitle edit too (before, that rescan used the URL and key the
   worker started with). Queue format, `gst_enqueue.sh`, schema and HTTP API unchanged.
+  The HTTP handler moved from `worker.py` to `gst_worker/web.py` and the settings loader to
+  `gst_worker/settings.py` (both still importable from `worker`); enqueueing a picked subtitle
+  or a scan result is now a use case in `ConsoleActions`.
 - **P0c: console login form.** Browsers now sign in at `/login` (cookie session,
   Sign out in the sidebar); Basic Auth keeps working for scripts. The account is
   created from `CONSOLE_USER`/`CONSOLE_PASSWORD` on the first run and stored as a

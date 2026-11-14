@@ -17,7 +17,11 @@ PACKAGE = "gst_worker"
 PACKAGE_DIR = Path(__file__).resolve().parent.parent / PACKAGE
 
 # Infrastructure: implements a port (or will) and may touch storage, files, sockets.
-ADAPTERS = frozenset({"store", "queue", "http", "bazarr", "tmdb", "gemini", "llm", "backups", "connection_tests"})
+ADAPTERS = frozenset({
+    "store", "queue", "http", "bazarr", "tmdb", "gemini", "llm", "backups", "connection_tests",
+    "settings",  # environment + config files + Bazarr's own config
+    "web",  # the console's HTTP handler
+})
 # Wires adapters into the core; the only place allowed to know all of them.
 COMPOSITION_ROOT = frozenset({"runtime"})
 
@@ -84,6 +88,16 @@ class CoreBoundaryTests(unittest.TestCase):
     def test_exception_list_only_shrinks(self):
         stale = set(KNOWN_VIOLATIONS) - core_violations()
         self.assertFalse(stale, f"no longer a violation, delete from KNOWN_VIOLATIONS: {sorted(stale)}")
+
+    def test_entry_point_wires_adapters_but_touches_no_infrastructure_itself(self):
+        """``worker.py`` is the process's composition root: it may import any adapter, but sockets, SQLite and
+        the stdlib HTTP server stay inside the adapters (``store``, ``http``, ``web``)."""
+        source = (PACKAGE_DIR.parent / "worker.py").read_text(encoding="utf-8")
+        direct = {
+            name for name in imported_modules(source)
+            for bad in FORBIDDEN_EXTERNAL if name == bad or name.startswith(bad + ".")
+        }
+        self.assertFalse(direct, f"worker.py imports infrastructure directly; put it behind an adapter: {sorted(direct)}")
 
     def test_adapter_and_root_names_are_real_modules(self):
         names = {path.stem for path in PACKAGE_DIR.glob("*.py")}

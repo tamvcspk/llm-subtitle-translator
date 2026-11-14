@@ -22,10 +22,13 @@ It does not call Gemini and should return quickly.
 
 ### Worker
 
-`worker.py` is the runtime entrypoint. In normal mode it starts:
+`worker.py` is the runtime entrypoint and composition root: it builds the adapters
+(`Store`, `BazarrMedia`, `TmdbMetadata`, `FileJobQueue`, the HTTP client), passes them
+down as ports, and holds `process_job` and `QueueWorker`. It imports no socket,
+SQLite or HTTP-server module itself (`tests/test_core_boundary.py`). In normal mode it starts:
 
 - a background worker loop that consumes one pending job at a time;
-- a small stdlib HTTP server for the console and JSON API.
+- a small stdlib HTTP server for the console and JSON API (`gst_worker/web.py`).
 
 Domain code is split under `gst_worker/`:
 
@@ -37,8 +40,15 @@ Domain code is split under `gst_worker/`:
   persistence. Console retry and delete operations share its transition helpers;
 - `queue_policy.py`: pure retry and daily quota lifecycle decisions. This is the
   policy seam; filesystem moves remain in `queue.py`.
-- `console.py`: `ConsoleActions`, the small interface used by the HTTP adapter
-  for queue actions. It keeps request routing separate from queue orchestration;
+- `console.py`: `ConsoleActions`, the queue use cases used by the HTTP adapter
+  (retry, cancel, delete, and enqueueing a picked subtitle or a scan result: it
+  builds the job and chooses the targets). It keeps request routing separate from
+  queue orchestration;
+- `web.py`: the console's HTTP handler (`ConsoleHandler`, `start_web_server`):
+  authentication before any route, request parsing, calls into the use cases,
+  response formatting. An adapter; `worker.py` re-exports `ConsoleHandler`;
+- `settings.py`: `load_settings` and friends, the app config layered over
+  environment variables and Bazarr's own config (an adapter);
 - `translation_attempt.py`: `TranslationAttempt`, the execution seam for one
   translation job: it reads the source, calls `subcore` in-process, maps typed
   provider errors to the queue's exceptions, and publishes the result;
