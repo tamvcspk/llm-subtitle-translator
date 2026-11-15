@@ -14,7 +14,7 @@ from subserver.catalog import CatalogPaths, CatalogSync, with_keys
 from subserver.catalog_actions import CatalogActions
 from subserver.catalog_api import handle
 from subserver.catalog_view import CatalogView
-from subserver.glossaries import GlossaryFiles
+from subserver.glossaries import Glossaries
 from subserver.job_requests import JobRequests
 from subserver.library import Library, identify_job
 from subserver.ports import CatalogEntry, CatalogSubtitle, MediaLibraryError
@@ -57,7 +57,7 @@ class Env:
                          "catalog_sync_interval": 300, "bazarr_api_key": "key", "max_calls_per_day": 0, **settings}
         self.config = {"source_languages": [EN], "target_languages": [VI]}
         self.versions = TranslationVersions(self.store, self.root / "backups", clock=self.clock.time)
-        self.library = Library(self.store, GlossaryFiles(str(self.root / "data")), self.versions)
+        self.library = Library(self.store, Glossaries(self.store), self.versions)
         self.queue = JobQueue(self.store, clock=self.clock.time, monotonic=self.clock.monotonic)
         self.queue.configure({}, ("m",), "gemini")
         self.fake = FakeMedia()

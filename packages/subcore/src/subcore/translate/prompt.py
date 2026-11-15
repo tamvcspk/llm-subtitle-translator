@@ -2,8 +2,8 @@
 
 System sections are ordered by priority, highest first:
 
-1. core rules  2. target-language rules  3. glossary (authoritative)
-4. extra context sections (story memory etc., added by later phases)  5. metadata
+1. core rules  2. target-language rules  3. glossary (authoritative)  4. effective style and character voices
+5. extra context sections (corrections, story memory)  6. metadata  7. accepted examples (few-shot)
 
 Core rules and the ``{i, text}`` structured-output contract are adapted from
 gemini-srt-translator (MIT, Copyright (c) 2024 Matheus Castro); see NOTICE.
@@ -12,10 +12,12 @@ gemini-srt-translator (MIT, Copyright (c) 2024 Matheus Castro); see NOTICE.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
-from ..glossary import ActiveRule, Glossary
+from ..glossary import ActiveRule, Glossary, Term
+from ..style import CharacterCard, Style, render_style, render_voices
 
 if TYPE_CHECKING:  # the bundle reads nothing from here at run time; the prompt renders a bundle
     from ..bundle import TranslationBundle
@@ -31,7 +33,7 @@ __all__ = [
 ]
 
 # Bump when the prompt text or the way it is assembled changes (it is part of every bundle hash, NFR-3).
-PROMPT_VERSION = "p3-1"
+PROMPT_VERSION = "p12-1"  # p12-1: the effective style and the character voices (FR-18) joined the system prompt
 
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "array",
@@ -110,15 +112,25 @@ class PromptContext:
     active_rules: list[ActiveRule] | None = None
     # Accepted (source, translation) pairs, rendered last (FR-18.5, P12).
     few_shot: list[tuple[str, str]] = field(default_factory=list)
+    # The effective style of the episode and the voices of the characters it names (FR-18, P12).
+    style: Style = field(default_factory=Style)
+    voices: list[CharacterCard] = field(default_factory=list)
 
 
-def _glossary_section(glossary: Glossary, active: list[ActiveRule]) -> str:
+def _mentioned(term: Term, texts: list[str]) -> bool:
+    return any(
+        re.search(rf"(?<!\w){re.escape(source)}(?!\w)", text, re.IGNORECASE) for source in term.sources for text in texts
+    )
+
+
+def _glossary_section(glossary: Glossary, active: list[ActiveRule], terms: tuple[Term, ...] | None = None) -> str:
     lines = ["Authoritative: these rules override anything inferred from context."]
     if glossary.style:
         lines.append(f"Style: {glossary.style}")
-    if glossary.terms:
+    terms = glossary.terms if terms is None else terms
+    if terms:
         lines.append("Terms (a LOCKED term's translation must appear verbatim whenever the source uses the term):")
-        for t in glossary.terms:
+        for t in terms:
             extra = f" (also written: {', '.join(t.aliases)})" if t.aliases else ""
             tag = " [LOCKED]" if t.locked else ""
             note = f" — {t.note}" if t.note else ""
@@ -152,9 +164,13 @@ def _glossary_section(glossary: Glossary, active: list[ActiveRule]) -> str:
     return "\n".join(lines)
 
 
-def render_system(bundle: "TranslationBundle") -> str:
+def render_system(bundle: "TranslationBundle", texts: Iterable[str] | None = None) -> str:
     """The system prompt of a bundle: the only place it is assembled (ADR-16). The glossary in the bundle is
-    already the one for this episode, with its address rules placed on cues."""
+    already the one for this episode, with its address rules placed on cues.
+
+    ``texts`` are the source lines of one request. With them, a glossary that has more terms than
+    ``params.glossary_filter_threshold`` lists only the terms those lines mention (FR-4.3); address rules and character
+    cards are never filtered by words, because two characters can talk a whole scene in pronouns."""
     sections: list[tuple[str, str]] = [
         ("Core rules", _CORE_RULES.format(language=bundle.target_name or language_name(bundle.target_lang))),
     ]
@@ -162,7 +178,18 @@ def render_system(bundle: "TranslationBundle") -> str:
     if lang_rules:
         sections.append(("Target-language rules", lang_rules))
     if not bundle.glossary.is_empty():
-        sections.append(("Glossary", _glossary_section(bundle.glossary, list(bundle.active_rules))))
+        shown = None
+        threshold = bundle.params.glossary_filter_threshold
+        if texts is not None and threshold > 0 and len(bundle.glossary.terms) > threshold:
+            lines = list(texts)
+            shown = tuple(t for t in bundle.glossary.terms if _mentioned(t, lines))
+        sections.append(("Glossary", _glossary_section(bundle.glossary, list(bundle.active_rules), shown)))
+    style = render_style(bundle.style)
+    if style:
+        sections.append(("Effective style", style))
+    voices = render_voices(bundle.voices)
+    if voices:
+        sections.append(("Character voices", voices))
     sections.extend(bundle.sections)
 
     meta = []

@@ -18,8 +18,8 @@ from typing import Any, Callable
 from . import queue_policy as policy
 from .config import QUOTA_RESET_TZ, enabled_target_languages
 from .jobs import (
-    CANCELLED, DONE, FAILED, LEGACY_STATES, OPEN_STATES, QUEUED, REPLACE, RUNNING, SKIPPED, WAITING,
-    JobStore, FROM_LEGACY, job_key, retranslation_key,
+    CANCELLED, DONE, FAILED, LEGACY_STATES, OPEN_STATES, QUEUED, REPLACE, RUNNING, SKIPPED, VARIANT, WAITING,
+    JobStore, FROM_LEGACY, job_key, retranslation_key, variant_key,
 )
 from .ports import Telemetry
 from .queue_policy import Health
@@ -72,8 +72,9 @@ def skip_reason(job: dict[str, Any]) -> str | None:
         return "source and target language are the same"
     if not subtitle_path or not Path(subtitle_path).exists():
         return "source subtitle is gone"
-    # An explicit retranslation exists to replace the target (the version history keeps the old one).
-    if job.get("trigger") == "retranslate":
+    # An explicit retranslation exists to replace the target (the version history keeps the old one); a variant
+    # exists to be compared with it and is never put on disk, so an existing target is no reason to skip it.
+    if job.get("trigger") in ("retranslate", "variant"):
         return None
     if outside_allowed_paths(subtitle_path):
         return "outside GST_ONLY_PATHS"
@@ -295,6 +296,26 @@ class JobQueue:
             target=target_code, origin="retranslate", range=window,
         )
         return job_id
+
+    def enqueue_variant(self, job: dict[str, Any]) -> str:
+        """One variant job (FR-18.8): the whole episode translated with another style and kept as a candidate, never
+        put on disk. At most one is open per episode and language (FR-15.3); a second request is refused."""
+        subtitle_path, output_path = str(job.get("subtitle_path", "")), str(job.get("output_path", ""))
+        target_code = str(job.get("target_code", ""))
+        key = variant_key(subtitle_path, output_path, target_code)
+        payload = {**job, "trigger": "variant", "created_at": int(time.time())}
+        added = self.jobs.add(
+            payload, key=key, kind=VARIANT, mode=VARIANT, origin="variant", prio=policy.INTERACTIVE,
+            job_id=f"{key}-{time.time_ns()}",
+        )
+        if not added.job_id:
+            raise ValueError("A variant of this episode is already queued")
+        self._emit(
+            "job.created", job_id=added.job_id, unit_id=job.get("unit_id") or None, subtitle=Path(subtitle_path).name,
+            reason="a variant: the episode is translated with another style and kept as a candidate to compare",
+            target=target_code, origin="variant", label=(job.get("variant") or {}).get("label"),
+        )
+        return added.job_id
 
     def retry(self, job_id: str) -> bool:
         """Put a failed job back in line with a fresh retry cycle (an admin's request)."""

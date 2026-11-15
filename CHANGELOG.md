@@ -1,4 +1,33 @@
 # Unreleased
+- **P12: style profile, glossary in the database, trial of a style, variants (FR-18, ADR-14).** **Upgrade note:** glossaries
+  moved from `series/<key>/glossary.<lang>.yaml` into `app.db`. At the first start the worker reads those files into the
+  database once and leaves them where they are; **from then on editing a file changes nothing**: use the Glossary page
+  (a form, with the YAML as an import/export tab) or copy `app.db` to back it up (console backups do not hold the database).
+  Every save keeps what it replaced in a history with *Restore*, which replaces `backups/glossary/`; `retention_glossary_keep`
+  now counts those rows and the cleanup no longer touches a leftover `backups/glossary/` folder. A glossary can be copied from
+  another series (a copy, not a link). **Style** (new page per series, `#style/<series>/<lang>`): formality, tone, swearing,
+  idioms, dialect, anime honorifics and subtitle limits (characters per second, line length, lines per cue), in layers that
+  override each other field by field: the language (built in), a genre **preset** (sitcom, drama, anime, documentary, kids;
+  yours to edit or clone; suggested from TMDB's genres), the series, an episode, and **character cards** (how a character talks
+  and addresses others, catchphrases, sample lines; used in an episode whose dialogue names them). The glossary still beats
+  every layer in the prompt. Changing a style, a preset in use or a card flags the translations made without it as stale and
+  retranslates nothing; **Check** counts first. **Try this style** translates about twenty sample lines, or the cues you
+  name, with the form as it stands (saved or not), next to what the episode has now, and writes nothing. **Compare on a whole
+  episode** queues a `variant` job that keeps the episode translated with another style as a candidate; the Compare page shows both
+  line by line, records which you prefer as `ab` quality signals (by style and prompt version), and can turn your picks into cue
+  edits or adopt the whole candidate. **Example lines**: cues you corrected elsewhere in the series that look like the ones
+  being translated are shown to the model, within `few_shot_budget_tokens` (600, 0 = off); they are in the bundle and its hash but
+  not in the rules hash, so fixing one cue never marks a series stale. A glossary with more than `glossary_filter_threshold`
+  (50) terms lists in each request only the terms its lines use; forms of address and character cards are never trimmed. A
+  version made by retranslating a range now says the range (`params`) and is stamped with the rules of the whole episode, so only
+  the other episodes stay stale. Bundle version 2 (style and voices; a version-1 bundle still runs) and prompt version `p12-1`: every
+  translation made before is *not* flagged stale by the new prompt, but a new translation uses it. Schema 12 (`glossaries`,
+  `glossary_history`, `style_profiles`, `character_cards`, `translations.params_json`). New endpoints: `GET|PUT /api/series/{id}/style`,
+  `GET /api/series/{id}/style/suggestions`, `POST /api/series/{id}/style/preview`, `PUT /api/series/{id}/cards`,
+  `POST /api/series/{id}/cards/delete`, `GET /api/style/presets` (+ `PUT`, `clone`, `delete`), `GET|PUT /api/units/{id}/style`,
+  `POST /api/units/{id}/variant`, `GET /api/units/{id}/versions/{v}/compare`, `POST /api/units/{id}/versions/{v}/choose`,
+  `GET /api/series/{id}/glossary/history`, `POST /api/series/{id}/glossary/restore|copy`; `GET|PUT /api/series/{id}/glossary` now
+  carry a `doc` beside the `yaml`.
 - **P11: bundle and declarative CLI (FR-21, ADR-16).** The worker gathers one bundle per translation (`subserver/gather.py`) and the engine runs only bundles. `subcore.bundle` is plain data with a `bundle_version` and a `bundle_hash`, and `render(bundle)` is the one place the prompt is built, so the worker and the CLI send the same bytes. Every job keeps the bundle of its latest attempt (schema 11: table `job_bundles`, swept with its job by every delete and by clean-up, so queue queries never read it), and **Export job spec** (`GET /api/jobs/{id}/spec`, a queue row action) downloads it. A key that reached the text (a pasted overview, say) is masked before the model, the call records and the spec see it, so the spec reproduces the run. Every translation call records its `bundle_hash` (NFR-12), and the job snapshot names it. The `subcore` CLI gained `bundle`, `render-prompt` (no provider is built), `validate` (exit 1 on review errors) and `compare` (two bundles, or one against a golden set: a table of numbers, no model judging). `translate` takes `--bundle`, writes a report JSON beside the output, and reads the API key from the flag, the environment or `--api-key-file`, in that order. Worker and CLI share the review (`translate/review.py`): count, tags, locked terms, line length, reading speed and untranslated cues. `subcore` imports neither the worker nor SQLite (test-enforced). Old bundles without the optional fields still run.
 - **Structure rename (P0e).** No behaviour change. `apps/worker` is now `apps/server`, the Python package `gst_worker` is `subserver`, and the workspace member `llm-subtitle-worker` is `llm-subtitle-server`. The image keeps `/app/worker.py`, `/app/static` and all environment variables; only `/app/gst_worker` became `/app/subserver`, so a bind-mounted override of that folder (not a normal setup) needs the new path.
 - **P10: Bazarr is read, not pushed (FR-14, FR-15.4-15.6, ADR-10).** **Upgrade note:** nothing is translated by

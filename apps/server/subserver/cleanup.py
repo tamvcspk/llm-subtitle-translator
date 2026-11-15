@@ -7,12 +7,13 @@ with ``dry_run=True`` says what would go, group by group, and ``dry_run=False`` 
   ``retention_failed_days``;
 * ``versions``: stored copies of older translation versions, beyond ``retention_versions_keep`` (the history lines stay,
   marked ``pruned``);
-* ``glossary``: glossary backups beyond ``retention_glossary_keep`` per series and language;
+* ``glossary``: earlier states of a glossary (``glossary_history``) beyond ``retention_glossary_keep`` per series and
+  language; the current glossary is never in the history, so it is out of reach;
 * ``temp``: ``.*.tmp`` files a crash left in ``QUEUE_DIR`` and ``DATA_DIR``, older than a day.
 
 A setting of ``0`` switches its group off. What is never touched (FR-13.2): jobs that are not finished (including
 ``held``) and refusals, the current version and the first one of each file, facts, summaries and snapshots, the database,
-and **every file in a media folder**: the use case reaches version copies, glossary backups and jobs only through their
+and **every file in a media folder**: the use case reaches version copies, glossary history and jobs only through their
 own stores, and the temporary-file sweep skips every media root. A leftover next to a subtitle in a media folder is only
 listed in the report.
 """
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .config import RETENTION_INT_CONFIG_KEYS
-from .glossaries import GlossaryFiles
+from .glossaries import Glossaries
 from .jobs import CANCELLED, DONE, FAILED, SKIPPED, JobStore
 from .ports import Reclaimed, Telemetry
 from .store import Store
@@ -124,7 +125,7 @@ class Cleanup:
         self,
         jobs: JobStore,
         versions: TranslationVersions,
-        glossaries: GlossaryFiles,
+        glossaries: Glossaries,
         store: Store,
         *,
         settings_source: Callable[[], dict[str, Any]],
@@ -185,7 +186,7 @@ class Cleanup:
             return Reclaimed(rows=self.jobs.delete_expired(states, cutoff), bytes=found.bytes)
         if name == VERSIONS:
             return self.versions.prune(window, dry_run=dry_run)
-        return self.glossaries.prune_backups(window, dry_run=dry_run)
+        return self.glossaries.prune_history(window, dry_run=dry_run)
 
     def _temp(self, now: float, dry_run: bool) -> tuple[GroupReport, list[str]]:
         try:

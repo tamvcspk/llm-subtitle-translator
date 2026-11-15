@@ -34,6 +34,13 @@ def _lang(query: Query, body: dict[str, Any] | None = None) -> str | None:
     return _one(query, "lang") or ((body or {}).get("lang") or None)
 
 
+def _body_int(body: dict[str, Any], name: str) -> int:
+    try:
+        return int(body[name])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError(f"{name} must be a number") from None
+
+
 def _glossary_lang(query: Query, body: dict[str, Any] | None = None) -> str:
     lang = _lang(query, body)
     if not lang:
@@ -62,6 +69,9 @@ ROUTES: list[tuple[str, str, Handler]] = [
         lambda s, m, q, b: {"ok": s.remove_correction(int(m[1]), int(m[2]))},
     ),
     ("POST", r"/api/units/(\d+)/retranslate", lambda s, m, q, b: s.retranslate(int(m[1]), b)),
+    ("POST", r"/api/units/(\d+)/variant", lambda s, m, q, b: s.variant(int(m[1]), b)),
+    ("GET", r"/api/units/(\d+)/versions/(\d+)/compare", lambda s, m, q, b: s.compare(int(m[1]), int(m[2]), _lang(q))),
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/choose", lambda s, m, q, b: s.choose(int(m[1]), int(m[2]), b)),
     ("GET", r"/api/units/(\d+)/versions", lambda s, m, q, b: s.list_versions(int(m[1]), _lang(q))),
     (
         "GET",
@@ -77,13 +87,26 @@ ROUTES: list[tuple[str, str, Handler]] = [
     ("POST", r"/api/units/(\d+)/context/extract", lambda s, m, q, b: s.refresh_context(int(m[1]))),
     ("GET", r"/api/series/(\d+)/memory", lambda s, m, q, b: s.series_memory(int(m[1]))),
     ("PUT", r"/api/series/(\d+)/memory", lambda s, m, q, b: s.set_series_memory(int(m[1]), b)),
-    ("GET", r"/api/series/(\d+)/glossary",lambda s, m, q, b: s.glossary(int(m[1]), _glossary_lang(q))),
+    ("GET", r"/api/series/(\d+)/glossary", lambda s, m, q, b: s.glossary(int(m[1]), _glossary_lang(q))),
     (
         "PUT",
         r"/api/series/(\d+)/glossary",
         lambda s, m, q, b: s.save_glossary(
-            int(m[1]), _glossary_lang(q, b), str(b.get("yaml") if b.get("yaml") is not None else ""),
-            dry_run=bool(b.get("dry_run")),
+            int(m[1]), _glossary_lang(q, b), None if b.get("doc") is not None else str(b.get("yaml") or ""),
+            doc=b.get("doc"), dry_run=bool(b.get("dry_run")),
+        ),
+    ),
+    ("GET", r"/api/series/(\d+)/glossary/history", lambda s, m, q, b: s.glossary_history(int(m[1]), _glossary_lang(q))),
+    (
+        "POST",
+        r"/api/series/(\d+)/glossary/restore",
+        lambda s, m, q, b: s.restore_glossary(int(m[1]), _glossary_lang(q, b), _body_int(b, "version")),
+    ),
+    (
+        "POST",
+        r"/api/series/(\d+)/glossary/copy",
+        lambda s, m, q, b: s.copy_glossary(
+            int(m[1]), _glossary_lang(q, b), _body_int(b, "from_series"), merge=bool(b.get("merge")),
         ),
     ),
 ]

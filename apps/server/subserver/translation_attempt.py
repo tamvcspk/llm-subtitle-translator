@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from subcore import srt
+from subcore import fewshot, srt
 from subcore.memory.facts import EXTRACT_PROMPT_VERSION
 from subcore.providers import (
     AuthError,
@@ -43,7 +43,7 @@ from .translation import (
     ERROR_TAIL_LENGTH, CallBudgetError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, ProviderAuthError,
     ProviderUnavailableError, redact,
 )
-from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, TranslationVersions, sha256_bytes
+from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, VARIANT, TranslationVersions, sha256_bytes
 
 # Bump when the prompt or engine behaviour changes enough that old results should not be reused (NFR-3).
 PROMPT_VERSION = SUBCORE_PROMPT_VERSION
@@ -199,7 +199,14 @@ class TranslationAttempt:
             raise RuntimeError(f"Source subtitle has no cues: {source.name}")
 
         retranslate = dict(job.get("retranslate") or {}) if trigger == RETRANSLATE else {}
-        rules = self._rules(unit, target_code, cues, retranslate.get("correction_ids"))
+        variant = dict(job.get("variant") or {}) if trigger == VARIANT else {}
+        rules = self._rules(unit, target_code, cues, retranslate.get("correction_ids"), variant)
+        # How this version was made, when its other fields do not say: a retranslated range (FR-11.3.6), a variant's style.
+        params: dict[str, Any] = {}
+        if retranslate.get("range"):
+            params["range"] = dict(retranslate["range"])
+        if variant:
+            params["variant"] = {k: variant.get(k) for k in ("label", "preset", "style")}
         model = str(settings.get("gst_model") or os.getenv("GST_MODEL", DEFAULT_MODEL))
         temperature = _temperature(settings)
 
@@ -210,6 +217,7 @@ class TranslationAttempt:
             self.telemetry.llm_call(
                 job_id, log, prompt_version=prompt_version_of(log.task), glossary_hash=rules.hash,
                 bundle_hash=current["bundle_hash"] if log.task == "translate" else "",
+                style_hash=rules.style_hash if log.task == "translate" else "",
             )
 
         deadline = time.monotonic() + job_timeout_seconds()
@@ -244,7 +252,7 @@ class TranslationAttempt:
             memory_hash=plan.fingerprint if plan else "",
             context_complete=plan.complete if plan else True,
             missing_units=plan.missing if plan else [],
-            job_id=job_id, base_version=base_version,
+            job_id=job_id, base_version=base_version, params=params,
         )
 
         if self.versions is not None and trigger == AUTO and not rules.locked:
@@ -326,12 +334,29 @@ class TranslationAttempt:
                 temperature=temperature,
                 only=only,
                 keep=keep,
+                few_shot=self._few_shot(unit, target_code, cues, only, keep, settings),
+                glossary_filter_threshold=_int_setting(settings, "glossary_filter_threshold", 50),
             )
             bundle = self._clean(bundle, settings)
             current["bundle_hash"] = bundle.bundle_hash()
             self._keep_bundle(job, bundle, settings)
             result = run(bundle, provider, on_progress=on_progress)
         return result, bundle
+
+    def _few_shot(self, unit, target_code: str, cues, only, keep, settings: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+        """Lines an admin corrected elsewhere in this series that look like the ones now being translated (FR-18.5).
+
+        Taken from the series' cue edits, never from this episode's own (those are kept as they are). They go in the
+        bundle and its hash, not in the rules hash: a fixed cue must not make the whole series stale (ADR-14 point 9)."""
+        budget = _int_setting(settings, "few_shot_budget_tokens", 600)
+        if budget <= 0 or unit is None or unit.series_id is None or self.library is None:
+            return ()
+        edits = self.library.catalog.series_cue_edits(unit.series_id, target_code, exclude_unit=unit.id)
+        if not edits:
+            return ()
+        wanted = range(1, len(cues) + 1) if only is None else only
+        texts = [cues[n - 1].text for n in wanted if 1 <= n <= len(cues) and n not in keep]
+        return fewshot.select([(e.source_text, e.text) for e in edits], texts, budget)
 
     @staticmethod
     def _review(bundle, result: TranslationResult, settings: dict[str, Any]) -> list[Finding]:
@@ -423,10 +448,11 @@ class TranslationAttempt:
         unit_id = self.library.register_job(job)
         return self.library.catalog.get_unit(unit_id)
 
-    def _rules(self, unit, target_code: str, cues, correction_ids) -> UnitRules:
+    def _rules(self, unit, target_code: str, cues, correction_ids, variant: dict[str, Any] | None = None) -> UnitRules:
         if self.library is None or unit is None:
             return UnitRules()
-        return self.library.unit_rules(unit, target_code, cues=cues, correction_ids=correction_ids)
+        layers = self.library.variant_layers(unit, variant) if variant else None
+        return self.library.unit_rules(unit, target_code, cues=cues, correction_ids=correction_ids, styles=layers)
 
     def _title(self, unit) -> str:
         if not unit:

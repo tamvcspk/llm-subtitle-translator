@@ -15,10 +15,34 @@ from typing import Any
 
 from subcore import glossary as g
 from subcore import srt
+from subcore.style import CharacterCard, Style, cards_present, language_style, resolve_style
 
 from .ports import Correction
 
 RULE_KINDS = ("term", "address", "note")
+
+
+@dataclass(frozen=True)
+class StyleLayers:
+    """The stored layers of style that apply to one episode (FR-18.1), lowest first: the series' preset, the series
+    (or movie), this episode, and the series' character cards. The language layer is not stored, so it is not here."""
+
+    preset: Style | None = None
+    series: Style | None = None
+    unit: Style | None = None
+    cards: tuple[CharacterCard, ...] = ()
+
+    def fingerprint(self) -> dict[str, Any]:
+        """What changes the rules hash: the stored layers and every card of the series, empty parts left out so that
+        an episode with no style keeps the hash it had before P12."""
+        parts: dict[str, Any] = {}
+        for name in ("preset", "series", "unit"):
+            layer = getattr(self, name)
+            if layer is not None and not layer.is_empty():
+                parts[name] = layer.to_doc()
+        if self.cards:
+            parts["cards"] = [c.to_doc() for c in sorted(self.cards, key=lambda c: c.name.casefold())]
+        return parts
 
 
 @dataclass
@@ -28,6 +52,9 @@ class UnitRules:
     extra_sections: list[tuple[str, str]] = field(default_factory=list)
     locked: dict[int, str] = field(default_factory=dict)  # cue ordinal -> hand-edited text (FR-11.2.4)
     hash: str = ""
+    style: Style = field(default_factory=Style)  # the effective style of the episode, every layer laid on the others
+    voices: list[CharacterCard] = field(default_factory=list)  # the cards of the characters the dialogue names
+    style_hash: str = ""  # of the effective style and voices: what a call record says about the style
 
 
 def _term(payload: dict[str, Any]) -> g.Term:
@@ -72,12 +99,19 @@ def build_rules(
     episode: int | None,
     corrections: list[Correction] | None = None,
     cues: list[srt.Cue] | None = None,
+    lang: str = "",
+    styles: StyleLayers | None = None,
 ) -> UnitRules:
-    """Merge the glossary file with an episode's active corrections.
+    """Merge the glossary with an episode's active corrections and lay its style layers on each other.
 
-    ``cues`` (the source) places timed address rules and validates cue edits; without it the
-    result is still good for hashing and for term/note rules.
+    ``cues`` (the source) places timed address rules, validates cue edits and decides which character cards the
+    dialogue names; without it the result is still good for hashing and for term/note rules.
+
+    The hash covers the glossary, the corrections and the stored style layers with all the series' cards: a change
+    in any of them marks the translations made without it stale (FR-18.6). It does not cover few-shot examples, which
+    change with every cue an admin fixes (ADR-14 point 9), nor the language layer, which belongs to the prompt version.
     """
+    styles = styles or StyleLayers()
     scoped = glossary.for_episode(season, episode)
     active = scoped.active_address_rules(season, episode, cues)
     terms = list(scoped.terms)
@@ -113,10 +147,18 @@ def build_rules(
 
     merged = replace(scoped, terms=tuple(terms), address_rules=tuple(rules))
     sections = [("Corrections for this episode", "\n".join(f"- {text}" for text in notes))] if notes else []
-    digest = hashlib.sha256(
-        json.dumps([g.dumps(scoped), fingerprint], ensure_ascii=False, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-    return UnitRules(merged, active, sections, locked, digest)
+    payload: list[Any] = [g.dumps(scoped), fingerprint]
+    stored = styles.fingerprint()
+    if stored:  # absent without style, so the hash of an episode that has none is what it was before P12
+        payload.append(stored)
+    digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+    effective = resolve_style([language_style(lang), styles.preset, styles.series, styles.unit])
+    voices = cards_present(styles.cards, [c.text for c in cues]) if cues is not None else list(styles.cards)
+    style_digest = hashlib.sha256(json.dumps(
+        [effective.to_doc(), [c.to_doc() for c in voices]], ensure_ascii=False, sort_keys=True,
+    ).encode("utf-8")).hexdigest()
+    return UnitRules(merged, active, sections, locked, digest, effective, voices, style_digest)
 
 
 def correction_position(season: int | None, episode: int | None, cue: srt.Cue | None) -> g.Position | None:

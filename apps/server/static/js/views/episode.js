@@ -49,6 +49,9 @@ function renderHeader() {
   const glossary = $("episode-glossary");
   glossary.hidden = !isEpisode;
   if (isEpisode) glossary.href = `#glossary/${unit.series.id}/${state.lang}`;
+  const style = $("episode-style");
+  style.hidden = !isEpisode;
+  if (isEpisode) style.href = `#style/${unit.series.id}/${state.lang}`;
   $("episode-retranslate").disabled = !unit.source_exists;
   $("episode-retranslate").title = unit.source_exists ? "" : "The source subtitle is no longer on disk";
 
@@ -226,16 +229,20 @@ function renderVersions() {
       const holder = h("div", { class: "diff" });
       const hasEarlier = versions.some((other) => other.version < item.version);
       const statusLabel = STATUS_LABELS[item.status] ?? "";
+      const variant = item.params?.variant;
+      const range = item.params?.range;
       return h("div", { class: "version" },
         h("div", { class: "version-main" },
           h("strong", { text: `v${item.version}` }),
-          h("span", { class: "tag", text: TRIGGERS[item.trigger] || item.trigger }),
+          h("span", { class: "tag", text: variant ? `Variant · ${variant.label || "style"}` : (TRIGGERS[item.trigger] || item.trigger) }),
+          range && h("span", { class: "tag", text: `cues ${range.first}–${range.last}` }),
           item.current && h("span", { class: "status status-ok" }, h("span", { class: "dot" }), "On disk"),
           statusLabel && h("span", { class: "tag", text: statusLabel }),
           h("span", { class: "muted", text: [formatDateTime(item.created_at), item.model, item.tokens_out ? `${item.tokens_out} tokens out` : ""].filter(Boolean).join(" · ") }),
           h("span", { class: "muted mono", title: item.sha256, text: item.sha256.slice(0, 10) })),
         h("div", { class: "version-actions" },
           hasEarlier && item.status !== "pruned" && actionButton("Changes", (button) => toggleDiff(item.version, holder, button)),
+          item.status === "candidate" && h("a", { class: "btn btn-sm", href: `#compare/${state.unitId}/${item.version}/${state.lang}` }, "Compare"),
           item.status === "candidate" && actionButton("Use this version", () => adopt(item.version), { variant: "btn-primary" }),
           !item.current && item.status !== "candidate" && item.status !== "pruned" && actionButton("Restore", () => revert(item.version), { iconName: "retry" }),
           item.current && actionButton("Delete subtitle", removeSubtitle)),

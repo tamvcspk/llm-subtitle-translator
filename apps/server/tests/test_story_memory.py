@@ -18,7 +18,7 @@ from subcore.providers.fake import echo_items
 from subserver import library_api
 from subserver import queue as gst_queue
 from subserver.bazarr import list_series_episodes
-from subserver.glossaries import GlossaryFiles
+from subserver.glossaries import Glossaries
 from subserver.queue import JobQueue
 from subserver.library import Library
 from subserver.memory import StoryMemory, parse_anchor, unit_label
@@ -72,7 +72,7 @@ class Env:
         self.store = Store(self.data / "app.db")
         test.addCleanup(self.store.close)
         self.versions = TranslationVersions(self.store, self.data / "backups" / "subtitles")
-        self.glossaries = GlossaryFiles(self.data)
+        self.glossaries = Glossaries(self.store)
         self.settings = dict(SETTINGS)
         self.memory = StoryMemory(
             self.store, self.store, settings_source=lambda: self.settings, media=self, clock=lambda: self.now

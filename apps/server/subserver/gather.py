@@ -35,8 +35,10 @@ def gather(
     only: Iterable[int] | None,
     keep: dict[int, str] | None,
     few_shot: Iterable[tuple[str, str]] = (),
+    glossary_filter_threshold: int = 50,
 ) -> TranslationBundle:
-    """The bundle of one attempt. ``extra_sections`` are the story memory's sections (corrections come from ``rules``)."""
+    """The bundle of one attempt. ``extra_sections`` are the story memory's sections (corrections come from ``rules``,
+    and so do the effective style and the voices of the characters the dialogue names)."""
     context = PromptContext(
         target_lang=target_code,
         target_name=target_name or None,
@@ -50,11 +52,13 @@ def gather(
         episode=unit.episode if unit else None,
         title=title,
         few_shot=list(few_shot),
+        style=rules.style,
+        voices=list(rules.voices),
     )
     return make_bundle(
         cues,
         context,
-        TranslateOptions(temperature=temperature),
+        TranslateOptions(temperature=temperature, glossary_filter_threshold=glossary_filter_threshold),
         only=only,
         keep=keep,
         model=model,

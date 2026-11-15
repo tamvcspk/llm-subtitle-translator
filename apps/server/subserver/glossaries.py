@@ -1,32 +1,38 @@
-"""Glossary YAML files on disk: ``DATA_DIR/series/<key>/glossary.<lang>.yaml`` (FR-4.1, ADR-5).
+"""Glossaries in the database (FR-4, FR-18.10, ADR-14).
 
-The YAML is the single source of truth for series-level rules and stays hand-editable. Writes made
-through the console validate first, keep the previous file under ``DATA_DIR/backups/glossary/`` and
-replace the file atomically, so a bad save can never leave a half-written glossary. (Saving through
-the console re-renders the file, which drops YAML comments; the backup keeps the original text.)
+A glossary belongs to an owner (a series, or a movie) and a language, and is stored as a *document*: the YAML schema as
+a mapping (``subcore.glossary.to_doc``). The database is the single source of truth; YAML is only the exchange format:
+``read_text`` exports it, ``write`` imports it, and ``import_files`` reads the old ``series/<key>/glossary.<lang>.yaml``
+files once, leaving them where they are. Each save keeps what it replaced in ``glossary_history`` (this is what the old
+``backups/glossary/`` folder was for), and a save of the same document changes nothing.
+
+A document is checked before it is stored, so a bad save can never leave a glossary that stops the next job; a stored
+document that no longer reads (a hand-edited database) raises when it is loaded, so a translation never silently runs
+without it.
 """
 
 from __future__ import annotations
 
-import os
+import hashlib
+import json
+import logging
 import re
-import tempfile
-import time
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from subcore import glossary as g
 
-from .ports import Reclaimed
+from .ports import GlossaryRevision, Reclaimed, StoredGlossary
+from .store import Store
 
 SERIES = "series"
 MOVIES = "movies"
-# How `write` names a backup: `<lang>-<YYYYmmdd-HHMMSS>.yaml`; the language may itself hold a dash (`pt-br`).
-BACKUP_NAME = re.compile(r"^(?P<lang>.+)-(?P<stamp>\d{8}-\d{6})\.yaml$")
+IMPORTED_MARK = "_glossaries_imported"  # a settings row: the one-time import of the YAML files has run
 
 
 def safe_name(value: str) -> str:
-    """A key as a single, portable path component."""
+    """A key as a single, portable path component (how the YAML folders were named, and so how owners are)."""
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._") or "unnamed"
     return cleaned[:100]
 
@@ -38,83 +44,111 @@ def _clean_lang(lang: str) -> str:
     return code
 
 
-class GlossaryFiles:
-    def __init__(self, data_dir: str | Path) -> None:
-        self.root = Path(data_dir)
+def _kind(kind: str) -> str:
+    if kind not in (SERIES, MOVIES):
+        raise ValueError(f"a glossary belongs to a series or a movie, not {kind!r}")
+    return kind
 
-    def path(self, kind: str, key: str, lang: str) -> Path:
-        return self.root / kind / safe_name(key) / f"glossary.{_clean_lang(lang)}.yaml"
 
-    def read_text(self, kind: str, key: str, lang: str) -> str:
-        try:
-            return self.path(kind, key, lang).read_text(encoding="utf-8-sig")
-        except FileNotFoundError:
-            return ""
+def doc_hash(doc: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(doc, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ImportReport:
+    imported: int = 0
+    skipped: int = 0  # a glossary of that owner and language was already in the database
+    broken: tuple[str, ...] = field(default=())  # files that did not read; they stay where they are
+
+
+class Glossaries:
+    def __init__(self, store: Store) -> None:
+        self.store = store
+
+    # -- reading -------------------------------------------------------------------
+    def stored(self, kind: str, key: str, lang: str) -> StoredGlossary | None:
+        return self.store.glossary(_kind(kind), safe_name(key), _clean_lang(lang))
 
     def load(self, kind: str, key: str, lang: str) -> g.Glossary:
-        """The parsed glossary; a broken file raises so no translation silently runs without it."""
-        text = self.read_text(kind, key, lang)
+        """The parsed glossary; a stored document that is invalid raises so no translation silently runs without it."""
+        stored = self.stored(kind, key, lang)
+        if stored is None:
+            return g.Glossary(target_lang=lang)
         try:
-            return g.loads(text) if text.strip() else g.Glossary(target_lang=lang)
+            return g.from_doc(stored.doc)
         except g.GlossaryError as exc:
             raise RuntimeError(f"Glossary {kind}/{key}/{lang} is invalid: {exc}") from None
 
-    def write(self, kind: str, key: str, lang: str, text: str) -> Path:
-        """Validate ``text`` and replace the glossary atomically, keeping the previous file."""
-        g.loads(text)  # raises GlossaryError (a ValueError) naming the offending path
-        path = self.path(kind, key, lang)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.is_file():
-            backup_dir = self.root / "backups" / "glossary" / kind / safe_name(key)
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            stamp = time.strftime("%Y%m%d-%H%M%S")
-            (backup_dir / f"{lang}-{stamp}.yaml").write_bytes(path.read_bytes())
-        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-                handle.write(text if text.endswith("\n") else text + "\n")
-            os.replace(temporary, path)
-        except BaseException:
-            try:
-                os.unlink(temporary)
-            except OSError:
-                pass
-            raise
-        return path
+    def read_text(self, kind: str, key: str, lang: str) -> str:
+        """The YAML export; empty text when the owner has no glossary in that language."""
+        stored = self.stored(kind, key, lang)
+        return g.dumps(g.from_doc(stored.doc)) if stored else ""
 
-    def prune_backups(self, keep: int, *, dry_run: bool = False) -> Reclaimed:
-        """Keep the ``keep`` newest backups of each (series, language) and delete the older ones (FR-13.1).
+    def languages(self, kind: str, key: str) -> list[str]:
+        return self.store.glossary_languages(_kind(kind), safe_name(key))
 
-        Only files named the way ``write`` names them are considered; anything else in the folder is left alone,
-        and the glossary files themselves are never touched."""
-        root = self.root / "backups" / "glossary"
-        files = size = 0
-        if keep < 1 or not root.is_dir():
-            return Reclaimed()
-        for folder in sorted(p for p in root.glob("*/*") if p.is_dir()):
-            groups: dict[str, list[tuple[str, Path]]] = {}
-            for path in folder.iterdir():
-                match = BACKUP_NAME.match(path.name)
-                if match and path.is_file():
-                    groups.setdefault(match["lang"], []).append((match["stamp"], path))
-            for entries in groups.values():
-                for _, path in sorted(entries, key=lambda item: (item[0], item[1].name), reverse=True)[keep:]:
-                    try:
-                        length = path.stat().st_size
-                        if not dry_run:
-                            path.unlink()
-                    except OSError:
-                        continue
-                    files += 1
-                    size += length
-            if not dry_run:
-                try:
-                    folder.rmdir()  # only succeeds when empty
-                except OSError:
-                    pass
-        return Reclaimed(files=files, bytes=size)
-
-    def save(self, kind: str, key: str, lang: str, glossary: g.Glossary) -> Path:
+    # -- writing ---------------------------------------------------------------------
+    def save_doc(self, kind: str, key: str, lang: str, doc: dict[str, Any], *, note: str = "console") -> StoredGlossary:
+        """Validate ``doc`` (raises :class:`subcore.glossary.GlossaryError` naming the offending path) and store it.
+        The stored form is the normalised one, so a document and its YAML export always agree."""
+        glossary = g.from_doc(doc)
+        lang = _clean_lang(lang)
         if not glossary.target_lang:
             glossary = replace(glossary, target_lang=lang)
-        return self.write(kind, key, lang, g.dumps(glossary))
+        clean = g.to_doc(glossary)
+        return self.store.glossary_save(_kind(kind), safe_name(key), lang, clean, doc_hash(clean), note=note)
+
+    def save(self, kind: str, key: str, lang: str, glossary: g.Glossary, *, note: str = "console") -> StoredGlossary:
+        return self.save_doc(kind, key, lang, g.to_doc(glossary), note=note)
+
+    def write(self, kind: str, key: str, lang: str, text: str, *, note: str = "import") -> StoredGlossary:
+        """Import YAML text (the exchange format). An empty text is an empty glossary."""
+        return self.save(kind, key, lang, g.loads(text) if text.strip() else g.Glossary(), note=note)
+
+    def history(self, kind: str, key: str, lang: str, *, limit: int = 50) -> list[GlossaryRevision]:
+        return self.store.glossary_history(_kind(kind), safe_name(key), _clean_lang(lang), limit=limit)
+
+    def restore(self, kind: str, key: str, lang: str, version: int) -> StoredGlossary:
+        """Put an earlier state back as a new save (the state it replaces goes to the history, so a restore can be undone)."""
+        for revision in self.history(kind, key, lang, limit=1000):
+            if revision.version == version:
+                return self.save_doc(kind, key, lang, revision.doc, note="restore")
+        raise LookupError(f"no earlier version {version} of this glossary")
+
+    def copy(self, source: tuple[str, str], target: tuple[str, str], lang: str, *, merge: bool) -> StoredGlossary:
+        """Copy the glossary of another series into this one (Non-goals: no link, a copy). ``merge`` keeps what the
+        target already has and lets its own entries win on conflicts; otherwise the target is replaced."""
+        copied = self.load(*source, lang)
+        if copied.is_empty():
+            raise LookupError("the other series has no glossary in this language")
+        result = g.merge(copied, self.load(*target, lang)) if merge else copied
+        return self.save(*target, lang, result, note="copy")
+
+    def prune_history(self, keep: int, *, dry_run: bool = False) -> Reclaimed:
+        """Keep the ``keep`` newest earlier states of each glossary (FR-13.1); the current glossary is never touched."""
+        return self.store.glossary_prune_history(keep, dry_run=dry_run)
+
+    # -- the one-time import of the YAML files ----------------------------------------------
+    def import_files(self, data_dir: str | Path) -> ImportReport:
+        """Read ``<data_dir>/{series,movies}/<key>/glossary.<lang>.yaml`` into the database, once. The files stay
+        where they are. A glossary already in the database wins over its file, and a file that does not read is
+        named in the report and left alone (it can still be imported by hand from the console)."""
+        if any(row.key == IMPORTED_MARK for row in self.store.settings_rows()):
+            return ImportReport()
+        root = Path(data_dir)
+        imported, skipped, broken = 0, 0, []
+        for kind in (SERIES, MOVIES):
+            for path in sorted((root / kind).glob("*/glossary.*.yaml")):
+                lang = path.name[len("glossary."):-len(".yaml")]
+                key = path.parent.name
+                try:
+                    if self.stored(kind, key, lang) is not None:
+                        skipped += 1
+                        continue
+                    self.write(kind, key, lang, path.read_text(encoding="utf-8-sig"), note="import")
+                    imported += 1
+                except (g.GlossaryError, ValueError, OSError) as exc:
+                    logging.warning("Glossary file %s was not imported: %s", path, exc)
+                    broken.append(str(path))
+        self.store.setting_save({IMPORTED_MARK: True})
+        return ImportReport(imported, skipped, tuple(broken))

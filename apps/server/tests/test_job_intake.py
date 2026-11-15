@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from subserver.glossaries import GlossaryFiles
+from subserver.glossaries import Glossaries
 from subserver.intake import MIGRATED_DIR, import_queue_tree
 from subserver.jobs import FROM_LEGACY
 from subserver.library import Library
@@ -44,7 +44,7 @@ class ImportTests(Intake):
     def setUp(self):
         super().setUp()
         self.library = Library(
-            self.store, GlossaryFiles(str(self.root / "data")), TranslationVersions(self.store, str(self.root / "backups"))
+            self.store, Glossaries(self.store), TranslationVersions(self.store, str(self.root / "backups"))
         )
 
     def build_tree(self):

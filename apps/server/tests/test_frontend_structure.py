@@ -39,7 +39,7 @@ class FrontendStructureTests(unittest.TestCase):
         self.assertTrue(all(href == view for href, view in pairs))
         views = {view for _, view in pairs}
         self.assertEqual(views, {"dashboard", "queue", "library", "wanted", "scan", "settings", "system", "logs"})
-        for view in views | {"episode", "glossary"}:  # detail pages have no nav item of their own
+        for view in views | {"episode", "glossary", "style", "compare"}:  # detail pages have no nav item of their own
             self.assertIn(f'id="view-{view}" class="view" data-view="{view}"', html)
 
     def test_backups_live_under_system_view(self):
@@ -83,7 +83,7 @@ class FrontendStructureTests(unittest.TestCase):
             "auto_request", "auto_request_daily_cap", "catalog_sync_interval", "catalog_shrink_guard",
             "media_roots", "scan_limit",
             "memory_enabled", "memory_model", "memory_gap_wait_seconds", "memory_budget_tokens",
-            "memory_recent_episodes",
+            "memory_recent_episodes", "few_shot_budget_tokens", "glossary_filter_threshold",
             "log_level", "log_prompt_bodies", "log_max_mb", "log_retention_days", "log_body_max_bytes",
             "events_retention_days", "llm_cost_in_per_mtok", "llm_cost_out_per_mtok",
             "retention_done_days", "retention_failed_days", "retention_versions_keep", "retention_glossary_keep",
@@ -114,6 +114,32 @@ class FrontendStructureTests(unittest.TestCase):
             self.assertIn(element, html)
         self.assertIn("Stale", scripts)
         self.assertIn("is only flagged", html)
+
+    def test_the_style_page_checks_before_it_saves_and_tries_a_style_without_writing(self):
+        """P12: the form, the cards, the trial and the comparison reach the documented endpoints."""
+        html = read_html()
+        scripts = read_scripts()
+        style = view_section(html, "style")
+
+        for element in ('id="style-fields"', 'id="style-check"', 'id="style-save"', 'id="style-preset"', 'id="style-suggest"',
+                        'id="style-cards"', 'id="try-run"', 'id="variant-run"'):
+            self.assertIn(element, style)
+        for element in ('id="card-dialog"', 'id="card-save"', 'id="card-style"'):
+            self.assertIn(element, html)
+        for endpoint in ("/style?lang=", "/style/suggestions", "/style/preview", "/cards?lang=", "/cards/delete?lang=",
+                         "/variant", "/versions/${state.version}/compare", "/versions/${state.version}/choose",
+                         "/glossary/history", "/glossary/restore", "/glossary/copy"):
+            self.assertIn(endpoint, scripts)
+        # "Check" asks the server to count what a save would make stale, and writes nothing.
+        self.assertIn("dry_run: true", scripts)
+        # The glossary page edits a document through a form; the YAML tab is the exchange format.
+        glossary = view_section(html, "glossary")
+        for element in ('id="glossary-form"', 'id="glossary-yaml"', 'id="glossary-tabs"', 'id="glossary-more"'):
+            self.assertIn(element, glossary)
+        self.assertNotIn("backups/glossary", html + scripts)
+        compare = view_section(html, "compare")
+        for element in ('id="compare-list"', 'id="compare-verdict"', 'id="compare-apply"', 'id="compare-adopt"'):
+            self.assertIn(element, compare)
 
     def test_the_library_browses_the_catalog_and_a_bulk_request_shows_its_cost_before_it_asks(self):
         html = read_html()

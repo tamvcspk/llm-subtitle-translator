@@ -45,7 +45,7 @@ back in line with one more attempt.
 
 **Clean-up** (settings `retention_*`, FR-13):
 The daily and on-demand deletion of what the worker made for itself: finished job rows,
-stored copies of older subtitle versions, glossary backups and leftover temporary files.
+stored copies of older subtitle versions, earlier glossary versions and leftover temporary files.
 It always starts as a preview (`dry_run`), and never touches a media folder, an unfinished
 job, an Ignored decision, the catalog, a current version or the story memory. `0` switches a group off.
 
@@ -124,8 +124,39 @@ revert, retry, cancel), written once in the core (`ConsoleActions`, `UnitService
 the HTTP handler only parses, authenticates and formats.
 
 **Glossary**:
-Human-owned YAML rules for one series and target language: terms, characters,
-and address rules. It always overrides anything the machine infers.
+Human-owned rules for one series (or movie) and target language: terms, characters,
+and address rules. It always overrides anything the machine infers, and the style too.
+It lives in the database and is edited on a form; YAML is only the exchange format
+(import and export). Each save keeps what it replaced in the glossary's history.
+
+**Style profile**:
+How a translation should sound, as data: axes (formality, tone, swearing, idioms,
+dialect, anime honorifics), subtitle limits (characters per second, line length, lines
+per cue) and a note. Set in layers, lowest first: the target language, the series'
+genre **preset**, the series, an episode, a **character card**; each layer overrides
+the one below field by field, and the glossary overrides all of them. The effective
+style is in the bundle and in the rules hash (changing it flags translations stale).
+
+**Character card**:
+The voice of one character of a series: how they speak, how they address others,
+catchphrases, sample lines, and the style axes where they differ from the series. It
+is in an episode's prompt where the dialogue names the character.
+
+**Preset**:
+A genre's starting style (sitcom, drama, anime, documentary, kids), stored once and then
+the admin's to edit or clone. The Style page suggests one from the series' TMDB genres.
+
+**Few-shot example**:
+A line an admin corrected elsewhere in the same series, shown to the model with its fixed
+translation when it looks like the lines being translated, within a token budget. It is in
+the bundle and its hash, never in the rules hash: it changes with every cue you fix, and
+must not make a whole series stale.
+
+**Variant**:
+A job (kind `variant`) that translates a whole episode with another style and keeps it as a
+candidate beside the current translation. It is compared line by line, and the admin's
+verdicts are recorded as `ab` quality signals; nothing goes on disk unless the admin
+chooses to.
 
 **Locked term**:
 A glossary term whose translation must appear in the output of every cue whose
@@ -179,7 +210,7 @@ identified from Bazarr ids or, failing that, the file name. The Library lists un
 A person's fix to how a unit is translated. Kinds: `term`, `address`, `note`
 (applied by the model on the next retranslation) and `cue_edit` (the person's own
 text for one cue, applied at once). Scope `episode` lives in `app.db`; `forward`
-and `series` are written to the glossary.
+and `series` are written to the series' glossary.
 
 **Locked cue**:
 A cue the person edited by hand. Every later retranslation copies it verbatim,
@@ -192,8 +223,8 @@ It runs ahead of automatic jobs. Only the range is requested, but the whole
 source is still sent as context.
 
 **Stale translation**:
-A translation made with different rules (glossary file or episode corrections),
-or with a different story behind it (the facts of an earlier episode changed, or a
+A translation made with different rules (glossary, style or character cards, or episode
+corrections), or with a different story behind it (the facts of an earlier episode changed, or a
 missing one arrived), than the ones that apply to its episode now. Only ever
 flagged; never retranslated automatically.
 
@@ -213,8 +244,9 @@ configured episode.
 
 **Bundle** (`subcore.bundle`):
 Everything one translation reads, as plain data: the cues with their timing, the episode's glossary
-(already narrowed to the episode), its address rules placed on cues, the corrections and story sections,
-few-shot examples by value, the cues asked for and the model parameters. The worker gathers it from the
+(already narrowed to the episode), its address rules placed on cues, the effective style and the voices of the
+characters the dialogue names, the corrections and story sections, few-shot examples by value, the cues asked for
+and the model parameters. The worker gathers it from the
 database (`subserver/gather.py`); the engine renders and runs it; the CLI runs the same file. It holds no key
 and no machine path. `bundle_version` says how to read it, and `bundle_hash` changes only when the prompt or a
 parameter changes.

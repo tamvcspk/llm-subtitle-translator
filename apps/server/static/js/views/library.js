@@ -212,7 +212,10 @@ function showItems(page) {
     const glossary = series.series_id
       ? page.languages.map((lang) => h("a", { class: "btn btn-sm", href: `#glossary/${series.series_id}/${lang}` }, icon("glossary"), `Glossary · ${lang}`))
       : [];
-    rows.push(h("div", { class: "series-tools" }, policy, glossary,
+    const style = series.series_id && page.languages.length
+      ? [h("a", { class: "btn btn-sm", href: `#style/${series.series_id}/${page.languages[0]}` }, icon("edit"), "Style")]
+      : [];
+    rows.push(h("div", { class: "series-tools" }, policy, glossary, style,
       actionButton("Request all missing", () => request({ series: series.id }, { label: `the whole of “${title}”` })),
     ));
   }

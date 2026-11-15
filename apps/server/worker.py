@@ -24,7 +24,9 @@ from subserver.intake import import_queue_tree
 from subserver.job_requests import JobRequests
 from subserver.queue import JobQueue, skip_reason
 from subserver.console import ConsoleActions
-from subserver.glossaries import GlossaryFiles
+from subserver.glossaries import Glossaries
+from subserver.style_service import StyleService
+from subserver.styles import Styles
 from subserver.library import Library, enrich_job_identity
 from subserver.memory import StoryMemory
 from subserver.queue_policy import configured_models
@@ -70,7 +72,7 @@ def process_job(
                         reason=reason, subtitle=subtitle, target=job.get("target_code"))
         return "skipped"
     # Bazarr decides what is wanted: when it says the language is not missing, spend no model call.
-    if job.get("trigger") != "retranslate" and media.target_still_missing(job) is False:
+    if job.get("trigger") not in ("retranslate", "variant") and media.target_still_missing(job) is False:
         logging.info("Skipping job for %s: Bazarr does not list %s as missing",
                      job.get("subtitle_path"), job.get("target_code"))
         telemetry.event("job.skipped", job_id=str(job.get("job_id") or ""), unit_id=job.get("unit_id") or None,
@@ -93,6 +95,8 @@ def process_job(
             status_callback(f"Translating {done}/{total} cues", progress_done=done, progress_total=total)
 
     status = (attempt or DEFAULT_ATTEMPT).run(job, description, settings, on_progress=report_progress)
+    if job.get("trigger") == "variant":
+        return status  # nothing went on disk: Bazarr has nothing to rescan
     if status_callback:
         status_callback("Refreshing Bazarr")
     # The subtitle is already published: a Bazarr that is slow or down must not turn a finished translation into a
@@ -282,12 +286,19 @@ def main() -> int:
     settled = versions.reconcile()
     if any(settled.values()):
         logging.warning("Start-up: version history settled %s", settled)
-    glossaries = GlossaryFiles(data_dir)
+    glossaries = Glossaries(store)
+    styles = Styles(store)
+    # Start-up, explicitly (P12): the YAML glossaries of an older worker enter the database once, and the built-in
+    # style presets are stored where the admin can edit them. Neither touches a file.
+    imported = glossaries.import_files(data_dir)
+    if imported.imported or imported.broken:
+        logging.info("Start-up: %d glossary file(s) imported, %d not readable", imported.imported, len(imported.broken))
+    styles.seed_presets()
 
     media = BazarrMedia(http, live_settings)
     metadata = TmdbMetadata(http, cache, live_settings)
     memory = StoryMemory(store, store, settings_source=live_settings, media=media)
-    library = Library(store, glossaries, versions, memory=memory)
+    library = Library(store, glossaries, versions, memory=memory, styles=styles)
     attempt = TranslationAttempt(
         versions=versions, usage=store, provider_factory=provider_factory, library=library, memory=memory,
         telemetry=telemetry,
@@ -305,6 +316,10 @@ def main() -> int:
         library, glossaries, versions, worker.queue, refresh_bazarr=media.refresh,
         memory=memory, settings_source=live_settings, usage=store, provider_factory=provider_factory,
         telemetry=telemetry,
+    )
+    style_service = StyleService(
+        library, styles, metadata=metadata, settings_source=live_settings, provider_factory=provider_factory,
+        telemetry=telemetry, usage=store,
     )
     # The library as Bazarr lists it, what the admin asks for from it, and the policy that asks by itself (P10, ADR-10).
     job_requests = JobRequests(
@@ -368,6 +383,7 @@ def main() -> int:
             settings_service=settings_service,
             cleanup=cleanup,
             catalog=CatalogActions(store, library, catalog_sync, auto_request, job_requests, catalog_view),
+            style=style_service,
         ).as_handler_context()
         if not args.no_worker:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()

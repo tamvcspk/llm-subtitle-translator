@@ -63,8 +63,8 @@ class BundleFormatTests(unittest.TestCase):
         b = bundle(glossary=GLOSSARY)
         data = b.to_dict()
         self.assertEqual(set(data), {
-            "bundle_version", "params", "language", "episode", "glossary", "active_rules", "sections",
-            "few_shot", "cues", "requested", "keep",
+            "bundle_version", "params", "language", "episode", "glossary", "active_rules", "style", "voices",
+            "sections", "few_shot", "cues", "requested", "keep",
         })
         text = b.to_json().lower()
         for marker in ("api_key", "apikey", "password", "authorization", "c:\\", "/media/", "/state/"):
@@ -73,7 +73,7 @@ class BundleFormatTests(unittest.TestCase):
     def test_older_bundle_without_optional_fields_still_runs(self):
         """Criterion 18h: a bundle written before the optional fields existed loads and renders."""
         data = json.loads(bundle(glossary=GLOSSARY).to_json())
-        for key in ("sections", "few_shot", "keep", "requested", "active_rules"):
+        for key in ("sections", "few_shot", "keep", "requested", "active_rules", "style", "voices"):
             data.pop(key)
         data["bundle_version"] = 1
         data["written_by_a_future_field"] = {"ignored": True}

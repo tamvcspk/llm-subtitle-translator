@@ -24,7 +24,7 @@ import worker
 from subserver import queue as gst_queue
 from subserver.bodies import BodyLog, encode_record
 from subserver.config import normalize_app_config
-from subserver.glossaries import GlossaryFiles
+from subserver.glossaries import Glossaries
 from subserver.library import Library
 from subserver.logs import RedactingFormatter, set_log_level
 from subserver.ports import BodyRef, Telemetry as TelemetryPort
@@ -32,7 +32,7 @@ from subserver.redaction import REDACTED, Redactor
 from subserver.settings import SettingsService
 from subserver.store import Store
 from subserver.telemetry import NULL, Telemetry, events_page
-from subserver.translation_attempt import TranslationAttempt
+from subserver.translation_attempt import PROMPT_VERSION, TranslationAttempt
 from subserver.units import UnitService
 from subserver.versions import TranslationVersions
 
@@ -118,7 +118,7 @@ class Env:
             )
 
         self.versions = TranslationVersions(self.store, self.root / "data" / "backups", telemetry=self.telemetry)
-        self.glossaries = GlossaryFiles(self.root / "data")
+        self.glossaries = Glossaries(self.store)
         self.library = Library(self.store, self.glossaries, self.versions)
         self.attempt = TranslationAttempt(
             versions=self.versions, usage=self.store, library=self.library, provider_factory=factory,
@@ -325,12 +325,13 @@ class CallRecordTests(unittest.TestCase):
         first, repair = env.store.llm_calls(job_id)
         self.assertEqual((first.kind, repair.kind), ("translate", "repair"))
         self.assertEqual((first.repairs, repair.repairs), (0, 1))
-        self.assertEqual({first.prompt_version, repair.prompt_version}, {"p3-1"})
+        self.assertEqual({first.prompt_version, repair.prompt_version}, {PROMPT_VERSION})
         self.assertEqual((first.http_status, first.retries, first.batch), (200, 0, 0))
         version = env.store.current_version(str(env.output()))
         self.assertEqual(first.glossary_hash, version.glossary_hash)
         self.assertEqual(len(first.bundle_hash), 64)  # P11: a translation call names its bundle
-        self.assertEqual(first.style_hash, "")  # P12 fills this in
+        self.assertEqual(len(first.style_hash), 64)  # the hash of the effective style and voices (P12)
+        self.assertEqual(repair.style_hash, first.style_hash)
         self.assertAlmostEqual(first.cost_est, (first.tokens_in * 1.0 + first.tokens_out * 2.0) / 1_000_000)
 
     def test_a_failed_call_keeps_its_http_code_and_attempt_number(self):

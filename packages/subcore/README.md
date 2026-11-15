@@ -4,16 +4,19 @@ Subtitle translation engine for `llm-subtitle-translator`. Pure library: it know
 nothing about Bazarr, the queue, or HTTP.
 
 Status: P1 done in code (SRT, providers, translator, glossary, CLI); memory (`memory`) in P4; the
-OpenAI-compatible provider in P7; the bundle and the declarative CLI in P11. Roadmap: `PLAN.md`, design: `docs/design/ARCHITECTURE.md`.
+OpenAI-compatible provider in P7; the bundle and the declarative CLI in P11; style, character cards and few-shot in P12.
+Roadmap: `PLAN.md`, design: `docs/design/ARCHITECTURE.md`.
 
 | Module | Role |
 |---|---|
 | `srt` | parse/serialize (BOM, CRLF, empty cues, odd indexes), tag validation, atomic write |
 | `providers` | `Provider` protocol, typed errors (`RateLimited`, `QuotaExhausted`, `Unavailable`, `BadOutput`, `AuthError`, `ModelNotFound`), `gemini`, `openai_compat` (OpenRouter, Ollama, LM Studio, vLLM; standard library only) and `fake` adapters |
-| `bundle` | the bundle a translation reads (plain data, `bundle_version`, `bundle_hash`), `matches` for display |
+| `bundle` | the bundle a translation reads (plain data, `bundle_version` 2, `bundle_hash`), `matches` for display |
+| `style` | a style as data (axes, subtitle limits, notes), `resolve_style` to lay layers on each other, character cards, genre presets, `render_style`/`render_voices` for the prompt |
+| `fewshot` | `select`: the closest corrected lines of a series to the text being translated, within a token budget (lexical, no embeddings) |
 | `translate` | engine: `make_bundle` → `run` (planner, prompt renderer, validate → repair → split), `render_requests`, `review` (shared with the worker) |
 | `compare` | side-by-side numbers for two configurations or a golden set |
-| `glossary` | YAML load/merge/dump/validate, locked terms, timed address rules |
+| `glossary` | YAML load/merge/dump/validate, `from_doc`/`to_doc` (the document the worker stores), locked terms, timed address rules |
 | `cli` | manual translation and debugging |
 
 ## CLI
@@ -61,6 +64,14 @@ address_rules:
     from: "S01E06 00:32:10"   # inclusive; time optional
     until: "S02E01"           # exclusive; optional
 ```
+
+## Style
+
+A bundle carries the **effective** style (the layers already laid on each other) and the cards of the characters the
+dialogue names, and `render` puts them in two sections after the glossary: *Effective style* and *Character voices*. The
+glossary section comes first and says it is authoritative. With more than `glossary_filter_threshold` terms (a bundle
+parameter, default 50) each request lists only the terms its lines mention; forms of address and voices are never filtered
+by words. The CLI runs a bundle the worker exported, so it reproduces a style exactly; it does not build a style by itself.
 
 ## Tests
 

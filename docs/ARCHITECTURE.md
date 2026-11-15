@@ -93,14 +93,19 @@ Domain code is split under `subserver/`:
 - `versions.py`: `TranslationVersions`, publishing with version history, backup
   before overwrite, and revert;
 - `cleanup.py`: `Cleanup`, the file clean-up use case (FR-13): `run(dry_run)` returns a
-  `CleanupReport` per group (finished `jobs` rows, version copies, glossary backups,
+  `CleanupReport` per group (finished `jobs` rows, version copies, earlier glossary states,
   leftover `.*.tmp`), and `run_if_due` is the daily run called from the backup scheduler
   thread (its last run is a `_cleanup_last_run` marker in `settings`). It deletes nothing
   itself except temporary files: rows go through `JobStore.delete_expired` (which refuses
   any state that is not finished), copies through `TranslationVersions.prune` (only
-  inside `backups/subtitles/`, marking the version `pruned`), backups through
-  `GlossaryFiles.prune_backups`. The temporary-file sweep skips every media root and the
+  inside `backups/subtitles/`, marking the version `pruned`), glossary history through
+  `Glossaries.prune_history`. The temporary-file sweep skips every media root and the
   folder of every target subtitle, and only lists what it finds there;
+- `glossaries.py`, `styles.py`, `style_service.py`, `style_api.py` (P12): the glossary of a
+  series or movie in `app.db` (with its history and the one-time import of the old YAML
+  files), the genre presets, series/episode styles and character cards, and the use cases
+  and routes of the Style page, including the trial of a style (writes nothing). The style
+  layers are laid on each other by `subcore.style`; `rules.py` hashes them;
 - `tmdb.py`: TMDB lookup and translation description generation;
 - `bazarr.py`: Bazarr API refresh, wanted-item lookup, and API-key parsing;
 - `backups.py`: server-side backup listing, creation and restore. The configuration
@@ -150,12 +155,14 @@ enrichment from the Bazarr API). `units` and `series` rows, a
 `glossary_hash` on every translation version live in `app.db` (schema 2; schema 3
 adds story memory, below).
 
-`rules.py` merges the series glossary (`DATA_DIR/series/<key>/glossary.<lang>.yaml`,
-read by `glossaries.py`) with the unit's active episode corrections for one
+`rules.py` merges the series glossary (stored in `app.db` since P12 and read by
+`glossaries.py`; before P12 it was `DATA_DIR/series/<key>/glossary.<lang>.yaml`) with the
+unit's active episode corrections and the style layers for one
 episode. Terms and address rules carry `from`/`until` windows. The result goes to
 the prompt, and its hash is stored as the version's `glossary_hash`: when the hash
 computed now differs, the translation is *stale* (flagged only). Hand-edited cues
-(`cue_edit`) are outside the hash; they are locked output.
+(`cue_edit`) are outside the hash; they are locked output, and so are the few-shot
+examples made from them.
 
 `units.py` (`UnitService`) implements the console actions: cue view, corrections,
 retranslation, versions, diff, revert, glossary read/write. `library_api.py` routes

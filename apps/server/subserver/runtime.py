@@ -26,6 +26,7 @@ class RuntimeContext:
     settings_service: Any = None  # SettingsService: settings and API keys in the database (P6, FR-20)
     cleanup: Any = None  # Cleanup: the retention use case behind POST /api/cleanup (P9, FR-13)
     catalog: Any = None  # CatalogActions: the Library page's use cases, behind /api/catalog and /api/jobs (P10, FR-14, FR-15)
+    style: Any = None  # StyleService: a series' style, presets, character cards and the trial of a style (P12, FR-18)
 
     def as_handler_context(self) -> dict[str, Any]:
         return self.__dict__.copy()

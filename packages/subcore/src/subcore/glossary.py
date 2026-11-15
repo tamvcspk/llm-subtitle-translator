@@ -54,6 +54,8 @@ __all__ = [
     "ActiveRule",
     "load",
     "loads",
+    "from_doc",
+    "to_doc",
     "dumps",
     "merge",
     "locked_violations",
@@ -254,10 +256,18 @@ def _entries(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
 
 
 def loads(text: str) -> Glossary:
+    """Parse the YAML exchange format (FR-18.10)."""
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise GlossaryError(f"invalid YAML: {exc}") from exc
+    return from_doc(data)
+
+
+def from_doc(data: Any) -> Glossary:
+    """Validate and read a glossary *document*: the mapping the YAML holds, as the database stores it (ADR-14).
+
+    A broken document raises :class:`GlossaryError` naming the offending path, whatever its origin."""
     if data is None:
         return Glossary()
     if not isinstance(data, dict):
@@ -341,6 +351,12 @@ def load(path: str | os.PathLike[str]) -> Glossary:
 
 def dumps(glossary: Glossary) -> str:
     """Render back to the YAML schema above (stable key order, UTF-8 friendly)."""
+    return yaml.safe_dump(to_doc(glossary), allow_unicode=True, sort_keys=False)
+
+
+def to_doc(glossary: Glossary) -> dict[str, Any]:
+    """The glossary as a plain document (the YAML schema above as a mapping): what the database stores and the
+    console edits. ``from_doc(to_doc(g)) == g``."""
     data: dict[str, Any] = {"version": 1}
     if glossary.target_lang:
         data["target_lang"] = glossary.target_lang
@@ -381,7 +397,7 @@ def dumps(glossary: Glossary) -> str:
             if r.note:
                 item["note"] = r.note
             data["address_rules"].append(item)
-    return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    return data
 
 
 def merge(*glossaries: Glossary) -> Glossary:

@@ -103,7 +103,7 @@ class JobBundleTests(unittest.TestCase):
         self.assertIsNone(console.job_spec(job["job_id"]))  # queued, not yet translated
         self.env.attempt.run(job, "", SETTINGS)
         spec = console.job_spec(job["job_id"])
-        self.assertEqual(spec["bundle_version"], 1)
+        self.assertEqual(spec["bundle_version"], 2)
         self.assertEqual(TranslationBundle.from_dict(spec).bundle_hash(), self.env.store.job_bundle(job["job_id"]).bundle_hash)
 
     def test_jobs_rows_carry_no_bundle_text(self):

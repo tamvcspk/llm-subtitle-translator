@@ -24,8 +24,9 @@ from dataclasses import asdict
 
 from .ports import (
     JobBundle,
-    Account, ApiKey, SettingRow, BodyRef, CatalogApplied, CatalogEntry, CatalogState, CatalogSubtitle, Correction,
-    EventRecord, LlmCall, Output, QualitySignal, Series, StoredFacts, TokenTotals, TranslationVersion, Unit,
+    Account, ApiKey, SettingRow, BodyRef, CardRow, CatalogApplied, CatalogEntry, CatalogState, CatalogSubtitle,
+    Correction, CueEdit, EventRecord, GlossaryRevision, LlmCall, Output, QualitySignal, Reclaimed, Series, StoredFacts,
+    StoredGlossary, StyleRow, TokenTotals, TranslationVersion, Unit,
 )
 
 _MIGRATIONS: tuple[str, ...] = (
@@ -353,6 +354,53 @@ _MIGRATIONS: tuple[str, ...] = (
         bundle_json TEXT NOT NULL
     );
     """,
+    # Migration 12 (P12, FR-18, ADR-14): glossaries, style profiles and character cards in the database. An owner is
+    # a series or a movie, named by (owner_kind, owner_key) like the folders the YAML used to live in (``series/<key>``,
+    # ``movies/<key>``), so a movie has a glossary too and no row needs a series id. ``glossary_history`` keeps what
+    # each save replaced (the old ``backups/glossary/``). ``style_profiles.scope`` is preset | series | unit.
+    # ``translations.params_json`` says how a version was made when its other fields do not (a range, a variant).
+    """
+    ALTER TABLE translations ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}';
+    CREATE TABLE glossaries (
+        id INTEGER PRIMARY KEY,
+        owner_kind TEXT NOT NULL,
+        owner_key TEXT NOT NULL,
+        lang TEXT NOT NULL,
+        doc_json TEXT NOT NULL,
+        rules_hash TEXT NOT NULL DEFAULT '',
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at REAL NOT NULL,
+        UNIQUE (owner_kind, owner_key, lang)
+    );
+    CREATE TABLE glossary_history (
+        id INTEGER PRIMARY KEY,
+        glossary_id INTEGER NOT NULL REFERENCES glossaries(id),
+        version INTEGER NOT NULL,
+        doc_json TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        at REAL NOT NULL,
+        UNIQUE (glossary_id, version)
+    );
+    CREATE TABLE style_profiles (
+        id INTEGER PRIMARY KEY,
+        scope TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        doc_json TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at REAL NOT NULL,
+        UNIQUE (scope, scope_id)
+    );
+    CREATE TABLE character_cards (
+        id INTEGER PRIMARY KEY,
+        owner_kind TEXT NOT NULL,
+        owner_key TEXT NOT NULL,
+        name TEXT NOT NULL COLLATE NOCASE,
+        doc_json TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at REAL NOT NULL,
+        UNIQUE (owner_kind, owner_key, name)
+    );
+    """,
 )
 
 
@@ -366,6 +414,7 @@ def _version_from_row(row: sqlite3.Row) -> TranslationVersion:
         glossary_hash=row["glossary_hash"], context_complete=bool(row["context_complete"]),
         memory_hash=row["memory_hash"], missing_units=tuple(json.loads(row["missing_units_json"] or "[]")),
         origin=row["origin"], publishing=bool(row["publishing"]), edited_at=row["edited_at"], job_id=row["job_id"],
+        params=json.loads(row["params_json"] or "{}"),
     )
 
 
@@ -419,6 +468,27 @@ def _correction_from_row(row: sqlite3.Row) -> Correction:
     return Correction(
         id=row["id"], unit_id=row["unit_id"], target_lang=row["target_lang"], kind=row["kind"],
         payload=json.loads(row["payload_json"]), created_at=row["created_at"], active=bool(row["active"]),
+    )
+
+
+def _glossary_from_row(row: sqlite3.Row) -> StoredGlossary:
+    return StoredGlossary(
+        owner_kind=row["owner_kind"], owner_key=row["owner_key"], lang=row["lang"], doc=json.loads(row["doc_json"]),
+        rules_hash=row["rules_hash"], version=row["version"], updated_at=row["updated_at"],
+    )
+
+
+def _style_from_row(row: sqlite3.Row) -> StyleRow:
+    return StyleRow(
+        scope=row["scope"], scope_id=row["scope_id"], doc=json.loads(row["doc_json"]), version=row["version"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _card_from_row(row: sqlite3.Row) -> CardRow:
+    return CardRow(
+        owner_kind=row["owner_kind"], owner_key=row["owner_key"], name=row["name"], doc=json.loads(row["doc_json"]),
+        version=row["version"], updated_at=row["updated_at"],
     )
 
 
@@ -876,6 +946,7 @@ class Store:
         publishing: bool = False,
         job_id: str = "",
         edited_at: float = 0.0,
+        params: dict[str, Any] | None = None,
     ) -> None:
         if status is None:
             status = "current" if make_current else "superseded"
@@ -894,14 +965,14 @@ class Store:
                     "INSERT INTO translations (output_path, source_path, source_sha256, target_lang, version,"
                     " stored_path, sha256, context_hash, trigger, parent_version, status, model, tokens_in,"
                     " tokens_out, created_at, unit_id, glossary_hash, context_complete, memory_hash,"
-                    " missing_units_json, origin, publishing, job_id, edited_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " missing_units_json, origin, publishing, job_id, edited_at, params_json)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         output_path, source_path, source_sha256, target_lang, version, stored_path, sha256,
                         context_hash, trigger, parent_version, status,
                         model, tokens_in, tokens_out, now, unit_id, glossary_hash, int(context_complete),
                         memory_hash, json.dumps(list(missing_units), ensure_ascii=False), origin, int(publishing),
-                        job_id, edited_at,
+                        job_id, edited_at, json.dumps(params or {}, ensure_ascii=False, sort_keys=True),
                     ),
                 )
                 self._db.execute("COMMIT")
@@ -1101,6 +1172,160 @@ class Store:
         with self._lock:
             cursor = self._db.execute("UPDATE corrections SET active = 0 WHERE id = ? AND active = 1", (correction_id,))
             return cursor.rowcount > 0
+
+    def series_cue_edits(self, series_id: int, target_lang: str, *, exclude_unit: int | None = None) -> list[CueEdit]:
+        """The cues admins corrected in any episode of a series, as (source line, fixed text) pairs: the candidates
+        for few-shot examples (FR-18.5). Only edits that still say what they describe (they carry their source)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT c.unit_id, c.payload_json FROM corrections c JOIN units u ON u.id = c.unit_id"
+                " WHERE u.series_id = ? AND c.target_lang = ? AND c.kind = 'cue_edit' AND c.active = 1"
+                " AND (? IS NULL OR c.unit_id <> ?) ORDER BY c.id",
+                (series_id, target_lang, exclude_unit, exclude_unit),
+            ).fetchall()
+        out: list[CueEdit] = []
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            source, text = str(payload.get("source_text") or ""), str(payload.get("text") or "")
+            if source.strip() and text.strip():
+                out.append(CueEdit(unit_id=row["unit_id"], cue=int(payload.get("cue") or 0), source_text=source, text=text))
+        return out
+
+    # -- glossaries, style profiles, character cards (P12, ADR-14) -----------------------------------
+    def glossary(self, owner_kind: str, owner_key: str, lang: str) -> StoredGlossary | None:
+        rows = self.query(
+            "SELECT * FROM glossaries WHERE owner_kind = ? AND owner_key = ? AND lang = ?", (owner_kind, owner_key, lang)
+        )
+        return _glossary_from_row(rows[0]) if rows else None
+
+    def glossary_languages(self, owner_kind: str, owner_key: str) -> list[str]:
+        rows = self.query(
+            "SELECT lang FROM glossaries WHERE owner_kind = ? AND owner_key = ? ORDER BY lang", (owner_kind, owner_key)
+        )
+        return [r["lang"] for r in rows]
+
+    def glossary_save(
+        self, owner_kind: str, owner_key: str, lang: str, doc: dict[str, Any], rules_hash: str, *, note: str = "console",
+    ) -> StoredGlossary:
+        """Store a glossary document. What it replaces goes to the history first; saving the same document again
+        changes nothing (no new version, no history line)."""
+        text = json.dumps(doc, ensure_ascii=False, sort_keys=True)
+        now = time.time()
+        with self.transaction() as db:
+            row = db.execute(
+                "SELECT * FROM glossaries WHERE owner_kind = ? AND owner_key = ? AND lang = ?",
+                (owner_kind, owner_key, lang),
+            ).fetchone()
+            if row is None:
+                db.execute(
+                    "INSERT INTO glossaries (owner_kind, owner_key, lang, doc_json, rules_hash, version, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, 1, ?)", (owner_kind, owner_key, lang, text, rules_hash, now),
+                )
+            elif json.dumps(json.loads(row["doc_json"]), ensure_ascii=False, sort_keys=True) != text:
+                db.execute(
+                    "INSERT INTO glossary_history (glossary_id, version, doc_json, note, at) VALUES (?, ?, ?, ?, ?)",
+                    (row["id"], row["version"], row["doc_json"], note, now),
+                )
+                db.execute(
+                    "UPDATE glossaries SET doc_json = ?, rules_hash = ?, version = version + 1, updated_at = ? WHERE id = ?",
+                    (text, rules_hash, now, row["id"]),
+                )
+            saved = db.execute(
+                "SELECT * FROM glossaries WHERE owner_kind = ? AND owner_key = ? AND lang = ?",
+                (owner_kind, owner_key, lang),
+            ).fetchone()
+        return _glossary_from_row(saved)
+
+    def glossary_history(self, owner_kind: str, owner_key: str, lang: str, *, limit: int = 50) -> list[GlossaryRevision]:
+        """Earlier states of a glossary, newest first (the current one is not in the list)."""
+        rows = self.query(
+            "SELECT h.version, h.doc_json, h.note, h.at FROM glossary_history h JOIN glossaries g ON g.id = h.glossary_id"
+            " WHERE g.owner_kind = ? AND g.owner_key = ? AND g.lang = ? ORDER BY h.version DESC LIMIT ?",
+            (owner_kind, owner_key, lang, limit),
+        )
+        return [
+            GlossaryRevision(version=r["version"], doc=json.loads(r["doc_json"]), at=r["at"], note=r["note"]) for r in rows
+        ]
+
+    def glossary_prune_history(self, keep: int, *, dry_run: bool = False) -> Reclaimed:
+        """Keep the ``keep`` newest earlier states of each glossary and delete the older ones (FR-13.1). The current
+        document is never in the history, so it cannot be touched."""
+        if keep < 1:
+            return Reclaimed()
+        select = (
+            "SELECT id, length(doc_json) AS size FROM ("
+            " SELECT id, doc_json, row_number() OVER (PARTITION BY glossary_id ORDER BY version DESC) AS n"
+            " FROM glossary_history) WHERE n > ?"
+        )
+        with self.transaction() as db:
+            doomed = db.execute(select, (keep,)).fetchall()
+            if doomed and not dry_run:
+                db.executemany("DELETE FROM glossary_history WHERE id = ?", [(r["id"],) for r in doomed])
+        return Reclaimed(rows=len(doomed), bytes=sum(r["size"] for r in doomed))
+
+    def style_row(self, scope: str, scope_id: str) -> StyleRow | None:
+        rows = self.query("SELECT * FROM style_profiles WHERE scope = ? AND scope_id = ?", (scope, scope_id))
+        return _style_from_row(rows[0]) if rows else None
+
+    def style_rows(self, scope: str) -> list[StyleRow]:
+        return [_style_from_row(r) for r in self.query("SELECT * FROM style_profiles WHERE scope = ? ORDER BY scope_id", (scope,))]
+
+    def style_save(self, scope: str, scope_id: str, doc: dict[str, Any]) -> StyleRow:
+        text = json.dumps(doc, ensure_ascii=False, sort_keys=True)
+        now = time.time()
+        with self.transaction() as db:
+            db.execute(
+                "INSERT INTO style_profiles (scope, scope_id, doc_json, version, updated_at) VALUES (?, ?, ?, 1, ?)"
+                " ON CONFLICT (scope, scope_id) DO UPDATE SET doc_json = excluded.doc_json, updated_at = excluded.updated_at,"
+                " version = style_profiles.version + (style_profiles.doc_json <> excluded.doc_json)",
+                (scope, scope_id, text, now),
+            )
+            row = db.execute("SELECT * FROM style_profiles WHERE scope = ? AND scope_id = ?", (scope, scope_id)).fetchone()
+        return _style_from_row(row)
+
+    def style_delete(self, scope: str, scope_id: str) -> bool:
+        with self.transaction() as db:
+            return db.execute("DELETE FROM style_profiles WHERE scope = ? AND scope_id = ?", (scope, scope_id)).rowcount > 0
+
+    def cards(self, owner_kind: str, owner_key: str) -> list[CardRow]:
+        rows = self.query(
+            "SELECT * FROM character_cards WHERE owner_kind = ? AND owner_key = ? ORDER BY name", (owner_kind, owner_key)
+        )
+        return [_card_from_row(r) for r in rows]
+
+    def card_save(
+        self, owner_kind: str, owner_key: str, name: str, doc: dict[str, Any], *, replaces: str | None = None,
+    ) -> CardRow:
+        """Create or update a card. ``replaces`` is the old name when the card is renamed."""
+        text = json.dumps(doc, ensure_ascii=False, sort_keys=True)
+        now = time.time()
+        with self.transaction() as db:
+            old = db.execute(
+                "SELECT id FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
+                (owner_kind, owner_key, replaces or name),
+            ).fetchone()
+            if old is None:
+                db.execute(
+                    "INSERT INTO character_cards (owner_kind, owner_key, name, doc_json, version, updated_at)"
+                    " VALUES (?, ?, ?, ?, 1, ?)", (owner_kind, owner_key, name, text, now),
+                )
+            else:
+                db.execute(
+                    "UPDATE character_cards SET name = ?, doc_json = ?, version = version + 1, updated_at = ? WHERE id = ?",
+                    (name, text, now, old["id"]),
+                )
+            row = db.execute(
+                "SELECT * FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
+                (owner_kind, owner_key, name),
+            ).fetchone()
+        return _card_from_row(row)
+
+    def card_delete(self, owner_kind: str, owner_key: str, name: str) -> bool:
+        with self.transaction() as db:
+            return db.execute(
+                "DELETE FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
+                (owner_kind, owner_key, name),
+            ).rowcount > 0
 
     # -- story memory (P4) ------------------------------------------------------------
     def find_unit(self, series_id: int, season: int, episode: int) -> Unit | None:

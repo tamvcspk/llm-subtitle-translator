@@ -13,17 +13,19 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from subcore import glossary as g
 from subcore import srt
+from subcore.style import Style, StyleError
 
-from .glossaries import MOVIES, SERIES, GlossaryFiles
+from .glossaries import MOVIES, SERIES, Glossaries
 from .ports import KIND_EPISODE, KIND_MOVIE, CatalogEntry, MediaLibrary, Output, Unit
 from .store import Store
-from .rules import UnitRules, build_rules
+from .rules import StyleLayers, UnitRules, build_rules
+from .styles import Styles
 from .versions import TranslationVersions
 
 STATUSES = ("current", "stale", "incomplete", "untranslated")
@@ -135,12 +137,14 @@ def enrich_job_identity(job: dict[str, Any], media: MediaLibrary) -> None:
 
 class Library:
     def __init__(
-        self, catalog: Store, glossaries: GlossaryFiles, versions: TranslationVersions, memory: Any = None
+        self, catalog: Store, glossaries: Glossaries, versions: TranslationVersions, memory: Any = None,
+        styles: Styles | None = None,
     ) -> None:
         self.catalog = catalog
         self.glossaries = glossaries
         self.versions = versions
         self.memory = memory  # StoryMemory | None: when set, story memory also decides staleness (FR-5.5)
+        self.styles = styles  # Styles | None: without it an episode has no style layers (FR-18)
 
     # -- registering ---------------------------------------------------------
     def register_job(self, job: dict[str, Any]) -> int:
@@ -218,8 +222,10 @@ class Library:
         correction_ids: list[int] | None = None,
         glossary: g.Glossary | None = None,
         cache: dict | None = None,
+        styles: StyleLayers | None = None,
     ) -> UnitRules:
-        """Rules for one unit and language; ``correction_ids`` narrows the episode corrections used."""
+        """Rules for one unit and language; ``correction_ids`` narrows the episode corrections used. ``styles``
+        replaces the stored style layers (a variant, or the preview of a style that is not saved yet)."""
         kind, key = self.owner(unit)
         if glossary is None:
             slot = (kind, key, lang)
@@ -233,13 +239,41 @@ class Library:
         if correction_ids is not None:
             wanted = set(correction_ids)
             corrections = [c for c in corrections if c.kind == "cue_edit" or c.id in wanted]
-        return build_rules(glossary, season=unit.season, episode=unit.episode, corrections=corrections, cues=cues)
+        return build_rules(
+            glossary, season=unit.season, episode=unit.episode, corrections=corrections, cues=cues, lang=lang,
+            styles=styles if styles is not None else self.style_layers(unit, cache),
+        )
+
+    def style_layers(self, unit: Unit, cache: dict | None = None) -> StyleLayers:
+        """The stored style layers that apply to a unit: its series' (or movie's) preset, style and cards, and its own."""
+        if self.styles is None:
+            return StyleLayers()
+        kind, key = self.owner(unit)
+        slot = ("style", kind, key)
+        if cache is not None and slot in cache:
+            base = cache[slot]
+        else:
+            base = self.styles.layers(kind, key)
+            if cache is not None:
+                cache[slot] = base
+        return replace(base, unit=self.styles.unit_style(unit.id))
 
     def source_cues(self, unit: Unit) -> list[srt.Cue]:
         path = Path(unit.source_path)
         if not unit.source_path or not path.is_file():
             raise LookupError("the source subtitle of this episode is no longer on disk")
         return srt.parse_file(path)
+
+    def variant_layers(self, unit: Unit, variant: dict[str, Any]) -> StyleLayers:
+        """The style layers of a variant (FR-18.8): its preset and style stand in for the series' own and the episode's
+        override; the series' character cards stay. Raises ``ValueError`` when the variant's style does not read."""
+        base = self.style_layers(unit)
+        preset = self.styles.preset(str(variant["preset"])) if self.styles and variant.get("preset") else None
+        try:
+            style = Style.from_doc(variant.get("style"), "variant.style")
+        except StyleError as exc:
+            raise ValueError(str(exc)) from None
+        return StyleLayers(preset=preset.style if preset else None, series=style, unit=None, cards=base.cards)
 
     # -- status --------------------------------------------------------------
     def stale_ignored(self, unit: Unit) -> bool:
@@ -249,7 +283,8 @@ class Library:
         return bool(series and series.stale_policy == "ignore")
 
     def target_info(
-        self, unit: Unit, output: Output, *, glossary: g.Glossary | None = None, cache: dict | None = None
+        self, unit: Unit, output: Output, *, glossary: g.Glossary | None = None, cache: dict | None = None,
+        styles: StyleLayers | None = None,
     ) -> dict[str, Any]:
         lang, output_path = output.target_lang, output.output_path
         exists = Path(output_path).is_file()
@@ -272,7 +307,7 @@ class Library:
             info["removed"] = not exists and self.versions.latest_status(output_path) == "removed"
             return info
         stale = not self.stale_ignored(unit) and (
-            current.glossary_hash != self.unit_rules(unit, lang, glossary=glossary, cache=cache).hash
+            current.glossary_hash != self.unit_rules(unit, lang, glossary=glossary, cache=cache, styles=styles).hash
             or (self.memory is not None and self.memory.is_stale(unit, current, cache))
         )
         info.update(
@@ -333,6 +368,14 @@ class Library:
 
     # -- glossary preview (how many translations a save would make stale) ---------
     def glossary_impact(self, series_id: int, lang: str, candidate: g.Glossary) -> dict[str, int]:
+        return self.impact(series_id, lang, glossary=candidate)
+
+    def impact(
+        self, series_id: int, lang: str, *, glossary: g.Glossary | None = None,
+        layers: Callable[[Unit], StyleLayers] | None = None,
+    ) -> dict[str, int]:
+        """How many translations of a series a candidate glossary, or a candidate set of style layers (``layers``
+        answers per unit), would make stale (FR-5.6, FR-18.6). Nothing is saved."""
         series_cache: dict = {}
         now = after = would = 0
         for unit in self.catalog.list_units(series_id):
@@ -340,7 +383,10 @@ class Library:
                 if out.target_lang != lang:
                     continue
                 before = self.target_info(unit, out, cache=series_cache)["status"]
-                later = self.target_info(unit, out, glossary=candidate)["status"]
+                later = self.target_info(
+                    unit, out, glossary=glossary, styles=layers(unit) if layers else None,
+                    cache=series_cache if glossary is None else None,
+                )["status"]
                 now += before == "stale"
                 after += later == "stale"
                 would += before != "stale" and later == "stale"

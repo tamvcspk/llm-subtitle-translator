@@ -17,7 +17,7 @@ from subcore.providers import FakeProvider
 from subserver import library_api
 from subserver.bazarr import BazarrMedia
 from subserver import queue as gst_queue
-from subserver.glossaries import GlossaryFiles
+from subserver.glossaries import Glossaries
 from subserver.jobs import job_key
 from subserver.queue import JobQueue
 from subserver.library import Library, identify_job
@@ -56,7 +56,7 @@ class Env:
         self.store = Store(self.data / "app.db")
         test.addCleanup(self.store.close)
         self.versions = TranslationVersions(self.store, self.data / "backups" / "subtitles")
-        self.glossaries = GlossaryFiles(self.data)
+        self.glossaries = Glossaries(self.store)
         self.library = Library(self.store, self.glossaries, self.versions)
         self.prefix = "[vi] "
         self.fake = FakeProvider(handler=self.handler)
@@ -151,7 +151,7 @@ class StoreMigrationTests(unittest.TestCase):
             old.close()
             store = Store(path)
             try:
-                self.assertEqual(store.schema_version, 11)
+                self.assertEqual(store.schema_version, 12)
                 row = store.current_version("/m/a.vi.srt")
                 self.assertEqual((row.sha256, row.unit_id, row.glossary_hash), ("abc", None, ""))
             finally:
@@ -216,7 +216,7 @@ class Criterion7Tests(unittest.TestCase):
             "lang": "vi", "kind": "term", "scope": "forward",
             "payload": {"source": "Kyber crystal", "target": "tinh thể Kyber"},
         })
-        yaml_text = (env.data / "series" / "bazarr-7" / "glossary.vi.yaml").read_text(encoding="utf-8")
+        yaml_text = env.glossaries.read_text("series", "bazarr-7", "vi")  # the YAML export of the stored glossary
         self.assertIn("from: S01E03", yaml_text)
 
         env.fake.calls.clear()
@@ -510,34 +510,43 @@ class GlossaryPageTests(unittest.TestCase):
             self.env.translate(episode)
         self.series = self.env.store.list_series()[0].id
 
-    def test_save_validates_backs_up_and_reports_how_many_translations_go_stale(self):
+    def yaml_of(self):
+        from subcore import glossary as g
+
+        return g.loads(self.env.service.glossary(self.series, "vi")["yaml"])
+
+    def test_save_validates_keeps_the_history_and_reports_how_many_translations_go_stale(self):
+        from subcore import glossary as g
+
         first = "terms:\n  - {source: Kyber crystal, target: tinh thể Kyber, locked: true}\n"
         preview = self.env.service.save_glossary(self.series, "vi", first, dry_run=True)
         self.assertEqual((preview["saved"], preview["would_stale"]), (False, 2))
-        self.assertFalse((self.env.data / "series").exists())  # a dry run writes nothing
+        self.assertIsNone(self.env.store.glossary("series", "bazarr-7", "vi"))  # a dry run stores nothing
 
         saved = self.env.service.save_glossary(self.series, "vi", first)
         self.assertTrue(saved["saved"])
-        self.assertEqual(self.env.service.glossary(self.series, "vi")["yaml"], first)
+        self.assertEqual(self.yaml_of().terms, g.loads(first).terms)  # the export says what was imported
         self.assertEqual(self.env.service.glossary(self.series, "vi")["stale_units"], 2)
+        self.assertFalse((self.env.data / "series").exists())  # the database is the source of truth: no file is written
 
         self.env.service.save_glossary(self.series, "vi", first + "style: casual\n")
-        backups = list((self.env.data / "backups" / "glossary" / "series" / "bazarr-7").glob("vi-*.yaml"))
-        self.assertEqual(len(backups), 1)
-        self.assertEqual(backups[0].read_text(encoding="utf-8"), first)
+        history = self.env.service.glossary_history(self.series, "vi")["items"]
+        self.assertEqual([(h["version"], h["terms"]) for h in history], [(1, 1)])  # what the second save replaced
+        self.assertFalse((self.env.data / "backups" / "glossary").exists())  # the history replaced the backup folder
 
-    def test_invalid_yaml_is_rejected_and_the_file_is_left_alone(self):
+    def test_invalid_yaml_is_rejected_and_the_stored_glossary_is_left_alone(self):
+        from subcore import glossary as g
+
         good = "terms:\n  - {source: A, target: B}\n"
         self.env.service.save_glossary(self.series, "vi", good)
         for bad in ("terms: nope\n", "terms:\n  - {source: A}\n", "version: 9\n", "a: [unclosed\n"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 self.env.service.save_glossary(self.series, "vi", bad)
-        self.assertEqual(self.env.service.glossary(self.series, "vi")["yaml"], good)
+        self.assertEqual(self.yaml_of().terms, g.loads(good).terms)
+        self.assertEqual(self.env.service.glossary(self.series, "vi")["version"], 1)
 
-    def test_a_hand_broken_glossary_stops_the_job_instead_of_translating_without_it(self):
-        path = self.env.data / "series" / "bazarr-7" / "glossary.vi.yaml"
-        path.parent.mkdir(parents=True)
-        path.write_text("terms: [broken\n", encoding="utf-8")
+    def test_a_stored_glossary_that_no_longer_reads_stops_the_job_instead_of_translating_without_it(self):
+        self.env.store.glossary_save("series", "bazarr-7", "vi", {"terms": "broken"}, "")  # a hand-edited database
         with self.assertRaisesRegex(RuntimeError, "Glossary series/bazarr-7/vi is invalid"):
             self.env.translate(3)
 
@@ -595,7 +604,9 @@ class ApiRoutingTests(unittest.TestCase):
         status, payload = self.call(env, "PUT", f"/api/series/{series}/glossary", {"lang": ["vi"]}, {"yaml": "style: x\n"})
         self.assertEqual((status, payload["saved"]), (200, True))
         status, payload = self.call(env, "GET", f"/api/series/{series}/glossary", {"lang": ["vi"]})
-        self.assertEqual((status, payload["yaml"]), (200, "style: x\n"))
+        self.assertEqual(status, 200)
+        self.assertIn("style: x", payload["yaml"])
+        self.assertEqual(payload["doc"]["style"], "x")
         self.assertEqual(self.call(env, "GET", f"/api/series/{series}/glossary")[0], 400)  # lang is required
 
 

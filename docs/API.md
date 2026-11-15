@@ -423,7 +423,7 @@ body, `true`, `"false"` or anything else deletes nothing. Reply:
     {"name": "jobs_done", "enabled": true, "window": 30, "files": 0, "rows": 412, "bytes": 1832040, "error": ""},
     {"name": "jobs_failed", "enabled": true, "window": 90, "files": 0, "rows": 3, "bytes": 8120, "error": ""},
     {"name": "versions", "enabled": true, "window": 5, "files": 87, "rows": 0, "bytes": 5402112, "error": ""},
-    {"name": "glossary", "enabled": false, "window": 0, "files": 0, "rows": 0, "bytes": 0, "error": ""},
+    {"name": "glossary", "enabled": true, "window": 20, "files": 0, "rows": 6, "bytes": 3190, "error": ""},
     {"name": "temp", "enabled": true, "window": null, "files": 1, "rows": 0, "bytes": 2048, "error": ""}
   ],
   "total": {"files": 88, "rows": 415, "bytes": 7244320},
@@ -531,8 +531,8 @@ the admin removed; the policy's have `origin: policy` and the automatic class.
 
 ## Library, episodes, corrections, versions and glossaries
 
-These endpoints back the Library, Episode and Glossary pages. Errors are
-`{"error": "..."}` with `400` (bad request or invalid YAML) or `404` (unknown
+These endpoints back the Library, Episode, Glossary, Style and Compare pages. Errors are
+`{"error": "..."}` with `400` (bad request, invalid glossary or style) or `404` (unknown
 unit, series, version or language). A *unit* is one episode or one movie; ids
 come from `GET /api/library/...`. Cues are addressed by their 1-based number `n`
 in the source subtitle (the same number the model sees), not the SRT index.
@@ -588,7 +588,7 @@ Active episode-scope corrections: `{"items": [{"id", "kind", "payload", "created
 | `cue_edit` | `cue`, `text`; or `edits: [{cue, text}]` (episode scope only) | none: a new version is written at once, Bazarr is asked to rescan, and the cues are locked |
 
 `scope` is `episode` (stored in `app.db`), `forward` (from this episode on) or
-`series`; the last two write the series glossary YAML (movie glossary for movies)
+`series`; the last two write the series' glossary (the movie's own for movies)
 and return `impact: {"stale_now", "stale_after", "would_stale"}`. A `cue_edit`
 reply has `version` and `warnings` (for example tags that differ from the
 source). Locked cues are kept verbatim by every later retranslation and shown to
@@ -612,8 +612,11 @@ The result overwrites the target and is recorded as a version; the old file is
 kept in `backups/subtitles/`.
 
 ### GET /api/units/{id}/versions?lang=
-`{"lang", "modified_outside", "versions": [{"version", "trigger", "origin", "status", "parent_version", "model", "sha256", "tokens_in", "tokens_out", "created_at", "current"}]}`, newest first.
-`trigger` is `auto`, `retranslate`, `cue_edit`, `revert`, `external` (a hand edit kept before an overwrite) or `remove`.
+`{"lang", "modified_outside", "versions": [{"version", "trigger", "origin", "status", "parent_version", "model", "sha256", "tokens_in", "tokens_out", "created_at", "current", "params"}]}`, newest first.
+`trigger` is `auto`, `retranslate`, `variant`, `cue_edit`, `revert`, `external` (a hand edit kept before an overwrite) or `remove`.
+`params` says how a version was made when its other fields do not: `{"range": {"first", "last"}}` for a retranslated range
+(the version is still stamped with the rules and context of the whole episode, so only the other episodes stay stale,
+FR-11.3.6) and `{"variant": {"label", "preset", "style"}}` for a variant; `{}` for any other.
 `origin` is `machine`, `edit`, `revert` or `external`. `status` is `current`, `superseded`, `candidate` (a result that is
 not on disk: the file appeared while the job ran, the subtitle changed under a replace job, or the source changed; adopt it to
 publish it), `removed` (the admin deleted the subtitle; restoring it is a revert) or `pruned` (its stored copy was
@@ -680,10 +683,101 @@ facts never enter the main storyline. Changing either can make translations `sta
 nothing is retranslated. Reply: the same as `GET`.
 
 ### GET /api/series/{id}/glossary?lang=
-`{"lang", "exists", "yaml", "stale_units"}`. `lang` is required.
+`{"lang", "exists", "doc", "yaml", "version", "stale_units"}`. `lang` is required. The glossary lives in the database
+(P12); `doc` is the YAML schema as a JSON object (what the form edits), `yaml` is its export, `version` counts saves
+(0 when there is none).
 
 ### PUT /api/series/{id}/glossary?lang=
-Body `{"yaml": "...", "dry_run": false}`. The YAML is validated (`400` names the
-offending path), the previous file is kept under `backups/glossary/`, and the new
-one is written atomically. Reply `{"ok", "saved", "stale_now", "stale_after", "would_stale"}`;
-with `dry_run` nothing is written.
+Body `{"doc": {...}, "dry_run": false}` (the form) or `{"yaml": "...", "dry_run": false}` (an import). The document is
+validated (`400` names the offending path, for example `terms[0]: missing required field 'target'`) and stored; what it
+replaces goes to the history. Reply `{"ok", "saved", "version", "stale_now", "stale_after", "would_stale"}`; with
+`dry_run` nothing is stored. Saving the same glossary again changes nothing.
+
+### GET /api/series/{id}/glossary/history?lang=
+What each save replaced, newest first: `{"lang", "items": [{"version", "at", "note", "terms", "characters", "address_rules"}]}`.
+`note` says what made the replacing save: `console`, `import`, `correction`, `restore` or `copy`. The count kept per
+series and language is `retention_glossary_keep`.
+
+### POST /api/series/{id}/glossary/restore
+Body `{"lang": "vi", "version": 3}`. Puts an earlier state back as a new save (the one it replaces goes to the history, so
+a restore can be undone). `404` for a version that is not in the history.
+
+### POST /api/series/{id}/glossary/copy
+Body `{"lang": "vi", "from_series": 12, "merge": true}`. Copies the other series' glossary into this one: a copy, not a
+link. With `merge` this series keeps its own entries on conflicts; without it the glossary is replaced. Reply
+`{"ok", "version", "from"}`; `404` when the other series has no glossary in that language.
+
+## Style, character cards and presets
+
+A style (P12, FR-18) is a set of axes and subtitle limits; every field is optional. Layers, lowest first: the target
+language, the series' preset, the series, the episode, and a character's card. The glossary always wins. A style is
+`{"formality": "casual|neutral|formal", "tone": "text", "profanity": "keep|soften|remove",
+"localization": "literal|balanced|adapt", "dialect": "north|south|neutral", "honorifics": "keep|translate",
+"max_cps": 17, "max_line_length": 42, "max_lines": 2, "allow_condense": true, "notes": "text"}`; an unknown or
+invalid field is a `400` naming it. Changing a style, a preset a series uses, or a card flags the translations made
+without it as `stale`; nothing is retranslated. Every save route takes `dry_run` and then only counts
+`{"stale_now", "stale_after", "would_stale"}`.
+
+### GET /api/series/{id}/style?lang=
+`{"series", "lang", "preset", "style", "effective", "presets": [...], "cards": [...]}`. `effective` is what is in force
+once the language and the preset are laid under the series' own style. No network call is made.
+
+### PUT /api/series/{id}/style?lang=
+Body `{"preset": "sitcom" | "", "style": {...}, "dry_run": false}`. Reply `{"ok", "saved", "stale_now", "stale_after", "would_stale"}`.
+`404` for a preset that does not exist.
+
+### GET /api/series/{id}/style/suggestions
+Asks TMDB (through the metadata port) for the series' genres and returns `{"genres": [...], "presets": [...]}`, best fit
+first (an anime before a drama). Empty without a TMDB key or a match; never an error.
+
+### POST /api/series/{id}/style/preview
+"Thử style" (FR-18.7). Body `{"lang": "vi", "unit_id": 34, "count": 20, "cues": [12, 40], "preset": "", "style": {...}}`, all
+optional: the episode defaults to the first one with a translation, the cues to about twenty spread over it (or the ones
+named), the style to the stored one (or the draft given, saved or not). Translates those lines with the default model
+and returns `{"rows": [{"n", "source", "current", "preview"}], "model", "tokens_in", "tokens_out", "effective",
+"voices", "bundle_hash", "style_hash"}`. **Spends model calls; writes nothing**: no file, no version. A provider failure is
+a `400` naming the error type.
+
+### PUT /api/series/{id}/cards?lang=
+Body `{"card": {"name": "Bob", "aliases": [], "speech": "fast, sarcastic", "address": [{"to": "Alice", "form": "anh–em"}],
+"catchphrases": [], "samples": [], "style": {"formality": "casual"}, "always": false}, "replaces": "old name", "dry_run": false}`.
+Creates or replaces a card (`replaces` renames). A card is in a prompt only for an episode whose dialogue names the
+character (or all, with `always`). Reply `{"ok", "saved", "card", "stale_now", "stale_after", "would_stale"}`.
+
+### POST /api/series/{id}/cards/delete?lang=
+Body `{"name": "Bob"}`. Reply `{"ok", "stale_now", "stale_after", "would_stale"}`; `404` for an unknown card.
+
+### GET /api/style/presets
+`{"items": [{"id", "name", "genres", "style", "builtin"}]}`. The five built-in presets (sitcom, drama, anime, documentary,
+kids) are stored once and belong to the admin from then on.
+
+### PUT /api/style/presets/{id}
+Body `{"name", "genres": ["Comedy"], "style": {...}}`. Edits a preset (`404` for an unknown one). Series that use it are
+flagged stale.
+
+### POST /api/style/presets/{id}/clone
+Body `{"name": "My sitcom"}`. A copy under a new id (`my-sitcom`) to edit; `400` when the id is taken.
+
+### POST /api/style/presets/{id}/delete
+Deletes a preset the admin made (`400` for a built-in one: edit it instead).
+
+### GET /api/units/{id}/style · PUT /api/units/{id}/style
+`{"style": {...}}`: the episode's own override, the layer above the series'. An empty style removes it.
+
+### POST /api/units/{id}/variant
+Body `{"lang": "vi", "label": "warmer", "preset": "", "style": {...}}`. Queues a **variant** job (kind `variant`,
+origin `variant`): the whole episode translated with that style in place of the series' own and the episode's
+override, kept as a `candidate` version whose `params.variant` says `{label, preset, style}`. It never goes on disk
+by itself and ignores an existing target. At most one variant per episode and language is open at a time (`400`).
+Reply `{"ok", "job_id", "label"}`.
+
+### GET /api/units/{id}/versions/{v}/compare?lang=
+The current translation and a version side by side: `{"lang", "version", "status", "params", "model", "aligned",
+"differing", "rows": [{"n", "source", "current", "variant", "differs"}]}`.
+
+### POST /api/units/{id}/versions/{v}/choose
+Body `{"lang": "vi", "picks": {"12": "variant", "13": "current"}, "whole": "variant", "apply": false}`. Records the admin's
+verdict on a candidate: one `ab` quality signal per pick (winner `variant`, `current` or `tie`) and one for `whole`, each
+carrying the variant's label, style, model and prompt version, so scores add up by style and prompt version. With
+`apply` the verdict is acted on: the cues won by `variant` become cue edits of the current translation, and a
+`whole` win adopts the candidate. `400` when the version is not a candidate. Reply `{"ok", "recorded", "applied"}`.

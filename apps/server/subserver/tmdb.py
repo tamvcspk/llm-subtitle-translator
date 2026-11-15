@@ -77,6 +77,43 @@ class TmdbMetadata:
         )
 
 
+    def genres(self, job: dict[str, Any]) -> tuple[str, ...]:
+        settings = self._settings()
+        return build_tmdb_genres(
+            job, bazarr=self.http, tmdb=self.http, bazarr_url=str(settings.get("bazarr_url") or ""),
+            bazarr_api_key=str(settings.get("bazarr_api_key") or ""), tmdb_api_key=str(settings.get("tmdb_api_key") or ""),
+            cache=self.cache,
+        )
+
+
+def build_tmdb_genres(
+    job: dict[str, Any], bazarr: HTTPClient, tmdb: HTTPClient, bazarr_url: str, bazarr_api_key: str, tmdb_api_key: str,
+    cache: MemoryCache,
+) -> tuple[str, ...]:
+    """TMDB's genre names of a series or a movie, to suggest a style preset (FR-18.4). Empty when there is no key, no
+    match or the lookup failed: a suggestion is a convenience and never an error."""
+    if not tmdb_api_key:
+        return ()
+    try:
+        if job.get("media_type") == "series":
+            series = first_data(bazarr.get_json(
+                f"{bazarr_url}/api/series", params={"seriesid[]": str(job.get("series_id", ""))},
+                headers={"X-API-KEY": bazarr_api_key},
+            ))
+            tv_id = tmdb_find_tv_id(series, tmdb, tmdb_api_key, cache)
+            path = f"/tv/{tv_id}" if tv_id else ""
+        else:
+            movie_id = extract_tmdb_movie_id(str(job.get("video_path", "")))
+            path = f"/movie/{movie_id}" if movie_id else ""
+        if not path:
+            return ()
+        show = cached_get_json(cache, tmdb, f"{TMDB_BASE_URL}{path}", {"api_key": tmdb_api_key, "language": "en-US"})
+        return tuple(str(g["name"]) for g in show.get("genres", []) if g.get("name"))
+    except Exception:  # noqa: BLE001
+        logging.exception("Could not read TMDB genres for %s", job.get("series_id") or job.get("video_path"))
+        return ()
+
+
 def build_tmdb_description(
     job: dict[str, Any],
     bazarr: HTTPClient,

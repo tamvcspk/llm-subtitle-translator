@@ -230,7 +230,9 @@ Saved settings with their defaults (the Settings page shows the same fields; key
   "retention_done_days": 30,
   "retention_failed_days": 90,
   "retention_versions_keep": 5,
-  "retention_glossary_keep": 20
+  "retention_glossary_keep": 20,
+  "few_shot_budget_tokens": 600,
+  "glossary_filter_threshold": 50
 }
 ```
 
@@ -436,24 +438,32 @@ GST_ONLY_PATHS=/media/Series/One Test Show   # only this folder is ever requeste
 
 Raise or remove it once the first results look right. Check the Queue page before leaving it unattended.
 
-## Glossaries and Data Directory
+## Glossaries, styles and Data Directory
 
 `DATA_DIR` (default: `STATE_DIR`) holds machine-owned data:
 
 ```text
-app.db                                   versions, library, corrections
+app.db                                   versions, library, corrections, glossaries, styles, character cards
 backups/subtitles/                       a copy of every published subtitle version
-backups/glossary/<series|movies>/<key>/  the previous glossary file before each console save
-series/<key>/glossary.<lang>.yaml        series glossary (hand-editable, see below)
-movies/<key>/glossary.<lang>.yaml        movie glossary
+series/<key>/glossary.<lang>.yaml        old series glossaries, read once at the first start of this version
+movies/<key>/glossary.<lang>.yaml        old movie glossaries, read once as well
 ```
+
+Since P12 the **glossary, the style and the character cards are in `app.db`** and are edited on the console (Glossary,
+Style): the database is the single source of truth, and YAML is only the exchange format (the Glossary page's YAML tab
+imports and exports it). At the first start of this version the worker reads every `glossary.<lang>.yaml` under
+`series/` and `movies/` into the database once, and **leaves the files where they are**; a file that does not read is
+named in the log and skipped (paste it into the YAML tab once it is fixed). Editing those files afterwards changes
+nothing. Every save keeps what it replaced in the glossary's history (on the Glossary page, under *History and
+copying*), which replaces the old `backups/glossary/` folder; a folder left by an older version is no longer touched by
+cleanup and can be deleted by hand. A console backup holds settings only, not the database (see [Backup](#backup)), so
+copy `app.db` to keep your glossaries, styles and character cards: the old YAML files no longer follow your edits.
 
 `<key>` is `tvdb-<id>` when Bazarr knows the TVDB id, else `bazarr-<series id>`,
 else a slug of the title. A glossary applies to one series and one target
-language and may be edited by hand or on the Glossary page. Example:
+language. The exchange format looks like this:
 
 ```yaml
-style: casual, keep honorifics
 terms:
   - source: Kyber crystal
     target: tinh thể Kyber
@@ -469,9 +479,33 @@ address_rules:
     from: S01E06 00:32:10
 ```
 
-A glossary file that is not valid stops translation jobs for that series with the
-reason in the job error; fix the file (or restore the copy in `backups/glossary/`)
-and retry.
+A save of a glossary that is not valid is refused naming the offending path. A stored glossary that no longer reads
+(a hand-edited database) stops translation jobs for that series with the reason in the job error; restore an earlier
+version on the Glossary page and retry. A translation never silently runs without its glossary.
+
+The `style:` line of a glossary is the free-text note from before P12. It is still read and sent to the model; the
+Style page replaces it with a form.
+
+### Style profile (P12)
+
+A style is a set of axes (formality, tone, swearing, idioms, dialect, anime honorifics) and subtitle limits
+(characters per second, line length, lines per cue), set in layers: the target language (built in), the series' genre
+preset, the series, an episode, and a character's card, each layer overriding the one below field by field. The glossary
+always wins over every layer. Five presets (sitcom, drama, anime, documentary, kids) are stored at the first start and are
+yours to edit or clone; the Style page suggests one from TMDB's genres (a TMDB key is needed).
+
+Changing a style, a preset in use, or a card marks the translations made without it **stale** and retranslates nothing.
+Example lines (lines you corrected elsewhere in the same series that look like the ones being translated) are *not* part
+of that: they change with every cue you fix, so they reach the prompt and the bundle hash but never make a translation
+stale.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `few_shot_budget_tokens` | 600 | Tokens the example lines may take in a prompt. `0` turns them off. |
+| `glossary_filter_threshold` | 50 | With more terms than this, each request lists only the terms its lines mention. Forms of address and character cards are never trimmed by words. `0` never trims. |
+
+Both are live (Settings → Style and glossary) and both are recorded in the bundle of a job, so "Export job spec" shows
+what was sent.
 
 ## File Clean-up
 
@@ -484,7 +518,7 @@ deletes the following. Every window is a setting (Settings → Clean-up, live at
 | Finished jobs | `done`, `skipped` and `cancelled` job rows older than the window | `retention_done_days` (30) |
 | Failed jobs | `failed` job rows older than the window | `retention_failed_days` (90) |
 | Subtitle versions | the stored copy in `backups/subtitles/` of every version of a target file except its current version, its first version and the newest N | `retention_versions_keep` (5) |
-| Glossary backups | files in `backups/glossary/` beyond the newest N of each series and language | `retention_glossary_keep` (20) |
+| Glossary history | earlier states of a glossary (database rows) beyond the newest N of each series and language; the current glossary is never in the history | `retention_glossary_keep` (20) |
 | Temporary files | `.*.tmp` left by a crash in `QUEUE_DIR` and `DATA_DIR`, older than a day | always on |
 
 A deleted version copy leaves its line in the subtitle's History, marked **pruned**; it can no longer be restored or
@@ -493,8 +527,8 @@ compared, and the page says so. The current version and the first one always kee
 What it never touches: any file in a media folder (a `.tmp` left beside a subtitle is listed on the Backups page and in
 the answer of `POST /api/cleanup`, not deleted: the folders in `media_roots` and the folder of every target subtitle are
 protected even when they lie inside the data or queue folder), a job that is not finished (queued, running, waiting),
-the Ignored decisions, the catalog, the current version of any subtitle, the story memory and the glossary files
-themselves, the database, backup zips and log files (those keep their own limits).
+the Ignored decisions, the catalog, the current version of any subtitle, the story memory, the glossaries, styles and
+character cards themselves, the database, backup zips and log files (those keep their own limits).
 
 Finished jobs are also what the dashboard's model statistics (`model_layers`) count, so they reach back only as far as
 `retention_done_days` and `retention_failed_days`; the status answer says so. Look at them, and at whether the strong

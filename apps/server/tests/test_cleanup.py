@@ -17,7 +17,7 @@ from pathlib import Path
 import worker
 from subserver.auth import ConsoleAuth
 from subserver.cleanup import GLOSSARY, JOBS_DONE, JOBS_FAILED, TEMP, VERSIONS, Cleanup, orphan_temp_files
-from subserver.glossaries import GlossaryFiles
+from subserver.glossaries import Glossaries
 from subserver.jobs import CANCELLED, DONE, FAILED, QUEUED, RUNNING, SKIPPED, WAITING, JobStore
 from subserver.ports import CURRENT, PRUNED, SUPERSEDED
 from subserver.store import Store
@@ -46,7 +46,7 @@ class Env:
         self.clock = [NOW]
         self.jobs = JobStore(self.store, clock=lambda: self.clock[0])
         self.versions = TranslationVersions(self.store, self.data / "backups" / "subtitles", clock=lambda: self.clock[0])
-        self.glossaries = GlossaryFiles(self.data)
+        self.glossaries = Glossaries(self.store)
         self.settings = {
             "retention_done_days": 30, "retention_failed_days": 90, "retention_versions_keep": 5,
             "retention_glossary_keep": 20, **settings,
@@ -85,15 +85,21 @@ class Env:
         row = self.store.get_version(self.output, version)
         return bool(row and row.stored_path and Path(row.stored_path).is_file())
 
-    def glossary_backups(self, key: str = "show", lang: str = "vi", count: int = 25) -> list[Path]:
-        folder = self.data / "backups" / "glossary" / "series" / key
-        folder.mkdir(parents=True, exist_ok=True)
-        made = []
-        for number in range(count):
-            path = folder / f"{lang}-2026010{1 + number // 20}-{number % 20:02d}0000.yaml"
-            path.write_text(f"# backup {number}\n", encoding="utf-8")
-            made.append(path)
-        return made
+    def glossary_backups(self, key: str = "show", lang: str = "vi", count: int = 25) -> list[int]:
+        """``count`` earlier states in the history of one glossary (``count + 1`` saves: the last one is the current
+        glossary, not a history line). Returns the versions that went to the history, oldest first."""
+        for number in range(count + 1):
+            self.glossaries.save_doc("series", key, lang, {"terms": [{"source": f"s{number}", "target": "t"}]})
+        return [row["version"] for row in self.history_rows(key, lang)][::-1]
+
+    def history_rows(self, key: str, lang: str):
+        return self.store.query(
+            "SELECT h.version FROM glossary_history h JOIN glossaries g ON g.id = h.glossary_id"
+            " WHERE g.owner_key = ? AND g.lang = ? ORDER BY h.version DESC", (key, lang),
+        )
+
+    def history_versions(self, key: str, lang: str) -> list[int]:
+        return sorted(row["version"] for row in self.history_rows(key, lang))
 
     def stray(self, path: Path, age_days: float) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -224,7 +230,8 @@ class Criterion12c(unittest.TestCase):
                        and not p.name.startswith("app.db-"))
         rows = sorted(tuple(r) for r in env.store.query("SELECT job_id, state FROM jobs"))
         versions = [(v.version, v.status) for v in env.store.versions(env.output)]
-        return files, rows, versions
+        history = [tuple(r) for r in env.store.query("SELECT glossary_id, version FROM glossary_history ORDER BY id")]
+        return files, rows, versions, history
 
     def test_12c_a_dry_run_removes_nothing_and_matches_the_real_run_that_follows(self):
         env = Env(self, retention_versions_keep=2, retention_glossary_keep=5)
@@ -326,7 +333,7 @@ class Criterion12e(unittest.TestCase):
             JOBS_DONE: len([j for j in env.job_ids() if j.startswith("done")]),
             JOBS_FAILED: len([j for j in env.job_ids() if j.startswith("failed")]),
             VERSIONS: len([n for n in range(1, 9) if env.copy_exists(n)]),
-            GLOSSARY: len(list((env.data / "backups" / "glossary").rglob("*.yaml"))),
+            GLOSSARY: len(env.store.query("SELECT 1 FROM glossary_history")),
         }
 
     def test_12e_zero_switches_off_exactly_its_group(self):
@@ -395,22 +402,38 @@ class Criterion12f(unittest.TestCase):
         self.assertFalse(path.exists())
 
 
-class GlossaryBackups(unittest.TestCase):
-    def test_each_series_and_language_keeps_its_newest_backups_and_nothing_else_is_touched(self):
+class GlossaryHistory(unittest.TestCase):
+    def test_each_series_and_language_keeps_its_newest_earlier_states_and_nothing_else_is_touched(self):
         env = Env(self, retention_glossary_keep=3)
-        vi = env.glossary_backups("show", "vi", 6)
-        pt = env.glossary_backups("show", "pt-br", 2)
-        other = env.glossary_backups("other", "vi", 4)
-        note = env.data / "backups" / "glossary" / "series" / "show" / "notes.txt"
-        note.write_text("mine", encoding="utf-8")
+        env.glossary_backups("show", "vi", 6)
+        env.glossary_backups("show", "pt-br", 2)
+        env.glossary_backups("other", "vi", 4)
+        # What an older worker left on disk is not the cleanup's to delete any more: the files stay as they are.
+        old_backup = env.data / "backups" / "glossary" / "series" / "show" / "vi-20260101-000000.yaml"
+        old_backup.parent.mkdir(parents=True)
+        old_backup.write_text("# an old backup\n", encoding="utf-8")
         live = env.data / "series" / "show" / "glossary.vi.yaml"
         live.parent.mkdir(parents=True)
         live.write_text("target_lang: vi\n", encoding="utf-8")
+        current = env.glossaries.stored("series", "show", "vi")
+
         env.cleanup.run(dry_run=False)
-        self.assertEqual([p.exists() for p in vi], [False, False, False, True, True, True])  # the newest three
-        self.assertEqual([p.exists() for p in pt], [True, True])
-        self.assertEqual([p.exists() for p in other], [False, True, True, True])
-        self.assertTrue(note.exists() and live.exists())
+
+        self.assertEqual(env.history_versions("show", "vi"), [4, 5, 6])  # the newest three of six
+        self.assertEqual(env.history_versions("show", "pt-br"), [1, 2])
+        self.assertEqual(env.history_versions("other", "vi"), [2, 3, 4])
+        self.assertEqual(env.glossaries.stored("series", "show", "vi"), current)  # the glossary itself is never pruned
+        self.assertTrue(old_backup.exists() and live.exists())
+
+    def test_a_dry_run_counts_what_the_real_run_removes(self):
+        env = Env(self, retention_glossary_keep=2)
+        env.glossary_backups("show", "vi", 5)
+        dry = env.cleanup.run(dry_run=True).group(GLOSSARY).reclaimed
+        self.assertEqual(env.history_versions("show", "vi"), [1, 2, 3, 4, 5])
+        real = env.cleanup.run(dry_run=False).group(GLOSSARY).reclaimed
+        self.assertEqual((dry.rows, dry.bytes), (real.rows, real.bytes))
+        self.assertEqual(real.rows, 3)
+        self.assertEqual(env.history_versions("show", "vi"), [4, 5])
 
 
 class DailyRun(unittest.TestCase):

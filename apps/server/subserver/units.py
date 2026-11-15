@@ -18,11 +18,12 @@ from typing import Any, Callable
 from subcore import glossary as g
 from subcore import srt
 from subcore.memory.facts import EXTRACT_PROMPT_VERSION
+from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
 
 from subcore.providers import ProviderError
 
 from .config import DEFAULT_MODEL, model_for_task
-from .glossaries import GlossaryFiles
+from .glossaries import Glossaries
 from .library import Library
 from .ports import CURRENT, PRUNED, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit
 from .store import Store
@@ -75,7 +76,7 @@ class UnitService:
     def __init__(
         self,
         library: Library,
-        glossaries: GlossaryFiles,
+        glossaries: Glossaries,
         versions: TranslationVersions,
         jobs: JobQueue,
         refresh_bazarr: Callable[[dict[str, Any]], None] | None = None,
@@ -282,7 +283,7 @@ class UnitService:
         return {"text": _text(payload, "text", what)}
 
     def _glossary_correction(self, unit: Unit, lang: str, kind: str, scope: str, clean: dict[str, Any]) -> dict[str, Any]:
-        """``forward``/``series`` corrections live in the glossary YAML (FR-11.2.3)."""
+        """``forward``/``series`` corrections live in the series' glossary (FR-11.2.3)."""
         gkind, key = self.library.owner(unit)
         glossary = self.glossaries.load(gkind, key, lang)
         forward = scope == "forward" and unit.series_id is not None
@@ -307,7 +308,7 @@ class UnitService:
         impact = None
         if unit.series_id is not None:
             impact = self.library.glossary_impact(unit.series_id, lang, glossary)
-        self.glossaries.save(gkind, key, lang, glossary)
+        self.glossaries.save(gkind, key, lang, glossary, note="correction")
         return {"ok": True, "scope": scope, "ids": [], "impact": impact,
                 "from": str(start) if start else None}
 
@@ -426,16 +427,8 @@ class UnitService:
                 raise ValueError(f"unknown or inactive correction(s): {', '.join(map(str, unknown))}")
             ids = sorted(set(wanted))
 
-        series = self.catalog.get_series(unit.series_id) if unit.series_id is not None else None
         job_id = self.jobs.enqueue_retranslation({
-            "provider": "gemini-console",
-            "video_path": unit.video_path, "subtitle_path": unit.source_path,
-            "output_path": out.output_path, "source_code": unit.source_code,
-            "source_language": unit.source_language or unit.source_code,
-            "target_code": lang, "target_language": out.target_language or lang,
-            "media_type": unit.media_type or ("series" if series else "movie"),
-            "series_id": series.bazarr_id if series else "", "media_id": unit.bazarr_id,
-            "unit_id": unit.id, "retranslate": {"range": window, "correction_ids": ids},
+            **self._job_payload(unit, out), "retranslate": {"range": window, "correction_ids": ids},
         })
         # An admin asking for a retranslation says the current translation was not good enough (FR-19.4).
         current = self.version_repo.current_version(out.output_path)
@@ -445,6 +438,121 @@ class UnitService:
             job_id=job_id, whole_episode=window is None, model=current.model if current else "",
         )
         return {"ok": True, "job_id": job_id, "range": window, "correction_ids": ids}
+
+    def _job_payload(self, unit: Unit, out: Output) -> dict[str, Any]:
+        """The job an admin's action on one episode makes: where its files are and what to translate into."""
+        series = self.catalog.get_series(unit.series_id) if unit.series_id is not None else None
+        return {
+            "provider": "gemini-console",
+            "video_path": unit.video_path, "subtitle_path": unit.source_path,
+            "output_path": out.output_path, "source_code": unit.source_code,
+            "source_language": unit.source_language or unit.source_code,
+            "target_code": out.target_lang, "target_language": out.target_language or out.target_lang,
+            "media_type": unit.media_type or ("series" if series else "movie"),
+            "series_id": series.bazarr_id if series else "", "media_id": unit.bazarr_id,
+            "unit_id": unit.id,
+        }
+
+    # -- variants and A/B (FR-18.8) -------------------------------------------------------
+    def variant(self, unit_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        """Queue the whole episode translated with another style, to be kept as a candidate and compared with the
+        current translation. Nothing goes on disk; the style is checked now, not when the job runs."""
+        unit = self.unit(unit_id)
+        out = self.output(unit, body.get("lang"))
+        self._source(unit)  # also proves the source is still there
+        style = body.get("style") or {}
+        if not isinstance(style, dict):
+            raise ValueError("style must be an object")
+        preset = str(body.get("preset") or "")
+        styles = self.library.styles
+        if preset and (styles is None or styles.preset(preset) is None):
+            raise LookupError(f"no preset {preset!r}")
+        variant = {"label": str(body.get("label") or "").strip()[:80] or "variant", "preset": preset, "style": style}
+        self.library.variant_layers(unit, variant)  # raises ValueError naming the bad field
+        job_id = self.jobs.enqueue_variant({**self._job_payload(unit, out), "variant": variant})
+        return {"ok": True, "job_id": job_id, "label": variant["label"]}
+
+    def compare(self, unit_id: int, version: int, lang: str | None = None) -> dict[str, Any]:
+        """The current translation and a candidate side by side, cue by cue (FR-18.8)."""
+        unit = self.unit(unit_id)
+        out = self.output(unit, lang)
+        row = self.version_repo.get_version(out.output_path, version)
+        if row is None:
+            raise LookupError(f"no version {version}")
+        source = self._source(unit)
+        other = self._version_cues(out, version)
+        try:
+            current = self._target(out)
+        except LookupError:
+            current = []
+        rows = [
+            {
+                "n": n, "source": cue.text, "current": current[n - 1].text if n <= len(current) else None,
+                "variant": other[n - 1].text if n <= len(other) else None,
+            }
+            for n, cue in enumerate(source, start=1)
+        ]
+        for item in rows:
+            item["differs"] = item["current"] != item["variant"]
+        return {
+            "lang": out.target_lang, "version": version, "status": row.status, "params": row.params, "model": row.model,
+            "aligned": len(other) == len(source) and len(current) == len(source),
+            "differing": sum(1 for r in rows if r["differs"]), "rows": rows,
+        }
+
+    def choose(self, unit_id: int, version: int, body: dict[str, Any]) -> dict[str, Any]:
+        """The admin's verdict on a variant (FR-18.8): which text is better for some cues or for the whole episode.
+
+        Every verdict is a quality signal (``ab``), so scores add up by style and prompt version (FR-19.5). With
+        ``apply`` the verdict is acted on: the chosen variant cues become cue edits of the current translation, and a
+        whole-episode win adopts the candidate."""
+        unit = self.unit(unit_id)
+        out = self.output(unit, body.get("lang"))
+        picks = body.get("picks") or {}
+        if not isinstance(picks, dict):
+            raise ValueError("picks must map a cue number to 'variant' or 'current'")
+        whole = body.get("whole")
+        if whole not in (None, "variant", "current", "tie"):
+            raise ValueError("whole must be 'variant', 'current' or 'tie'")
+        view = self.compare(unit_id, version, out.target_lang)
+        if view["status"] != "candidate":
+            raise ValueError(f"version {version} is {view['status']}, not a candidate to judge")
+        by_cue = {r["n"]: r for r in view["rows"]}
+        chosen: dict[int, str] = {}
+        for key, winner in picks.items():
+            try:
+                n = int(key)
+            except (TypeError, ValueError):
+                raise ValueError(f"cue {key!r} is not a number") from None
+            if n not in by_cue:
+                raise ValueError(f"cue {n} is not in this episode")
+            if winner not in ("variant", "current", "tie"):
+                raise ValueError(f"cue {n}: the winner must be 'variant', 'current' or 'tie'")
+            chosen[n] = winner
+        params = view["params"].get("variant") or {}
+        meta = dict(
+            lang=out.target_lang, variant_version=version, label=params.get("label"), preset=params.get("preset"),
+            style=params.get("style"), model=view["model"], prompt_version=SUBCORE_PROMPT_VERSION,
+        )
+        for n, winner in sorted(chosen.items()):
+            self.telemetry.signal(
+                "ab", unit_id=unit.id, cue=n, before=by_cue[n]["current"] or "", after=by_cue[n]["variant"] or "",
+                winner=winner, **meta,
+            )
+        if whole:
+            self.telemetry.signal("ab", unit_id=unit.id, winner=whole, whole_episode=True, **meta)
+        applied: dict[str, Any] = {}
+        if body.get("apply"):
+            edits = [{"cue": n, "text": by_cue[n]["variant"]} for n, w in sorted(chosen.items())
+                     if w == "variant" and by_cue[n]["variant"] and by_cue[n]["differs"]]
+            if whole == "variant":
+                applied = {"adopted": self.adopt(unit_id, version, out.target_lang)["adopted"]}
+            elif edits:
+                result = self.add_correction(unit_id, {
+                    "lang": out.target_lang, "kind": "cue_edit", "payload": {"edits": edits},
+                })
+                applied = {"edited_cues": [e["cue"] for e in edits], "version": result.get("version")}
+        return {"ok": True, "recorded": len(chosen) + (1 if whole else 0), "applied": applied}
 
     @staticmethod
     def _range(spec: Any, source: list[srt.Cue]) -> dict[str, int] | None:
@@ -488,7 +596,7 @@ class UnitService:
                     "version": r.version, "trigger": r.trigger, "origin": r.origin, "status": r.status,
                     "parent_version": r.parent_version, "model": r.model, "sha256": r.sha256,
                     "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "created_at": r.created_at,
-                    "current": r.status == CURRENT and on_disk,
+                    "current": r.status == CURRENT and on_disk, "params": r.params,
                 }
                 for r in reversed(rows)
             ],
@@ -668,21 +776,66 @@ class UnitService:
             raise ValueError(redact(f"The provider could not finish ({type(exc).__name__}: {exc})", settings)) from None
         return {"ok": True, **result}
 
-    # -- glossary -------------------------------------------------------------------------
-    def glossary(self, series_id: int, lang: str) -> dict[str, Any]:
+    # -- glossary (in the database; YAML is the exchange format, FR-18.10) --------------------------------
+    def _series(self, series_id: int):
         series = self.catalog.get_series(series_id)
         if series is None:
             raise LookupError(f"no series {series_id}")
-        text = self.glossaries.read_text("series", series.key, lang)
-        impact = self.library.glossary_impact(series_id, lang, g.loads(text) if text.strip() else g.Glossary())
-        return {"lang": lang, "exists": bool(text.strip()), "yaml": text, "stale_units": impact["stale_now"]}
+        return series
 
-    def save_glossary(self, series_id: int, lang: str, text: str, *, dry_run: bool = False) -> dict[str, Any]:
-        series = self.catalog.get_series(series_id)
-        if series is None:
-            raise LookupError(f"no series {series_id}")
-        parsed = g.loads(text) if text.strip() else g.Glossary()  # GlossaryError is a ValueError
+    def glossary(self, series_id: int, lang: str) -> dict[str, Any]:
+        """The glossary as a document (for the form) and as YAML (to export), with the number of stale translations."""
+        series = self._series(series_id)
+        stored = self.glossaries.stored("series", series.key, lang)
+        glossary = self.glossaries.load("series", series.key, lang)
+        impact = self.library.glossary_impact(series_id, lang, glossary)
+        return {
+            "lang": lang, "exists": stored is not None,
+            "doc": g.to_doc(glossary) if stored else {"version": 1}, "yaml": self.glossaries.read_text("series", series.key, lang),
+            "version": stored.version if stored else 0, "stale_units": impact["stale_now"],
+        }
+
+    def save_glossary(
+        self, series_id: int, lang: str, text: str | None = None, *, doc: dict[str, Any] | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Save a glossary given as a document (the form) or as YAML text (an import). A bad one raises ValueError
+        naming the offending path; ``dry_run`` only says how many translations the save would make stale."""
+        series = self._series(series_id)
+        if doc is not None:
+            if not isinstance(doc, dict):
+                raise ValueError("doc must be an object")
+            parsed, note = g.from_doc(doc), "console"  # GlossaryError is a ValueError
+        else:
+            text = text or ""
+            parsed, note = (g.loads(text) if text.strip() else g.Glossary()), "import"
         impact = self.library.glossary_impact(series_id, lang, parsed)
+        saved = None
         if not dry_run:
-            self.glossaries.write("series", series.key, lang, text)
-        return {"ok": True, "saved": not dry_run, **impact}
+            saved = self.glossaries.save("series", series.key, lang, parsed, note=note)
+        return {"ok": True, "saved": not dry_run, "version": saved.version if saved else None, **impact}
+
+    def glossary_history(self, series_id: int, lang: str) -> dict[str, Any]:
+        """What each save replaced, newest first (the history that stands in for the old backups)."""
+        series = self._series(series_id)
+        return {
+            "lang": lang,
+            "items": [
+                {"version": r.version, "at": r.at, "note": r.note, "terms": len(r.doc.get("terms") or ()),
+                 "characters": len(r.doc.get("characters") or ()), "address_rules": len(r.doc.get("address_rules") or ())}
+                for r in self.glossaries.history("series", series.key, lang)
+            ],
+        }
+
+    def restore_glossary(self, series_id: int, lang: str, version: int) -> dict[str, Any]:
+        series = self._series(series_id)
+        restored = self.glossaries.restore("series", series.key, lang, int(version))
+        return {"ok": True, "version": restored.version, "restored": int(version)}
+
+    def copy_glossary(self, series_id: int, lang: str, source_series_id: int, *, merge: bool) -> dict[str, Any]:
+        """Copy another series' glossary into this one: a copy, not a link (Non-goals, v0.12)."""
+        series, source = self._series(series_id), self._series(source_series_id)
+        if series.id == source.id:
+            raise ValueError("choose another series to copy from")
+        result = self.glossaries.copy(("series", source.key), ("series", series.key), lang, merge=merge)
+        return {"ok": True, "version": result.version, "from": source.title or source.key}

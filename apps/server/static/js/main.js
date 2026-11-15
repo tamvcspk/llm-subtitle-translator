@@ -13,8 +13,10 @@ import logs from "./views/logs.js";
 import library from "./views/library.js";
 import episode from "./views/episode.js";
 import glossary from "./views/glossary.js";
+import style from "./views/style.js";
+import compare from "./views/compare.js";
 
-const VIEWS = { dashboard, queue, library, episode, glossary, wanted: wantedView, scan: scanView, settings, system, logs };
+const VIEWS = { dashboard, queue, library, episode, glossary, style, compare, wanted: wantedView, scan: scanView, settings, system, logs };
 const POLL_MS = 5000;
 
 const initialized = new Set();
@@ -32,7 +34,7 @@ async function switchView({ view, param }) {
   currentView = view;
 
   document.querySelectorAll(".view").forEach((el) => { el.hidden = el.dataset.view !== view; });
-  // Detail pages (episode, glossary) have no nav item of their own and light up their parent.
+  // Detail pages (episode, glossary, style, compare) have no nav item of their own and light up their parent.
   const navView = def.nav || view;
   document.querySelectorAll(".nav-item").forEach((el) => {
     if (el.dataset.view === navView) el.setAttribute("aria-current", "page");

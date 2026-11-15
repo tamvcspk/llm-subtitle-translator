@@ -46,6 +46,7 @@ class TranslateOptions:
     context_window: int = 5  # neighbours shown around each cue being repaired
     max_split_depth: int = 1  # splitting after failed repairs: one level
     temperature: float | None = None
+    glossary_filter_threshold: int = 50  # FR-4.3: above this many terms a request lists only the ones its lines use
 
 
 @dataclass
@@ -129,6 +130,7 @@ def options_of(bundle: TranslationBundle) -> TranslateOptions:
     return TranslateOptions(
         output_factor=p.output_factor, min_part_cues=p.min_part_cues, repair_rounds=p.repair_rounds,
         context_window=p.context_window, max_split_depth=p.max_split_depth, temperature=p.temperature,
+        glossary_filter_threshold=p.glossary_filter_threshold,
     )
 
 
@@ -172,6 +174,8 @@ def make_bundle(
         episode=ctx.episode,
         glossary=glossary,
         active_rules=active,
+        style=ctx.style,
+        voices=tuple(ctx.voices),
         sections=tuple((str(t), str(b)) for t, b in ctx.extra_sections),
         few_shot=tuple((str(s), str(t)) for s, t in ctx.few_shot),
         requested=None if only is None else tuple(sorted({int(n) for n in only})),
@@ -186,6 +190,7 @@ def make_bundle(
             repair_rounds=options.repair_rounds,
             context_window=options.context_window,
             max_split_depth=options.max_split_depth,
+            glossary_filter_threshold=options.glossary_filter_threshold,
         ),
     )
 
@@ -207,7 +212,6 @@ class _Run:
         self.cues = list(bundle.cues)
         self.options = options_of(bundle)
         self.on_progress = on_progress
-        self.system = render_system(bundle)
         self.glossary = bundle.glossary if not bundle.glossary.is_empty() else None
         self.source = {n: c.text for n, c in enumerate(self.cues, start=1) if c.text.strip()}
         self.keep = dict(bundle.keep)
@@ -227,7 +231,7 @@ class _Run:
     def _call(self, kind: str, targets: list[int], context: dict[int, str], notes: dict[int, str]):
         reference = {n: text for n, text in self.keep.items() if n in context}
         req = LLMRequest(
-            system=self.system,
+            system=render_system(self.bundle, context.values()),  # per request: a big glossary is filtered to its lines
             user=build_user(context, targets, notes, reference),
             response_schema=RESPONSE_SCHEMA if self.provider.caps.structured_output else None,
             temperature=self.bundle.params.temperature,
@@ -354,7 +358,7 @@ def render_requests(bundle: TranslationBundle) -> list[RenderedRequest]:
     keep = dict(bundle.keep)
     wanted = None if bundle.requested is None else set(bundle.requested)
     targets = [n for n in sorted(source) if n not in keep and (wanted is None or n in wanted)]
-    system = render_system(bundle)
+    system = render_system(bundle, source.values())
     out = []
     for number, part in enumerate(_parts(bundle, targets, options)):
         reference = {n: text for n, text in keep.items() if n in source}

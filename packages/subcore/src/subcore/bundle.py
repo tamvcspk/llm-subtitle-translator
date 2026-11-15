@@ -8,7 +8,7 @@ API key, no machine path and no database id. Few-shot examples are stored by val
 changes. Anything that only *describes* a bundle for a screen (which glossary entry matches cue 142) is
 not a field here: ``matches`` reads a bundle and returns that description, and nothing it returns is hashed.
 
-Format: ``bundle_version`` 1. ``from_dict`` accepts any version up to :data:`BUNDLE_VERSION`, fills
+Format: ``bundle_version`` 2 (1 had no style or voices). ``from_dict`` accepts any version up to :data:`BUNDLE_VERSION`, fills
 optional fields that an older writer did not have, and ignores fields it does not know, so a bundle
 written by an earlier build still runs (FR-21.1, criterion 18h).
 """
@@ -23,10 +23,12 @@ from typing import Any
 
 from . import srt
 from .glossary import AddressRule, ActiveRule, Glossary, dumps as dump_glossary, loads as load_glossary
+from .style import CharacterCard, Style, StyleError
 
 __all__ = ["BUNDLE_VERSION", "Params", "TranslationBundle", "BundleError", "CueMatch", "matches"]
 
-BUNDLE_VERSION = 1
+# 2: the effective style and the character voices (P12). A version-1 bundle reads as one with no style.
+BUNDLE_VERSION = 2
 
 
 class BundleError(ValueError):
@@ -46,6 +48,8 @@ class Params:
     repair_rounds: int = 2
     context_window: int = 5
     max_split_depth: int = 1
+    # More glossary terms than this: each request lists only the terms its lines mention (FR-4.3). 0 = never filter.
+    glossary_filter_threshold: int = 50
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,10 @@ class TranslationBundle:
     # Already resolved for the episode: terms outside their window are gone, corrections are merged in.
     glossary: Glossary = field(default_factory=Glossary)
     active_rules: tuple[ActiveRule, ...] = ()
+    # The effective style of the episode, every layer already laid on top of each other (FR-18.1), and the cards of
+    # the characters the dialogue names (FR-18.3). The glossary is not part of either: it always wins in the prompt.
+    style: Style = field(default_factory=Style)
+    voices: tuple[CharacterCard, ...] = ()
     # Extra (title, body) system sections: corrections, story memory. Placed before metadata.
     sections: tuple[tuple[str, str], ...] = ()
     # Accepted (source, translation) pairs, embedded by value (FR-21.6). Rendered last in the system prompt.
@@ -86,6 +94,7 @@ class TranslationBundle:
                 "repair_rounds": self.params.repair_rounds,
                 "context_window": self.params.context_window,
                 "max_split_depth": self.params.max_split_depth,
+                "glossary_filter_threshold": self.params.glossary_filter_threshold,
             },
             "language": {"target": self.target_lang, "target_name": self.target_name, "source": self.source_lang},
             "episode": {
@@ -99,6 +108,8 @@ class TranslationBundle:
                 }
                 for ar in self.active_rules
             ],
+            "style": self.style.to_doc(),
+            "voices": [card.to_doc() for card in self.voices],
             "sections": [{"title": t, "body": b} for t, b in self.sections],
             "few_shot": [{"source": s, "target": t} for s, t in self.few_shot],
             "cues": [
@@ -170,6 +181,11 @@ class TranslationBundle:
         )
         requested = data.get("requested")
         keep = {int(k["i"]): str(k["text"]) for k in data.get("keep") or []}
+        try:  # bundles of version 1 have neither
+            style = Style.from_doc(data.get("style"), "style")
+            voices = tuple(CharacterCard.from_doc(c, f"voices[{n}]") for n, c in enumerate(data.get("voices") or []))
+        except StyleError as exc:
+            raise BundleError(f"bad style in bundle: {exc}") from None
         return cls(
             cues=cues,
             target_lang=str(language.get("target") or "vi"),
@@ -181,6 +197,8 @@ class TranslationBundle:
             episode=episode.get("episode"),
             glossary=glossary,
             active_rules=active,
+            style=style,
+            voices=voices,
             sections=tuple((str(s["title"]), str(s["body"])) for s in data.get("sections") or []),
             few_shot=tuple((str(s["source"]), str(s["target"])) for s in data.get("few_shot") or []),
             requested=None if requested is None else tuple(int(n) for n in requested),

@@ -19,6 +19,11 @@ class InMemoryMetadata:
             return EXPECTED
         return ""
 
+    def genres(self, job):
+        if job.get("media_type") == "movie" and "{tmdb-603}" in job.get("video_path", ""):
+            return ("Sci-Fi",)
+        return ()
+
 
 class FakeTmdbHttp:
     """Answers the TMDB movie endpoint and counts the calls it gets."""
@@ -48,6 +53,11 @@ class MetadataContract:
     def test_an_item_it_cannot_match_gets_an_empty_text(self):
         self.assertEqual(self.repo.description({"media_type": "movie", "video_path": "/media/Unknown.mkv"}), "")
 
+    def test_a_known_item_names_its_genres_and_an_unknown_one_has_none(self):
+        """FR-18.4: the genres a style preset is suggested from."""
+        self.assertEqual(self.repo.genres(MOVIE_JOB), ("Sci-Fi",))
+        self.assertEqual(self.repo.genres({"media_type": "movie", "video_path": "/media/Unknown.mkv"}), ())
+
 
 class InMemoryMetadataTests(MetadataContract, unittest.TestCase):
     def setUp(self):
@@ -68,6 +78,13 @@ class TmdbMetadataTests(MetadataContract, unittest.TestCase):
     def test_a_failed_lookup_is_empty_text_not_an_error(self):
         repo = TmdbMetadata(FakeTmdbHttp(fail=True), MemoryCache(), lambda: self.settings)
         self.assertEqual(repo.description(MOVIE_JOB), "")
+        with self.assertLogs(level="ERROR"):
+            self.assertEqual(repo.genres(MOVIE_JOB), ())
+
+    def test_genres_need_a_key_and_ask_nothing_without_one(self):
+        self.settings["tmdb_api_key"] = ""
+        self.assertEqual(self.repo.genres(MOVIE_JOB), ())
+        self.assertEqual(self.http.calls, 0)
 
     def test_a_key_saved_later_takes_effect_without_a_new_adapter(self):
         self.settings["tmdb_api_key"] = ""

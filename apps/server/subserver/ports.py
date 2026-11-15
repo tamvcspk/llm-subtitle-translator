@@ -202,6 +202,9 @@ class TranslationVersion:
     publishing: bool = False
     edited_at: float = 0.0
     job_id: str = ""
+    # How the version was made when that is not in its other fields (P12): ``range`` of a retranslated range
+    # (FR-11.3.6) and ``variant`` (label, preset, style) of a variant (FR-18.8). Empty for an ordinary one.
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -279,6 +282,64 @@ class Correction:
     payload: dict[str, Any]
     created_at: float = 0.0
     active: bool = True
+
+
+@dataclass(frozen=True)
+class StoredGlossary:
+    """The glossary of one owner (a series or the movies folder of a title) in one language (FR-18.10, ADR-14).
+    ``doc`` is the YAML schema as a mapping; ``rules_hash`` is the hash of that document; ``version`` counts saves."""
+
+    owner_kind: str
+    owner_key: str
+    lang: str
+    doc: dict[str, Any]
+    rules_hash: str = ""
+    version: int = 1
+    updated_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class GlossaryRevision:
+    """An earlier saved state of a glossary: what a save replaced (the history that stands in for the old backups)."""
+
+    version: int
+    doc: dict[str, Any]
+    at: float = 0.0
+    note: str = ""  # who changed it: console | import | correction | restore
+
+
+@dataclass(frozen=True)
+class StyleRow:
+    """One stored style document. ``scope`` is preset | series | unit; ``scope_id`` names the preset, the owner
+    (``series/<key>``) or the unit id."""
+
+    scope: str
+    scope_id: str
+    doc: dict[str, Any]
+    version: int = 1
+    updated_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class CardRow:
+    """One stored character card of an owner."""
+
+    owner_kind: str
+    owner_key: str
+    name: str
+    doc: dict[str, Any]
+    version: int = 1
+    updated_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class CueEdit:
+    """A cue an admin corrected: the source line and the text it was fixed to (a few-shot candidate, FR-18.5)."""
+
+    unit_id: int
+    cue: int
+    source_text: str
+    text: str
 
 
 @runtime_checkable
@@ -437,3 +498,7 @@ class Metadata(Protocol):
 
     def description(self, job: dict[str, Any]) -> str:
         """The description for the job's item; ``""`` when there is no key, no match, or the lookup failed."""
+
+    def genres(self, job: dict[str, Any]) -> tuple[str, ...]:
+        """The genre names of the job's item (English, as TMDB spells them), to suggest a style preset (FR-18.4);
+        empty when there is no key, no match, or the lookup failed."""

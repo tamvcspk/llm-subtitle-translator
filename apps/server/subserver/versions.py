@@ -30,6 +30,7 @@ SKIPPED_EXISTING = "skipped-existing-output"
 AUTO = "auto"
 RETRANSLATE = "retranslate"
 REVERT = "revert"
+VARIANT = "variant"
 EXTERNAL = "external"
 CUE_EDIT = "cue_edit"
 REMOVE = "remove"
@@ -203,12 +204,15 @@ class TranslationVersions:
         job_id: str = "",
         base_version: int | None = None,
         candidate_reason: str = "",
+        params: dict[str, Any] | None = None,
     ) -> Published:
         """Put a result into the file's history.
 
         ``base_version`` is the current version when the job started (a replace job, FR-16.3); ``candidate_reason``
         is set by the caller when the source changed meanwhile (FR-15.10). Either one, or a file that appeared while
-        an automatic job ran, makes the result a candidate instead of overwriting anything.
+        an automatic job ran, makes the result a candidate instead of overwriting anything. A ``variant`` (FR-18.8) is
+        always a candidate: it is made to be compared, never to be put on disk by a job. ``params`` says how the
+        version was made (a retranslated range, a variant's style) when its other fields do not.
         """
         path = Path(output_path)
         data = text.encode("utf-8")
@@ -216,8 +220,11 @@ class TranslationVersions:
             trigger=trigger, source_path=source_path, source_sha256=source_sha256, target_lang=target_lang,
             context_hash=context_hash, model=model, tokens_in=tokens_in, tokens_out=tokens_out, unit_id=unit_id,
             glossary_hash=glossary_hash, memory_hash=memory_hash, context_complete=context_complete,
-            missing_units=tuple(missing_units), job_id=job_id, origin=_origin(trigger),
+            missing_units=tuple(missing_units), job_id=job_id, origin=_origin(trigger), params=params,
         )
+
+        if trigger == VARIANT:
+            return self._candidate(output_path, data, "a variant translation: kept to compare, never put on disk by a job", **meta)
 
         if trigger == AUTO and path.is_file():
             if self.is_system_file(output_path):

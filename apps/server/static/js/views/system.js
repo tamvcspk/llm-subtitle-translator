@@ -69,7 +69,7 @@ const CLEANUP_GROUPS = {
   jobs_done: ["Finished jobs", (w) => `older than ${plural(w, "day")}`],
   jobs_failed: ["Failed jobs", (w) => `older than ${plural(w, "day")}`],
   versions: ["Older subtitle versions", (w) => `beyond the newest ${w} (the current and the first are kept)`],
-  glossary: ["Glossary backups", (w) => `beyond the newest ${w} per series and language`],
+  glossary: ["Earlier glossary versions", (w) => `beyond the newest ${w} per series and language`],
   temp: ["Leftover temporary files", () => "older than a day, in the queue and data folders"],
 };
 

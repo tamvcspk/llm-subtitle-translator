@@ -53,6 +53,12 @@ def retranslation_key(subtitle_path: str, output_path: str, target_code: str) ->
     return hashlib.sha1(f"retranslate|{subtitle_path}|{output_path}|{target_code}".encode("utf-8")).hexdigest()
 
 
+def variant_key(subtitle_path: str, output_path: str, target_code: str) -> str:
+    """The key of a variant job (FR-18.8). Distinct from the publish key, so a failed variant is never taken for a
+    failed translation of the same file when a request looks for a job to revive."""
+    return hashlib.sha1(f"variant|{subtitle_path}|{output_path}|{target_code}".encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class Added:
     job_id: str | None  # the new job; None when an open job already holds the key

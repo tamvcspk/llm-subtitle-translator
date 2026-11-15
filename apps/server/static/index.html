@@ -202,6 +202,7 @@
           <div class="toolbar">
             <span id="episode-status"></span>
             <a id="episode-glossary" class="btn btn-sm" href="#library" data-icon="glossary">Glossary</a>
+            <a id="episode-style" class="btn btn-sm" href="#library" data-icon="edit">Style</a>
             <button id="episode-retranslate" type="button" class="btn btn-primary btn-sm" data-icon="retry">Retranslate…</button>
           </div>
         </header>
@@ -276,15 +277,144 @@
         <header class="panel-head panel-head-wrap">
           <div id="glossary-langs" class="chip-list"></div>
           <div class="toolbar">
+            <a id="glossary-style" class="btn btn-sm" href="#library" data-icon="edit">Style</a>
             <button id="glossary-check" type="button" class="btn">Check</button>
             <button id="glossary-save" type="button" class="btn btn-primary" disabled>Save glossary</button>
           </div>
         </header>
         <div id="glossary-result" class="notice" role="status" hidden></div>
-        <textarea id="glossary-yaml" class="input mono glossary-editor" rows="26" spellcheck="false" aria-label="Glossary YAML"></textarea>
+        <div class="subhead">
+          <nav id="glossary-tabs" class="tabs" aria-label="Glossary editor">
+            <button type="button" class="tab" data-tab="form" aria-current="page">Form</button>
+            <button type="button" class="tab" data-tab="yaml">YAML</button>
+          </nav>
+        </div>
+        <div id="glossary-form-pane">
+          <div id="glossary-form" class="glossary-form"></div>
+        </div>
+        <div id="glossary-yaml-pane" hidden>
+          <textarea id="glossary-yaml" class="input mono glossary-editor" rows="26" spellcheck="false" aria-label="Glossary YAML"></textarea>
+          <p class="hint glossary-hint">The YAML is the exchange format: paste a glossary here to import it, or copy it out. Comments are not kept.</p>
+        </div>
+        <details id="glossary-more" class="corrections">
+          <summary>History and copying</summary>
+          <div id="glossary-more-body" class="glossary-more"></div>
+        </details>
         <p class="footnote">
-          Saving through the console re-writes the file, which drops comments; the previous file is kept under backups/glossary.
-          Rules from the glossary always win over anything the model infers. A saved change can mark translations stale; it never retranslates them.
+          The glossary is stored in the worker's database; every save keeps what it replaced under History.
+          Rules from the glossary always win over the style and over anything the model infers. A saved change can mark translations stale; it never retranslates them.
+        </p>
+      </section>
+    </section>
+
+    <!-- Style: #style/<series id>/<language> -->
+    <section id="view-style" class="view" data-view="style" hidden>
+      <nav id="style-crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
+      <section class="panel">
+        <header class="panel-head panel-head-wrap">
+          <div>
+            <h2>Style</h2>
+            <p class="panel-sub">How the translation should sound. The glossary always wins over it.</p>
+          </div>
+          <div class="toolbar">
+            <a id="style-glossary" class="btn btn-sm" href="#library" data-icon="glossary">Glossary</a>
+            <button id="style-check" type="button" class="btn">Check</button>
+            <button id="style-save" type="button" class="btn btn-primary" disabled>Save style</button>
+          </div>
+        </header>
+        <div id="style-result" class="notice" role="status" hidden></div>
+        <div class="style-body">
+          <div class="field-grid">
+            <div class="field">
+              <label for="style-preset">Genre preset</label>
+              <div class="input-group">
+                <select id="style-preset" class="input"></select>
+                <button id="style-suggest" type="button" class="btn">Suggest from TMDB</button>
+              </div>
+              <p id="style-suggestion" class="hint"></p>
+            </div>
+            <div class="field">
+              <label>In force for this series</label>
+              <div id="style-effective" class="chip-list"></div>
+              <p class="hint">The language, the preset and this series laid on each other. A character card or an episode can still override it.</p>
+            </div>
+          </div>
+          <div id="style-fields" class="field-grid style-fields"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-head panel-head-wrap">
+          <div>
+            <h2>Characters</h2>
+            <p class="panel-sub">How each one talks. A card is used in an episode where the dialogue names the character.</p>
+          </div>
+          <div class="toolbar"><button id="card-add" type="button" class="btn btn-sm" data-icon="plus">Add a character</button></div>
+        </header>
+        <div id="style-cards" class="style-cards"></div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-head panel-head-wrap">
+          <div>
+            <h2>Try this style</h2>
+            <p class="panel-sub">Translates about twenty sample lines with the form above, saved or not, next to what the episode has now. Nothing is written.</p>
+          </div>
+        </header>
+        <div class="style-try">
+          <div class="field">
+            <label for="try-unit">Episode</label>
+            <select id="try-unit" class="input"></select>
+          </div>
+          <div class="field">
+            <label for="try-count">Lines</label>
+            <input id="try-count" class="input" type="number" min="1" max="40" value="20">
+          </div>
+          <div class="field">
+            <label for="try-cues">Or these cues <span class="label-hint">e.g. 12, 40, 41</span></label>
+            <input id="try-cues" class="input mono" type="text" spellcheck="false" autocomplete="off">
+          </div>
+          <button id="try-run" type="button" class="btn btn-primary">Try it</button>
+        </div>
+        <div id="try-result"></div>
+        <div class="style-variant">
+          <h3>Compare on a whole episode</h3>
+          <p class="hint">Translates the whole episode with the form above and keeps it as a candidate beside the current translation. You compare them line by line; nothing goes on disk until you choose to.</p>
+          <div class="style-try">
+            <div class="field">
+              <label for="variant-label">Name</label>
+              <input id="variant-label" class="input" type="text" maxlength="80" placeholder="warmer">
+            </div>
+            <button id="variant-run" type="button" class="btn">Queue the comparison</button>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <!-- Compare a candidate with the current translation: #compare/<unit id>/<version>/<language> -->
+    <section id="view-compare" class="view" data-view="compare" hidden>
+      <nav id="compare-crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
+      <section class="panel">
+        <header class="panel-head panel-head-wrap">
+          <div>
+            <h2 id="compare-title">Compare</h2>
+            <p class="panel-sub" id="compare-meta"></p>
+          </div>
+          <div class="toolbar">
+            <label class="check check-inline"><input id="compare-differing" type="checkbox" checked><span>Only lines that differ</span></label>
+            <button id="compare-verdict" type="button" class="btn">Record my choices</button>
+            <button id="compare-apply" type="button" class="btn btn-primary">Apply my choices</button>
+            <button id="compare-adopt" type="button" class="btn">Use the whole candidate</button>
+          </div>
+        </header>
+        <div id="compare-result" class="notice" role="status" hidden></div>
+        <div class="cue cue-head cue-compare" aria-hidden="true">
+          <div class="cue-meta">Cue</div><div class="cue-src">Source</div><div class="cue-dst">Current</div><div class="cue-dst">Candidate</div><div>Better</div>
+        </div>
+        <div id="compare-list" class="cues"></div>
+        <p class="footnote">
+          Your choices are recorded as quality signals, so scores add up by style and prompt version. “Apply” turns the lines you chose from the candidate
+          into hand edits of the current translation; “Use the whole candidate” replaces the file and keeps the old one in History.
         </p>
       </section>
     </section>
@@ -463,6 +593,25 @@
 
         <section class="settings-card">
           <div class="settings-intro">
+            <h2>Style and glossary</h2>
+            <p>How much of the prompt goes to accepted example lines, and when a big glossary is trimmed to the terms a request uses. The style itself is set per series on its Style page.</p>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="f-few_shot_budget_tokens">Example lines budget (tokens)</label>
+              <input id="f-few_shot_budget_tokens" name="few_shot_budget_tokens" class="input" type="number" min="0" max="20000" data-type="int" data-default="600">
+              <p class="hint">Lines you corrected elsewhere in the series that look like the ones being translated are shown to the model, up to this many tokens. 0 turns them off.</p>
+            </div>
+            <div class="field">
+              <label for="f-glossary_filter_threshold">Trim a glossary above (terms)</label>
+              <input id="f-glossary_filter_threshold" name="glossary_filter_threshold" class="input" type="number" min="0" max="100000" data-type="int" data-default="50">
+              <p class="hint">With more terms than this, each request lists only the terms its lines mention. Forms of address and character voices are never trimmed. 0 never trims.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-card">
+          <div class="settings-intro">
             <h2>Logging and measurement</h2>
             <p>Every decision the worker takes is written to an event log with its reason, and every model call to a call record. The prompt and the answer of each call can also be kept in daily files, so you can see exactly what was asked. Keys, passwords and cookies are never written.</p>
           </div>
@@ -603,7 +752,7 @@
               <p class="hint">Besides the current version and the first one. An older version stays in History but can no longer be restored.</p>
             </div>
             <div class="field">
-              <label for="f-retention_glossary_keep">Glossary backups kept</label>
+              <label for="f-retention_glossary_keep">Earlier glossary versions kept</label>
               <input id="f-retention_glossary_keep" name="retention_glossary_keep" class="input" type="number" min="0" max="1000" data-type="int" data-default="20">
               <p class="hint">Per series and language.</p>
             </div>
@@ -682,7 +831,7 @@
         <header class="panel-head panel-head-wrap">
           <div>
             <h2>Clean up files</h2>
-            <p class="panel-sub">Old finished jobs, stored copies of older subtitle versions, glossary backups and leftover temporary files, by the windows set in Settings. It runs by itself once a day. Media folders are never touched.</p>
+            <p class="panel-sub">Old finished jobs, stored copies of older subtitle versions, earlier glossary versions and leftover temporary files, by the windows set in Settings. It runs by itself once a day. Media folders are never touched.</p>
           </div>
           <div class="toolbar">
             <button id="cleanup-preview" type="button" class="btn" data-icon="scan">Preview</button>
@@ -781,6 +930,33 @@
       <div class="dialog-actions">
         <button value="cancel" class="btn">Close</button>
         <button id="cue-add" type="button" class="btn">Add rule</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- One character's card -->
+  <dialog id="card-dialog" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2 id="card-title">Character</h2>
+      <div class="field-grid">
+        <div class="field"><label for="card-name">Name</label><input id="card-name" class="input" type="text" spellcheck="false" autocomplete="off"></div>
+        <div class="field"><label for="card-aliases">Also called <span class="label-hint">comma separated</span></label><input id="card-aliases" class="input" type="text" spellcheck="false" autocomplete="off"></div>
+        <div class="field field-wide"><label for="card-speech">How they speak</label><input id="card-speech" class="input" type="text" placeholder="fast, sarcastic, childish…" autocomplete="off"></div>
+        <div class="field field-wide">
+          <label for="card-address">How they address others <span class="label-hint">one per line: <code>Alice = anh–em</code></span></label>
+          <textarea id="card-address" class="input mono" rows="3" spellcheck="false"></textarea>
+        </div>
+        <div class="field"><label for="card-catchphrases">Catchphrases <span class="label-hint">one per line</span></label><textarea id="card-catchphrases" class="input" rows="3"></textarea></div>
+        <div class="field"><label for="card-samples">Sample lines <span class="label-hint">one per line</span></label><textarea id="card-samples" class="input" rows="3"></textarea></div>
+        <label class="check field-wide"><input id="card-always" type="checkbox"><span>Always in the prompt, even where the dialogue does not name them</span></label>
+      </div>
+      <h3 class="dialog-section">Where they differ from the series</h3>
+      <div id="card-style" class="field-grid"></div>
+      <p class="hint">A card is the top layer of style, but the glossary still wins. Saving a card can mark translations stale; it never retranslates them.</p>
+      <p id="card-impact" class="hint"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="card-save" type="button" class="btn btn-primary">Save character</button>
       </div>
     </form>
   </dialog>
