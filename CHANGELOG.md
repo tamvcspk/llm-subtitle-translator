@@ -1,4 +1,6 @@
 # Unreleased
+- Fix: with `job_settle_seconds` at 0 a job no longer waits when its subtitle's modification time is a few
+  milliseconds ahead of the clock (Windows rounds file times up).
 - **P7: a second provider, `openai_compat` (FR-9.1-9.3, ADR-3).** The models can now run on any server that speaks
   the OpenAI chat completions API: OpenRouter, Ollama, LM Studio, vLLM, OpenAI. Set `llm_provider` to
   `openai_compat` and `llm_base_url` (for example `http://ollama:11434/v1`) in the settings (or `LLM_PROVIDER` and
