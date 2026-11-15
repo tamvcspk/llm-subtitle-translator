@@ -13,6 +13,9 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `GEMINI_API_KEY` | First run | empty | Primary Gemini API key. **Seeds the stored key on the first run only**; afterwards keys are managed in the web console and this variable is ignored (see [Settings and API keys](#settings-and-api-keys)). |
 | `GEMINI_API_KEY1` | First run | empty | Alias for the primary Gemini key (seed). |
 | `GEMINI_API_KEY2` | First run | empty | Optional second key (seed); used when the first key's quota is exhausted or the first key is refused. |
+| `LLM_PROVIDER` | No | `gemini` | `gemini` or `openai_compat` (an OpenAI-compatible server). Used until a provider is saved in Settings (a saved value wins). See [Second provider](#second-provider-openai-compatible). |
+| `LLM_BASE_URL` | No | empty | Base URL of the OpenAI-compatible server, for example `http://ollama:11434/v1` or `https://openrouter.ai/api/v1`. Used until one is saved in Settings. |
+| `LLM_API_KEY` | First run | empty | Seed for the first `openai_compat` key (`OPENAI_API_KEY` is the same). Leave it empty for a server that needs no key. |
 | `TMDB_API_KEY` | First run | empty | Seed for the TMDB key (movie/show/episode descriptions). |
 | `BAZARR_URL` | Yes | `http://bazarr:6767` | Bazarr base URL from inside the worker container. Used while no Bazarr URL is saved in the console. |
 | `BAZARR_API_KEY` | First run | empty | Seed for the Bazarr key. With no stored key and no seed, the worker reads Bazarr's own `config.yaml`. |
@@ -27,7 +30,7 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `GST_MAX_PENDING` | No | `0` | Most jobs allowed to wait, run or be deferred at once; further items are not queued. `0` is no cap. Same guard, same two containers. |
 | `GST_BATCH_SIZE` | No | `500` | Ignored since the worker translates with `subcore`, which plans parts itself. |
 | `GST_RETRY_BATCH_SIZE` | No | `300` | Ignored, see `GST_BATCH_SIZE`. |
-| `LLM_RPM` | No | `10` (`0` with `gst_paid_quota`) | Requests per minute per API key; `0` means unlimited. |
+| `LLM_RPM` | No | `10` (`0` with `gst_paid_quota`, and `0` with `openai_compat`) | Requests per minute per API key; `0` means unlimited. Only Gemini's free tier has a default limit. |
 | `LLM_TPM` | No | `0` | Estimated input tokens per minute per API key; `0` means unlimited. |
 | `LLM_RPD` | No | `0` | Requests per rolling 24 hours per API key; `0` means unlimited. When reached, that key counts as out of daily quota. |
 | `JOB_TIMEOUT_SECONDS` | No | `1800` | Watchdog for one translation job (minimum 60). |
@@ -151,8 +154,8 @@ Settings and API keys live in the SQLite database (`app.db`, tables `settings` a
 saved, with no restart.
 
 **Order of precedence** for a setting: the value saved in the console, then the environment variable, then the
-default. Only a few settings have an environment variable (`BAZARR_URL`, `GST_MODEL`, `LLM_RPM`, `LLM_TPM`,
-`LLM_RPD`); a setting you clear in the console falls back to it.
+default. Only a few settings have an environment variable (`BAZARR_URL`, `GST_MODEL`, `LLM_PROVIDER`,
+`LLM_BASE_URL`, `LLM_RPM`, `LLM_TPM`, `LLM_RPD`); a setting you clear in the console falls back to it.
 
 **The environment holds the configuration of the process itself**: paths (`STATE_DIR`, `QUEUE_DIR`, `DATA_DIR`,
 `DB_PATH`, `LOG_DIR`, ...), the web address and port, and the console account (`CONSOLE_USER`,
@@ -168,9 +171,10 @@ console cannot change them.
   `BAZARR_API_KEY` variables) become rows of `api_keys`, once. Afterwards the database wins: a changed or removed
   variable does not overwrite or bring back a key. To change a key, use the console.
 
-**API keys.** Each key has a provider (`gemini`, `bazarr`, `tmdb`), a label, a status and the time it was last
-used. The Settings page edits them through four fields (Bazarr, TMDB, Gemini 1, Gemini 2); `/api/keys` works on
-every stored key. The status is `ok`, `invalid` or `exhausted`:
+**API keys.** Each key has a provider (`gemini`, `openai_compat`, `bazarr`, `tmdb`), a label, a status and the time
+it was last used. The Settings page edits them through four fields (Bazarr, TMDB, Gemini 1, Gemini 2); the key of
+the second provider has its own field in the settings API (`openai_compat_api_key`); `/api/keys` works on every
+stored key. The status is `ok`, `invalid` or `exhausted`:
 
 - A Gemini key the provider refuses (HTTP 401/403, or 400 with the reason `API_KEY_INVALID`) becomes `invalid`:
   it is passed over, the next key takes over, and Settings and the dashboard show a warning. With no usable key
@@ -178,7 +182,8 @@ every stored key. The status is `ok`, `invalid` or `exhausted`:
 - Pasting a new key into the same field, or **Test** on a key that works, sets it back to `ok`; the next call
   uses it.
 - A model the provider does not know (HTTP 404) is a warning about the model setting, not about a key.
-- Runtime uses the first two usable Gemini keys (oldest first).
+- Runtime uses the first two usable Gemini keys (oldest first) and every usable key of `openai_compat`, in the
+  order they were added; the next key takes over when one is refused or its quota is spent.
 
 **Protection.** The API returns only the last four characters of a key (and nothing for a key shorter than 12
 characters). Keys are filtered from the log, events, prompt bodies and job error files. The database file is
@@ -206,9 +211,15 @@ Saved settings with their defaults (the Settings page shows the same fields; key
   "gst_temperature": "0.7",
   "gst_thinking_budget": "2048",
   "gst_no_thinking": false,
+  "llm_provider": "gemini",
+  "llm_base_url": "",
+  "llm_max_input_tokens": 128000,
+  "llm_max_output_tokens": 8192,
+  "research_model": "",
   "job_settle_seconds": 600,
   "memory_enabled": false,
   "memory_model": "",
+  "summarize_model": "",
   "memory_gap_wait_seconds": 1800,
   "memory_budget_tokens": 8000,
   "memory_recent_episodes": 3,
@@ -236,6 +247,38 @@ The public settings API returns each key field as `**********` plus `*_configure
 `*_last4` and `*_status`, never the stored value. Saving `**********` (or an empty
 field) keeps the stored key.
 
+## Second provider (OpenAI-compatible)
+
+Gemini is the default. Any server that speaks the OpenAI *chat completions* API can run the models instead
+(FR-9.1): OpenRouter, Ollama, LM Studio, vLLM, OpenAI itself. Switch in Settings (or the settings API); it is live
+at once, and the next call goes to the new provider. One provider serves everything at a time: both model layers
+and every task.
+
+- `llm_provider`: `gemini` (default) or `openai_compat`.
+- `llm_base_url`: the address up to `/v1`, for example `http://ollama:11434/v1`. An address ending in
+  `/chat/completions` is accepted too. It must start with `http://` or `https://` and carry no user name or
+  password. Redirects are never followed, because the key would go with them.
+- The key: add it like any other (`openai_compat_api_key` in the settings form, or `POST /api/keys` with
+  `"provider": "openai_compat"`). **A server of your own needs none**: with no key stored, requests go without
+  an `Authorization` header. **Test** on the key asks the server for its model list (`GET {base}/models`).
+- The model names are the server's own (`llama3.1:8b`, `qwen/qwen3-32b`). The defaults of `gst_model` and
+  `gst_fallback_model` are Gemini models: **when you switch provider, set both**, or clear the strong model
+  (`None`) to run one model. A name the server does not know shows as a warning in Settings and fails the job
+  with that explanation; it never marks the key invalid.
+- `llm_max_input_tokens` (default `128000`) and `llm_max_output_tokens` (default `8192`): the server cannot say what
+  its model allows, so set the real limits. The output limit decides how an episode is cut into parts; a small
+  local model wants `4096` or less.
+- Structured output degrades by capability. The worker first asks for a JSON schema; a server that answers 400/422
+  to it is asked for plain JSON mode, then for JSON through the prompt alone, and the choice is remembered for that
+  server and model until the worker restarts. Every reply is checked cue by cue as with Gemini, so a weaker server
+  costs more repair calls, not wrong subtitles.
+- Limits: `LLM_RPM`, `LLM_TPM`, `LLM_RPD` apply per key; with `openai_compat` they default to unlimited. A `429`
+  without a quota code is a rate limit (retried with backoff, honouring `Retry-After`); `insufficient_quota` and
+  `402` (out of credit) count as spent quota: that model is paused for 24 hours, exactly as when Gemini's daily
+  quota is spent (the pause does not notice a top-up; P8 replaces it with a breaker).
+- Gemini-only features stay with Gemini: `web_search` (the research task, P16) is not offered by this adapter,
+  and the thinking-token settings do nothing here.
+
 ## Translation Options
 
 The Settings page saves these options:
@@ -252,6 +295,7 @@ The Settings page saves these options:
   `gst_model` is stored as empty. `/api/status` `model_layers` shows how often
   jobs escalate and how many the strong model finishes; if few escalate or it
   rescues few, drop the layer.
+- `research_model`: model of the research task (FR-7, P16); blank uses `gst_model`. Nothing calls it yet.
 - `gst_paid_quota`: removes the default free-tier request limit (`LLM_RPM`).
 - `gst_temperature`: model temperature.
 - `gst_thinking_budget`, `gst_no_thinking`: thinking token budget, applied only
@@ -316,8 +360,9 @@ prints the facts and the running relationship state per episode.
   subtitle yet, the job waits this long (checking every 5 minutes) and then translates with
   the story incomplete (`incomplete` in the Library). `0` never waits. A manual retranslation
   never waits.
-- `memory_model`: model that reads facts and condenses old summaries; blank uses `gst_model`.
-  A cheaper model is fine.
+- `memory_model`: model that reads facts (task `extract`); blank uses `gst_model`. A cheaper model is fine.
+- `summarize_model`: model that condenses old summaries (task `summarize`); blank uses `memory_model`, then
+  `gst_model`.
 - `memory_recent_episodes` (default `3`) and `memory_budget_tokens` (default `8000`): the
   summaries of that many latest earlier episodes are given in full; when the whole story
   would exceed the budget, older summaries are condensed by one model call (cached).

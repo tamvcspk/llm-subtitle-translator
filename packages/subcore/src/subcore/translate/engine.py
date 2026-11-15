@@ -130,6 +130,7 @@ class _Run:
             response_schema=RESPONSE_SCHEMA if self.provider.caps.structured_output else None,
             temperature=self.options.temperature,
             task="translate",
+            json_output=True,
             meta={
                 "kind": kind, "targets": list(targets), "source": dict(context), "notes": dict(notes),
                 "batch": self.part_no,

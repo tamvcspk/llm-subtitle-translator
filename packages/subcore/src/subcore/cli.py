@@ -35,6 +35,16 @@ def default_output_path(src: Path, target: str, source_lang: str | None) -> Path
 def _build_provider(args: argparse.Namespace) -> Provider:
     if args.provider == "fake":
         return FakeProvider(prefix=f"[{args.target}] ")
+    if args.provider == "openai_compat":
+        from .providers.openai_compat import OpenAICompatProvider
+
+        if not args.base_url or not args.model:
+            raise SystemExit("error: --provider openai_compat needs --base-url and --model")
+        # A local server (Ollama, LM Studio) needs no key: the variable may be unset.
+        try:
+            return OpenAICompatProvider(args.base_url, os.environ.get(args.api_key_env, ""), args.model)
+        except ValueError as exc:
+            raise SystemExit(f"error: {exc}") from None
     from .providers.gemini import DEFAULT_MODEL, GeminiProvider
 
     key = ""
@@ -190,8 +200,9 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--source", help="source language code, e.g. en")
     t.add_argument("--out", help="output path (default: <name>.<target>.srt beside the input)")
     t.add_argument("--force", action="store_true", help="overwrite the output file if it exists")
-    t.add_argument("--provider", choices=["gemini", "fake"], default="gemini")
-    t.add_argument("--model", help="model name (gemini default: gemini-3.1-flash-lite)")
+    t.add_argument("--provider", choices=["gemini", "openai_compat", "fake"], default="gemini")
+    t.add_argument("--model", help="model name (gemini default: gemini-3.1-flash-lite; required for openai_compat)")
+    t.add_argument("--base-url", help="openai_compat only: e.g. http://localhost:11434/v1 or https://openrouter.ai/api/v1")
     t.add_argument("--api-key-env", default="GEMINI_API_KEY", help="environment variable holding the API key")
     t.add_argument("--title", help="series/movie title (sent to the model as context)")
     t.add_argument("--overview", help="short plot overview (sent to the model as context)")
@@ -203,8 +214,9 @@ def build_parser() -> argparse.ArgumentParser:
         "memory", help="print the story facts of several episodes (in story order) to judge extraction quality"
     )
     m.add_argument("files", nargs="+", help="source .srt files, earliest episode first")
-    m.add_argument("--provider", choices=["gemini", "fake"], default="gemini")
-    m.add_argument("--model", help="model name (gemini default: gemini-3.1-flash-lite)")
+    m.add_argument("--provider", choices=["gemini", "openai_compat", "fake"], default="gemini")
+    m.add_argument("--model", help="model name (gemini default: gemini-3.1-flash-lite; required for openai_compat)")
+    m.add_argument("--base-url", help="openai_compat only: e.g. http://localhost:11434/v1")
     m.add_argument("--api-key-env", default="GEMINI_API_KEY", help="environment variable holding the API key")
     m.add_argument("--title", help="series title (sent to the model as context)")
     m.add_argument("--source", help="source language code, e.g. en")

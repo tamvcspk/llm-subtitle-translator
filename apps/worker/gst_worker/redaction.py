@@ -16,7 +16,9 @@ from typing import Any
 
 REDACTED = "[REDACTED]"
 # Settings that hold a secret value; their values are registered by `register_settings`.
-SECRET_SETTING_KEYS = ("bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key")
+SECRET_SETTING_KEYS = (
+    "bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key", "openai_compat_api_key",
+)
 # A value shorter than this is never registered: replacing "abc" everywhere would wreck the text around it.
 MIN_SECRET_LENGTH = 6
 

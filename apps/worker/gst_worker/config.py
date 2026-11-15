@@ -25,7 +25,7 @@ GEMINI_LANGUAGE_NAMES = {
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_STRONG_MODEL = "gemini-3.5-flash"
 SECRET_MASK = "**********"
-SECRET_CONFIG_KEYS = ("bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key")
+SECRET_CONFIG_KEYS = ("bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key", "openai_compat_api_key")
 # The form field of each secret -> (provider, position among that provider's stored keys). The console edits the
 # keys through these four fields; /api/keys works on every stored key (FR-20.2).
 KEY_SLOTS = {
@@ -33,6 +33,7 @@ KEY_SLOTS = {
     "tmdb_api_key": ("tmdb", 0),
     "gemini_api_key": ("gemini", 0),
     "gemini_api_key2": ("gemini", 1),
+    "openai_compat_api_key": ("openai_compat", 0),
 }
 # Configuration of the process itself (paths, ports, the console account): read from the environment when the
 # worker starts and never stored in, or overwritten from, the settings table (FR-20.1).
@@ -51,11 +52,27 @@ GST_STRING_CONFIG_KEYS = (
     "gst_fallback_model",
     "gst_temperature",
     "gst_thinking_budget",
+    "llm_provider",
+    "llm_base_url",
+    "research_model",
 )
+# Which adapter the models run on (FR-9.1): Gemini, or any OpenAI-compatible server at `llm_base_url`
+# (OpenRouter, Ollama, LM Studio, vLLM). One provider at a time; every task and both model layers use it.
+PROVIDER_GEMINI = "gemini"
+PROVIDER_OPENAI_COMPAT = "openai_compat"
+LLM_PROVIDERS = (PROVIDER_GEMINI, PROVIDER_OPENAI_COMPAT)
+# What an OpenAI-compatible server cannot tell us about its model: set them to the model's real limits.
+# key -> (default, minimum)
+LLM_INT_CONFIG_KEYS = {
+    "llm_max_input_tokens": (128_000, 1_000),
+    "llm_max_output_tokens": (8_192, 256),
+}
 # Story memory (P4). Off by default until its relationship extraction has been measured on real series
 # (ARCHITECTURE section 8); a series can override the switch in the console.
 MEMORY_BOOL_CONFIG_KEYS = ("memory_enabled",)
-MEMORY_STRING_CONFIG_KEYS = ("memory_model",)
+# `memory_model` reads the facts (task `extract`); `summarize_model` condenses old summaries (task `summarize`) and
+# falls back to `memory_model`, then to `gst_model` (FR-9.3).
+MEMORY_STRING_CONFIG_KEYS = ("memory_model", "summarize_model")
 # key -> (default, minimum)
 MEMORY_INT_CONFIG_KEYS = {
     "memory_gap_wait_seconds": (1800, 0),
@@ -89,6 +106,7 @@ DEFAULT_APP_CONFIG = {
     "bazarr_api_key": "",
     "gemini_api_key": "",
     "gemini_api_key2": "",
+    "openai_compat_api_key": "",
     "tmdb_api_key": "",
     "gst_model": DEFAULT_MODEL,
     "gst_fallback_model": DEFAULT_STRONG_MODEL,
@@ -96,16 +114,43 @@ DEFAULT_APP_CONFIG = {
     "gst_temperature": "0.7",
     "gst_thinking_budget": "2048",
     "gst_no_thinking": False,
+    "llm_provider": PROVIDER_GEMINI,
+    "llm_base_url": "",
+    "research_model": "",
+    **{key: default for key, (default, _) in LLM_INT_CONFIG_KEYS.items()},
     "job_settle_seconds": 600,
     "admission_mode": ADMISSION_AUTO,
     "memory_enabled": False,
     "memory_model": "",
+    "summarize_model": "",
     **{key: default for key, (default, _) in MEMORY_INT_CONFIG_KEYS.items()},
     "log_level": "INFO",
     "log_prompt_bodies": "all",
     **{key: default for key, (default, _) in LOG_INT_CONFIG_KEYS.items()},
     **{key: 0.0 for key in LOG_FLOAT_CONFIG_KEYS},
 }
+
+
+def provider_name(settings: dict[str, Any]) -> str:
+    """The adapter the models run on: ``gemini`` unless the settings say ``openai_compat``."""
+    return PROVIDER_OPENAI_COMPAT if str(settings.get("llm_provider") or "") == PROVIDER_OPENAI_COMPAT else PROVIDER_GEMINI
+
+
+def model_for_task(settings: dict[str, Any], task: str, default: str = DEFAULT_MODEL) -> str:
+    """The model a task runs on (FR-9.3). ``translate`` uses ``gst_model``; ``extract`` the cheaper
+    ``memory_model``; ``summarize`` its own ``summarize_model``, else ``memory_model``; ``research``
+    ``research_model``. Each falls back to the translation model, so a single model setting is enough."""
+    def named(key: str) -> str:
+        return str(settings.get(key) or "").strip()
+
+    main = named("gst_model") or default
+    if task == "extract":
+        return named("memory_model") or main
+    if task == "summarize":
+        return named("summarize_model") or named("memory_model") or main
+    if task == "research":
+        return named("research_model") or main
+    return main
 
 
 def enabled_languages(config: dict[str, Any], key: str, default: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -156,6 +201,15 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
         normalized[key] = str(normalized.get(key) or "").strip()
     for key in GST_STRING_CONFIG_KEYS:
         normalized[key] = str(normalized.get(key) or "").strip()
+    normalized["llm_provider"] = normalized["llm_provider"].lower()
+    if normalized["llm_provider"] not in LLM_PROVIDERS:
+        normalized["llm_provider"] = PROVIDER_GEMINI
+    normalized["llm_base_url"] = normalized["llm_base_url"].rstrip("/")
+    for key, (default, minimum) in LLM_INT_CONFIG_KEYS.items():
+        try:
+            normalized[key] = max(minimum, int(normalized.get(key, default)))
+        except (TypeError, ValueError):
+            normalized[key] = default
     if not normalized["gst_model"]:
         normalized["gst_model"] = str(DEFAULT_APP_CONFIG["gst_model"])
     if normalized["gst_fallback_model"] == normalized["gst_model"]:

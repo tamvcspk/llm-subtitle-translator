@@ -50,3 +50,24 @@ def gemini_models(http: HTTPClient, settings: dict[str, str]) -> list[dict[str, 
         seen.add(model_id)
         items.append(model_item(model_id))
     return items or fallback_gemini_models()
+
+
+def openai_models(http: HTTPClient, settings: dict[str, str], api_key: str = "") -> list[dict[str, str]]:
+    """The models an OpenAI-compatible server lists at ``/models`` (empty when it cannot be asked)."""
+    from subcore.providers.openai_compat import normalize_base_url
+
+    try:
+        base_url = normalize_base_url(str(settings.get("llm_base_url") or ""))
+        response = http.get_json(f"{base_url}/models", headers={"Authorization": f"Bearer {api_key}"} if api_key else None)
+    except Exception as exc:  # noqa: BLE001 - an unset or unreachable server just has no list to offer
+        logging.warning("Could not list the models of the OpenAI-compatible server (%s)", type(exc).__name__)
+        return []
+    entries = response.get("data") if isinstance(response, dict) else response
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for entry in entries if isinstance(entries, list) else []:
+        model_id = str(entry.get("id") or "").strip() if isinstance(entry, dict) else ""
+        if model_id and model_id not in seen:
+            seen.add(model_id)
+            items.append({"id": model_id, "name": str(entry.get("name") or model_id) if isinstance(entry, dict) else model_id})
+    return items

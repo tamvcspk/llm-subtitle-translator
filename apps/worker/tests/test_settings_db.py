@@ -651,6 +651,20 @@ class HttpApiTests(unittest.TestCase):
         self.assertNotIn(KEY_A, text)
         self.assertEqual(self.service.settings()["gemini_api_key"], KEY_A)
 
+    def test_the_model_list_follows_the_provider_over_http(self):
+        """P7: with ``openai_compat`` the model dropdown lists the server's models, asked with the stored key."""
+        self.http.outcome = {"data": [{"id": "llama3.1"}, {"id": "qwen3"}]}
+        self.call("POST", "/api/settings", {
+            "llm_provider": "openai_compat", "llm_base_url": "http://ollama:11434/v1", "openai_compat_api_key": KEY_A,
+        })
+        status, text, data = self.call("GET", "/api/gemini-models")
+        self.assertEqual((status, [item["id"] for item in data["items"]]), (200, ["llama3.1", "qwen3"]))
+        self.assertEqual(self.http.calls[-1][0], "http://ollama:11434/v1/models")
+        self.assertEqual(self.http.calls[-1][2], {"Authorization": f"Bearer {KEY_A}"})
+        status, text, data = self.call("GET", "/api/settings")
+        self.assertEqual((data["llm_provider"], data["llm_base_url"]), ("openai_compat", "http://ollama:11434/v1"))
+        self.assertNotIn(KEY_A, text)
+
     def test_the_key_routes_list_add_rename_test_and_remove(self):
         status, text, data = self.call("POST", "/api/keys", {"provider": "gemini", "value": KEY_A, "label": "main"})
         self.assertEqual(status, 200)

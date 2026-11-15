@@ -82,6 +82,12 @@ Returns queue counts, current settings, Bazarr URL, and Bazarr ping status.
     "tmdb_api_key_configured": true,
     "tmdb_api_key_last4": "",
     "tmdb_api_key_status": "ok",
+    "openai_compat_api_key": "",
+    "openai_compat_api_key_configured": false,
+    "openai_compat_api_key_last4": "",
+    "openai_compat_api_key_status": "",
+    "llm_provider": "gemini",
+    "llm_base_url": "",
     "key_warnings": []
   },
   "bazarr_url": "http://bazarr:6767",
@@ -160,7 +166,8 @@ included in this field.
 ## GET /api/settings
 
 Returns the current settings, read from the database (a change saved a moment ago is already in it).
-Each of the four key fields (`bazarr_api_key`, `tmdb_api_key`, `gemini_api_key`, `gemini_api_key2`) is
+Each of the five key fields (`bazarr_api_key`, `tmdb_api_key`, `gemini_api_key`, `gemini_api_key2`,
+`openai_compat_api_key`) is
 returned as `**********` when a key is stored, with:
 
 - `<field>_configured`: whether a key is available;
@@ -170,7 +177,8 @@ returned as `**********` when a key is stored, with:
 
 `key_warnings` lists what Settings must warn about, each `{"kind", "message", ...}`: `key-invalid` (with
 `provider`, `key_id`, `label`) for a refused key, `model-not-found` (with `model`) for a model the provider
-does not know. Empty when all is well.
+does not know, `provider-unconfigured` when `llm_provider` is `openai_compat` and `llm_base_url` is empty.
+Empty when all is well.
 
 ## GET /api/languages
 
@@ -192,8 +200,10 @@ Returns Bazarr-supported language choices normalized for the web console.
 
 ## GET /api/gemini-models
 
-Returns Gemini model choices for the Settings dropdown. If the Gemini API cannot
-be reached or no key is configured, the worker returns a bundled fallback list.
+Returns the model choices for the Settings dropdown (the name is from before the second provider). With
+`llm_provider` `gemini`: if the Gemini API cannot be reached or no key is configured, the worker returns a bundled
+fallback list. With `openai_compat`: the models the server lists at `{llm_base_url}/models` (asked with the stored
+key, if any), or an empty list when the address is unset or the server cannot be reached.
 
 ```json
 {
@@ -226,10 +236,17 @@ keys beyond these four fields.
   "gst_temperature": "0.7",
   "gst_thinking_budget": "2048",
   "gst_no_thinking": false,
+  "llm_provider": "gemini",
+  "llm_base_url": "",
+  "llm_max_input_tokens": 128000,
+  "llm_max_output_tokens": 8192,
+  "research_model": "",
+  "openai_compat_api_key": "",
   "job_settle_seconds": 600,
   "admission_mode": "auto",
   "memory_enabled": false,
   "memory_model": "",
+  "summarize_model": "",
   "memory_gap_wait_seconds": 1800,
   "memory_budget_tokens": 8000,
   "memory_recent_episodes": 3,
@@ -391,7 +408,8 @@ refuses the whole import with `400` before anything changes.
 ## POST /api/test-connection
 
 Tests a configured or form-entered API key without saving it. `kind` can be
-`bazarr`, `gemini_api_key`, `gemini_api_key2`, or `tmdb_api_key`. When the key field is blank or `**********`
+`bazarr`, `gemini_api_key`, `gemini_api_key2`, `openai_compat_api_key` (asks `{llm_base_url}/models`; a server
+that needs no key may be tested with the field blank) or `tmdb_api_key`. When the key field is blank or `**********`
 the **stored** key is tested (even one marked `invalid`) and its status follows the answer: `ok` when it works,
 `invalid` when the service refuses it; an unreachable service changes nothing. A typed key is only tried.
 
@@ -416,7 +434,7 @@ A failure carries `"ok": false`, a `message`, and `"auth_failed": true` when the
 Every stored key (FR-20.2). The answer never holds a value, only its last four characters.
 
 A key is `{"id", "provider", "label", "status", "last4", "last_used_at", "updated_at"}` with `provider` one of
-`gemini`, `bazarr`, `tmdb`; `status` is `ok`, `invalid` or `exhausted`; `last4` is `""` for a key shorter than
+`gemini`, `openai_compat`, `bazarr`, `tmdb`; `status` is `ok`, `invalid` or `exhausted`; `last4` is `""` for a key shorter than
 12 characters; `last_used_at` is Unix seconds or `null`.
 
 | Route | Body | Answer |
@@ -427,8 +445,9 @@ A key is `{"id", "provider", "label", "status", "last4", "last_used_at", "update
 | `POST /api/keys/{id}/test` | | `{"ok", "message", "auth_failed"?, "key": key}`; a key that works becomes `ok`, one the service refuses becomes `invalid` |
 | `POST /api/keys/{id}/remove` | | `{"ok": true}` or `404` |
 
-The worker runs on the first two usable (`ok`) Gemini keys, oldest first. Every change reaches the running
-worker at once.
+The worker runs on the first two usable (`ok`) Gemini keys, oldest first, or, with `llm_provider` `openai_compat`,
+on every usable key of that provider in the order they were added (none is needed for a server that wants no
+key). Every change reaches the running worker at once.
 
 ## Library, episodes, corrections, versions and glossaries
 

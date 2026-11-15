@@ -19,9 +19,9 @@ from . import keys_api, library_api
 from .auth import ConsoleAuth
 from .backups import backup_file_path, create_backup, list_backups, restore_backup_archive
 from .bazarr import list_wanted_items
-from .config import KEY_SLOTS, SECRET_MASK, supported_languages
+from .config import KEY_SLOTS, PROVIDER_OPENAI_COMPAT, SECRET_MASK, supported_languages
 from .connection_tests import test_connection
-from .gemini import gemini_models
+from .gemini import gemini_models, openai_models
 from .http import describe_http_error
 from .logs import clear_logs, read_log_snapshot
 from .queue import layer_report, queue_snapshot
@@ -354,7 +354,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 else:
                     self.send_json(events_page(telemetry, urllib.parse.parse_qs(parsed.query)))
             elif parsed.path == "/api/gemini-models":
-                self.send_json({"items": gemini_models(self.ctx["http"], self.live_settings())})
+                settings = self.live_settings()
+                if settings.get("llm_provider") == PROVIDER_OPENAI_COMPAT:  # the models of the server in use
+                    items = openai_models(self.ctx["http"], settings, str(settings.get("openai_compat_api_key") or ""))
+                else:
+                    items = gemini_models(self.ctx["http"], settings)
+                self.send_json({"items": items})
             elif parsed.path == "/api/backups":
                 self.send_json({"items": list_backups(self.ctx["state_dir"])})
             elif parsed.path == "/api/backups/download":

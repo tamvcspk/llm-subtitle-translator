@@ -69,8 +69,11 @@ Domain code is split under `gst_worker/`:
   `events_page` answers `GET /api/events`;
 - `bodies.py`: `BodyLog`, the rotating JSONL files that keep the prompt and answer
   of each model call;
-- `llm.py`: builds the provider for an attempt: one rate-limited Gemini provider per
-  API key, with failover to the next key. `LiveProviderFactory` (the factory of the
+- `llm.py`: builds the provider for an attempt: one rate-limited provider per API key,
+  with failover to the next key. The adapter follows the setting `llm_provider`:
+  `GeminiProvider`, or `subcore`'s `OpenAICompatProvider` at `llm_base_url` (which may
+  run without a key). The model of each task comes from `config.model_for_task`
+  (translate, extract, summarize, research; each falls back to `gst_model`). `LiveProviderFactory` (the factory of the
   running worker) takes the usable keys from `SettingsService` at every build, so a
   new key is used by the next call, and wraps each key in `KeyedProvider`, which
   reports a refused key (`AuthError`: the key becomes `invalid`), a use, and an

@@ -1,7 +1,9 @@
 """Build the model provider for one translation attempt from worker settings.
 
-Each configured Gemini API key becomes its own rate-limited provider (limits are per key/project);
-the keys are tried in order and the next one takes over when one is spent (FR-9.4).
+Each configured API key becomes its own rate-limited provider (limits are per key/project); the keys are tried
+in order and the next one takes over when one is spent (FR-9.4). Which adapter that is follows the setting
+``llm_provider``: Gemini, or an OpenAI-compatible server at ``llm_base_url`` (FR-9.1). The model of each task
+comes from ``model_for_task`` (FR-9.3).
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from typing import Any, Callable, Protocol, Sequence
 from subcore.providers import (
     AuthError,
     CallLog,
+    Capabilities,
     FailoverProvider,
     LLMRequest,
     LLMResponse,
@@ -20,6 +23,7 @@ from subcore.providers import (
     ResilientProvider,
 )
 
+from .config import PROVIDER_GEMINI, PROVIDER_OPENAI_COMPAT, model_for_task, provider_name  # noqa: F401 - model_for_task re-exported
 from .ports import ApiKey, MissingApiKey  # noqa: F401 - defined by the core; re-exported for callers of this module
 
 # Free-tier default; paid projects set LLM_RPM=0 (unlimited) or their own number.
@@ -34,8 +38,9 @@ def _int(value: Any, default: int) -> int:
 
 
 def rate_limits(settings: dict[str, Any]) -> tuple[int, int, int]:
-    """(rpm, tpm, rpd); 0 means unlimited."""
-    default_rpm = 0 if settings.get("gst_paid_quota") else FREE_TIER_RPM
+    """(rpm, tpm, rpd); 0 means unlimited. Only Gemini's free tier has a known default; a server of your own
+    (or a paid account) is unlimited until ``LLM_RPM`` says otherwise."""
+    default_rpm = 0 if settings.get("gst_paid_quota") or provider_name(settings) == PROVIDER_OPENAI_COMPAT else FREE_TIER_RPM
     return (
         _int(settings.get("llm_rpm"), default_rpm),
         _int(settings.get("llm_tpm"), 0),
@@ -116,8 +121,10 @@ def build_provider(
 ) -> Provider:
     """The provider chain for ``model``: one rate-limited provider per key, tried in order.
 
-    ``keys`` are the stored keys to use (with a ``ledger`` to hear about them); without them the two keys
-    in ``settings`` are used, which is what the tests and the CLI-style callers pass."""
+    ``keys`` are the stored keys to use (with a ``ledger`` to hear about them); without them the keys in
+    ``settings`` are used, which is what the tests and the CLI-style callers pass."""
+    if provider_name(settings) == PROVIDER_OPENAI_COMPAT:
+        return _build_openai_compat(settings, model, deadline=deadline, on_call=on_call, keys=keys, ledger=ledger)
     from subcore.providers.gemini import GeminiProvider
 
     if keys is None:
@@ -132,6 +139,46 @@ def build_provider(
     providers: list[Provider] = []
     for key_id, value in entries:
         inner: Provider = GeminiProvider(value, model, thinking_budget=budget)
+        if ledger is not None and key_id is not None:
+            inner = KeyedProvider(inner, key_id, ledger)
+        providers.append(
+            ResilientProvider(inner, RateLimiter(rpm, tpm, rpd), deadline=deadline, on_call=on_call)
+        )
+    return providers[0] if len(providers) == 1 else FailoverProvider(providers)
+
+
+def _build_openai_compat(
+    settings: dict[str, Any],
+    model: str,
+    *,
+    deadline: float | None,
+    on_call: Callable[[CallLog], None] | None,
+    keys: Sequence[ApiKey] | None,
+    ledger: KeyLedger | None,
+) -> Provider:
+    """The same chain over an OpenAI-compatible server. A server of your own may need no key: with none
+    configured one provider without credentials is built."""
+    from subcore.providers.openai_compat import OpenAICompatProvider
+
+    base_url = str(settings.get("llm_base_url") or "").strip()
+    if not base_url:
+        raise MissingApiKey("The model server's base URL is not configured (Settings: llm_base_url)")
+    if keys is None:
+        entries: list[tuple[int | None, str]] = [(None, str(settings.get("openai_compat_api_key") or "").strip())]
+    else:
+        entries = [(key.id, key.value) for key in keys if key.value] or [(None, "")]
+    caps = Capabilities(
+        max_input_tokens=_int(settings.get("llm_max_input_tokens"), 128_000) or 128_000,
+        max_output_tokens=_int(settings.get("llm_max_output_tokens"), 8_192) or 8_192,
+        structured_output=True,
+    )
+    rpm, tpm, rpd = rate_limits(settings)
+    providers: list[Provider] = []
+    for key_id, value in entries:
+        try:
+            inner: Provider = OpenAICompatProvider(base_url, value, model, caps=caps)
+        except ValueError as exc:
+            raise MissingApiKey(f"The model server is not usable: {exc}") from None
         if ledger is not None and key_id is not None:
             inner = KeyedProvider(inner, key_id, ledger)
         providers.append(
@@ -155,11 +202,13 @@ class LiveProviderFactory:
         deadline: float | None = None,
         on_call: Callable[[CallLog], None] | None = None,
     ) -> Provider:
-        usable = self.keys.usable_keys("gemini")
+        provider = provider_name(settings)
+        usable = self.keys.usable_keys(provider)
         if not usable:
-            if self.keys.repo.api_keys("gemini"):
+            if self.keys.repo.api_keys(provider):
                 raise MissingApiKey(
-                    "Every Gemini API key was refused. Paste a new key in Settings, or test the key again."
+                    f"Every {provider} API key was refused. Paste a new key in Settings, or test the key again."
                 )
-            raise MissingApiKey("Gemini API key is not configured")
+            if provider != PROVIDER_OPENAI_COMPAT:  # a server of your own can run without a key
+                raise MissingApiKey("Gemini API key is not configured")
         return build_provider(settings, model, deadline=deadline, on_call=on_call, keys=usable, ledger=self.keys)

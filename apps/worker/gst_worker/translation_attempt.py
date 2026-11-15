@@ -26,7 +26,7 @@ from subcore.providers import (
 )
 from subcore.translate import PromptContext, TranslateOptions, TranslationError, translate
 
-from .config import DEFAULT_MODEL
+from .config import DEFAULT_MODEL, model_for_task
 from .library import Library
 from .memory import StoryMemory
 from .ports import MissingApiKey, ProviderFactory, Telemetry, Unit, UsageLog
@@ -140,8 +140,8 @@ class TranslationAttempt:
         providers: dict[str, Provider] = {}
 
         def provider_for(task: str) -> Provider:
-            """One provider (and rate limiter) per model; extraction may use a cheaper model (FR-9.3)."""
-            name = model if task == "translate" else (str(settings.get("memory_model") or "").strip() or model)
+            """One provider (and rate limiter) per model; each task has its own model setting (FR-9.3)."""
+            name = model if task == "translate" else model_for_task(settings, task, model)
             if name not in providers:
                 if self.provider_factory is None:
                     raise RuntimeError("no provider factory is wired into this translation attempt")

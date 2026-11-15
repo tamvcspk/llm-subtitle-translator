@@ -23,11 +23,15 @@ from .config import (
     GST_BOOL_CONFIG_KEYS,
     GST_STRING_CONFIG_KEYS,
     KEY_SLOTS,
+    LLM_INT_CONFIG_KEYS,
+    LLM_PROVIDERS,
     LOG_FLOAT_CONFIG_KEYS,
     LOG_INT_CONFIG_KEYS,
     MEMORY_BOOL_CONFIG_KEYS,
     MEMORY_INT_CONFIG_KEYS,
     MEMORY_STRING_CONFIG_KEYS,
+    PROVIDER_GEMINI,
+    PROVIDER_OPENAI_COMPAT,
     SECRET_CONFIG_KEYS,
     SECRET_MASK,
     SYSTEM_SETTING_KEYS,
@@ -41,7 +45,9 @@ from .redaction import DEFAULT as DEFAULT_REDACTOR
 # Markers the worker leaves in the settings table (keys that start with "_" are never shown or edited).
 IMPORTED_MARK = "_config_json_imported"
 SEEDED_MARK = "_keys_seeded"
-KEY_PROVIDERS = ("gemini", "bazarr", "tmdb")
+KEY_PROVIDERS = ("gemini", PROVIDER_OPENAI_COMPAT, "bazarr", "tmdb")
+# Providers that can hold several keys, which are then numbered ("Key 1", "Key 2").
+NUMBERED_PROVIDERS = ("gemini", PROVIDER_OPENAI_COMPAT)
 # A key shorter than this shows no tail at all: four characters of a short secret are too much of it.
 LAST4_MIN_LENGTH = 12
 TOUCH_INTERVAL_SECONDS = 30.0
@@ -51,8 +57,9 @@ SEED_ENV = {
     "tmdb_api_key": ("TMDB_API_KEY",),
     "gemini_api_key": ("GEMINI_API_KEY", "GEMINI_API_KEY1"),
     "gemini_api_key2": ("GEMINI_API_KEY2",),
+    "openai_compat_api_key": ("LLM_API_KEY", "OPENAI_API_KEY"),
 }
-SLOT_LABELS = {"bazarr": "Bazarr", "tmdb": "TMDB", "gemini": "Key"}
+SLOT_LABELS = {"bazarr": "Bazarr", "tmdb": "TMDB", "gemini": "Key", PROVIDER_OPENAI_COMPAT: "Key"}
 
 
 def last_chars(value: str) -> str:
@@ -149,7 +156,7 @@ class SettingsService:
     @staticmethod
     def _label(provider: str, position: int) -> str:
         base = SLOT_LABELS.get(provider, provider)
-        return f"{base} {position + 1}" if provider == "gemini" else base
+        return f"{base} {position + 1}" if provider in NUMBERED_PROVIDERS else base
 
     # -- settings ---------------------------------------------------------------
     def stored(self) -> dict[str, Any]:
@@ -170,6 +177,8 @@ class SettingsService:
         keys = self.repo.api_keys()
         by_provider = {name: [key for key in keys if key.provider == name] for name in KEY_PROVIDERS}
         usable_gemini = [key.value for key in by_provider["gemini"] if key.status == KEY_OK]
+        usable_openai = [key.value for key in by_provider[PROVIDER_OPENAI_COMPAT] if key.status == KEY_OK]
+        stored = self.stored()
 
         def first(provider: str) -> str:
             rows = by_provider[provider]
@@ -182,14 +191,24 @@ class SettingsService:
             "gemini_api_key": usable_gemini[0] if usable_gemini else "",
             "gemini_api_key2": usable_gemini[1] if len(usable_gemini) > 1 else "",
             "tmdb_api_key": first("tmdb") or str(env.get("TMDB_API_KEY") or ""),
+            "openai_compat_api_key": usable_openai[0] if usable_openai else "",
         }
         for key in GST_STRING_CONFIG_KEYS:
             settings[key] = str(app.get(key) or "").strip()
         for key in GST_BOOL_CONFIG_KEYS:
             settings[key] = bool(app.get(key))
         # stored value, else GST_MODEL, else the default (the normalized config always holds the default)
-        stored_model = str(self.stored().get("gst_model") or "").strip()
+        stored_model = str(stored.get("gst_model") or "").strip()
         settings["gst_model"] = stored_model or str(env.get("GST_MODEL") or "").strip() or DEFAULT_MODEL
+        # The provider follows the same order: what the console saved, else LLM_PROVIDER / LLM_BASE_URL, else Gemini.
+        provider = (str(stored.get("llm_provider") or "").strip() or str(env.get("LLM_PROVIDER") or "").strip()
+                    or PROVIDER_GEMINI).lower()
+        settings["llm_provider"] = provider if provider in LLM_PROVIDERS else PROVIDER_GEMINI
+        settings["llm_base_url"] = (
+            str(stored.get("llm_base_url") or "").strip() or str(env.get("LLM_BASE_URL") or "").strip()
+        ).rstrip("/")
+        for key in LLM_INT_CONFIG_KEYS:
+            settings[key] = int(app[key])
         settings["job_settle_seconds"] = int(app.get("job_settle_seconds") or 0)
         settings["admission_mode"] = str(app.get("admission_mode") or ADMISSION_AUTO)
         for key in MEMORY_BOOL_CONFIG_KEYS:
@@ -405,12 +424,16 @@ class SettingsService:
         key = next((item for item in self.repo.api_keys() if item.id == key_id), None)
         if key is None:
             return None
-        kind = {"bazarr": "bazarr", "tmdb": "tmdb_api_key", "gemini": "gemini_api_key"}.get(key.provider)
+        kind = {
+            "bazarr": "bazarr", "tmdb": "tmdb_api_key", "gemini": "gemini_api_key",
+            PROVIDER_OPENAI_COMPAT: "openai_compat_api_key",
+        }.get(key.provider)
         if kind is None:
             return {"ok": False, "kind": key.provider, "message": f"No test exists for {key.provider} keys"}
         field = "bazarr_api_key" if kind == "bazarr" else kind
+        current = self.settings()
         result = test_connection(
-            kind, {"bazarr_url": self.settings()["bazarr_url"], field: key.value}, http
+            kind, {"bazarr_url": current["bazarr_url"], "llm_base_url": current["llm_base_url"], field: key.value}, http
         )
         if result["ok"]:
             self.set_key_status(key.id, KEY_OK)
@@ -477,8 +500,17 @@ class SettingsService:
                     "kind": "key-invalid", "provider": key.provider, "key_id": key.id, "label": key.label,
                     "message": f"The {key.label} key of {key.provider} was refused. Paste a new key, or test it again.",
                 })
+        runtime = self.settings()
+        if runtime["llm_provider"] == PROVIDER_OPENAI_COMPAT and not runtime["llm_base_url"]:
+            warnings.append({
+                "kind": "provider-unconfigured", "provider": PROVIDER_OPENAI_COMPAT,
+                "message": "The provider is openai_compat but no base URL is set (llm_base_url).",
+            })
         settings = self.app_config()
-        wanted = {str(settings.get(name) or "") for name in ("gst_model", "gst_fallback_model", "memory_model")}
+        wanted = {
+            str(settings.get(name) or "")
+            for name in ("gst_model", "gst_fallback_model", "memory_model", "summarize_model", "research_model")
+        }
         for model in sorted(self.model_warnings):
             if model in wanted:  # a model that is no longer configured has nothing left to warn about
                 warnings.append({

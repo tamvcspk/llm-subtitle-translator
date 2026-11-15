@@ -3,13 +3,13 @@
 Subtitle translation engine for `llm-subtitle-translator`. Pure library: it knows
 nothing about Bazarr, the queue, or HTTP.
 
-Status: P1 done in code (SRT, providers, translator, glossary, CLI). Memory (`memory`)
-arrives in P4. Roadmap: `PLAN.md`, design: `docs/design/ARCHITECTURE.md`.
+Status: P1 done in code (SRT, providers, translator, glossary, CLI); memory (`memory`) in P4; the
+OpenAI-compatible provider in P7. Roadmap: `PLAN.md`, design: `docs/design/ARCHITECTURE.md`.
 
 | Module | Role |
 |---|---|
 | `srt` | parse/serialize (BOM, CRLF, empty cues, odd indexes), tag validation, atomic write |
-| `providers` | `Provider` protocol, typed errors (`RateLimited`, `QuotaExhausted`, `Unavailable`, `BadOutput`, `AuthError`, `ModelNotFound`), `gemini` and `fake` adapters |
+| `providers` | `Provider` protocol, typed errors (`RateLimited`, `QuotaExhausted`, `Unavailable`, `BadOutput`, `AuthError`, `ModelNotFound`), `gemini`, `openai_compat` (OpenRouter, Ollama, LM Studio, vLLM; standard library only) and `fake` adapters |
 | `translate` | planner (split at silences), prompt builder, validate → repair (2 rounds) → split |
 | `glossary` | YAML load/merge/dump/validate, locked terms, timed address rules |
 | `cli` | manual translation and debugging |
@@ -21,6 +21,8 @@ export GEMINI_API_KEY=...            # never passed on the command line
 uv run subcore translate Movie.en.srt --glossary glossary.yaml --target vi --source en \
     --title "Show" --season 1 --episode 6
 uv run subcore translate Movie.en.srt --provider fake      # dry run, no network
+# Any OpenAI-compatible server; a local one needs no key (the variable may be unset)
+uv run subcore translate Movie.en.srt --provider openai_compat --base-url http://localhost:11434/v1     --model llama3.1:8b --api-key-env LLM_API_KEY
 uv run subcore check-glossary glossary.yaml
 ```
 

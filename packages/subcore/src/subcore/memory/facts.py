@@ -304,6 +304,7 @@ def extract_facts(
         response_schema=FACTS_SCHEMA if provider.caps.structured_output else None,
         temperature=temperature,
         task="extract",
+        json_output=True,
         meta={"kind": "extract", "cues": len(cues), "title": title, "season": season, "episode": episode},
     )
     tokens_in = tokens_out = 0

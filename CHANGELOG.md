@@ -1,4 +1,21 @@
 # Unreleased
+- **P7: a second provider, `openai_compat` (FR-9.1-9.3, ADR-3).** The models can now run on any server that speaks
+  the OpenAI chat completions API: OpenRouter, Ollama, LM Studio, vLLM, OpenAI. Set `llm_provider` to
+  `openai_compat` and `llm_base_url` (for example `http://ollama:11434/v1`) in the settings (or `LLM_PROVIDER` and
+  `LLM_BASE_URL`, used until something is saved); the change is live at once. The key is a stored key of provider
+  `openai_compat` (field `openai_compat_api_key`, `POST /api/keys`, or the first-run seed `LLM_API_KEY`), tried in
+  order like the Gemini keys, marked `invalid` when the server refuses it, and never logged; a server of your own
+  needs none. **Test** on the key lists the server's models, and the model dropdown shows them. Set `gst_model`
+  and `gst_fallback_model` to the server's own model names when you switch (the defaults are Gemini models).
+  The adapter (`subcore.providers.openai_compat`, standard library only) streams, never follows redirects,
+  and turns 401/403, 404, 402/`insufficient_quota`, 429, 5xx, timeouts and empty or non-JSON answers into the
+  typed errors. A server that cannot do structured output is asked for JSON mode, then for JSON through the
+  prompt alone, and every cue is still validated and repaired as with Gemini. New settings: `llm_provider`,
+  `llm_base_url`, `llm_max_input_tokens`, `llm_max_output_tokens` (what the server's model allows),
+  `summarize_model` and `research_model` (FR-9.3: a model for each task, each falling back to `gst_model`).
+  `subcore translate --provider openai_compat --base-url ... --model ...` tries it by hand. Gemini stays the
+  default and nothing changes for it. Not done: choosing the provider per model, the Settings page for it (use
+  `POST /api/settings` until the UI redesign), a trial against a real Ollama or OpenRouter.
 - **P6: settings and API keys in the database (FR-20, ADR-13).** Settings and the Bazarr, TMDB and
   Gemini keys now live in `app.db` (schema 7: `settings`, `api_keys`) instead of `/state/config.json`, and a
   change is live at once, with no restart: the running worker adopts it when it is saved. A saved value beats

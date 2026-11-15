@@ -87,7 +87,10 @@ class Capabilities:
 
 @dataclass
 class LLMRequest:
-    """One model call. ``meta`` is for callers/tests and is never sent to the model."""
+    """One model call. ``meta`` is for callers/tests and is never sent to the model.
+
+    ``json_output`` says the caller parses a JSON reply: a provider without schema support uses its JSON mode for
+    it (FR-9.2), while a plain-text task (a summary) leaves it off."""
 
     system: str
     user: str
@@ -95,6 +98,7 @@ class LLMRequest:
     temperature: float | None = None
     task: str = "translate"
     meta: dict[str, Any] = field(default_factory=dict)
+    json_output: bool = False
 
 
 @dataclass

@@ -20,7 +20,7 @@ from subcore.memory.facts import EXTRACT_PROMPT_VERSION
 
 from subcore.providers import ProviderError
 
-from .config import DEFAULT_MODEL
+from .config import DEFAULT_MODEL, model_for_task
 from .glossaries import GlossaryFiles
 from .library import Library
 from .ports import CURRENT, Correction, JobQueue, MissingApiKey, Output, ProviderFactory, Telemetry, Unit, UsageLog
@@ -574,7 +574,7 @@ class UnitService:
         providers: dict[str, Any] = {}
 
         def provider_for(task: str):
-            name = model if task == "translate" else (str(settings.get("memory_model") or "").strip() or model)
+            name = model if task == "translate" else model_for_task(settings, task, model)
             if name not in providers:
                 if self._provider_factory is None:
                     raise RuntimeError("no provider factory is wired into the unit service")

@@ -195,6 +195,19 @@ provider, a label, a *status* (`ok`, `invalid`, `exhausted`) and the time it was
 The environment seeds the keys on the first run only; afterwards the database wins. The API
 returns only the last four characters.
 
+**Model provider**:
+The service the models run on, one for the whole worker: `gemini`, or `openai_compat`, any server
+that speaks the OpenAI chat completions API (OpenRouter, Ollama, LM Studio, vLLM) at a configured
+*base URL*. The setting `llm_provider` picks it and takes effect at the next call. A server of your
+own needs no key. The provider says what it can do (*capabilities*: token limits, structured
+output); when a server refuses structured output the adapter falls back to JSON mode and then to
+the prompt alone, and every reply is validated cue by cue either way.
+
+**Task model**:
+The model a kind of call runs on: `translate` (`gst_model`, with the strong model as the second
+layer), `extract` (`memory_model`), `summarize` (`summarize_model`, else `memory_model`), `research`
+(`research_model`). Each falls back to `gst_model`, so one model setting is enough.
+
 **Invalid key**:
 A key the provider refused (`AuthError`). It is passed over, the next key takes over, and
 Settings and the dashboard warn. Pasting a new key, or **Test key** on one that works, makes
