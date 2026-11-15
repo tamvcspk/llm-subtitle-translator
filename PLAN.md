@@ -14,7 +14,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[x]` CI GitHub xanh (f9b8605) |
 | **P0c** | Form đăng nhập + đổi mật khẩu trong Settings cho tài khoản duy nhất; Basic Auth giữ cho script (NFR-5, tiêu chí 9) | Tiêu chí 9: chưa đăng nhập → chuyển tới form / `401`; đăng nhập, đăng xuất, đổi mật khẩu vô hiệu phiên cũ và mật khẩu env cũ; `CONSOLE_PASSWORD_RESET=1` ghi đè; sai 5 lần → khoá; không rò mật khẩu/cookie vào log, API | `[x]` |
 | **P0d** | Ranh giới và port cho core worker (ADR-8): `Store` tách thành port hẹp trả kiểu có tên, tầng use case dùng chung cho HTTP, `JobQueue`/`MediaLibrary`/`Metadata`/`ProviderFactory` thành port (phần 1); chế độ `hold` và duyệt job (FR-12, phần 2) | Tiêu chí 10: test import không còn ngoại lệ; test hợp đồng mỗi port chạy trên adapter thật và fake; toàn bộ test cũ pass; `schema_version`, queue JSON, `gst_enqueue.sh`, HTTP API không đổi. Tiêu chí 11: hold/duyệt/từ chối/khôi phục đúng, `auto` y như cũ | `[~]` Phần 1 xong, CI xanh (bac2098). Phần 2 xong về code, docs và đã thử trên Bazarr thật (2026-11-14); còn CI xanh cho phần 2. Việc dọn file (FR-13) thành P9 |
-| **P0e** | Đổi tên cấu trúc (ADR-2, quyết định #24): `apps/worker` → `apps/server`, `gst_worker` → `subserver`, `llm-subtitle-worker` → `llm-subtitle-server`; `static/` ở lại; không đổi hành vi | CI xanh với đường dẫn mới: test server và subcore, compileall, `subcore --help`; không còn `gst_worker`/`apps/worker` ngoài PLAN và CHANGELOG lịch sử | `[~]` test cục bộ xanh (724 + 198), compileall và `subcore --help` xong; chờ commit và CI GitHub |
+| **P0e** | Đổi tên cấu trúc (ADR-2, quyết định #24): `apps/worker` → `apps/server`, `gst_worker` → `subserver`, `llm-subtitle-worker` → `llm-subtitle-server`; `static/` ở lại; không đổi hành vi | CI xanh với đường dẫn mới: test server và subcore, compileall, `subcore --help`; không còn `gst_worker`/`apps/worker` ngoài PLAN và CHANGELOG lịch sử | `[x]` CI xanh trên fff4d44 (test server 724, subcore 198, compileall, `subcore --help`); workflow Docker image cũng xanh |
 | **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[x]` CI xanh; thử Gemini thật 4 file; 50 file thật hoãn (xem dưới) |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[~]` Code + test xong (xem dưới); còn bảng `jobs`/importer và chạy thật với Bazarr |
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong, CI xanh (e5babb1); còn thử giao diện trên trình duyệt thật |
@@ -120,14 +120,14 @@ Chỉ bắt đầu sau mốc CI xanh của phần 1.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P0d phần 2.
 
 
-## P0e — Đổi tên cấu trúc `[~]`
+## P0e — Đổi tên cấu trúc `[x]`
 
 ADR-2 (đổi tên v0.12), quyết định #24. Làm trước P11 vì P11 chốt ranh giới import của `subcore` (tiêu chí 18c). Một commit chỉ rename, không đổi hành vi.
 
 - [x] `git mv apps/worker apps/server`, `apps/server/gst_worker` → `apps/server/subserver`; thành viên workspace `llm-subtitle-server`; sửa import, `Dockerfile`, `ci.yml`, `docker-image.yml` (đường dẫn kích hoạt), `scripts/start-local.ps1`, `AGENTS.md`, `CONTEXT.md`, `CONTRIBUTING.md`, `docs/`, `.claude/skills/`; `uv lock` chỉ đổi tên thành viên.
 - [x] Giữ `worker.py`, `/app/worker.py`, `/app/static`; `static/` ở lại trong `apps/server/` (không tạo `apps/web` khi chưa có bước build).
 - [x] Test cục bộ: server 724 OK (1 skipped), subcore 198 OK (1 skipped), compileall, `subcore --help`.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P0e; kiểm lại `docker-image.yml` chạy đúng với đường dẫn mới (không build image cục bộ).
+- [x] Workflow **CI** trên GitHub xanh cho commit P0e (fff4d44); `docker-image.yml` chạy đúng với đường dẫn mới (build trên GitHub, không build cục bộ).
 
 ## P1 — Engine `subcore` + CLI `[x]`
 
