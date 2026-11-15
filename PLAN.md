@@ -14,6 +14,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[x]` CI GitHub xanh (f9b8605) |
 | **P0c** | Form đăng nhập + đổi mật khẩu trong Settings cho tài khoản duy nhất; Basic Auth giữ cho script (NFR-5, tiêu chí 9) | Tiêu chí 9: chưa đăng nhập → chuyển tới form / `401`; đăng nhập, đăng xuất, đổi mật khẩu vô hiệu phiên cũ và mật khẩu env cũ; `CONSOLE_PASSWORD_RESET=1` ghi đè; sai 5 lần → khoá; không rò mật khẩu/cookie vào log, API | `[x]` |
 | **P0d** | Ranh giới và port cho core worker (ADR-8): `Store` tách thành port hẹp trả kiểu có tên, tầng use case dùng chung cho HTTP, `JobQueue`/`MediaLibrary`/`Metadata`/`ProviderFactory` thành port (phần 1); chế độ `hold` và duyệt job (FR-12, phần 2) | Tiêu chí 10: test import không còn ngoại lệ; test hợp đồng mỗi port chạy trên adapter thật và fake; toàn bộ test cũ pass; `schema_version`, queue JSON, `gst_enqueue.sh`, HTTP API không đổi. Tiêu chí 11: hold/duyệt/từ chối/khôi phục đúng, `auto` y như cũ | `[~]` Phần 1 xong, CI xanh (bac2098). Phần 2 xong về code, docs và đã thử trên Bazarr thật (2026-11-14); còn CI xanh cho phần 2. Việc dọn file (FR-13) thành P9 |
+| **P0e** | Đổi tên cấu trúc (ADR-2, quyết định #24): `apps/worker` → `apps/server`, `gst_worker` → `subserver`, `llm-subtitle-worker` → `llm-subtitle-server`; `static/` ở lại; không đổi hành vi | CI xanh với đường dẫn mới: test server và subcore, compileall, `subcore --help`; không còn `gst_worker`/`apps/worker` ngoài PLAN và CHANGELOG lịch sử | `[~]` test cục bộ xanh (724 + 198), compileall và `subcore --help` xong; chờ commit và CI GitHub |
 | **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[x]` CI xanh; thử Gemini thật 4 file; 50 file thật hoãn (xem dưới) |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[~]` Code + test xong (xem dưới); còn bảng `jobs`/importer và chạy thật với Bazarr |
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong, CI xanh (e5babb1); còn thử giao diện trên trình duyệt thật |
@@ -24,7 +25,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P8** | Lõi job và phiên bản trong SQLite (FR-15, FR-16, FR-17, ADR-11, ADR-12): `jobs`, scheduler, lease, breaker, chờ thay vì fail, phiên bản có `candidate`/`removed`, importer từ queue file, bỏ port nội bộ | Tiêu chí 14 a–l và 15 a–i; test cũ chuyển sang SQLite `:memory:` vẫn pass; `gst_enqueue.sh` vẫn chạy được qua importer | `[~]` Job, scheduler, lease, breaker, chờ, importer, gap, phiên bản FR-16 (candidate, removed, publish an toàn, Dùng bản này) và `refresh` nền xong với test (14a–l, 15a–i, 13i); ADR-12 xong (bỏ Protocol cho kho SQLite, test trên `Store(":memory:")`); CI GitHub xanh (187d305); còn thử giao diện trên trình duyệt thật và mốc reset Gemini chưa đối chiếu với provider thật (xem "Việc treo của P8") |
 | **P9** | Dọn file (FR-13): dòng `jobs` đã xong, bản sao phiên bản, lịch sử glossary, file tạm; `retention_*`, xem trước và **Dọn ngay** | Tiêu chí 12 a–f: dọn đúng nhóm, không đụng media, job chưa xong, phiên bản `current` | `[x]` Code, test (tiêu chí 12 a–f, `test_cleanup.py`) và docs xong; CI GitHub xanh (a574e10). Giao diện chưa thử trên trình duyệt thật, để session Brainstorming UI |
 | **P10** | Bazarr kéo và Library/Missing (FR-14, FR-15.4–15.6, ADR-10): `catalog_items`, đồng bộ, nhãn dẫn xuất, yêu cầu hàng loạt có ước lượng, Ignored, policy tự yêu cầu; gỡ script, `held`/`rejected`, tab Held | Tiêu chí 13 a–i; chạy thật trên Bazarr thật (Malcolm): yêu cầu tay, rồi bật `auto_request` cho một series | `[x]` Code, test (tiêu chí 13 a–i, `test_catalog.py`, `test_job_intake.py`) và docs xong; CI GitHub xanh (d6c5832); thăm dò Bazarr thật và thử Malcolm xong (2026-11-15); giao diện chưa thử trên trình duyệt thật, để session Brainstorming UI |
-| **P11** | Bundle và CLI khai báo (FR-21, ADR-16): `subcore.bundle`, `gather`, `render-prompt`/`validate`/`compare`, xuất job spec | Tiêu chí 18: cùng bundle cho cùng prompt ở CLI và worker; `subcore` không import `gst_worker`/`sqlite3`; bundle không chứa khoá | `[ ]` |
+| **P11** | Bundle và CLI khai báo (FR-21, ADR-16): `subcore.bundle`, `gather`, `render-prompt`/`validate`/`compare`, xuất job spec | Tiêu chí 18: cùng bundle cho cùng prompt ở CLI và worker; `subcore` không import `subserver`/`sqlite3`; bundle không chứa khoá | `[ ]` |
 | **P12** | Style profile và glossary vào DB (FR-18, ADR-14): form style, thẻ nhân vật, preset thể loại, few-shot từ cue đã sửa, xem thử, `variant` + A/B | Tiêu chí 16 a–g | `[ ]` |
 | **P13** | `suggestions` + Review inbox lõi (FR-4.4, FR-11.1, FR-11.1.5) | Tiêu chí 21 c–h: chấp nhận/sửa/từ chối/hàng loạt ghi vào glossary trong DB, hiện số bản dịch stale, từ chối không bị sinh lại, `auto_accept` theo loại, badge nav; mọi `source` qua cùng use case | `[ ]` |
 | **P14** | Bộ sinh đề xuất từ facts và thẻ nhân vật (FR-6, FR-18.3) | Tiêu chí 21 a–b: đề xuất `address_rule` và `term` `pending` kèm bằng chứng cue và timecode, chưa áp dụng vào bản dịch nào | `[ ]` |
@@ -118,6 +119,15 @@ Chỉ bắt đầu sau mốc CI xanh của phần 1.
 - **Không làm** (FR-21.5, quyết định #21): CLI cho worker. Console và HTTP API là giao diện duy nhất của worker; CLI của `subcore` chạy khai báo trên bundle (P11).
 - [ ] Workflow **CI** trên GitHub xanh cho commit P0d phần 2.
 
+
+## P0e — Đổi tên cấu trúc `[~]`
+
+ADR-2 (đổi tên v0.12), quyết định #24. Làm trước P11 vì P11 chốt ranh giới import của `subcore` (tiêu chí 18c). Một commit chỉ rename, không đổi hành vi.
+
+- [x] `git mv apps/worker apps/server`, `apps/server/gst_worker` → `apps/server/subserver`; thành viên workspace `llm-subtitle-server`; sửa import, `Dockerfile`, `ci.yml`, `docker-image.yml` (đường dẫn kích hoạt), `scripts/start-local.ps1`, `AGENTS.md`, `CONTEXT.md`, `CONTRIBUTING.md`, `docs/`, `.claude/skills/`; `uv lock` chỉ đổi tên thành viên.
+- [x] Giữ `worker.py`, `/app/worker.py`, `/app/static`; `static/` ở lại trong `apps/server/` (không tạo `apps/web` khi chưa có bước build).
+- [x] Test cục bộ: server 724 OK (1 skipped), subcore 198 OK (1 skipped), compileall, `subcore --help`.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P0e; kiểm lại `docker-image.yml` chạy đúng với đường dẫn mới (không build image cục bộ).
 
 ## P1 — Engine `subcore` + CLI `[x]`
 
@@ -283,10 +293,11 @@ FR-14, FR-15.4–15.6, FR-15.12; ADR-10; tiêu chí 13.
 FR-21, NFR-12; ADR-16; tiêu chí 18.
 
 - [ ] `subcore.bundle` (`TranslationBundle`, `bundle_version`, JSON, hash); `render(bundle)` và `translate.run(bundle, provider)` là đường duy nhất dựng prompt.
-- [ ] `gst_worker/gather.py` gom bundle từ DB; worker dịch qua bundle; hash bundle ghi vào `llm_calls`.
+- [ ] `subserver/gather.py` gom bundle từ DB; worker dịch qua bundle; hash bundle ghi vào `llm_calls`.
 - [ ] CLI: `translate` (flag hoặc `--bundle`), `render-prompt`, `validate` (dùng chung hàm với worker), `compare`; khoá `--api-key`/`--api-key-file`/env/file theo thứ tự flag > env > file; `--provider fake`.
 - [ ] `GET /api/jobs/{id}/spec` và nút **Xuất job spec** trên console.
-- [ ] Test tiêu chí 18 a–h, gồm test import (`subcore`/CLI không import `gst_worker`, `sqlite3`); docs: `packages/subcore/README.md`, `docs/API.md`, `AGENTS.md` ("Development Commands" và ranh giới), `CHANGELOG.md`.
+- [ ] Test tiêu chí 18 a–h, gồm test import (`subcore`/CLI không import `subserver`, `sqlite3`); docs: `packages/subcore/README.md`, `docs/API.md`, `AGENTS.md` ("Development Commands" và ranh giới), `CHANGELOG.md`.
+- [ ] Bundle thuần (FR-21.6): chỉ chứa thứ đi vào `render(bundle)`, few-shot nhúng giá trị đã chọn; hàm đọc thuần trong `subcore` (bundle, dải cue) → các mục glossary khớp, cho trang tập, không lưu và không vào hash. Test: đổi hàm này không đổi `bundle_hash`; hash chỉ đổi khi prompt hoặc tham số đổi.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P11.
 
 ## P12 — Style profile, glossary vào DB, xem thử, variant `[ ]`
@@ -300,6 +311,10 @@ FR-18, FR-4.1 (sửa), FR-11.2.3 (sửa); ADR-14; tiêu chí 16. Cần P11.
 - [ ] **Thử style** (~20 cue, không ghi file), job `variant` → `candidate`, trang so sánh cạnh nhau, A/B ghi `quality_signals`.
 - [ ] Đo bằng `variant` trên vài tập thật để trả lời câu hỏi mở 3 (hai lượt dịch) và ghi kết quả.
 - [ ] Test tiêu chí 16 a–g; docs: `docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md` (Style profile, Bundle), `AGENTS.md`, `CHANGELOG.md`; `docs/design/ARCHITECTURE.md` §3.3 ghi prompt thực tế.
+- [ ] Biên của hash stale (ADR-14 điểm 9): few-shot ngoài hash luật và `context_hash`; test sửa một cue ở tập 1 không đổi cờ `stale` của tập nào.
+- [ ] Dịch lại theo dải đóng dấu hash luật và `context_hash` hiện hành cho cả tập (FR-11.3.6), dải ghi ở `origin`/`params`; test: dịch lại cues 130–165 sau khi sửa quy tắc → tập hết `stale`, tập khác vẫn `stale`. Kiểm hành vi hiện có của retranslate theo dải trước khi sửa.
+- [ ] Lọc `terms` theo batch khi quá `glossary_filter_threshold` (FR-4.3); `address_rules` và thẻ nhân vật không lọc theo từ vựng. Đo số token trước và sau trên một series thật; test: cảnh chỉ dùng đại từ vẫn nhận quy tắc xưng hô.
+- [ ] Nhập glossary có sao chép từ series khác (không liên kết; Non-goals v0.12).
 - [ ] Workflow **CI** trên GitHub xanh cho commit P12.
 
 ## P13 — `suggestions` + Review inbox lõi `[ ]`
@@ -307,10 +322,11 @@ FR-18, FR-4.1 (sửa), FR-11.2.3 (sửa); ADR-14; tiêu chí 16. Cần P11.
 FR-4.4, FR-11.1, FR-11.1.5; ARCHITECTURE §3.6; tiêu chí 21 c–h. Làm **ngay sau P12** (cần glossary và thẻ nhân vật trong DB).
 
 - [ ] Migration bảng `suggestions` (có `source`, `fingerprint`, `UNIQUE(series_id, target_lang, fingerprint)`); importer không cần vì chưa có dữ liệu cũ.
-- [ ] `SuggestionService` (`gst_worker/suggestions.py`): `propose` (lọc trùng và đã từ chối), accept, sửa rồi accept, reject, accept hàng loạt theo series; accept đi qua use case ghi glossary/thẻ nhân vật của P12 và tính số bản dịch stale bằng `rules.py`; `auto_accept` theo loại (mặc định tắt cho `address_rules`, FR-4.4), có lịch sử và hoàn tác.
+- [ ] `SuggestionService` (`subserver/suggestions.py`): `propose` (lọc trùng và đã từ chối), accept, sửa rồi accept, reject, accept hàng loạt theo series; accept đi qua use case ghi glossary/thẻ nhân vật của P12 và tính số bản dịch stale bằng `rules.py`; `auto_accept` theo loại (mặc định tắt cho `address_rules`, FR-4.4), có lịch sử và hoàn tác.
 - [ ] HTTP API `/api/suggestions…` + `docs/API.md`.
 - [ ] Console: trang **Review** nhóm theo series, bằng chứng (cue + timecode hoặc URL nguồn), số bản dịch sẽ stale, xác nhận khi hàng loạt, badge `pending` trên nav, dùng được trên điện thoại.
 - [ ] Test tiêu chí 21 c–h bằng bộ sinh giả; docs: `docs/CONFIGURATION.md` (`auto_accept`), `CONTEXT.md` (Suggestion), `CHANGELOG.md`. Workflow **CI** trên GitHub xanh cho commit P13.
+- [ ] Bootstrap của `auto_request` (FR-15.12, ADR-10): `auto_request_bootstrap` (mặc định 2, `0` tắt), cờ `bootstrap_released` theo series, lý do "chờ duyệt glossary" ở Library, nút **Tiếp tục**; mở khoá khi `pending` của series trống. Test: series chưa có glossary chỉ có N job; duyệt hết `pending` thì phần còn lại được tạo ở lần đồng bộ sau; yêu cầu tay không bị chặn.
 
 ## P14 — Bộ sinh đề xuất từ facts `[ ]`
 
@@ -328,7 +344,7 @@ FR-6, FR-18.3; tiêu chí 21 a–b. Làm ngay sau P13.
 FR-19.5–19.6; ADR-15; tiêu chí 17h, 20.
 
 - [ ] `metrics_daily`, `GET /api/metrics`, trang **Insights** (vận hành và chất lượng; theo model, prompt version, style; trạng thái khoá, breaker, quota).
-- [ ] `gst_worker/feedback.py`: cue sửa lặp theo một mẫu → đề xuất correction hoặc rule vào `suggestions` (`source = feedback`, `pending`); hiện trong Review inbox của P13, không có chỗ hiển thị tạm trong Insights.
+- [ ] `subserver/feedback.py`: cue sửa lặp theo một mẫu → đề xuất correction hoặc rule vào `suggestions` (`source = feedback`, `pending`); hiện trong Review inbox của P13, không có chỗ hiển thị tạm trong Insights.
 - [ ] Bộ golden theo series từ cue đã sửa; `subcore compare` với golden; quy trình "đo trước khi đổi prompt hoặc style" ghi vào `docs/`.
 - [ ] LLM-as-judge tuỳ chọn, mặc định tắt.
 - [ ] Test tiêu chí 17h và 20 a–d; docs; `CHANGELOG.md`.

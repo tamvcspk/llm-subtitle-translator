@@ -1,4 +1,5 @@
 # Unreleased
+- **Structure rename (P0e).** No behaviour change. `apps/worker` is now `apps/server`, the Python package `gst_worker` is `subserver`, and the workspace member `llm-subtitle-worker` is `llm-subtitle-server`. The image keeps `/app/worker.py`, `/app/static` and all environment variables; only `/app/gst_worker` became `/app/subserver`, so a bind-mounted override of that folder (not a normal setup) needs the new path.
 - **P10: Bazarr is read, not pushed (FR-14, FR-15.4-15.6, ADR-10).** **Upgrade note:** nothing is translated by
   itself any more. The worker now *pulls* the library from Bazarr's API (series, episodes, movies, their subtitles
   and the languages Bazarr lists as missing) every `catalog_sync_interval` seconds (300) and on **Sync now**, and
