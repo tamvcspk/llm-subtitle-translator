@@ -128,13 +128,16 @@ class FrontendStructureTests(unittest.TestCase):
         self.assertIn("/api/queue/cancel", scripts)
         self.assertIn("Cancel this failed translation?", scripts)
 
-    def test_deferred_jobs_show_retry_time_and_support_cancellation(self):
+    def test_waiting_jobs_say_what_they_wait_for_and_support_cancellation_stop_and_the_gap_button(self):
         html = read_html()
         scripts = read_scripts()
 
         self.assertIn('id="stat-deferred"', html)
         self.assertIn('export const QUEUE_STATES = ["pending", "processing", "deferred", "done", "failed"];', scripts)
-        self.assertIn("Retry after", scripts)
+        self.assertIn("Waiting · daily quota spent", scripts)
+        self.assertIn("Waiting · earlier episodes' facts", scripts)
+        self.assertIn('post("/api/queue/request-prerequisites"', scripts)
+        self.assertIn('post("/api/queue/stop"', scripts)
         self.assertIn('post("/api/queue/delete", { state, job_id: job.job_id })', scripts)
         self.assertIn('state === "pending" || state === "deferred"', scripts)
 

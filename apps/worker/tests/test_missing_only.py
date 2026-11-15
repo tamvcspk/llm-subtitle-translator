@@ -11,6 +11,8 @@ from unittest.mock import Mock, patch
 
 import worker
 from gst_worker import bazarr, queue, subtitles, translation
+from gst_worker.queue import JobQueue
+from gst_worker.store import Store
 
 TARGETS = [{"code": "vi", "language": "Vietnamese", "enabled": True}]
 LITE = "gemini-3.1-flash-lite"
@@ -26,6 +28,9 @@ class Workdir(unittest.TestCase):
         self.queue_dir = str(self.root / "queue")
         self.media = self.root / "media"
         self.media.mkdir()
+        self.store = Store(":memory:")
+        self.addCleanup(self.store.close)
+        self.jobs = JobQueue(self.store)
 
     def source(self, stem="Show.S01E01", folder=None):
         directory = folder or self.media
@@ -36,7 +41,7 @@ class Workdir(unittest.TestCase):
         return path
 
     def enqueue(self, path):
-        return queue.enqueue_translation_jobs(self.queue_dir, {"subtitle_path": str(path), "source_code": "en"}, TARGETS)
+        return self.jobs.enqueue({"subtitle_path": str(path), "source_code": "en"}, TARGETS)
 
     def env(self, **values):
         patcher = patch.dict(os.environ, values)
@@ -97,12 +102,13 @@ class AdmissionGuardTests(Workdir):
         self.env(GST_MAX_PENDING="2")
         created = [self.enqueue(self.source(f"Show.S01E0{n}")) for n in range(1, 6)]
         self.assertEqual(sum(len(batch) for batch in created), 2)
-        self.assertEqual(queue.open_job_count(self.queue_dir), 2)
+        self.assertEqual(self.jobs.jobs.open_count(), 2)
 
     def test_the_bazarr_script_obeys_the_same_guards_and_variants(self):
         script = (Path(__file__).resolve().parents[3] / "bazarr-postprocess" / "gst_enqueue.sh").read_text(encoding="utf-8")
         payload = script.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-        queue.ensure_queue_dirs(self.queue_dir)  # the shell wrapper creates these before the payload runs
+        for folder in ("pending", "processing", "done", "failed"):  # the shell wrapper creates these before the payload runs
+            (Path(self.queue_dir) / folder).mkdir(parents=True)
         (self.root / "targets.json").write_text(json.dumps({
             "source_languages": [{"code": "en", "language": "English"}], "target_languages": TARGETS,
         }), encoding="utf-8")
@@ -126,7 +132,7 @@ class AdmissionGuardTests(Workdir):
 
         for n in range(1, 4):
             run(self.source(f"Many.S01E0{n}"), GST_MAX_PENDING="2")
-        self.assertEqual(queue.open_job_count(self.queue_dir), 2)
+        self.assertEqual(len(list((Path(self.queue_dir) / "pending").glob("*.json"))), 2)  # the script counts its own gate
 
 
 class FakeMedia:
@@ -231,16 +237,12 @@ class RescanFailureTests(unittest.TestCase):
 
 
 class EscalationTests(Workdir):
-    def setUp(self):
-        super().setUp()
-        self.jobs = queue.JobQueue(self.queue_dir)
-
     def process(self, execute, models=MODELS):
         return self.jobs.process_once(execute, models=models)
 
     def only_job(self, state):
-        [path] = list((Path(self.queue_dir) / state).glob("*.json"))
-        return json.loads(path.read_text(encoding="utf-8"))
+        [job] = self.jobs.jobs.by_state(*queue.FROM_LEGACY[state])
+        return job
 
     def test_a_hard_job_moves_to_the_strong_model_once_and_finishes_there(self):
         self.enqueue(self.source())
@@ -254,7 +256,7 @@ class EscalationTests(Workdir):
 
         self.assertTrue(self.process(execute))
         pending = self.only_job("pending")
-        self.assertTrue(pending["use_fallback_model"])
+        self.assertEqual(pending["tier"], "strong")
         self.assertEqual(pending["escalated_from"], LITE)
         self.assertTrue(self.process(execute))
         self.assertEqual(used, [LITE, STRONG])
@@ -274,14 +276,14 @@ class EscalationTests(Workdir):
         execute = Mock(side_effect=translation.HardJobError("invalid"))
         self.process(execute, models=(LITE,))
         self.assertEqual(execute.call_count, 1)
-        self.assertEqual(len(list((Path(self.queue_dir) / "failed").glob("*.json"))), 1)
+        self.assertEqual(self.jobs.jobs.counts()["failed"], 1)
 
     def test_an_ordinary_error_does_not_buy_a_strong_model_call(self):
         self.enqueue(self.source())
         execute = Mock(side_effect=RuntimeError("The provider rejected the API key"))
         self.process(execute)
         self.assertEqual(execute.call_count, 1)
-        self.assertEqual(len(list((Path(self.queue_dir) / "failed").glob("*.json"))), 1)
+        self.assertEqual(self.jobs.jobs.counts()["failed"], 1)
 
     def test_a_manual_retry_starts_again_on_the_default_model(self):
         self.enqueue(self.source())
@@ -289,10 +291,10 @@ class EscalationTests(Workdir):
         self.process(execute)
         self.process(execute)
         failed = self.only_job("failed")
-        self.assertTrue(queue.retry_failed_job(self.queue_dir, failed["job_id"]))
+        self.assertTrue(self.jobs.retry(failed["job_id"]))
         pending = self.only_job("pending")
         self.assertNotIn("escalated_from", pending)
-        self.assertNotIn("use_fallback_model", pending)
+        self.assertEqual(pending["tier"], "")
 
     def test_layer_report_shows_whether_the_strong_model_earns_its_place(self):
         for n in range(1, 4):
@@ -306,7 +308,7 @@ class EscalationTests(Workdir):
 
         for _ in range(6):
             self.process(execute)
-        report = queue.layer_report(self.queue_dir)
+        report = self.jobs.layer_report()
         self.assertEqual(report["escalated"], {"total": 2, "done": 1, "failed": 1, "waiting": 0})
         self.assertEqual(report["by_model"][LITE]["done"], 1)
         self.assertEqual(report["by_model"][STRONG], {"done": 1, "failed": 1})

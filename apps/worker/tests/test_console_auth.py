@@ -10,6 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import worker
+from gst_worker.console import ConsoleActions
+from gst_worker.queue import JobQueue
+from gst_worker.store import Store
 from gst_worker.auth import ALLOW, UNAUTHORIZED, UNCONFIGURED, ConsoleAuth
 
 USER = "admin"
@@ -82,6 +85,7 @@ class ConsoleAuthServerTests(unittest.TestCase):
         self.ctx = {
             "static_dir": str(static),
             "queue_dir": str(Path(self.tmp.name) / "queue"),
+            "console": ConsoleActions(JobQueue(Store(":memory:"))),
             "log_dir": str(Path(self.tmp.name) / "logs"),
         }
 

@@ -13,11 +13,39 @@ The collection of translation jobs awaiting execution, running, deferred for a
 later attempt, completed, or failed.
 
 **Daily quota pause**:
-The period after every configured model has exhausted its daily Gemini quota
-during which new translation jobs and retries are blocked; waiting jobs are
-failed rather than automatically resumed. Exhausting only one model's quota
-pauses that model alone. The pause follows the models configured now: switching
-to a model that still has quota lifts it.
+The period after every configured model has exhausted its daily Gemini quota. Jobs
+wait for the reset (`waiting`, reason `quota`); none is failed and new requests are
+accepted. Exhausting only one model's quota pauses that model alone, and its jobs move
+to the other model. The pause follows the models configured now: switching to a model
+that still has quota lifts it.
+
+**Job**:
+One translation of one source subtitle into one target language, stored as a row of the
+`jobs` table. It has a state (`queued`, `running`, `waiting`, `held`, `rejected`, `done`,
+`skipped`, `failed`, `cancelled`), a class (interactive, retranslate, auto) and, while
+waiting, a reason. A job is only ever failed for its own faults: its source, its glossary,
+an invalid output after the strong model, a refused content filter, or too many crashes.
+
+**Waiting** (job state `waiting`):
+A job that cannot run now for a reason outside its own control. The reason is shown:
+`quota`, `provider` (key refused, model unknown, breaker open), `context` (earlier
+episodes' facts missing), `settle` (source changed a moment ago) or `rate` (provider busy).
+A waiting job is not a failed job.
+
+**Breaker**:
+The per (provider, model) switch that stops calls to a model after repeated rate-limit or
+unavailable errors. It opens after `breaker_threshold` failures in a row, rests for a
+growing time, and then lets exactly one trial call through (half-open). Stored in
+`provider_health`.
+
+**Lease**:
+A running job's claim on the worker, renewed by a heartbeat while the translation runs.
+A job whose lease runs out, or that is still marked running when the worker starts, goes
+back in line with one more attempt.
+
+**Blocked answer**:
+A model answer refused by the provider's content filter. It is repaired and split like
+any unusable answer; if it still fails, the job fails with the reason saying so.
 
 **Strong model** (setting `gst_fallback_model`):
 The second of two model layers. The default model is a light one that translates
@@ -89,6 +117,21 @@ and starts again from the beginning.
 One published result for a target subtitle path, with its sha256, the input and
 context it was made from, and a stored copy. Retranslating or reverting adds a
 version instead of replacing history.
+
+**Candidate**:
+A translation version that is kept but is not on disk. A job makes one instead of
+overwriting when the file appeared while it ran, the subtitle changed under a replace
+job, or the source changed. The admin adopts it ("Use this version") to publish it.
+
+**Removed version**:
+A tombstone that the admin left by deleting the target subtitle. It keeps the last
+content so a revert can bring it back, and an automatic job does not request the
+episode again while it is the newest version.
+
+**Publish announcement**:
+A translation version written as `publishing` before its file is renamed into place
+and confirmed afterwards. A restart settles it: a file that carries the announced
+sha256 is confirmed, any other file cancels it (the result becomes a candidate).
 
 **System-made file**:
 A target subtitle whose sha256 equals the current translation version for its

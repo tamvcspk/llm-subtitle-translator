@@ -1,22 +1,28 @@
-"""Publishing target subtitles with version history, backup and revert (FR-8.1, NFR-4, SPEC criterion 8).
+"""Publishing target subtitles with version history, backup, revert, candidates and removal (FR-8.1, FR-16,
+NFR-4, SPEC criteria 8 and 15).
 
-A target file is *system-made* when the store has a ``current`` version for its path whose sha256
-equals the file on disk. Any other existing file (hand-edited, or put there by someone else) is
-never overwritten by an automatic job; an explicit retranslate or revert first keeps it as an
-``external`` version, so nothing is ever lost.
+A target file is *system-made* when the store has a ``current`` version for its path whose sha256 equals the file on
+disk. Any other existing file (hand-edited, or put there by someone else) is never overwritten: it is first kept as
+an ``external`` version. An automatic job never overwrites a file at all; a result that cannot go on disk safely
+(the file appeared while the job ran, the base version moved, the source changed) is kept as a ``candidate`` for the
+admin to adopt (FR-16.3, FR-16.4).
+
+Publishing is announced before the rename (FR-16.5): the new version is written as ``publishing`` in the store, the
+file is replaced, then the announcement is confirmed. ``reconcile`` (run at start-up) settles whatever a crash left.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Callable, Iterable
 
-from subcore import srt
-
-from .ports import Telemetry, VersionRepo
+from .ports import CANDIDATE, CURRENT, REMOVED, SUPERSEDED, Telemetry, TranslationVersion, VersionRepo
 from .telemetry import NULL as NULL_TELEMETRY
 
 SKIPPED_EXISTING = "skipped-existing-output"
@@ -25,6 +31,8 @@ RETRANSLATE = "retranslate"
 REVERT = "revert"
 EXTERNAL = "external"
 CUE_EDIT = "cue_edit"
+REMOVE = "remove"
+DEFAULT_COALESCE_SECONDS = 600.0  # edit_coalesce_minutes = 10 (FR-16.7)
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -41,15 +49,26 @@ def sha256_file(path: Path) -> str:
 
 @dataclass(frozen=True)
 class Published:
-    status: str  # translated | skipped-existing-output | reverted
+    status: str  # translated | candidate | skipped-existing-output | reverted | adopted | removed
     version: int | None = None
+    reason: str = ""
 
 
 class TranslationVersions:
-    def __init__(self, repo: VersionRepo, backup_dir: str | Path, telemetry: Telemetry | None = None) -> None:
+    def __init__(
+        self,
+        repo: VersionRepo,
+        backup_dir: str | Path,
+        telemetry: Telemetry | None = None,
+        *,
+        coalesce_seconds: float = DEFAULT_COALESCE_SECONDS,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
         self.repo = repo  # the VersionRepo port; callers outside this module read versions through it
         self.backup_dir = Path(backup_dir)
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
+        self.coalesce_seconds = coalesce_seconds
+        self.clock = clock
 
     # -- paths -------------------------------------------------------------
     def _version_path(self, output_path: str, version: int) -> Path:
@@ -65,6 +84,21 @@ class TranslationVersions:
         temporary.replace(stored)
         return stored
 
+    @staticmethod
+    def _write_file(path: Path, data: bytes) -> None:
+        temporary = path.with_name(f".{path.name}.publish.tmp")
+        temporary.write_bytes(data)
+        os.replace(temporary, path)
+
+    def _read_copy(self, version: TranslationVersion) -> bytes:
+        try:
+            data = Path(version.stored_path).read_bytes()
+        except OSError:
+            raise ValueError(f"the stored copy of version {version.version} is missing") from None
+        if not hmac.compare_digest(sha256_bytes(data), version.sha256):
+            raise ValueError(f"stored copy of version {version.version} is damaged")
+        return data
+
     # -- state -------------------------------------------------------------
     def is_system_file(self, output_path: str) -> bool:
         path = Path(output_path)
@@ -75,21 +109,34 @@ class TranslationVersions:
             and hmac.compare_digest(sha256_file(path), current.sha256)
         )
 
-    def _keep_external(self, output_path: str) -> None:
-        """Back up an existing file that is not the current system version."""
+    def latest_status(self, output_path: str) -> str:
+        """Status of the newest version of a file ('' when there is none): a removed one stays removed (FR-16.6)."""
+        rows = self.repo.versions(output_path)
+        return rows[-1].status if rows else ""
+
+    def _note_external(self, output_path: str) -> TranslationVersion | None:
+        """Keep a file that is not the stored current version as an ``external`` version, once per content.
+
+        Returns the version recorded, or None when the file is the system's own or already recorded."""
         path = Path(output_path)
         if not path.is_file() or self.is_system_file(output_path):
-            return
+            return None
         data = path.read_bytes()
+        digest = sha256_bytes(data)
+        known = next((r for r in self.repo.versions(output_path) if r.sha256 == digest), None)
+        if known is not None:
+            return None
         version = self.repo.next_version(output_path)
         stored = self._write_copy(output_path, version, data)
         self.repo.add_version(
-            output_path, version=version, stored_path=str(stored), sha256=sha256_bytes(data), trigger=EXTERNAL
+            output_path, version=version, stored_path=str(stored), sha256=digest, trigger=EXTERNAL,
+            origin="external",
         )
         self.telemetry.event(
-            "version.external", level="WARNING", target=Path(output_path).name, version=version,
+            "version.external", level="WARNING", target=path.name, version=version,
             reason="the target file was not the stored current version (edited or put there from outside); kept as a version before it was replaced",
         )
+        return self.repo.get_version(output_path, version)
 
     # -- cache (NFR-3) -----------------------------------------------------
     def cached_text(self, source_sha256: str, target_lang: str, context_hash: str) -> str | None:
@@ -104,7 +151,32 @@ class TranslationVersions:
                 return data.decode("utf-8")
         return None
 
-    # -- publish / revert --------------------------------------------------
+    # -- publishing ---------------------------------------------------------
+    def _publish_file(self, output_path: str, version: int, data: bytes, **fields: Any) -> None:
+        """The publish protocol (FR-16.5): copy, announce, rename, confirm."""
+        stored = self._write_copy(output_path, version, data)
+        self.repo.add_version(
+            output_path, version=version, stored_path=str(stored), sha256=sha256_bytes(data),
+            status=CURRENT, publishing=True, **fields,
+        )
+        self._write_file(Path(output_path), data)
+        self.repo.set_version(output_path, version, publishing=False)
+
+    def _candidate(self, output_path: str, data: bytes, reason: str, **fields: Any) -> Published:
+        """Keep a result that must not go on disk now (FR-16.3). Nothing is written to the target."""
+        current = self.repo.current_version(output_path)
+        version = self.repo.next_version(output_path)
+        stored = self._write_copy(output_path, version, data)
+        self.repo.add_version(
+            output_path, version=version, stored_path=str(stored), sha256=sha256_bytes(data),
+            status=CANDIDATE, parent_version=current.version if current else None, **fields,
+        )
+        self.telemetry.event(
+            "version.candidate", job_id=fields.get("job_id", ""), unit_id=fields.get("unit_id"),
+            target=Path(output_path).name, version=version, reason=reason,
+        )
+        return Published("candidate", version, reason)
+
     def publish(
         self,
         output_path: str,
@@ -124,81 +196,228 @@ class TranslationVersions:
         context_complete: bool = True,
         missing_units: Iterable[str] = (),
         job_id: str = "",
+        base_version: int | None = None,
+        candidate_reason: str = "",
     ) -> Published:
+        """Put a result into the file's history.
+
+        ``base_version`` is the current version when the job started (a replace job, FR-16.3); ``candidate_reason``
+        is set by the caller when the source changed meanwhile (FR-15.10). Either one, or a file that appeared while
+        an automatic job ran, makes the result a candidate instead of overwriting anything.
+        """
         path = Path(output_path)
-        if path.exists() and trigger == AUTO:
-            return Published(SKIPPED_EXISTING)
-        if path.exists():
-            self._keep_external(output_path)
         data = text.encode("utf-8")
-        parent = self.repo.current_version(output_path)
+        meta: dict[str, Any] = dict(
+            trigger=trigger, source_path=source_path, source_sha256=source_sha256, target_lang=target_lang,
+            context_hash=context_hash, model=model, tokens_in=tokens_in, tokens_out=tokens_out, unit_id=unit_id,
+            glossary_hash=glossary_hash, memory_hash=memory_hash, context_complete=context_complete,
+            missing_units=tuple(missing_units), job_id=job_id, origin=_origin(trigger),
+        )
+
+        if trigger == AUTO and path.is_file():
+            if self.is_system_file(output_path):
+                return Published(SKIPPED_EXISTING)
+            self._note_external(output_path)  # a person or Bazarr put a file here while the job ran
+            return self._candidate(
+                output_path, data, "a target subtitle appeared while the job ran; the result waits as a candidate",
+                **meta,
+            )
+
+        current = self.repo.current_version(output_path)
+        if candidate_reason or (
+            trigger == RETRANSLATE and base_version is not None
+            and base_version != (current.version if current else None)
+        ):
+            self._note_external(output_path)
+            reason = candidate_reason or (
+                f"the subtitle changed while the job ran (it started from version {base_version}); "
+                "the result waits as a candidate"
+            )
+            return self._candidate(output_path, data, reason, **meta)
+
+        if path.is_file() and trigger != AUTO:
+            self._note_external(output_path)  # a hand edit is kept before anything replaces it (FR-16.2)
+
+        current = self.repo.current_version(output_path)
+        if trigger == CUE_EDIT and current and current.origin == "edit" and self._within_coalesce(current):
+            # Consecutive edits in one sitting are one version (FR-16.7): the version's copy takes the new text.
+            stored = self._write_copy(output_path, current.version, data)
+            self.repo.set_version(
+                output_path, current.version, stored_path=str(stored), sha256=sha256_bytes(data),
+                edited_at=self.clock(), publishing=True,
+            )
+            self._write_file(path, data)
+            self.repo.set_version(output_path, current.version, publishing=False)
+            self._event_published(
+                path, current.version, trigger, unit_id, job_id, model, data, current.parent_version, coalesced=True,
+            )
+            return Published("translated", current.version)
+
         version = self.repo.next_version(output_path)
-        stored = self._write_copy(output_path, version, data)
-        if trigger == AUTO and path.exists():  # appeared while the copy was written
-            return Published(SKIPPED_EXISTING)
-        srt.write_atomic(path, text)
-        self.repo.add_version(
-            output_path,
-            version=version,
-            stored_path=str(stored),
-            sha256=sha256_bytes(data),
-            trigger=trigger,
-            source_path=source_path,
-            source_sha256=source_sha256,
-            target_lang=target_lang,
-            context_hash=context_hash,
-            parent_version=parent.version if parent else None,
-            model=model,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            unit_id=unit_id,
-            glossary_hash=glossary_hash,
-            memory_hash=memory_hash,
-            context_complete=context_complete,
-            missing_units=missing_units,
+        self._publish_file(
+            output_path, version, data,
+            parent_version=current.version if current else None,
+            edited_at=self.clock() if trigger == CUE_EDIT else 0.0,
+            **meta,
         )
-        self.telemetry.event(
-            "version.published", job_id=job_id, unit_id=unit_id, target=path.name, version=version, trigger=trigger, model=model,
-            parent=parent.version if parent else None, sha256=sha256_bytes(data),
-            reason=f"version {version} published ({trigger})",
-        )
+        self._event_published(path, version, trigger, unit_id, job_id, model, data, current.version if current else None)
         return Published("translated", version)
 
+    def _within_coalesce(self, current: TranslationVersion) -> bool:
+        return bool(current.edited_at) and self.clock() - current.edited_at <= self.coalesce_seconds
+
+    def _event_published(
+        self, path: Path, version: int, trigger: str, unit_id: int | None, job_id: str, model: str, data: bytes,
+        parent: int | None, *, coalesced: bool = False,
+    ) -> None:
+        if coalesced:
+            reason = f"cue edits made within {int(self.coalesce_seconds)} s of each other are one version ({version})"
+            kind = "version.coalesced"
+        else:
+            reason = f"version {version} published ({trigger})"
+            kind = "version.published"
+        self.telemetry.event(
+            kind, job_id=job_id, unit_id=unit_id, target=path.name, version=version, trigger=trigger, model=model,
+            parent=parent, sha256=sha256_bytes(data), reason=reason,
+        )
+
+    # -- revert, adopt, remove -------------------------------------------------
     def revert(self, output_path: str, version: int) -> Published:
         """Restore an earlier version byte for byte; the restore is itself a new version."""
         target = self.repo.get_version(output_path, version)
         if target is None:
             raise ValueError(f"no version {version} for {output_path}")
-        stored = Path(target.stored_path)
-        data = stored.read_bytes()
-        if not hmac.compare_digest(sha256_bytes(data), target.sha256):
-            raise ValueError(f"stored copy of version {version} is damaged")
-        self._keep_external(output_path)
+        if target.status == CANDIDATE:
+            raise ValueError(f"version {version} is a candidate and was never on disk; adopt it instead")
+        data = self._read_copy(target)
+        self._note_external(output_path)
         new_version = self.repo.next_version(output_path)
-        copy = self._write_copy(output_path, new_version, data)
-        temporary = Path(output_path).with_name(f".{Path(output_path).name}.revert.tmp")
-        temporary.write_bytes(data)
-        temporary.replace(output_path)
-        self.repo.add_version(
-            output_path,
-            version=new_version,
-            stored_path=str(copy),
-            sha256=target.sha256,
-            trigger=REVERT,
-            source_path=target.source_path,
-            source_sha256=target.source_sha256,
-            target_lang=target.target_lang,
-            context_hash=target.context_hash,
-            parent_version=version,
-            model=target.model,
-            unit_id=target.unit_id,
-            glossary_hash=target.glossary_hash,
-            memory_hash=target.memory_hash,
-            context_complete=target.context_complete,
-            missing_units=target.missing_units,
+        current = self.repo.current_version(output_path)
+        self._publish_file(
+            output_path, new_version, data,
+            trigger=REVERT, origin="revert", source_path=target.source_path, source_sha256=target.source_sha256,
+            target_lang=target.target_lang, context_hash=target.context_hash, parent_version=version,
+            model=target.model, unit_id=target.unit_id, glossary_hash=target.glossary_hash,
+            context_complete=target.context_complete, missing_units=target.missing_units,
         )
         self.telemetry.event(
             "version.reverted", unit_id=target.unit_id, target=Path(output_path).name, version=new_version,
             restored=version, sha256=target.sha256, reason=f"restored version {version} as version {new_version}",
+            replaced=current.version if current else None,
         )
         return Published("reverted", new_version)
+
+    def adopt(self, output_path: str, version: int) -> Published:
+        """"Dùng bản này" (FR-16.4): a candidate becomes the current version and goes on disk."""
+        target = self.repo.get_version(output_path, version)
+        if target is None:
+            raise LookupError(f"no version {version}")
+        if target.status != CANDIDATE:
+            raise ValueError(f"version {version} is {target.status}, not a candidate")
+        data = self._read_copy(target)
+        self._note_external(output_path)  # a hand edit made meanwhile stays in the history
+        self.repo.set_version(output_path, version, status=CURRENT, publishing=True)
+        self._write_file(Path(output_path), data)
+        self.repo.set_version(output_path, version, publishing=False)
+        self.telemetry.event(
+            "version.adopted", unit_id=target.unit_id, target=Path(output_path).name, version=version,
+            reason=f"candidate {version} adopted; it is now the file's current version",
+        )
+        return Published("adopted", version)
+
+    def remove(self, output_path: str, *, reason: str = "removed from the console") -> Published:
+        """The admin deletes the target subtitle (FR-16.6): a ``removed`` tombstone keeps the content for revert."""
+        current = self.repo.current_version(output_path)
+        if current is None:
+            raise LookupError("there is no current version of this subtitle to remove")
+        path = Path(output_path)
+        self._note_external(output_path)
+        current = self.repo.current_version(output_path)
+        if current is None:
+            raise LookupError("there is no current version of this subtitle to remove")
+        try:
+            data = self._read_copy(current)
+        except ValueError:
+            data = path.read_bytes() if path.is_file() else b""
+        version = self.repo.next_version(output_path)
+        stored = self._write_copy(output_path, version, data)
+        self.repo.add_version(
+            output_path, version=version, stored_path=str(stored), sha256=sha256_bytes(data), trigger=REMOVE,
+            status=REMOVED, publishing=True, origin="edit", parent_version=current.version,
+            unit_id=current.unit_id, target_lang=current.target_lang,
+        )
+        path.unlink(missing_ok=True)
+        self.repo.set_version(output_path, version, publishing=False)
+        self.telemetry.event(
+            "version.removed", unit_id=current.unit_id, target=path.name, version=version, reason=reason,
+        )
+        return Published("removed", version, reason)
+
+    # -- start-up (FR-16.5) -------------------------------------------------------
+    def reconcile(self) -> dict[str, int]:
+        """Settle what a crash left behind, then note target files that vanished outside the console (FR-16.6).
+
+        A publish whose file already carries its sha256 is confirmed; one whose file does not is cancelled: the
+        result becomes a candidate and the version that is on disk is put back in force, or the file is kept as an
+        external version when it matches none. Nothing is lost either way."""
+        counts = {"confirmed": 0, "cancelled": 0, "removed": 0, "vanished": 0}
+        for row in self.repo.publishing_versions():
+            path = Path(row.output_path)
+            if row.status == REMOVED:
+                path.unlink(missing_ok=True)
+                self.repo.set_version(row.output_path, row.version, publishing=False)
+                counts["removed"] += 1
+                continue
+            on_disk = sha256_file(path) if path.is_file() else None
+            if on_disk == row.sha256:
+                self.repo.set_version(row.output_path, row.version, publishing=False)
+                counts["confirmed"] += 1
+                continue
+            logging.warning("Publish of version %s of %s did not finish; cancelled at start-up", row.version, path.name)
+            self.repo.set_version(row.output_path, row.version, status=CANDIDATE, publishing=False)
+            previous = max(
+                (r for r in self.repo.versions(row.output_path)
+                 if r.status == SUPERSEDED and r.version < row.version),
+                key=lambda r: r.version, default=None,
+            )
+            if previous is not None and on_disk == previous.sha256:
+                self.repo.set_version(row.output_path, previous.version, status=CURRENT)
+            elif on_disk is not None:
+                self._note_external(row.output_path)
+            self.telemetry.event(
+                "version.publish_cancelled", level="WARNING", unit_id=row.unit_id, target=path.name,
+                version=row.version, reason="the file did not carry the announced content after a restart; the result is a candidate",
+            )
+            counts["cancelled"] += 1
+        for current in self.repo.current_versions():
+            target = Path(current.output_path)
+            # A file is only "removed outside" when its folder is there: a media share that is not mounted yet
+            # must not turn the whole library into removals that no automatic job would ever undo.
+            if target.is_file() or not target.parent.is_dir():
+                continue
+            data = self._read_copy_or_none(current)
+            if data is None:
+                continue
+            version = self.repo.next_version(current.output_path)
+            stored = self._write_copy(current.output_path, version, data)
+            self.repo.add_version(
+                current.output_path, version=version, stored_path=str(stored), sha256=sha256_bytes(data),
+                trigger=EXTERNAL, status=REMOVED, origin="external", unit_id=current.unit_id,
+                target_lang=current.target_lang, parent_version=current.version,
+            )
+            self.telemetry.event(
+                "version.external_removed", level="WARNING", unit_id=current.unit_id, target=Path(current.output_path).name,
+                version=version, reason="the target file was removed outside the console; recorded as removed",
+            )
+            counts["vanished"] += 1
+        return counts
+
+    def _read_copy_or_none(self, version: TranslationVersion) -> bytes | None:
+        try:
+            return self._read_copy(version)
+        except ValueError:
+            return None
+
+
+def _origin(trigger: str) -> str:
+    return {CUE_EDIT: "edit", REMOVE: "edit", REVERT: "revert", EXTERNAL: "external"}.get(trigger, "machine")

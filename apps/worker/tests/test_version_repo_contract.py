@@ -5,7 +5,7 @@ import time
 import unittest
 from pathlib import Path
 
-from gst_worker.ports import CURRENT, SUPERSEDED, TranslationVersion, VersionRepo
+from gst_worker.ports import CURRENT, REMOVED, SUPERSEDED, TranslationVersion, VersionRepo
 from gst_worker.store import Store
 
 OUT = "/media/Show.S01E01.vi.srt"
@@ -30,8 +30,9 @@ class InMemoryVersionRepo:
         return max((r.version for r in self._rows if r.output_path == output_path), default=0) + 1
 
     def add_version(self, output_path, *, version, stored_path, sha256, trigger, make_current=True, missing_units=(),
-                    **fields):
-        if make_current:
+                    status=None, **fields):
+        status = status or (CURRENT if make_current else SUPERSEDED)
+        if status in (CURRENT, REMOVED):
             self._rows = [
                 TranslationVersion(**{**r.__dict__, "status": SUPERSEDED})
                 if r.output_path == output_path and r.status == CURRENT else r
@@ -39,9 +40,27 @@ class InMemoryVersionRepo:
             ]
         self._rows.append(TranslationVersion(
             output_path=output_path, version=version, stored_path=stored_path, sha256=sha256, trigger=trigger,
-            status=CURRENT if make_current else SUPERSEDED, created_at=time.time(),
-            missing_units=tuple(missing_units), **fields,
+            status=status, created_at=time.time(), missing_units=tuple(missing_units), **fields,
         ))
+
+    def set_version(self, output_path, version, **fields):
+        if fields.get("status") == CURRENT:
+            self._rows = [
+                TranslationVersion(**{**r.__dict__, "status": SUPERSEDED})
+                if r.output_path == output_path and r.status == CURRENT and r.version != version else r
+                for r in self._rows
+            ]
+        self._rows = [
+            TranslationVersion(**{**r.__dict__, **fields})
+            if r.output_path == output_path and r.version == version else r
+            for r in self._rows
+        ]
+
+    def publishing_versions(self):
+        return [r for r in self._rows if r.publishing]
+
+    def current_versions(self):
+        return [r for r in self._rows if r.status == CURRENT]
 
     def cached_versions(self, source_sha256, target_lang, context_hash):
         hits = [

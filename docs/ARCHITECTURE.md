@@ -257,31 +257,19 @@ so the worker serves `.js` as `text/javascript` with `Cache-Control: no-cache`.
 
 ## Queue Layout
 
-The queue is a set of JSON files in seven directories:
+Since P8 jobs are rows of the `jobs` table in `app.db` (ADR-11), claimed by `JobQueue`
+(`queue.py`) through `JobStore` (`jobs.py`). States: `queued`, `running`, `waiting`
+(with `wait_reason`: `quota`, `provider`, `context`, `settle`, `rate`), `held`, `rejected`,
+`done`, `skipped`, `failed`, `cancelled`. Provider health lives in `provider_health`
+(one row per provider and model, `*` for a refused key), decided by the pure
+`queue_policy.py`.
 
-```text
-queue/
-  pending/
-  processing/
-  deferred/
-  done/
-  failed/
-  held/       # received in admission_mode=hold, waiting for approval; never claimed
-  rejected/   # refused held jobs, kept so the script and scans do not queue them again
-```
-
-Jobs the Bazarr script writes carry no `admission` field; the worker adds one (`admin`,
-`auto`, `approved`) as a job is admitted, and in `hold` mode moves an unmarked pending job
-to `held/` before each claim (`JobQueue.admit_new_jobs`). Design: `docs/design/ARCHITECTURE.md` ADR-9.
-
-A job file is moved between directories as state changes. Deferred and failed
-jobs may also have a sibling `.error` file containing the exception text.
-Deferred jobs record `retry_at`. `provider-pause.json` records which models have
-exhausted their daily quota (`models`, model name to expiry) and, once every
-configured model has, the global circuit breaker (`reason`, `retry_at`) that
-prevents other work from consuming requests. The worker re-derives the circuit
-breaker from `models` whenever settings change and before each claim, so
-switching to a model that still has quota lifts it.
+The old folders `pending/ processing/ deferred/ done/ failed/ held/ rejected/` remain
+only as the Bazarr script's gate: `gst_enqueue.sh` still writes one JSON file per missing
+target into `pending/`, and `intake.receive_script_jobs` turns each file into a row on
+every tick and deletes it (`hold` is applied there). Folders left from before P8 are
+imported once (`intake.import_queue_tree`) and moved to `queue.migrated/`. P10 removes the
+script and the gate.
 
 ## Job Shape
 

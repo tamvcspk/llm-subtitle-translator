@@ -14,8 +14,9 @@ from gst_worker.auth import ConsoleAuth
 from gst_worker.bazarr import BazarrIntegration, BazarrMedia
 from gst_worker.logs import configure_logging
 from gst_worker.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
-from gst_worker.config import ADMISSION_AUTO, ADMISSION_HOLD
-from gst_worker.queue import FileJobQueue, JobQueue, skip_reason, stamp_open_jobs, sync_daily_quota_pause
+from gst_worker.config import ADMISSION_AUTO, ADMISSION_HOLD, provider_name
+from gst_worker.intake import import_queue_tree, receive_script_jobs
+from gst_worker.queue import JobQueue, skip_reason
 from gst_worker.console import ConsoleActions
 from gst_worker.glossaries import GlossaryFiles
 from gst_worker.library import Library, enrich_job_identity
@@ -111,17 +112,24 @@ class QueueWorker:
         media: MediaLibrary | None = None,
         metadata: Metadata | None = None,
         telemetry: Telemetry | None = None,
+        store: Store | None = None,
+        key_ok: Callable[[], bool] | None = None,
     ) -> None:
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
-        self.queue = JobQueue(queue_dir, self.telemetry)
+        self.queue_dir = queue_dir
+        self.store = store or Store(":memory:")
+        self.queue = JobQueue(self.store, self.telemetry, key_ok=key_ok)
         self.settings = settings
         self.cache = cache
         self.http = http
         self.attempt = attempt
         self.media = media
         self.metadata = metadata
-        self.console = ConsoleActions(FileJobQueue(queue_dir, self.telemetry))
-        self.queue.recover_interrupted_jobs()
+        self.console = ConsoleActions(self.queue)
+        self.queue.configure(settings, self.models(), provider_name(settings))
+        # Start-up, explicitly: the old queue folders move into the table once, then jobs a stopped worker held go back in line.
+        import_queue_tree(self.queue, queue_dir)
+        self.queue.recover()
 
     def models(self) -> tuple[str, ...]:
         return configured_models(
@@ -129,11 +137,13 @@ class QueueWorker:
         )
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
-        """Adopt new settings; a newly configured model with quota left lifts the daily quota pause."""
+        """Adopt new settings; a newly configured model with quota left is usable at once."""
         was = self.admission_mode()
         if was != ADMISSION_HOLD and str(settings.get("admission_mode") or "") == ADMISSION_HOLD:
-            # Switching to `hold` leaves the line as it is (FR-12.8): what the script queued before now counts as admitted.
-            stamp_open_jobs(str(self.queue.queue_dir))
+            # Switching to `hold` leaves the line as it is (FR-12.8): what the script dropped and what was queued
+            # before now counts as admitted.
+            receive_script_jobs(self.queue, self.queue_dir, ADMISSION_AUTO)
+            self.queue.jobs.stamp_open_jobs(ADMISSION_AUTO)
         old = self.settings
         self.settings = settings
         changed = sorted(key for key in {*old, *settings} if old.get(key) != settings.get(key))
@@ -142,7 +152,7 @@ class QueueWorker:
                 "settings.changed", reason="the settings were saved", keys=changed[:40],
                 changes={k: [old.get(k), settings.get(k)] for k in changed[:40] if k not in SECRET_SETTING_KEYS},
             )
-        sync_daily_quota_pause(str(self.queue.queue_dir), self.models())
+        self.queue.configure(settings, self.models(), provider_name(settings))
         # The log level, the secrets to hide and the body limits follow the saved settings at once (FR-19.3).
         apply = getattr(self.telemetry, "apply_settings", None)
         if apply is not None:
@@ -152,7 +162,7 @@ class QueueWorker:
         return ADMISSION_HOLD if str(self.settings.get("admission_mode") or "") == ADMISSION_HOLD else ADMISSION_AUTO
 
     def process_once(self, now: float | None = None) -> bool:
-        self.queue.admit_new_jobs(self.admission_mode())
+        receive_script_jobs(self.queue, self.queue_dir, self.admission_mode())
         return self.queue.process_once(
             lambda job, update_status: process_job(
                 job, self.settings, self.cache, self.http, update_status, self.attempt,
@@ -161,11 +171,17 @@ class QueueWorker:
             settle_seconds=max(0, int(self.settings.get("job_settle_seconds") or 0)),
             now=now,
             models=self.models(),
+            settings=self.settings,
         )
 
     def run_forever(self, sleep_seconds: int) -> None:
         while True:
-            if not self.process_once():
+            try:
+                worked = self.process_once()
+            except Exception:  # noqa: BLE001 - the loop must outlive one bad tick
+                logging.exception("Queue tick failed")
+                worked = False
+            if not worked:
                 time.sleep(sleep_seconds)
 
 
@@ -234,6 +250,10 @@ def main() -> int:
     settings_service.telemetry = telemetry
     DEFAULT_REDACTOR.add_values([os.getenv("CONSOLE_PASSWORD", "")])
     versions = TranslationVersions(store, f"{data_dir}/backups/subtitles", telemetry=telemetry)
+    # Start-up, explicitly (FR-16.5): publishes a crash left announced are confirmed or cancelled before any job runs.
+    settled = versions.reconcile()
+    if any(settled.values()):
+        logging.warning("Start-up: version history settled %s", settled)
     glossaries = GlossaryFiles(data_dir)
 
     media = BazarrMedia(http, live_settings)
@@ -246,13 +266,14 @@ def main() -> int:
     )
     worker = QueueWorker(
         queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt,
-        media=media, metadata=metadata, telemetry=telemetry,
+        media=media, metadata=metadata, telemetry=telemetry, store=store,
+        key_ok=lambda: any(key.status == "ok" for key in store.api_keys(provider_name(live_settings()))),
     )
     # A saved setting, a pasted key or a key the provider refused reaches the running worker at once (FR-20.1).
     settings_service.subscribe(lambda: worker.apply_settings(settings_service.settings()))
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
     units = UnitService(
-        library, glossaries, versions, worker.console.jobs, refresh_bazarr=media.refresh,
+        library, glossaries, versions, worker.queue, refresh_bazarr=media.refresh,
         memory=memory, settings_source=live_settings, usage=store, provider_factory=provider_factory,
         telemetry=telemetry,
     )

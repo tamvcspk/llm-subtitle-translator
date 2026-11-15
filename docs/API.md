@@ -111,10 +111,26 @@ second layer is not paying for itself.
 
 ## GET /api/queue
 
-Returns all queue states and counts. Besides `pending`, `processing`, `deferred`,
-`done` and `failed`, there are `held` (waiting for approval) and `rejected`; each
-list is the latest 100 jobs of its state, `counts` has the real numbers. Use
-`/api/queue/held` for the whole inbox.
+Returns all queue states and counts. The states are `pending` (queued), `processing`
+(running), `deferred` (waiting, see `wait_reason`), `done` (includes `skipped`), `failed`,
+`held` (waiting for approval) and `rejected`; each list is the latest 100 jobs of its
+state, `counts` has the real numbers. Use `/api/queue/held` for the whole inbox.
+
+Each waiting job carries `wait_reason` and `retry_at` (Unix seconds, when it may run
+again). The reasons are `quota` (daily quota spent), `provider` (key refused, model
+unknown, or breaker open), `context` (earlier episodes' facts missing; `missing_units`
+names them), `settle` (source subtitle changed a moment ago) and `rate` (provider busy,
+retrying soon). A wait is never a failure. A running job carries `stage`, and
+`progress_done` / `progress_total` while it translates. `attempts` counts restarts after
+a crash; a job that crashed `max_crashes` times is `failed` with `error` starting
+`crashed:`.
+
+The response also has `providers`: one entry per configured model with `model`,
+`state` (`closed`, `open` (breaker), `exhausted` (quota), `invalid` (key or model refused),
+or `half_open`), `reason`, `until` (when it may be tried again, or null), `failures`
+(consecutive failures) and `usable`.
+
+The same `providers` list is in `/api/status`.
 
 ## GET /api/queue/held
 
@@ -156,6 +172,21 @@ queue them again.
 ## POST /api/queue/restore
 
 `{"job_ids": [...]}` or `{"all": true}`: takes rejected jobs back to held.
+
+## POST /api/queue/stop
+
+`{"job_id": "..."}`. A waiting or queued job is cancelled at once. A running job is
+asked to stop and does so at the next batch boundary, so a subtitle being written is
+finished first. Returns `{"ok": true, "outcome": "cancelled"}` or
+`{"ok": true, "outcome": "stopping"}`; `ok` is false when there was nothing to stop.
+
+## POST /api/queue/request-prerequisites
+
+`{"job_id": "..."}` for a job with `wait_reason` `context`. Queues the earlier episodes the
+job waits for, when their source subtitle is on disk, at interactive priority. Returns
+`{"requested": ["<job id>"], "unavailable": ["S01E02"]}`; `unavailable` names the earlier
+episodes that have no source subtitle yet. Asking again makes no second job. Returns
+`400` for a job that is not waiting for earlier episodes.
 
 Both `/api/queue` and `/api/status` include `daily_quota_pause`: `null` when
 inactive, or `{"retry_at": 1790355039.786}` while paused (Unix seconds).
@@ -310,7 +341,9 @@ Scans media roots and enqueues all missing target jobs found by that scan.
 
 ## POST /api/queue/retry
 
-Moves a failed job back to pending.
+Moves a failed job back to pending with a fresh retry cycle (waits, breaker and call counts
+are reset). Returns `{"ok": false}` when the job is not failed or the same file already has an
+open job.
 
 ```json
 {"job_id": "7fefefb6fdb4f200bbb5fcac70e917492cea4d8f"}
@@ -319,7 +352,9 @@ Moves a failed job back to pending.
 ## POST /api/queue/delete
 
 Deletes one job from a queue state. A `held` job cannot be deleted this way
-(approve or reject it); deleting a `rejected` job forgets the refusal.
+(approve or reject it); deleting a `rejected` job forgets the refusal. Deleting a
+`pending` or `deferred` job is a cancel: the record is kept as `cancelled`. A `processing`
+job cannot be deleted; use `/api/queue/stop`.
 
 ```json
 {"state": "failed", "job_id": "7fefefb6fdb4f200bbb5fcac70e917492cea4d8f"}
@@ -532,8 +567,12 @@ The result overwrites the target and is recorded as a version; the old file is
 kept in `backups/subtitles/`.
 
 ### GET /api/units/{id}/versions?lang=
-`{"lang", "modified_outside", "versions": [{"version", "trigger", "status", "parent_version", "model", "sha256", "tokens_in", "tokens_out", "created_at", "current"}]}`, newest first.
-`trigger` is `auto`, `retranslate`, `cue_edit`, `revert` or `external` (a hand edit kept before an overwrite).
+`{"lang", "modified_outside", "versions": [{"version", "trigger", "origin", "status", "parent_version", "model", "sha256", "tokens_in", "tokens_out", "created_at", "current"}]}`, newest first.
+`trigger` is `auto`, `retranslate`, `cue_edit`, `revert`, `external` (a hand edit kept before an overwrite) or `remove`.
+`origin` is `machine`, `edit`, `revert` or `external`. `status` is `current`, `superseded`, `candidate` (a result that is
+not on disk: the file appeared while the job ran, the subtitle changed under a replace job, or the source changed; adopt it to
+publish it), `removed` (the admin deleted the subtitle; restoring it is a revert) or `pruned` (its stored copy was
+removed by retention, FR-13.3, P9; not restorable).
 
 ### GET /api/units/{id}/versions/{v}/diff?against=&lang=
 Cue-level changes from `against` (default: the previous version) to `v`:
@@ -543,6 +582,16 @@ Cue-level changes from `against` (default: the previous version) to `v`:
 Body `{"lang": "vi"}`. Restores version `v` byte for byte as a new version (what
 was on disk is kept first) and asks Bazarr to rescan. Cue locks whose text is no
 longer in the restored file are released. Reply `{"ok": true, "version", "restored"}`.
+
+### POST /api/units/{id}/versions/{v}/adopt
+Body `{"lang": "vi"}`. "Dùng bản này": a `candidate` version is written to the file and becomes `current`; the
+version that was on disk becomes `superseded`. Only a candidate can be adopted (`400` otherwise). Reply
+`{"ok": true, "version", "adopted"}`.
+
+### POST /api/units/{id}/output/remove
+Body `{"lang": "vi"}`. Deletes the target subtitle file. The last version is kept as a `removed` version, so
+the subtitle can be restored by a revert. The episode shows as removed and an automatic job does not request
+it again; only a manual request does. Needs a current version (`404` otherwise). Reply `{"ok": true, "version"}`.
 
 ### GET /api/units/{id}/context?lang=
 The story memory behind a translation (episodes of a series only; a movie gets

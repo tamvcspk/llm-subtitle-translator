@@ -28,7 +28,6 @@ from gst_worker.glossaries import GlossaryFiles
 from gst_worker.library import Library
 from gst_worker.logs import RedactingFormatter, set_log_level
 from gst_worker.ports import BodyRef, Telemetry as TelemetryPort, TelemetryRepo
-from gst_worker.queue import FileJobQueue
 from gst_worker.redaction import REDACTED, Redactor
 from gst_worker.settings import SettingsService
 from gst_worker.store import Store
@@ -128,11 +127,10 @@ class Env:
         self.queue_dir = str(self.root / "queue")
         self.worker = worker.QueueWorker(
             self.queue_dir, self.settings, None, None, attempt=self.attempt, media=Media(), metadata=Meta(overview),
-            telemetry=self.telemetry,
+            telemetry=self.telemetry, store=self.store,
         )
         self.service = UnitService(
-            self.library, self.glossaries, self.versions, FileJobQueue(self.queue_dir, self.telemetry),
-            telemetry=self.telemetry,
+            self.library, self.glossaries, self.versions, self.worker.queue, telemetry=self.telemetry,
         )
 
     def source(self, episode=1):
@@ -145,17 +143,15 @@ class Env:
         return self.media / f"Show.S01E{episode:02d}.vi.srt"
 
     def enqueue(self, episode=1):
-        created = gst_queue.enqueue_translation_jobs(
-            self.queue_dir,
+        created = self.worker.queue.enqueue(
             {
                 "subtitle_path": str(self.source(episode)), "video_path": str(self.media / f"Show.S01E{episode:02d}.mkv"),
                 "media_type": "series", "series_id": "7", "media_id": str(100 + episode), "source_code": "en",
                 "provider": "gemini-console",
             },
             [{"code": "vi", "language": "Vietnamese", "enabled": True}],
-            self.telemetry,
         )
-        return Path(created[0]).stem
+        return created[0]
 
     def run_job(self, episode=1):
         job_id = self.enqueue(episode)
@@ -181,7 +177,8 @@ class Env:
         for path in Path(self.queue_dir).rglob("*"):
             if path.is_file():
                 parts.append(path.read_text(encoding="utf-8"))
-        parts.append(json.dumps(gst_queue.queue_snapshot(self.queue_dir)))
+        parts.append(json.dumps(self.worker.queue.snapshot(), default=str))
+        parts.append(json.dumps([dict(row) for row in self.store.query("SELECT * FROM jobs")], default=str))
         parts.append(json.dumps(events_page(self.telemetry, {"limit": ["1000"]}), default=str))
         return "\n".join(parts)
 
@@ -234,9 +231,9 @@ class DecisionEventTests(unittest.TestCase):
         env = Env(self)
         env.output().write_text("exists", encoding="utf-8")
         self.assertEqual(
-            gst_queue.enqueue_translation_jobs(
-                env.queue_dir, {"subtitle_path": str(env.source()), "source_code": "en"},
-                [{"code": "vi", "language": "Vietnamese", "enabled": True}], env.telemetry,
+            env.worker.queue.enqueue(
+                {"subtitle_path": str(env.source()), "source_code": "en"},
+                [{"code": "vi", "language": "Vietnamese", "enabled": True}],
             ),
             [],
         )
@@ -263,16 +260,16 @@ class DecisionEventTests(unittest.TestCase):
         # The strong model's translation is what was published.
         self.assertEqual(env.store.current_version(str(env.output())).model, "m-2")
 
-    def test_an_outage_defers_the_job_with_the_time_to_retry(self):
+    def test_an_outage_makes_the_job_wait_with_the_time_to_retry(self):
         def down(req, call_no):
             raise Unavailable("503 overloaded")
 
         env = Env(self, handlers={"m-1": down}, settings={"gst_fallback_model": ""})
         job_id = env.run_job()
 
-        (deferred,) = [e for e in env.store.events(job_id=job_id) if e.kind == "job.deferred"]
-        self.assertEqual(deferred.data["cause"], "provider-unavailable")
-        self.assertGreater(deferred.data["retry_at"], 0)
+        (deferred,) = [e for e in env.store.events(job_id=job_id) if e.kind == "job.waiting"]
+        self.assertEqual(deferred.data["wait"], "rate")
+        self.assertGreater(deferred.data["until"], 0)
         self.assertIn("unavailable", deferred.reason)
         self.assertFalse(env.output().exists())
 

@@ -14,8 +14,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import worker
-from gst_worker import config, queue
+from gst_worker import config, queue, queue_policy
 from gst_worker.console import ConsoleActions
+from gst_worker.intake import receive_script_jobs
+from gst_worker.jobs import FROM_LEGACY, JobStore
+from gst_worker.queue import JobQueue
+from gst_worker.store import Store
 
 TARGETS = [{"code": "vi", "language": "Vietnamese", "enabled": True}]
 SCRIPT = (Path(__file__).resolve().parents[3] / "bazarr-postprocess" / "gst_enqueue.sh").read_text(encoding="utf-8")
@@ -46,19 +50,23 @@ class HoldCase(unittest.TestCase):
         self.queue_dir = str(self.root / "queue")
         self.media = self.root / "media"
         self.media.mkdir()
-        queue.ensure_queue_dirs(self.queue_dir)  # the shell wrapper creates these before the payload runs
+        for folder in ("pending", "processing", "done", "failed"):  # the shell wrapper creates these before the payload runs
+            (Path(self.queue_dir) / folder).mkdir(parents=True)
+        self.store = Store(":memory:")
+        self.addCleanup(self.store.close)
+        self.jobs = JobStore(self.store)
         (self.root / "targets.json").write_text(json.dumps({
             "source_languages": [{"code": "en", "language": "English"}], "target_languages": TARGETS,
         }), encoding="utf-8")
         self.attempt = Mock()
         self.attempt.run.return_value = "translated"
         self.media_port = FakeMedia()
-        self.console = ConsoleActions(queue.FileJobQueue(self.queue_dir))
+        self.console = ConsoleActions(JobQueue(self.store))
 
     def worker(self, mode="auto", **settings):
         return worker.QueueWorker(
             self.queue_dir, {"job_settle_seconds": 0, "admission_mode": mode, **settings}, None, None,
-            attempt=self.attempt, media=self.media_port, metadata=NoMetadata(),
+            attempt=self.attempt, media=self.media_port, metadata=NoMetadata(), store=self.store,
         )
 
     def subtitle(self, stem="Show.S01E01", folder=None):
@@ -81,7 +89,8 @@ class HoldCase(unittest.TestCase):
                               capture_output=True, check=True).stdout
 
     def names(self, state):
-        return sorted(p.stem for p in (Path(self.queue_dir) / state).glob("*.json"))
+        """The jobs in a state, under the names the console has always used for them."""
+        return sorted(job["job_id"] for job in self.jobs.by_state(*FROM_LEGACY[state]))
 
     def only(self, state):
         [name] = self.names(state)
@@ -102,29 +111,30 @@ class AdmissionTests(HoldCase):
         self.assertFalse(queue_worker.process_once())
         self.attempt.run.assert_not_called()
         self.assertEqual(self.names("pending"), [])
-        held = json.loads((Path(self.queue_dir) / "held" / f"{self.only('held')}.json").read_text())
+        held = self.jobs.get(self.only("held"))
         self.assertEqual((held["target_code"], held["source_code"]), ("vi", "en"))
         self.assertIn("held_at", held)
-        self.assertEqual(queue.queue_snapshot(self.queue_dir)["counts"]["held"], 1)
+        self.assertEqual(self.console.snapshot()["counts"]["held"], 1)
 
     def test_what_the_admin_creates_is_never_held(self):  # 11c
         subtitle = self.subtitle()
         base = {"subtitle_path": str(subtitle), "source_code": "en"}
-        queue.enqueue_translation_jobs(self.queue_dir, base, TARGETS)
+        self.console.jobs.enqueue(base, TARGETS)
         self.assertTrue(self.worker("hold").process_once())
         self.assertEqual(self.names("held"), [])
         self.assertEqual(self.attempt.run.call_count, 1)
 
         retranslation = {"subtitle_path": str(subtitle), "output_path": str(subtitle.with_suffix(".vi.srt")), "target_code": "vi",
                          "source_code": "en"}
-        queue.enqueue_retranslation(self.queue_dir, retranslation)
+        self.console.jobs.enqueue_retranslation(retranslation)
         self.assertTrue(self.worker("hold").process_once())
         self.assertEqual(self.names("held"), [])
 
     def test_a_failed_job_the_admin_retries_runs_even_in_hold(self):
-        job_id = Path(queue.enqueue_translation_jobs(self.queue_dir, {"subtitle_path": str(self.subtitle()), "source_code": "en"}, TARGETS)[0]).stem
-        queue.JobQueue(self.queue_dir).process_once(Mock(side_effect=ValueError("boom")))
-        self.assertTrue(queue.retry_failed_job(self.queue_dir, job_id))
+        [job_id] = self.console.jobs.enqueue({"subtitle_path": str(self.subtitle()), "source_code": "en"}, TARGETS)
+        self.console.jobs.process_once(Mock(side_effect=ValueError("boom")))
+        self.assertEqual(self.names("failed"), [job_id])
+        self.assertTrue(self.console.jobs.retry(job_id))
         self.assertTrue(self.worker("hold").process_once())
         self.assertEqual(self.names("held"), [])
 
@@ -150,8 +160,9 @@ class AdmissionTests(HoldCase):
             update_status("Sending batches")
             raise KeyboardInterrupt()
 
+        receive_script_jobs(self.console.jobs, self.queue_dir, "auto")
         with self.assertRaises(KeyboardInterrupt):
-            queue.JobQueue(self.queue_dir).process_once(interrupt)  # claimed in auto, then the service died
+            self.console.jobs.process_once(interrupt)  # claimed in auto, then the service died
         self.assertEqual(len(self.names("processing")), 1)
         restarted = self.worker("hold")  # recovers the interrupted job
         restarted.process_once()
@@ -170,7 +181,7 @@ class AdmissionTests(HoldCase):
     def test_a_held_job_does_not_count_against_max_pending_and_blocks_no_one(self):
         self.bazarr(self.subtitle("Show.S01E01"))
         self.worker("hold").process_once()
-        self.assertEqual(queue.open_job_count(self.queue_dir), 0)
+        self.assertEqual(self.jobs.open_count(), 0)
         self.assertIn("queued", self.bazarr(self.subtitle("Show.S01E02"), GST_MAX_PENDING="1"))
 
     def test_hold_leaves_a_job_outside_only_paths_to_end_as_skipped(self):  # FR-12.7
@@ -219,8 +230,8 @@ class DecisionTests(HoldCase):
         while queue_worker.process_once():
             pass
         self.assertEqual(self.attempt.run.call_count, 2)  # the third needed no model call
-        skipped = [json.loads(p.read_text()) for p in (Path(self.queue_dir) / "done").glob("*.json")]
-        self.assertEqual(sorted(job["result"] for job in skipped), ["skipped", "translated", "translated"])
+        results = [job["result"] for job in self.jobs.by_state("done", "skipped")]
+        self.assertEqual(sorted(results), ["skipped", "translated", "translated"])
 
     def test_approve_by_series_takes_only_that_series(self):
         self.hold_two()
@@ -246,12 +257,14 @@ class DecisionTests(HoldCase):
         self.assertTrue((self.root / "outside.json").exists())
         self.assertEqual(list(pending.glob("*.json")), [])
 
-    def test_approval_is_refused_while_the_daily_quota_is_paused(self):
+    def test_approval_during_a_spent_quota_is_accepted_and_the_jobs_wait_for_the_reset(self):
         self.hold_two()
-        with patch.object(queue, "daily_quota_pause_until", return_value=9e12):
-            with self.assertRaises(ValueError):
-                self.console.approve(everything=True)
-        self.assertEqual(len(self.names("held")), 3)
+        queue_worker = self.worker("hold", gst_model="m")
+        queue_worker.queue.jobs.set_health("gemini", "m", queue_policy.after_quota(queue_policy.Health(), 9e12))
+        self.assertEqual(len(self.console.approve(everything=True)), 3)  # NFR-1: a spent quota refuses nothing
+        self.assertFalse(queue_worker.process_once())
+        self.assertEqual((len(self.names("deferred")), self.names("failed")), (3, []))
+        self.attempt.run.assert_not_called()
 
     def test_a_rejection_is_remembered_against_the_script_and_a_scan(self):  # 11h
         first, _ = self.hold_two()
@@ -260,8 +273,8 @@ class DecisionTests(HoldCase):
         self.assertEqual(self.names("rejected"), [rejected_id])
 
         self.bazarr(first, series_id="5")  # Bazarr runs the script for the same item again
-        self.assertEqual(queue.enqueue_translation_jobs(  # and so does a scan from the console
-            self.queue_dir, {"subtitle_path": str(first), "source_code": "en"}, TARGETS), [])
+        self.assertEqual(self.console.jobs.enqueue(  # and so does a scan from the console
+            {"subtitle_path": str(first), "source_code": "en"}, TARGETS), [])
         queue_worker = self.worker("auto")  # even with hold off the "no" stands
         queue_worker.process_once()
         self.assertEqual((self.names("pending"), self.names("processing")), ([], []))
@@ -282,7 +295,7 @@ class DecisionTests(HoldCase):
     def test_a_held_job_is_not_deleted_around_the_remembered_no(self):
         self.hold_two()
         held = self.only_of_series()
-        self.assertFalse(queue.delete_queue_job(self.queue_dir, "held", held))
+        self.assertFalse(self.console.delete("held", held))
         self.assertEqual(len(self.names("held")), 3)
 
     def only_of_series(self):

@@ -275,7 +275,7 @@ and every task.
 - Limits: `LLM_RPM`, `LLM_TPM`, `LLM_RPD` apply per key; with `openai_compat` they default to unlimited. A `429`
   without a quota code is a rate limit (retried with backoff, honouring `Retry-After`); `insufficient_quota` and
   `402` (out of credit) count as spent quota: that model is paused for 24 hours, exactly as when Gemini's daily
-  quota is spent (the pause does not notice a top-up; P8 replaces it with a breaker).
+  quota is spent. The job waits until the reset (P8: a breaker per model, see `breaker_threshold`).
 - Gemini-only features stay with Gemini: `web_search` (the research task, P16) is not offered by this adapter,
   and the thinking-token settings do nothing here.
 
@@ -303,6 +303,23 @@ The Settings page saves these options:
 - `job_settle_seconds`: queue settle window before a new job can run. Default
   is `600` seconds so Bazarr has time to finish extracting other embedded
   subtitles from the same media file.
+- `breaker_threshold` (default `3`, min `1`): consecutive rate-limit or
+  unavailable errors, after the retries inside one call, that open the breaker of
+  a model. An open breaker rests 300, 900, 1800, then 3600 seconds, then one trial
+  call; a job waiting on it does not fail.
+- `max_crashes` (default `3`): a job found running after this many restarts is
+  failed with reason `crashed`.
+- `max_calls_per_job` (default `20`, `0` = no cap): model calls one job may make.
+  Reaching it fails the job with the reason.
+- `max_calls_per_day` (default `0`, no cap): model calls all jobs may make in one UTC
+  day. Reaching it makes jobs wait until the next UTC midnight. Turn it on with a paid key.
+- `transient_retry_seconds` (default `30`): how soon a job runs again after one failure
+  that did not open the breaker.
+- `edit_coalesce_minutes` (default `10`, min `0`): cue edits made closer than this to the
+  previous edit are one `edit` version (FR-16.7). `0` makes every save its own version.
+- `quota_reset_tz` (default `America/Los_Angeles`): the zone whose midnight resets a
+  daily quota. Gemini counts days in Pacific time; check it against the provider's
+  documentation before relying on it (SPEC section 8).
 - `admission_mode`: what the worker does with jobs the Bazarr script queues.
   `auto` (default) translates them. `hold` receives and stores them as *held*
   jobs without calling the model; you approve or reject them in Queue → Held.

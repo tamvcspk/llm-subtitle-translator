@@ -169,13 +169,18 @@ class TokenTotals:
 
 CURRENT = "current"
 SUPERSEDED = "superseded"
+CANDIDATE = "candidate"  # a result kept but never put on disk until the admin adopts it (FR-16.3, FR-16.4)
+REMOVED = "removed"  # tombstone: the admin deleted the target; the content stays for revert (FR-16.6)
+PRUNED = "pruned"  # a stored copy removed by retention; the history line stays (FR-13.3, P9)
 
 
 @dataclass(frozen=True)
 class TranslationVersion:
-    """One stored version of a target subtitle file (FR-8.1). ``status`` is ``current`` or ``superseded``;
-    ``trigger`` is auto | retranslate | revert | external | cue_edit. ``missing_units`` lists the earlier
-    units that had no usable facts when this was made (``context_complete`` is then False)."""
+    """One stored version of a target subtitle file (FR-8.1, FR-16.1). ``status`` is current | superseded |
+    candidate | removed | pruned; ``trigger`` is auto | retranslate | revert | external | cue_edit | remove;
+    ``origin`` is machine | edit | revert | external | import. ``publishing`` marks a version whose file write has
+    been announced but not confirmed yet (FR-16.5). ``missing_units`` lists the earlier units that had no usable
+    facts when this was made (``context_complete`` is then False)."""
 
     output_path: str
     version: int
@@ -197,6 +202,10 @@ class TranslationVersion:
     context_complete: bool = True
     memory_hash: str = ""
     missing_units: tuple[str, ...] = ()
+    origin: str = ""
+    publishing: bool = False
+    edited_at: float = 0.0
+    job_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -427,8 +436,24 @@ class VersionRepo(Protocol):
         context_complete: bool = True,
         memory_hash: str = "",
         missing_units: Iterable[str] = (),
+        status: str | None = None,
+        origin: str = "",
+        publishing: bool = False,
+        job_id: str = "",
+        edited_at: float = 0.0,
     ) -> None:
-        """Record a version. With ``make_current`` it atomically supersedes the file's previous current one."""
+        """Record a version. ``status`` defaults to current (or superseded without ``make_current``). A ``current``
+        or ``removed`` version atomically supersedes the file's previous current one; a candidate supersedes nothing."""
+
+    def set_version(self, output_path: str, version: int, **fields: Any) -> None:
+        """Change ``status``, ``publishing``, ``stored_path``, ``sha256`` or ``edited_at`` of one version. Setting
+        ``status`` to current supersedes the file's other current version in the same transaction."""
+
+    def publishing_versions(self) -> list[TranslationVersion]:
+        """Versions whose publish was announced and not confirmed (checked again at start-up, FR-16.5)."""
+
+    def current_versions(self) -> list[TranslationVersion]:
+        """The current version of every file that has one."""
 
     def cached_versions(self, source_sha256: str, target_lang: str, context_hash: str) -> list[TranslationVersion]:
         """Auto and retranslate versions made from the same input and context, newest first."""
@@ -619,43 +644,3 @@ class HeldJob:
     created_at: float = 0.0
     held_at: float = 0.0
     cue_count: int = 0
-
-
-@runtime_checkable
-class JobQueue(Protocol):
-    """How the core submits and manages translation jobs. The queue's own life cycle (claiming a job, deferring
-    it, quota pauses, recovery) belongs to the adapter and the worker loop, not to the core."""
-
-    def enqueue(self, base_job: dict[str, Any], targets: list[dict[str, Any]]) -> list[str]:
-        """Queue one automatic job per enabled target language that is still missing; returns what was queued.
-        Raises when the daily quota pause is active."""
-
-    def enqueue_retranslation(self, job: dict[str, Any]) -> str:
-        """Queue one explicit retranslation ahead of automatic work; returns its job id. Raises ``ValueError``
-        when one for the same target is already waiting."""
-
-    def retry(self, job_id: str) -> bool:
-        """Put a failed job back in line; False when there is no such failed job."""
-
-    def cancel(self, job_id: str) -> bool:
-        """Remove a failed job for good; False when there is no such job."""
-
-    def delete(self, state: str, job_id: str) -> bool:
-        """Remove a job that is in ``state``; False when there is none. A held job is not deleted this way
-        (approve or reject it, so a refusal is remembered)."""
-
-    def held(self) -> list[HeldJob]:
-        """The jobs waiting for approval (FR-12), oldest first."""
-
-    def rejected(self) -> list[HeldJob]:
-        """The jobs the admin refused, oldest first."""
-
-    def approve(self, job_ids: list[str]) -> list[str]:
-        """Release held jobs into the queue; returns the ids that moved. Unknown or not-held ids are ignored.
-        Raises when the daily quota pause is active."""
-
-    def reject(self, job_ids: list[str]) -> list[str]:
-        """Refuse held jobs for good: they never run and are not queued again; returns the ids that moved."""
-
-    def restore(self, job_ids: list[str]) -> list[str]:
-        """Take rejected jobs back to the held inbox; returns the ids that moved."""

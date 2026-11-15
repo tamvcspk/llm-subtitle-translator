@@ -1,12 +1,12 @@
-import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import worker
-from gst_worker import queue, queue_policy, translation
+from gst_worker import queue_policy, translation
+from gst_worker import queue_policy as policy
+from tests.queue_harness import START, SchedulerCase
 
 PRIMARY = "gemini-3.8-flash"
 FALLBACK = "gemini-3.5-flash-lite"
@@ -26,41 +26,15 @@ class ModelPolicyTests(unittest.TestCase):
         self.assertEqual(queue_policy.select_model(MODELS, {FALLBACK}, prefer_fallback=True), PRIMARY)
         self.assertIsNone(queue_policy.select_model(MODELS, {PRIMARY, FALLBACK}))
 
-    def test_provider_retry_backs_off_then_hands_over_to_fallback(self):
-        delays = [queue_policy.provider_retry_decision(count, 0).retry_at for count in range(4)]
-        self.assertEqual(delays, [300, 900, 1800, 3600])
-        self.assertEqual(queue_policy.provider_retry_decision(4, 0, fallback_available=True).state, "fallback")
-        self.assertEqual(queue_policy.provider_retry_decision(4, 0).state, "failed")
 
+class ModelFallbackQueueTests(SchedulerCase):
+    MODELS = MODELS
 
-class ModelFallbackQueueTests(unittest.TestCase):
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-        self.queue_dir = str(self.root / "queue")
-        self.jobs = queue.JobQueue(self.queue_dir)
+    def run_job(self, execute, advance=1):
+        return self.tick(execute, advance=advance)
 
-    def enqueue(self, name, mtime=100):
-        source = self.root / f"{name}.en.srt"
-        source.write_text("subtitle", encoding="utf-8")
-        os.utime(source, (100, 100))
-        path = Path(queue.enqueue_translation_jobs(
-            self.queue_dir, {"subtitle_path": str(source), "source_code": "en"},
-            [{"code": "zh", "language": "Chinese", "enabled": True}],
-        )[0])
-        os.utime(path, (mtime, mtime))
-        return path.stem
-
-    def process(self, execute, now):
-        with patch("gst_worker.queue.time.time", return_value=now):
-            return self.jobs.process_once(execute, now=now, models=MODELS)
-
-    def job(self, state, job_id):
-        return json.loads((Path(self.queue_dir) / state / f"{job_id}.json").read_text(encoding="utf-8"))
-
-    def test_primary_outage_backs_off_then_finishes_on_fallback(self):
-        job_id = self.enqueue("movie")
+    def test_primary_outage_opens_the_breaker_then_finishes_on_the_strong_model(self):
+        job_id = self.add("movie")
         used = []
 
         def execute(job, update_status):
@@ -69,99 +43,94 @@ class ModelFallbackQueueTests(unittest.TestCase):
                 raise translation.ProviderUnavailableError("503 UNAVAILABLE")
             return "translated"
 
-        now = 1000
-        for delay in (300, 900, 1800, 3600):
-            self.assertTrue(self.process(execute, now))
-            self.assertEqual(self.job("deferred", job_id)["retry_at"], now + delay)
-            now += delay
-        self.assertTrue(self.process(execute, now))
-        self.assertTrue(self.job("pending", job_id)["use_fallback_model"])
-        self.assertTrue(self.process(execute, now))
-
-        self.assertEqual(used, [PRIMARY] * 5 + [FALLBACK])
-        done = self.job("done", job_id)
-        self.assertEqual(done["gst_model"], FALLBACK)
-        for field in ("use_fallback_model", "provider_retry_count", "last_error"):
+        self.drain(execute, step=31)  # the default breaker opens at the third failure in a row
+        self.assertEqual(used, [PRIMARY] * 3 + [FALLBACK])
+        done = self.job(job_id)
+        self.assertEqual((done["state"], done["gst_model"]), ("done", FALLBACK))
+        for field in ("provider_retry_count", "last_error"):
             self.assertNotIn(field, done)
 
-    def test_fallback_outage_fails_without_another_cycle(self):
-        job_id = self.enqueue("movie")
-        path = Path(self.queue_dir) / "pending" / f"{job_id}.json"
-        path.write_text(json.dumps({**self.job("pending", job_id), "provider_retry_count": 4, "use_fallback_model": True}), encoding="utf-8")
+    def test_an_outage_of_the_strong_model_makes_the_job_wait_it_does_not_fail(self):
+        job_id = self.add("movie")
+        self.queue.jobs.transition(job_id, "queued", tier="strong")
         execute = Mock(side_effect=translation.ProviderUnavailableError("503 UNAVAILABLE"))
 
-        self.assertTrue(self.process(execute, 1000))
+        self.drain(execute, step=31)
 
-        self.assertEqual(execute.call_args.args[0]["gst_model"], FALLBACK)
-        self.assertTrue((Path(self.queue_dir) / "failed" / f"{job_id}.json").exists())
+        self.assertEqual({call.args[0]["gst_model"] for call in execute.call_args_list}, {PRIMARY, FALLBACK})
+        job = self.job(job_id)
+        self.assertEqual((job["state"], job["wait_reason"]), ("waiting", "provider"))  # not failed: the breaker rests
+        self.assertEqual(self.queue.jobs.counts()["failed"], 0)
 
-    def test_waiting_out_an_outage_holds_other_jobs(self):
-        first = self.enqueue("first", mtime=100)
-        second = self.enqueue("second", mtime=200)
-        execute = Mock(side_effect=[translation.ProviderUnavailableError("503"), "translated", "translated"])
+    def test_an_open_breaker_holds_the_other_jobs_too(self):
+        self.configure(models=(PRIMARY,))
+        first, second = self.add("first", created_at=START), self.add("second", created_at=START + 1)
+        execute = Mock(side_effect=translation.ProviderUnavailableError("503"))
+        self.drain(execute, step=31)  # three failures: the breaker is open
+        self.assertEqual(execute.call_count, 3)
+        self.assertEqual(self.state(second), "waiting")  # parked: the provider cannot be called now
+        self.assertIsNone(self.tick(lambda job, update: "translated", advance=100))
+        done = self.drain(lambda job, update: "translated", step=400)
+        self.assertEqual(sorted(done), sorted([first, second]))
 
-        self.assertTrue(self.process(execute, 1000))
-        self.assertFalse(self.process(execute, 1299))
-        self.assertEqual(execute.call_count, 1)
-
-        self.assertTrue(self.process(execute, 1300))
-        self.assertTrue(self.process(execute, 1300))
-        self.assertEqual([call.args[0]["job_id"] for call in execute.call_args_list], [first, second, first])
-
-    def test_daily_quota_moves_work_to_fallback_until_both_models_are_exhausted(self):
-        first = self.enqueue("first", mtime=100)
-        second = self.enqueue("second", mtime=200)
+    def test_daily_quota_moves_work_to_the_strong_model_until_both_are_exhausted(self):
+        first, second = self.add("first", created_at=START), self.add("second", created_at=START + 1)
         execute = Mock(side_effect=[
             translation.DailyQuotaExceededError("429 daily quota"),
             translation.DailyQuotaExceededError("429 daily quota"),
         ])
 
-        self.assertTrue(self.process(execute, 1000))
-        self.assertIsNone(queue.daily_quota_pause_until(self.queue_dir, 1001))
-        self.assertEqual(queue.model_quota_pauses(self.queue_dir, 1001), {PRIMARY: 87_400})
-        self.assertEqual(self.job("pending", first)["last_error"], "429 daily quota")
+        self.assertTrue(self.run_job(execute))
+        self.assertIsNone(self.queue.quota_pause_until())  # the strong model still has quota
+        self.assertEqual(self.job(first)["last_error"], "429 daily quota")
+        health = self.queue.jobs.health_map()
+        reset = policy.daily_quota_reset_at(self.clock.now)
+        self.assertEqual((health[("gemini", PRIMARY)].state, health[("gemini", PRIMARY)].until), ("exhausted", reset))
 
-        self.assertTrue(self.process(execute, 5000))
+        self.assertTrue(self.run_job(execute))
         self.assertEqual([call.args[0]["gst_model"] for call in execute.call_args_list], [PRIMARY, FALLBACK])
-        self.assertEqual(queue.daily_quota_pause_until(self.queue_dir, 5001), 87_400)
-        self.assertEqual(queue.queue_snapshot(self.queue_dir)["counts"]["failed"], 2)
-        self.assertTrue((Path(self.queue_dir) / "failed" / f"{second}.json").exists())
+        self.assertEqual(self.queue.quota_pause_until(), reset)
+        self.assertIsNone(self.tick(execute, advance=1))  # the next tick parks the job still in line
+        self.assertEqual(self.queue.jobs.counts()["failed"], 0)  # waiting, not failed (NFR-1)
+        self.assertEqual({self.state(first), self.state(second)}, {"waiting"})
 
-        with patch("gst_worker.queue.time.time", return_value=87_400):
-            self.assertTrue(queue.retry_failed_job(self.queue_dir, first))
-        self.assertTrue(self.process(lambda job, update: job["gst_model"], 87_400))
-        self.assertEqual(self.job("done", first)["gst_model"], PRIMARY)
+        self.clock.advance(reset - self.clock.now + 1)
+        used = []
+        self.drain(lambda job, update: used.append(job["gst_model"]) or "translated")
+        self.assertEqual(used, [PRIMARY, PRIMARY])
+        self.assertEqual(self.job(first)["gst_model"], PRIMARY)
 
-    def test_switching_fallback_to_a_model_with_quota_lifts_the_pause(self):
-        first = self.enqueue("first")
+    def test_switching_the_strong_model_to_one_with_quota_lifts_the_pause(self):
+        first = self.add("first")
         execute = Mock(side_effect=translation.DailyQuotaExceededError("429 daily quota"))
-        self.assertTrue(self.process(execute, 1000))
-        self.assertTrue(self.process(execute, 1000))
-        self.assertEqual(queue.daily_quota_pause_until(self.queue_dir, 1001), 87_400)
+        self.assertTrue(self.run_job(execute))
+        self.assertTrue(self.run_job(execute))
+        self.assertIsNotNone(self.queue.quota_pause_until())
+        self.assertEqual(self.state(first), "waiting")
 
         fresh = "gemini-3.6-flash-lite"
-        with patch("gst_worker.queue.time.time", return_value=2000):
-            # Unchanged models keep the pause; a new model with quota left lifts it.
-            self.assertEqual(queue.sync_daily_quota_pause(self.queue_dir, MODELS), 87_400)
-            self.assertIsNone(queue.sync_daily_quota_pause(self.queue_dir, (PRIMARY, fresh)))
-            self.assertIsNone(queue.queue_snapshot(self.queue_dir)["daily_quota_pause"])
-            self.assertTrue(queue.retry_failed_job(self.queue_dir, first))
-            self.assertTrue(self.jobs.process_once(lambda job, update: "translated", now=2000, models=(PRIMARY, fresh)))
-        self.assertEqual(self.job("done", first)["gst_model"], fresh)
+        self.configure(models=(PRIMARY, MODELS[1]))
+        self.assertIsNotNone(self.queue.quota_pause_until())  # unchanged models keep the pause
+        self.configure(models=(PRIMARY, fresh))
+        self.assertIsNone(self.queue.quota_pause_until())  # a new model with quota left lifts it
+        self.assertEqual(self.drain(lambda job, update: "translated"), [first])
+        self.assertEqual(self.job(first)["gst_model"], fresh)
 
-        # Switching back to two exhausted models restores the pause until the earliest expiry.
-        self.assertEqual(queue.sync_daily_quota_pause(self.queue_dir, MODELS, 3000), 87_400)
-
-    def test_settings_update_through_worker_lifts_the_pause(self):
+    def test_settings_update_through_the_worker_lifts_the_pause(self):
+        store = self.store
+        qw = worker.QueueWorker(
+            "unused-queue-dir", {"gst_model": PRIMARY, "gst_fallback_model": FALLBACK}, None, None, store=store,
+        )
+        qw.queue.jobs.clock = self.clock.time
+        qw.queue.jobs.monotonic = self.clock.monotonic
+        self.queue = qw.queue
+        self.add("first")
         execute = Mock(side_effect=translation.DailyQuotaExceededError("429 daily quota"))
-        self.enqueue("first")
-        self.assertTrue(self.process(execute, 1000))
-        self.assertTrue(self.process(execute, 1000))
-        with patch("gst_worker.queue.time.time", return_value=2000):
-            qw = worker.QueueWorker(self.queue_dir, {"gst_model": PRIMARY, "gst_fallback_model": FALLBACK}, None, None)
-            self.assertIsNotNone(queue.daily_quota_pause_until(self.queue_dir))
-            qw.apply_settings({"gst_model": PRIMARY, "gst_fallback_model": "gemini-3.6-flash-lite"})
-            self.assertIsNone(queue.daily_quota_pause_until(self.queue_dir))
+        self.assertTrue(self.run_job(execute))
+        self.assertTrue(self.run_job(execute))
+        self.assertIsNotNone(qw.queue.quota_pause_until())
+        qw.apply_settings({"gst_model": PRIMARY, "gst_fallback_model": "gemini-3.6-flash-lite"})
+        self.assertIsNone(qw.queue.quota_pause_until())
 
 
 class _NoBazarr:

@@ -1,4 +1,25 @@
 # Unreleased
+- **P8: jobs and versions in SQLite (FR-15, FR-17, ADR-11, ADR-12).** A translation job is now a row of the `jobs`
+  table, not a JSON file. The worker claims one job atomically (`BEGIN IMMEDIATE`), orders them by class
+  (interactive > retranslate > auto), round-robin per series, with aging, and skips jobs whose model cannot be
+  called now. Leases with heartbeat recover a crashed job on the next start (`max_crashes`, then `failed` with
+  reason `crashed`). A provider failure never fails a job: it waits with a reason (`quota`, `provider`, `context`,
+  `settle`, `rate`) and the console shows it. A per-(provider, model) breaker opens after `breaker_threshold`
+  failures in a row and rests 300, 900, 1800, 3600 s, with one trial call when the rest is over. A refused key
+  (`AuthError`) or an unknown model parks the jobs until the setting changes. `max_calls_per_job` and
+  `max_calls_per_day` cap the model calls. A provider's content refusal (`Blocked`, new in subcore) is a kind
+  of `BadOutput` and fails the job with the reason after one escalation. The queue folders of 0.x are imported
+  once into the table and moved to `queue.migrated/`; `gst_enqueue.sh` is unchanged and still drops its files
+  into `pending/`, which the worker takes into the table each tick until P10. The console has a Stop button for a
+  running job and a "Request earlier episodes" button for a job waiting on story facts.
+  Versions (FR-16): a result that cannot go on disk safely (the file appeared while the job ran, the subtitle
+  changed under a replace job, the source changed) is kept as a `candidate`, and "Use this version" publishes
+  it. Deleting the subtitle from the console keeps a `removed` version (restorable by revert) and the episode
+  is not requested again automatically. Publishing is announced before the rename and settled at start-up.
+  A hand-edited file is kept once as an `external` version. Consecutive cue edits within
+  `edit_coalesce_minutes` are one version. The Bazarr rescan after a change runs in the background with retries.
+  Schema 9. Not done yet: the `ADR-12` port cleanup beyond `JobQueue`, the `pruned` state (P9), the Library
+  label "Removed" (the flag is in the API, the console badge is not), and the CI run on GitHub.
 - Fix: with `job_settle_seconds` at 0 a job no longer waits when its subtitle's modification time is a few
   milliseconds ahead of the clock (Windows rounds file times up).
 - **P7: a second provider, `openai_compat` (FR-9.1-9.3, ADR-3).** The models can now run on any server that speaks

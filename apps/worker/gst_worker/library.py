@@ -226,9 +226,11 @@ class Library:
             "missing_units": [],
             "updated_at": None,
             "modified_outside": False,
+            "removed": False,  # the admin deleted it: shown as Missing · Removed and not requested again (FR-16.6)
         }
         if current is None or not exists:
             info["modified_outside"] = exists and current is None  # a file we did not make
+            info["removed"] = not exists and self.versions.latest_status(output_path) == "removed"
             return info
         stale = not self.stale_ignored(unit) and (
             current.glossary_hash != self.unit_rules(unit, lang, glossary=glossary, cache=cache).hash

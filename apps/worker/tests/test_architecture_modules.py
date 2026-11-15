@@ -4,18 +4,19 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from gst_worker.console import ConsoleActions
-from gst_worker.queue_policy import daily_quota_retry_at, provider_retry_decision
+from gst_worker.queue_policy import PROVIDER_RETRY_DELAYS, daily_quota_reset_at, next_utc_midnight
 
 
 class QueuePolicyTests(unittest.TestCase):
-    def test_provider_retry_policy_is_pure_and_bounded(self):
-        self.assertEqual(provider_retry_decision(0, 1000).retry_at, 1300)
-        self.assertEqual(provider_retry_decision(3, 1000).retry_count, 4)
-        self.assertEqual(provider_retry_decision(4, 1000).state, "failed")
-        self.assertEqual(provider_retry_decision(4, 1000, fallback_available=True).state, "fallback")
+    def test_the_breaker_rests_for_the_steps_the_retry_policy_always_had(self):
+        self.assertEqual(PROVIDER_RETRY_DELAYS, (300, 900, 1800, 3600))
 
-    def test_daily_quota_pause_is_24_hours(self):
-        self.assertEqual(daily_quota_retry_at(1000), 87400)
+    def test_the_daily_quota_resets_at_the_next_pacific_midnight_never_more_than_a_day_away(self):
+        for now in (1_800_000_000.0, 1_810_000_000.0, 1_820_000_000.0):
+            self.assertTrue(0 < daily_quota_reset_at(now) - now <= 86_400 + 3_600)
+
+    def test_a_day_cap_counts_from_zero_at_utc_midnight(self):
+        self.assertEqual(next_utc_midnight(1_800_000_000.0), 1_800_057_600.0)
 
 
 class ConsoleActionsTests(unittest.TestCase):

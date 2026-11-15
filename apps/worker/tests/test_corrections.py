@@ -5,6 +5,7 @@ Every provider is a fake; nothing touches the network.
 
 import hashlib
 import json
+import time
 import sqlite3
 import tempfile
 import unittest
@@ -17,7 +18,8 @@ from gst_worker import library_api
 from gst_worker.bazarr import BazarrMedia
 from gst_worker import queue as gst_queue
 from gst_worker.glossaries import GlossaryFiles
-from gst_worker.queue import FileJobQueue
+from gst_worker.jobs import job_key
+from gst_worker.queue import JobQueue
 from gst_worker.library import Library, identify_job
 from gst_worker.ports import Correction
 from gst_worker.store import _MIGRATIONS, Store
@@ -63,8 +65,9 @@ class Env:
         )
         self.queue_dir = str(self.root / "queue")
         self.refreshed = []
+        self.jobs = JobQueue(self.store)
         self.service = UnitService(
-            self.library, self.glossaries, self.versions, FileJobQueue(self.queue_dir), refresh_bazarr=self.refreshed.append
+            self.library, self.glossaries, self.versions, self.jobs, refresh_bazarr=self.refreshed.append
         )
 
     def handler(self, req, call_no):
@@ -100,9 +103,8 @@ class Env:
 
     def run_pending_retranslation(self):
         """Run the queued retranslation job the way the worker would (minus HTTP and TMDB)."""
-        paths = sorted((Path(self.queue_dir) / "pending").glob("*.json"))
-        self.test_job = json.loads(paths[-1].read_text(encoding="utf-8"))
-        paths[-1].unlink()
+        self.test_job = self.jobs.jobs.by_state("queued")[-1]
+        self.jobs.jobs.transition(self.test_job["job_id"], "done", result="translated")  # it leaves the line
         return self.attempt.run(self.test_job, "", SETTINGS)
 
 
@@ -149,7 +151,7 @@ class StoreMigrationTests(unittest.TestCase):
             old.close()
             store = Store(path)
             try:
-                self.assertEqual(store.schema_version, 7)
+                self.assertEqual(store.schema_version, 9)
                 row = store.current_version("/m/a.vi.srt")
                 self.assertEqual((row.sha256, row.unit_id, row.glossary_hash), ("abc", None, ""))
             finally:
@@ -372,7 +374,7 @@ class RangeRetranslationTests(unittest.TestCase):
         ]:
             with self.subTest(spec=spec), self.assertRaisesRegex(ValueError, expected):
                 env.service.retranslate(unit, {"lang": "vi", "range": spec})
-        self.assertEqual(list((Path(env.queue_dir) / "pending").glob("*.json")), [])
+        self.assertEqual(env.jobs.jobs.by_state("queued"), [])
 
     def test_a_range_needs_an_existing_target_that_matches_the_source(self):
         env = Env(self)
@@ -392,11 +394,9 @@ class QueueTests(unittest.TestCase):
         env = Env(self)
         env.translate(1)
         auto = env.job(2)
-        queue = gst_queue.JobQueue(env.queue_dir)
-        auto_path = queue.queue_dir / "pending" / "auto-2.json"
-        auto_path.write_text(json.dumps(auto), encoding="utf-8")
-        import os
-        os.utime(auto_path, (1, 1))  # much older than the retranslation
+        queue = env.jobs
+        queue.jobs.add(auto, key=job_key(auto["subtitle_path"], auto["output_path"], "vi"), job_id="auto-2",
+                       created_at=time.time() - 3600)  # an hour older than the retranslation, not yet aged up
 
         env.service.retranslate(env.unit(1), {"lang": "vi"})
         seen = []

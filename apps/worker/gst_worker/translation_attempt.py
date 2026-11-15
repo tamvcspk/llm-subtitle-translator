@@ -33,7 +33,11 @@ from .ports import MissingApiKey, ProviderFactory, Telemetry, Unit, UsageLog
 from .rules import UnitRules
 from .subtitles import target_output_path
 from .telemetry import Telemetry as TelemetrySink
-from .translation import ERROR_TAIL_LENGTH, DailyQuotaExceededError, HardJobError, ProviderUnavailableError, redact
+from .queue_policy import next_utc_midnight
+from .translation import (
+    ERROR_TAIL_LENGTH, CallBudgetError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, ProviderAuthError,
+    ProviderUnavailableError, redact,
+)
 from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, TranslationVersions, sha256_bytes
 
 # Bump when the prompt or engine behaviour changes enough that old results should not be reused (NFR-3).
@@ -74,6 +78,56 @@ def _temperature(settings: dict[str, Any]) -> float | None:
         return float(str(settings.get("gst_temperature") or "").strip())
     except ValueError:
         return None
+
+
+class _Budget:
+    """The model calls one job may make, and the day's calls all jobs may make (FR-17.6)."""
+
+    def __init__(self, per_job: int, per_day: int, used_today: Callable[[float], int] | None, clock=time.time) -> None:
+        self.per_job, self.per_day, self.used_today, self.clock = per_job, per_day, used_today, clock
+        self.calls = 0
+
+    def spend(self) -> None:
+        if self.per_job > 0 and self.calls >= self.per_job:
+            raise CallBudgetError(f"the job already made {self.calls} model calls (max_calls_per_job={self.per_job})", "job")
+        if self.per_day > 0 and self.used_today is not None:
+            now = self.clock()
+            if self.used_today(next_utc_midnight(now) - 86_400) >= self.per_day:
+                raise CallBudgetError(f"the day's {self.per_day} model calls are spent (max_calls_per_day)", "day")
+        self.calls += 1
+
+
+class _BudgetedProvider:
+    """A provider that counts its calls against a budget before making them."""
+
+    def __init__(self, inner: Provider, budget: _Budget) -> None:
+        self.inner, self.budget = inner, budget
+
+    @property
+    def name(self) -> str:
+        return self.inner.name
+
+    @property
+    def model(self) -> str:
+        return self.inner.model
+
+    @property
+    def caps(self):
+        return self.inner.caps
+
+    def count_tokens(self, req):
+        return self.inner.count_tokens(req)
+
+    def generate(self, req):
+        self.budget.spend()
+        return self.inner.generate(req)
+
+
+def _int_setting(settings: dict[str, Any], key: str, default: int) -> int:
+    try:
+        return int(settings.get(key) if settings.get(key) not in (None, "") else default)
+    except (TypeError, ValueError):
+        return default
 
 
 class TranslationAttempt:
@@ -120,6 +174,17 @@ class TranslationAttempt:
                 reason="a target subtitle already exists; an automatic job never overwrites it",
             )
             return SKIPPED_EXISTING
+        manual = trigger != AUTO or job.get("admission") == "admin"
+        if self.versions is not None and not manual and self.versions.latest_status(output) == "removed":
+            self.telemetry.event(
+                "translation.skipped", job_id=job_id, unit_id=unit_id, target=target_code,
+                reason="the admin removed this subtitle; only a manual request brings it back (FR-16.6)",
+            )
+            return SKIPPED_EXISTING
+        # The version in force when the job starts: a replace job publishes over it only if it is still that one
+        # (FR-16.3). Taken here, not when the job was queued, so a wait does not make every edit a conflict.
+        base = self.versions.repo.current_version(output) if self.versions is not None else None
+        base_version = base.version if base else None
 
         source_sha = sha256_bytes(source.read_bytes())
         cues = srt.parse_file(source)
@@ -138,6 +203,10 @@ class TranslationAttempt:
 
         deadline = time.monotonic() + job_timeout_seconds()
         providers: dict[str, Provider] = {}
+        budget = _Budget(
+            _int_setting(settings, "max_calls_per_job", 0), _int_setting(settings, "max_calls_per_day", 0),
+            getattr(self.usage, "calls_since", None),
+        )
 
         def provider_for(task: str) -> Provider:
             """One provider (and rate limiter) per model; each task has its own model setting (FR-9.3)."""
@@ -145,7 +214,9 @@ class TranslationAttempt:
             if name not in providers:
                 if self.provider_factory is None:
                     raise RuntimeError("no provider factory is wired into this translation attempt")
-                providers[name] = self.provider_factory(settings, name, deadline=deadline, on_call=record)
+                providers[name] = _BudgetedProvider(
+                    self.provider_factory(settings, name, deadline=deadline, on_call=record), budget
+                )
             return providers[name]
 
         # Story memory (P4): earlier episodes' facts are made sure of first, so the bundle is complete
@@ -162,7 +233,7 @@ class TranslationAttempt:
             memory_hash=plan.fingerprint if plan else "",
             context_complete=plan.complete if plan else True,
             missing_units=plan.missing if plan else [],
-            job_id=job_id,
+            job_id=job_id, base_version=base_version,
         )
 
         if self.versions is not None and trigger == AUTO and not rules.locked:
@@ -173,7 +244,7 @@ class TranslationAttempt:
                     "translation.cached", job_id=job_id, unit_id=unit_id, target=target_code, model=model,
                     reason="the same source and context were translated before; the stored result is reused",
                 )
-                return self.versions.publish(output, cached, **published).status
+                return self.versions.publish(output, cached, **published, **self._source_moved(source, source_sha)).status
 
         only, keep = self._plan(retranslate, rules, cues, output)
 
@@ -202,8 +273,20 @@ class TranslationAttempt:
             srt.write_atomic(output, text)
             return "translated"
         return self.versions.publish(
-            output, text, tokens_in=result.tokens_in, tokens_out=result.tokens_out, **published
+            output, text, tokens_in=result.tokens_in, tokens_out=result.tokens_out, **published,
+            **self._source_moved(source, source_sha),
         ).status
+
+    @staticmethod
+    def _source_moved(source: Path, source_sha: str) -> dict[str, str]:
+        """A result made from a source that changed meanwhile is not published over the target (FR-15.10)."""
+        try:
+            moved = sha256_bytes(source.read_bytes()) != source_sha
+        except OSError:
+            moved = True  # the source vanished: nothing must go on disk from it
+        if not moved:
+            return {}
+        return {"candidate_reason": "the source subtitle changed while the job ran; the result waits as a candidate"}
 
     def _translate(
         self, provider_for, cues, job, description, settings, rules, plan, unit, only, keep, temperature, on_progress,
@@ -254,16 +337,18 @@ class TranslationAttempt:
                 f"Translation exceeded the {int(job_timeout_seconds() // 60)} minute job limit"
             ) from None
         except AuthError as exc:
-            raise RuntimeError(self._message("The provider rejected the API key", exc, settings)) from None
+            raise ProviderAuthError(self._message("The provider rejected the API key", exc, settings)) from None
         except ModelNotFound as exc:
-            raise RuntimeError(
-                self._message("The provider does not know the model (check the model in Settings)", exc, settings)
+            raise ModelNotFoundError(
+                self._message("The provider does not know the model (check the model in Settings)", exc, settings),
+                model=str(settings.get("gst_model") or ""),
             ) from None
         except MissingApiKey as exc:
             raise RuntimeError(str(exc)) from None
         except TranslationError as exc:
             error = HardJobError(self._message("Translation failed", exc, settings))
             error.issues = list(getattr(exc, "issues", ()))  # type: ignore[attr-defined]
+            error.blocked = int(getattr(exc, "blocked", 0) or 0)  # type: ignore[attr-defined]
             raise error from None
         except ProviderError as exc:
             raise RuntimeError(self._message("Translation failed", exc, settings)) from None

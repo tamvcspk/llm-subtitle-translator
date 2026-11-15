@@ -12,6 +12,7 @@ from typing import Any
 from .base import (
     AuthError,
     BadOutput,
+    Blocked,
     Capabilities,
     LLMRequest,
     LLMResponse,
@@ -22,7 +23,10 @@ from .base import (
     Unavailable,
 )
 
-__all__ = ["GeminiProvider", "map_api_error", "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S"]
+__all__ = ["GeminiProvider", "map_api_error", "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S", "BLOCKED_FINISH_REASONS"]
+
+# Finish reasons that mean "the content was refused", as opposed to a cut-off or an empty answer (FR-17.2).
+BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "RECITATION"})
 
 # The light model does the routine work; the worker escalates hard jobs to a stronger one
 # (gemini-3.5-flash). gemini-2.5-flash is closed to new API users (404); in the 2026-11-11
@@ -164,6 +168,7 @@ class GeminiProvider:
         parts: list[str] = []
         tokens_in = tokens_out = 0
         finish = None
+        block_reason = ""
         try:
             stream = client.models.generate_content_stream(
                 model=self.model, contents=req.user, config=self._config(req)
@@ -179,6 +184,10 @@ class GeminiProvider:
                 candidates = getattr(chunk, "candidates", None) or []
                 if candidates and getattr(candidates[0], "finish_reason", None) is not None:
                     finish = candidates[0].finish_reason
+                feedback = getattr(chunk, "prompt_feedback", None)
+                reason = getattr(feedback, "block_reason", None) if feedback is not None else None
+                if reason is not None:
+                    block_reason = getattr(reason, "name", str(reason))
         except ProviderError:
             raise
         except Exception as exc:  # noqa: BLE001 - converted or re-raised below
@@ -187,6 +196,8 @@ class GeminiProvider:
         text = "".join(parts)
         finish_name = getattr(finish, "name", str(finish)) if finish is not None else ""
         if not text.strip():
+            if finish_name in BLOCKED_FINISH_REASONS or block_reason:
+                raise Blocked(f"blocked by the content filter ({block_reason or finish_name})")
             raise BadOutput(f"empty response (finish_reason={finish_name or 'unknown'})")
         # A MAX_TOKENS cut-off is returned as-is: the cues that made it are kept and the
         # rest are repaired/split by the translator instead of re-buying the whole call.

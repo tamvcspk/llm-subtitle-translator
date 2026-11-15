@@ -9,16 +9,21 @@ from unittest.mock import patch
 from subcore import srt
 from subcore.providers import (
     AuthError,
+    Blocked,
     FakeProvider,
+    ModelNotFound,
     QuotaExhausted,
     RateLimited,
     ResilientProvider,
     Unavailable,
 )
 
-from gst_worker import queue as gst_queue
+from gst_worker.queue import JobQueue
 from gst_worker.store import Store
-from gst_worker.translation import DailyQuotaExceededError, HardJobError, ProviderUnavailableError
+from gst_worker.translation import (
+    CallBudgetError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, ProviderAuthError,
+    ProviderUnavailableError,
+)
 from gst_worker.translation_attempt import TranslationAttempt
 from gst_worker.versions import TranslationVersions
 
@@ -120,9 +125,39 @@ class TranslateAndPublishTests(unittest.TestCase):
             return [{"i": i, "text": t} for i, t in req.meta["source"].items()]
 
         env = Env(self, handler=handler)
-        self.assertEqual(env.run(), "skipped-existing-output")
+        # The result waits as a candidate (FR-16.3, criterion 15e); the file that appeared is kept, not overwritten.
+        self.assertEqual(env.run(), "candidate")
         self.assertEqual(env.output.read_text(encoding="utf-8"), "someone else")
-        self.assertEqual(env.store.versions(str(env.output)), [])
+        self.assertEqual([v.status for v in env.store.versions(str(env.output))], ["current", "candidate"])
+
+    def test_a_removed_subtitle_is_not_requested_again_by_an_automatic_job_but_a_manual_one_brings_it_back(self):
+        env = Env(self)
+        env.run()
+        env.versions.remove(str(env.output))
+        self.assertEqual(env.run(), "skipped-existing-output")  # automatic: the admin's removal stands (FR-16.6)
+        self.assertEqual(len(env.fake.calls), 1)  # no model call for the skipped job
+        self.assertFalse(env.output.exists())
+        self.assertEqual(env.run(admission="admin"), "translated")  # a request the admin made by hand
+        self.assertTrue(env.output.exists())
+
+    def test_a_replace_started_before_an_admin_edit_publishes_a_candidate_and_keeps_the_edit(self):
+        box = {"armed": False}
+
+        def handler(req, n):
+            if box["armed"]:  # the admin edits a cue while the replace job is still calling the model
+                box["armed"] = False
+                env = box["env"]
+                env.versions.publish(str(env.output), "admin edit\n", trigger="cue_edit")
+            return [{"i": i, "text": t} for i, t in req.meta["source"].items()]
+
+        env = Env(self, handler=handler)
+        box["env"] = env
+        self.assertEqual(env.run(), "translated")  # version 1
+        box["armed"] = True
+        self.assertEqual(env.run(trigger="retranslate"), "candidate")
+        self.assertEqual(env.output.read_text(encoding="utf-8"), "admin edit\n")
+        self.assertEqual(env.store.current_version(str(env.output)).version, 2)
+        self.assertEqual(env.store.versions(str(env.output))[-1].status, "candidate")
 
     def test_works_without_a_store(self):
         env = Env(self, versions=False)
@@ -150,24 +185,54 @@ class FailureMappingTests(unittest.TestCase):
         self.assertEqual(len(env.fake.calls), 3)  # backed off between attempts
         self.assertEqual(len(env.slept), 2)
 
-    def test_continuous_429_defers_the_job_instead_of_failing_it(self):
+    def test_continuous_429_makes_the_job_wait_instead_of_failing_it(self):
         env = self.failing(RateLimited("429", retry_after=1))
-        queue = gst_queue.JobQueue(str(env.root / "queue"))
+        queue = JobQueue(env.store)
         job = env.job()
-        (queue.queue_dir / "pending" / "job1.json").write_text(json.dumps(job), encoding="utf-8")
+        queue.jobs.add(job, key="k", job_id="job1")
         queue.process_once(
             lambda j, update: env.attempt.run(j, "", {"gst_model": "m-1"}), models=("m-1",)
         )
-        self.assertTrue((queue.queue_dir / "deferred" / "job1.json").exists())
-        self.assertFalse((queue.queue_dir / "failed" / "job1.json").exists())
+        self.assertEqual(queue.jobs.state_of("job1"), "waiting")
+        self.assertEqual(queue.jobs.counts()["failed"], 0)
 
-    def test_rejected_key_fails_without_leaking_the_key(self):
+    def test_rejected_key_is_a_provider_problem_not_a_job_failure_and_never_leaks_the_key(self):
         secret = "AIzaSyFAKEKEYFORTESTING1234567890abcdef"
         env = self.failing(AuthError(f"API key {secret} not valid"))
-        with self.assertRaises(RuntimeError) as raised:
+        with self.assertRaises(ProviderAuthError) as raised:
             env.run(settings={"gst_model": "m-1", "gemini_api_key": secret})
         self.assertNotIn(secret, str(raised.exception))
         self.assertNotIsInstance(raised.exception, (ProviderUnavailableError, DailyQuotaExceededError))
+
+    def test_an_unknown_model_names_the_model(self):
+        env = self.failing(ModelNotFound("no such model"))
+        with self.assertRaises(ModelNotFoundError) as raised:
+            env.run(settings={"gst_model": "m-1"})
+        self.assertEqual(raised.exception.model, "m-1")
+
+    def test_a_blocked_answer_is_repaired_and_split_then_reported_as_blocked_to_the_queue(self):
+        env = self.failing(Blocked("SAFETY"))
+        with self.assertRaises(HardJobError) as raised:  # the queue escalates it once, then fails it with the reason
+            env.run()
+        self.assertGreaterEqual(raised.exception.blocked, 3)
+        self.assertGreater(len(env.fake.calls), 3)  # repair and split were tried
+        self.assertFalse(env.output.exists())
+
+    def test_the_call_cap_of_a_job_stops_it_before_the_next_call(self):
+        env = Env(self, handler=lambda req, n: "this is not json")  # every answer needs a repair
+        with self.assertRaises(CallBudgetError) as raised:
+            env.run(settings={"gst_model": "m-1", "max_calls_per_job": 2})
+        self.assertEqual(raised.exception.scope, "job")
+        self.assertEqual(len(env.fake.calls), 2)
+
+    def test_the_call_cap_of_a_day_counts_the_calls_of_every_job(self):
+        env = Env(self)
+        env.run(settings={"gst_model": "m-1", "max_calls_per_day": 1})  # the first call is recorded in the store
+        env.output.unlink()
+        env.attempt.versions = None  # no cache: the second job must call the model
+        with self.assertRaises(CallBudgetError) as raised:
+            env.run(settings={"gst_model": "m-1", "max_calls_per_day": 1})
+        self.assertEqual(raised.exception.scope, "day")
 
     def test_watchdog_stops_a_job_that_ran_out_of_time(self):
         env = Env(self)

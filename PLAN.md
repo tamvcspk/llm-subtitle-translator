@@ -21,7 +21,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P5** | Nhật ký và đo lường (FR-19, NFR-11, ADR-15): `events`, `llm_calls` mở rộng, body prompt JSONL xoay vòng, mức log, `quality_signals`. Chưa đổi luồng job | Tiêu chí 17 a–g: mỗi quyết định có event kèm lý do; body xoay vòng đúng giới hạn và bật tắt được; khoá, mật khẩu, cookie không rò; lỗi ghi log không làm job fail | `[~]` |
 | **P6** | Cài đặt và khoá API trong DB (FR-20, NFR-5, ADR-13): `settings`, `api_keys`, hiệu lực ngay, Thử khoá | Tiêu chí 19: đổi cài đặt và khoá không cần khởi động lại; khoá gieo từ env lần đầu; chỉ trả 4 ký tự cuối; backup không gồm khoá | `[~]` Code, test (tiêu chí 19 a, b, c, e, f) và docs xong; CI GitHub xanh (4e6fffc); còn thử giao diện trên trình duyệt thật. 19d chờ P8 |
 | **P7** | Provider thứ hai `openai_compat` (FR-9.1–9.3) | Tiêu chí 22: cùng fixture qua `fake` và `openai_compat` (server giả cục bộ) cho cùng kết quả validate; 401/429/5xx/đầu ra sai thành exception có kiểu; model chọn theo tác vụ; khoá lấy từ `api_keys`, không lộ | `[~]` Code, test (tiêu chí 22 a–e, server giả cục bộ), docs xong; CI GitHub xanh (270f9b2); còn thử tay Ollama/OpenRouter thật và giao diện |
-| **P8** | Lõi job và phiên bản trong SQLite (FR-15, FR-16, FR-17, ADR-11, ADR-12): `jobs`, scheduler, lease, breaker, chờ thay vì fail, phiên bản có `candidate`/`removed`, importer từ queue file, bỏ port nội bộ | Tiêu chí 14 a–l và 15 a–i; test cũ chuyển sang SQLite `:memory:` vẫn pass; `gst_enqueue.sh` vẫn chạy được qua importer | `[ ]` |
+| **P8** | Lõi job và phiên bản trong SQLite (FR-15, FR-16, FR-17, ADR-11, ADR-12): `jobs`, scheduler, lease, breaker, chờ thay vì fail, phiên bản có `candidate`/`removed`, importer từ queue file, bỏ port nội bộ | Tiêu chí 14 a–l và 15 a–i; test cũ chuyển sang SQLite `:memory:` vẫn pass; `gst_enqueue.sh` vẫn chạy được qua importer | `[~]` Job, scheduler, lease, breaker, chờ, importer, gap, phiên bản FR-16 (candidate, removed, publish an toàn, Dùng bản này) và `refresh` nền xong với test (14a–l, 15a–i, 13i); còn ADR-12 (`JobQueue` còn trong `queue.py`, port `VersionRepo` còn), mốc reset Gemini chưa đối chiếu với provider thật, CI GitHub chưa chạy |
 | **P9** | Dọn file (FR-13): dòng `jobs` đã xong, bản sao phiên bản, lịch sử glossary, file tạm; `retention_*`, xem trước và **Dọn ngay** | Tiêu chí 12 a–f: dọn đúng nhóm, không đụng media, job chưa xong, phiên bản `current` | `[ ]` |
 | **P10** | Bazarr kéo và Library/Missing (FR-14, FR-15.4–15.6, ADR-10): `catalog_items`, đồng bộ, nhãn dẫn xuất, yêu cầu hàng loạt có ước lượng, Ignored, policy tự yêu cầu; gỡ script, `held`/`rejected`, tab Held | Tiêu chí 13 a–i; chạy thật trên Bazarr thật (Malcolm): yêu cầu tay, rồi bật `auto_request` cho một series | `[ ]` |
 | **P11** | Bundle và CLI khai báo (FR-21, ADR-16): `subcore.bundle`, `gather`, `render-prompt`/`validate`/`compare`, xuất job spec | Tiêu chí 18: cùng bundle cho cùng prompt ở CLI và worker; `subcore` không import `gst_worker`/`sqlite3`; bundle không chứa khoá | `[ ]` |
@@ -230,21 +230,21 @@ FR-9.1–9.3; ARCHITECTURE ADR-3; tiêu chí 22. Làm ngay sau P6, trước P8.
 - [x] Workflow **CI** trên GitHub xanh cho commit P7 (270f9b2, chạy tay trên nhánh `p7-openai-compat` bằng `workflow_dispatch`, run 43685288377). Kèm sửa test `test_telemetry` chập chờn: `job_settle_seconds = 0` vẫn chờ khi mtime của phụ đề nhỉnh hơn đồng hồ vài ms (Windows làm tròn lên), nay bỏ qua phép so sánh khi không có cửa sổ chờ.
 - [ ] Giao diện: chưa có trang chọn provider/base URL/khoá `openai_compat` (đặt qua `POST /api/settings` và `/api/keys`); chờ đợt thiết kế lại giao diện cùng P6.
 
-## P8 — Lõi job và phiên bản trong SQLite `[ ]`
+## P8 — Lõi job và phiên bản trong SQLite `[~]`
 
 FR-15, FR-16, FR-17, FR-13.7; ADR-11, ADR-12; NFR-10 (sửa); tiêu chí 14, 15. Có thể tách P8a (job, scheduler, breaker) và P8b (phiên bản) khi vào làm; thứ tự dưới đây đã theo hướng đó.
 
-- [ ] **Sửa sớm:** hết quota ngày không còn đánh `failed` job đang chờ (`_fail_waiting_quota_jobs`; trái NFR-1, FR-15.8); sửa `CONTEXT.md` cùng lúc.
-- [ ] Bảng `jobs`, `provider_health`; ràng buộc một job mở mỗi (unit, ngôn ngữ, loại); trạng thái `waiting` + `wait_reason`; `held` tạm cho job do script tạo (bỏ ở P10).
-- [ ] Scheduler: claim nguyên tử (`BEGIN IMMEDIATE`, `UPDATE … RETURNING`), lớp ưu tiên, vòng tròn series, aging, lọc theo tầng model; WAL, `busy_timeout`, transaction ngắn cho các thread HTTP.
-- [ ] Lease và heartbeat; recovery tường minh lúc khởi động; `max_crashes`; ảnh chụp cài đặt lúc claim; huỷ hợp tác.
-- [ ] Breaker (`queue_policy.py`), nghỉ tăng dần, nửa mở, mốc reset quota thật (kiểm chứng câu hỏi mở 1 trước khi cài), `AuthError`/`Blocked` có kiểu, `max_calls_per_job`/`max_calls_per_day`.
-- [ ] Gap: "Waiting · thiếu facts" kèm nút yêu cầu tập tiên quyết (FR-15.11).
-- [ ] Phiên bản: `origin`, `status` (`candidate`, `removed`), `parent`, chỉ mục duy nhất `current`, khoá lạc quan `base_version`, trình tự publish có `publishing` và đối chiếu sha256 lúc khởi động, gộp phiên sửa cue, "Dùng bản này", xoá phụ đề đích → `removed`.
-- [ ] `refresh` Bazarr chạy nền, thử lại được, không đổi kết quả job.
-- [ ] Importer một lần từ cây thư mục queue và `translations`, idempotent theo job id; cây cũ sang `queue.migrated/`; cổng nhận file của `gst_enqueue.sh` (importer định kỳ) giữ đến P10.
+- [x] **Sửa sớm:** hết quota ngày không còn đánh `failed` job đang chờ (`_fail_waiting_quota_jobs`; trái NFR-1, FR-15.8); sửa `CONTEXT.md` cùng lúc.
+- [x] Bảng `jobs`, `provider_health`; ràng buộc một job mở mỗi (unit, ngôn ngữ, loại); trạng thái `waiting` + `wait_reason`; `held` tạm cho job do script tạo (bỏ ở P10).
+- [x] Scheduler: claim nguyên tử (`BEGIN IMMEDIATE`, `UPDATE … RETURNING`), lớp ưu tiên, vòng tròn series, aging, lọc theo tầng model; WAL, `busy_timeout`, transaction ngắn cho các thread HTTP.
+- [x] Lease và heartbeat; recovery tường minh lúc khởi động; `max_crashes`; ảnh chụp cài đặt lúc claim; huỷ hợp tác.
+- [x] Breaker (`queue_policy.py`), nghỉ tăng dần, nửa mở, mốc reset quota thật (kiểm chứng câu hỏi mở 1 trước khi cài), `AuthError`/`Blocked` có kiểu, `max_calls_per_job`/`max_calls_per_day`.
+- [x] Gap: "Waiting · thiếu facts" kèm nút yêu cầu tập tiên quyết (FR-15.11).
+- [x] Phiên bản: `origin`, `status` (`candidate`, `removed`), `parent`, chỉ mục duy nhất `current`, khoá lạc quan `base_version`, trình tự publish có `publishing` và đối chiếu sha256 lúc khởi động, gộp phiên sửa cue, "Dùng bản này", xoá phụ đề đích → `removed`.
+- [x] `refresh` Bazarr chạy nền, thử lại được, không đổi kết quả job.
+- [x] Importer một lần từ cây thư mục queue và `translations`, idempotent theo job id; cây cũ sang `queue.migrated/`; cổng nhận file của `gst_enqueue.sh` (importer định kỳ) giữ đến P10.
 - [ ] ADR-12: gỡ `JobQueue`, `queue.py` và các port nội bộ khi chạm vào; test hợp đồng đổi thành test trên SQLite `:memory:`; sửa `tests/test_core_boundary.py` và tiêu chí 10; cập nhật phần "Seams" của `AGENTS.md`.
-- [ ] Test tiêu chí 14 a–l và 15 a–i; docs: `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md` (Job, Waiting, Candidate, Lease, Breaker), `CHANGELOG.md`.
+- [x] Test tiêu chí 14 a–l và 15 a–i (`test_job_scheduler.py`, `test_version_lifecycle.py`); docs: `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md` (Job, Waiting, Candidate, Lease, Breaker), `CHANGELOG.md`.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P8.
 
 ## P9 — Dọn file (FR-13) `[ ]`

@@ -7,7 +7,7 @@ import { actionButton, bindAction, confirmDialog, emptyState, errorState, h, loa
 const EMPTY = {
   pending: ["Nothing waiting", "Jobs queued by Bazarr or this console appear here."],
   processing: ["Idle", "No translation is running."],
-  deferred: ["Nothing deferred", "Jobs waiting to retry after a Gemini capacity error appear here."],
+  deferred: ["Nothing waiting", "Jobs waiting for the provider (quota, key, breaker), for earlier episodes or for a subtitle to settle appear here, with the reason."],
   done: ["No finished jobs yet", "Completed translations appear here."],
   failed: ["No failed jobs", "Everything that ran has either finished or is still queued."],
   held: ["Nothing to approve", "With “Hold for my approval” on in Settings, jobs from Bazarr wait here until you approve them."],
@@ -55,7 +55,32 @@ async function cancelJob(job, state) {
   await refreshQueue();
 }
 
+async function requestEarlier(job) {
+  const data = await post("/api/queue/request-prerequisites", { job_id: job.job_id });
+  const requested = (data.requested || []).length;
+  const missing = (data.unavailable || []).length;
+  toast(
+    requested ? `${plural(requested, "earlier episode")} queued` : "No earlier episode could be queued yet",
+    requested ? "success" : "info",
+  );
+  if (missing) toast(`Still without a source subtitle: ${data.unavailable.join(", ")}`, "info");
+  await refreshQueue();
+}
+
+async function stopJob(job) {
+  const data = await post("/api/queue/stop", { job_id: job.job_id });
+  toast(data.outcome === "stopping" ? "Stopping at the next batch" : "Job stopped", "success");
+  await refreshQueue();
+}
+
 function actionsFor(job, state) {
+  if (state === "processing") return [actionButton("Stop", () => stopJob(job), { variant: "btn-danger" })];
+  if (state === "deferred" && job.wait_reason === "context") {
+    return [
+      actionButton("Request earlier episodes", () => requestEarlier(job)),
+      actionButton("Cancel", () => cancelJob(job, state), { variant: "btn-danger" }),
+    ];
+  }
   if (state === "failed") {
     return [
       actionButton("Retry", () => retryJob(job), { iconName: "retry" }),

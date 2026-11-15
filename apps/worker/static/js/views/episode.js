@@ -11,7 +11,9 @@ import {
 const $ = (id) => document.getElementById(id);
 const TRIGGERS = {
   auto: "Translated", retranslate: "Retranslated", cue_edit: "Cue edit", revert: "Restored", external: "Edited outside the worker",
+  remove: "Deleted from the console",
 };
+const STATUS_LABELS = { candidate: "Candidate · not on disk", removed: "Removed", superseded: "" };
 const WATCH_MS = 30 * 60 * 1000;
 
 const state = { unitId: null, lang: null, detail: null, cues: null, corrections: [], versions: null, context: null, query: "", watch: null };
@@ -183,6 +185,30 @@ async function revert(version) {
   await loadAll();
 }
 
+async function adopt(version) {
+  const confirmed = await confirmDialog({
+    title: `Use version ${version}?`,
+    message: "This candidate is written to the file and becomes the current version. The version on disk now stays in History.",
+    confirmLabel: "Use this version",
+  });
+  if (!confirmed) return;
+  await post(`${base()}/versions/${version}/adopt`, { lang: state.lang });
+  toast(`Version ${version} is now on disk`, "success");
+  await loadAll();
+}
+
+async function removeSubtitle() {
+  const confirmed = await confirmDialog({
+    title: "Delete this subtitle?",
+    message: "The target file is deleted. The history keeps the last version, so it can be restored. The episode will not be requested again automatically.",
+    confirmLabel: "Delete",
+  });
+  if (!confirmed) return;
+  await post(`${base()}/output/remove`, { lang: state.lang });
+  toast("Subtitle deleted; it can be restored from History", "success");
+  await loadAll();
+}
+
 function renderVersions() {
   const { versions, modified_outside: edited } = state.versions;
   $("episode-version-count").textContent = versions.length;
@@ -196,16 +222,20 @@ function renderVersions() {
     ...versions.map((item) => {
       const holder = h("div", { class: "diff" });
       const hasEarlier = versions.some((other) => other.version < item.version);
+      const statusLabel = STATUS_LABELS[item.status] ?? "";
       return h("div", { class: "version" },
         h("div", { class: "version-main" },
           h("strong", { text: `v${item.version}` }),
           h("span", { class: "tag", text: TRIGGERS[item.trigger] || item.trigger }),
           item.current && h("span", { class: "status status-ok" }, h("span", { class: "dot" }), "On disk"),
+          statusLabel && h("span", { class: "tag", text: statusLabel }),
           h("span", { class: "muted", text: [formatDateTime(item.created_at), item.model, item.tokens_out ? `${item.tokens_out} tokens out` : ""].filter(Boolean).join(" · ") }),
           h("span", { class: "muted mono", title: item.sha256, text: item.sha256.slice(0, 10) })),
         h("div", { class: "version-actions" },
           hasEarlier && actionButton("Changes", (button) => toggleDiff(item.version, holder, button)),
-          !item.current && actionButton("Restore", () => revert(item.version), { iconName: "retry" })),
+          item.status === "candidate" && actionButton("Use this version", () => adopt(item.version), { variant: "btn-primary" }),
+          !item.current && item.status !== "candidate" && actionButton("Restore", () => revert(item.version), { iconName: "retry" }),
+          item.current && actionButton("Delete subtitle", removeSubtitle)),
         holder);
     }));
 }

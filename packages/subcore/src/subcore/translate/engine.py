@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 from .. import srt
-from ..providers.base import BadOutput, LLMRequest, Provider
+from ..providers.base import BadOutput, Blocked, LLMRequest, Provider
 from . import alignment, planner
 from .prompt import RESPONSE_SCHEMA, PromptContext, build_system, build_user
 from .validate import check_cue, parse_reply
@@ -36,7 +36,7 @@ class CallRecord:
     tokens_in: int = 0
     tokens_out: int = 0
     model: str = ""
-    outcome: str = "ok"  # ok | bad_output
+    outcome: str = "ok"  # ok | bad_output | blocked
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,7 @@ class TranslationError(Exception):
     def __init__(self, failed: dict[int, str]):
         self.failed = failed
         self.issues: list[ValidationIssue] = []  # what the validator found on the way; filled in by ``translate``
+        self.blocked = 0  # how many calls the provider refused for their content; filled in by ``translate``
         shown = "; ".join(f"cue {i}: {why}" for i, why in sorted(failed.items())[:5])
         more = f" (+{len(failed) - 5} more)" if len(failed) > 5 else ""
         super().__init__(f"{len(failed)} cue(s) failed validation after repair: {shown}{more}")
@@ -119,6 +120,7 @@ class _Run:
         self.warnings: list[str] = []
         self.issues: list[ValidationIssue] = []
         self.part_no = 0  # which part of the episode is being worked on (0-based), for the call record
+        self.blocked = 0  # calls the provider refused for their content (FR-17.2)
         self.total = len(self.targets)
 
     # -- one model call ---------------------------------------------------
@@ -138,8 +140,10 @@ class _Run:
         )
         try:
             response = self.provider.generate(req)
-        except BadOutput:
-            self.calls.append(CallRecord(kind, len(targets), outcome="bad_output"))
+        except BadOutput as exc:
+            blocked = isinstance(exc, Blocked)
+            self.blocked += blocked
+            self.calls.append(CallRecord(kind, len(targets), outcome="blocked" if blocked else "bad_output"))
             return parse_reply("", set(targets))
         self.calls.append(
             CallRecord(kind, len(targets), response.tokens_in, response.tokens_out, response.model)
@@ -265,6 +269,7 @@ def translate(
                 run.run_part(part, kind="translate", parts_used=len(parts), depth=0)
         except TranslationError as exc:
             exc.issues = run.issues
+            exc.blocked = run.blocked
             raise
 
     translated = [

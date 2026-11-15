@@ -3,7 +3,7 @@
 The schema is a subset of docs/design/ARCHITECTURE.md section 4. ``translations`` is still keyed by
 ``output_path`` (one history per target file) and carries a nullable ``unit_id`` linking it to the
 library (``series`` / ``units``, with ``unit_outputs`` mapping a unit and target language to its file).
-Queue job files stay on disk for now, so there is no ``jobs`` table yet.
+Jobs and provider health live here too (ADR-11, schema 8); version history carries origin, candidates and removals (FR-16, schema 9).
 """
 
 from __future__ import annotations
@@ -14,8 +14,9 @@ import secrets
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from subcore.memory import Facts
 
@@ -230,6 +231,72 @@ _MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX api_keys_provider ON api_keys (provider, id);
     """,
+    # Schema 8 (P8, ADR-11): jobs and provider health. A job is a row, not a file. ``job_id`` is the public id
+    # (the old sha1 for the first job of a file, so imported and script jobs keep theirs); ``key`` is that sha1,
+    # the thing at most one open job may hold per ``kind`` (FR-15.3). ``payload_json`` is the job as the worker
+    # passes it around (paths, languages, retranslate range, ...); the columns are what the scheduler queries.
+    # ``prio`` is the class (interactive 200, retranslate 100, auto 0); ``tier`` is '' (any model) or 'strong'.
+    # ``lease_until`` is on the monotonic clock of the running process and means nothing after a restart, which
+    # recovers every running row at startup; ``not_before`` is wall-clock time.
+    """
+    CREATE TABLE jobs (
+        id INTEGER PRIMARY KEY,
+        job_id TEXT NOT NULL UNIQUE,
+        key TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'publish',
+        mode TEXT NOT NULL DEFAULT 'fill',
+        origin TEXT NOT NULL DEFAULT 'manual',
+        prio INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL,
+        wait_reason TEXT NOT NULL DEFAULT '',
+        series_key TEXT NOT NULL DEFAULT '',
+        unit_id INTEGER,
+        target_lang TEXT NOT NULL DEFAULT '',
+        tier TEXT NOT NULL DEFAULT '',
+        not_before REAL NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        lease_until REAL,
+        cancel_requested INTEGER NOT NULL DEFAULT 0,
+        base_version INTEGER,
+        source_sha256 TEXT NOT NULL DEFAULT '',
+        snapshot_json TEXT NOT NULL DEFAULT '{}',
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        result TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        started_at REAL,
+        finished_at REAL
+    );
+    CREATE UNIQUE INDEX jobs_open ON jobs (key, kind) WHERE state IN ('queued', 'running', 'waiting', 'held');
+    CREATE INDEX jobs_state ON jobs (state, not_before);
+    CREATE INDEX jobs_series ON jobs (series_key, started_at);
+    CREATE INDEX jobs_key ON jobs (key);
+    CREATE TABLE provider_health (
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,              -- '*' is the provider as a whole (a refused key)
+        state TEXT NOT NULL DEFAULT 'closed',   -- closed | open | half_open | exhausted | invalid
+        failures INTEGER NOT NULL DEFAULT 0,
+        level INTEGER NOT NULL DEFAULT 0,
+        until REAL NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL DEFAULT '',
+        updated_at REAL NOT NULL,
+        PRIMARY KEY (provider, model)
+    );
+    """,
+    # Schema 9 (P8, FR-16, ADR-11): versions carry an origin (machine | edit | revert | external | import), may be
+    # candidate / removed / pruned, and a publish is announced (publishing = 1) before the file is renamed into
+    # place, so a crash in between is settled at start-up. edited_at is the last cue edit folded into a version
+    # (FR-16.7). At most one current version per file.
+    """
+    ALTER TABLE translations ADD COLUMN origin TEXT NOT NULL DEFAULT '';
+    ALTER TABLE translations ADD COLUMN publishing INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE translations ADD COLUMN edited_at REAL NOT NULL DEFAULT 0;
+    ALTER TABLE translations ADD COLUMN job_id TEXT NOT NULL DEFAULT '';
+    UPDATE translations SET origin = CASE trigger
+        WHEN 'cue_edit' THEN 'edit' WHEN 'revert' THEN 'revert' WHEN 'external' THEN 'external' ELSE 'machine' END;
+    CREATE UNIQUE INDEX translations_one_current ON translations (output_path) WHERE status = 'current';
+    """,
 )
 
 
@@ -242,7 +309,13 @@ def _version_from_row(row: sqlite3.Row) -> TranslationVersion:
         tokens_in=row["tokens_in"], tokens_out=row["tokens_out"], unit_id=row["unit_id"],
         glossary_hash=row["glossary_hash"], context_complete=bool(row["context_complete"]),
         memory_hash=row["memory_hash"], missing_units=tuple(json.loads(row["missing_units_json"] or "[]")),
+        origin=row["origin"], publishing=bool(row["publishing"]), edited_at=row["edited_at"], job_id=row["job_id"],
     )
+
+
+def _origin_of(trigger: str) -> str:
+    """Where a version came from (FR-16.1): the machine unless the trigger says the admin or a file did it."""
+    return {"cue_edit": "edit", "remove": "edit", "revert": "revert", "external": "external"}.get(trigger, "machine")
 
 
 def _key_from_row(row: sqlite3.Row) -> ApiKey:
@@ -301,6 +374,7 @@ class Store:
         self._lock = threading.RLock()
         self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
+        self._db.execute("PRAGMA busy_timeout=10000")  # a second connection (a --once run) waits, it does not fail
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA foreign_keys=ON")
         self._migrate()
@@ -309,6 +383,26 @@ class Store:
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """One short write transaction (``BEGIN IMMEDIATE``): the worker and the HTTP threads queue for it, so a
+        read-then-write such as claiming a job cannot interleave with another claim (ADR-11).
+
+        The lock is re-entrant, but a transaction inside a transaction is a bug: do not nest.
+        """
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._db
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
+
+    def query(self, sql: str, args: Iterable[Any] = ()) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._db.execute(sql, tuple(args)).fetchall()
 
     def _restrict_files(self) -> None:
         """The database holds API keys: only the worker's own user may read it (FR-20.3). Best effort, as the
@@ -470,6 +564,10 @@ class Store:
                  retries, repairs, cost_est),
             )
             return int(cursor.lastrowid)
+
+    def calls_since(self, at: float) -> int:
+        """Model calls recorded since ``at`` (a Unix time): what `max_calls_per_day` counts (FR-17.6)."""
+        return int(self.query("SELECT COUNT(*) AS n FROM llm_calls WHERE at >= ?", (at,))[0]["n"])
 
     def llm_calls(self, job_id: str | None = None) -> list[LlmCall]:
         with self._lock:
@@ -667,11 +765,21 @@ class Store:
         context_complete: bool = True,
         memory_hash: str = "",
         missing_units: Iterable[str] = (),
+        status: str | None = None,
+        origin: str = "",
+        publishing: bool = False,
+        job_id: str = "",
+        edited_at: float = 0.0,
     ) -> None:
+        if status is None:
+            status = "current" if make_current else "superseded"
+        if not origin:
+            origin = _origin_of(trigger)
+        now = time.time()
         with self._lock:
             self._db.execute("BEGIN")
             try:
-                if make_current:
+                if status in ("current", "removed"):  # one current; a tombstone is what the file was last
                     self._db.execute(
                         "UPDATE translations SET status = 'superseded' WHERE output_path = ? AND status = 'current'",
                         (output_path,),
@@ -680,19 +788,58 @@ class Store:
                     "INSERT INTO translations (output_path, source_path, source_sha256, target_lang, version,"
                     " stored_path, sha256, context_hash, trigger, parent_version, status, model, tokens_in,"
                     " tokens_out, created_at, unit_id, glossary_hash, context_complete, memory_hash,"
-                    " missing_units_json)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " missing_units_json, origin, publishing, job_id, edited_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         output_path, source_path, source_sha256, target_lang, version, stored_path, sha256,
-                        context_hash, trigger, parent_version, "current" if make_current else "superseded",
-                        model, tokens_in, tokens_out, time.time(), unit_id, glossary_hash, int(context_complete),
-                        memory_hash, json.dumps(list(missing_units), ensure_ascii=False),
+                        context_hash, trigger, parent_version, status,
+                        model, tokens_in, tokens_out, now, unit_id, glossary_hash, int(context_complete),
+                        memory_hash, json.dumps(list(missing_units), ensure_ascii=False), origin, int(publishing),
+                        job_id, edited_at,
                     ),
                 )
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
                 raise
+
+    _VERSION_FIELDS = frozenset({"status", "publishing", "stored_path", "sha256", "edited_at"})
+
+    def set_version(self, output_path: str, version: int, **fields: Any) -> None:
+        unknown = set(fields) - self._VERSION_FIELDS
+        if unknown:
+            raise ValueError(f"not a version field: {', '.join(sorted(unknown))}")
+        if "publishing" in fields:
+            fields["publishing"] = int(bool(fields["publishing"]))
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                if fields.get("status") == "current":
+                    self._db.execute(
+                        "UPDATE translations SET status = 'superseded' WHERE output_path = ? AND status = 'current'"
+                        " AND version <> ?",
+                        (output_path, version),
+                    )
+                if fields:
+                    assignments = ", ".join(f"{name} = ?" for name in fields)
+                    self._db.execute(
+                        f"UPDATE translations SET {assignments} WHERE output_path = ? AND version = ?",
+                        (*fields.values(), output_path, version),
+                    )
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def publishing_versions(self) -> list[TranslationVersion]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM translations WHERE publishing = 1 ORDER BY id").fetchall()
+        return [_version_from_row(row) for row in rows]
+
+    def current_versions(self) -> list[TranslationVersion]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM translations WHERE status = 'current' ORDER BY output_path").fetchall()
+        return [_version_from_row(row) for row in rows]
 
     # -- series and units (P3) ---------------------------------------------
     def upsert_series(self, key: str, *, title: str = "", bazarr_id: str = "") -> int:

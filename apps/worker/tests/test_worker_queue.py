@@ -9,6 +9,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import worker
+from gst_worker import queue_policy
+from gst_worker.jobs import FROM_LEGACY, JobStore
+from gst_worker.queue import JobQueue
+from gst_worker.store import Store
 from gst_worker import (
     backups as gst_backups,
     bazarr as gst_bazarr,
@@ -93,16 +97,34 @@ class TestWorkerQueueTests(unittest.TestCase):
             )
 
 
+    def queue(self):
+        store = Store(":memory:")
+        self.addCleanup(store.close)
+        return JobQueue(store)
+
+    def worker(self, queue_dir, settings, **kwargs):
+        store = Store(":memory:")
+        self.addCleanup(store.close)
+        return worker.QueueWorker(str(queue_dir), settings, gst_http.MemoryCache(), FakeHTTP({}), store=store, **kwargs)
+
+    def drop(self, queue_dir, job):
+        """What Bazarr's script does: one JSON file in the gate folder, `pending/`."""
+        folder = Path(queue_dir) / "pending"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{job['job_id']}.json").write_text(json.dumps(job), encoding="utf-8")
+
+    def names(self, jobs, state):
+        return sorted(job["job_id"] for job in jobs.by_state(*FROM_LEGACY[state]))
+
     def test_enqueue_translation_jobs_for_enabled_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
-            queue_dir = Path(tmp) / "queue"
+            queue = self.queue()
             subtitle = Path(tmp) / "Movie.ja.srt"
             subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
             (Path(tmp) / "Movie.zh.srt").write_text("existing", encoding="utf-8")
 
-            created = gst_queue.enqueue_translation_jobs(
-                queue_dir=str(queue_dir),
-                base_job={
+            created = queue.enqueue(
+                {
                     "video_path": str(Path(tmp) / "Movie.mkv"),
                     "subtitle_path": str(subtitle),
                     "provider": "embeddedsubtitles",
@@ -111,24 +133,23 @@ class TestWorkerQueueTests(unittest.TestCase):
                     "media_id": "781",
                     "media_type": "movie",
                 },
-                targets=[
+                [
                     {"code": "zh", "language": "Simplified Chinese", "enabled": True},
                     {"code": "zt", "language": "Traditional Chinese", "enabled": True},
                 ],
             )
 
             self.assertEqual(len(created), 1)
-            job = json.loads(Path(created[0]).read_text(encoding="utf-8"))
+            job = queue.jobs.get(created[0])
             self.assertEqual(job["target_code"], "zt")
             self.assertEqual(job["target_language"], "Traditional Chinese")
             self.assertEqual(job["output_path"], str(Path(tmp) / "Movie.zt.srt"))
             self.assertEqual(job["source_code"], "ja")
             self.assertEqual(job["source_language"], "Japanese")
 
-
     def test_enqueue_translation_jobs_retries_existing_failed_job(self):
         with tempfile.TemporaryDirectory() as tmp:
-            queue_dir = Path(tmp) / "queue"
+            queue = self.queue()
             subtitle = Path(tmp) / "Episode.en.srt"
             subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
             base_job = {
@@ -140,30 +161,25 @@ class TestWorkerQueueTests(unittest.TestCase):
             }
             targets = [{"code": "zh", "language": "Simplified Chinese", "enabled": True}]
 
-            [pending_path_string] = gst_queue.enqueue_translation_jobs(str(queue_dir), base_job, targets)
-            pending_path = Path(pending_path_string)
-            failed_path = queue_dir / "failed" / pending_path.name
-            pending_path.replace(failed_path)
-            failed_path.with_suffix(".error").write_text("gst failed with exit 1", encoding="utf-8")
+            [job_id] = queue.enqueue(base_job, targets)
+            queue.jobs.transition(job_id, "failed", error="gst failed with exit 1")
 
-            created = gst_queue.enqueue_translation_jobs(str(queue_dir), base_job, targets)
-            snapshot = gst_queue.queue_snapshot(str(queue_dir))
+            created = queue.enqueue(base_job, targets)
+            snapshot = queue.snapshot()
 
-            self.assertEqual(created, [str(pending_path)])
+            self.assertEqual(created, [job_id])
             self.assertEqual(snapshot["counts"]["pending"], 1)
             self.assertEqual(snapshot["counts"]["failed"], 0)
-            self.assertFalse(failed_path.with_suffix(".error").exists())
-
+            self.assertNotIn("error", queue.jobs.get(job_id))
 
     def test_enqueue_translation_jobs_skips_same_source_target(self):
         with tempfile.TemporaryDirectory() as tmp:
-            queue_dir = Path(tmp) / "queue"
+            queue = self.queue()
             subtitle = Path(tmp) / "Movie.zh.srt"
             subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
 
-            created = gst_queue.enqueue_translation_jobs(
-                queue_dir=str(queue_dir),
-                base_job={
+            created = queue.enqueue(
+                {
                     "video_path": str(Path(tmp) / "Movie.mkv"),
                     "subtitle_path": str(subtitle),
                     "provider": "embeddedsubtitles",
@@ -172,94 +188,70 @@ class TestWorkerQueueTests(unittest.TestCase):
                     "media_id": "781",
                     "media_type": "movie",
                 },
-                targets=[
+                [
                     {"code": "zh", "language": "Simplified Chinese", "enabled": True},
                     {"code": "en", "language": "English", "enabled": True},
                 ],
             )
 
             self.assertEqual(len(created), 1)
-            job = json.loads(Path(created[0]).read_text(encoding="utf-8"))
+            job = queue.jobs.get(created[0])
             self.assertEqual(job["target_code"], "en")
             self.assertEqual(job["output_path"], str(Path(tmp) / "Movie.en.srt"))
 
-
     def test_queue_snapshot_counts_job_states(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            queue_dir = Path(tmp)
-            for state in ("pending", "processing", "done", "failed"):
-                (queue_dir / state).mkdir()
-            (queue_dir / "pending" / "a.json").write_text('{"job_id":"a"}', encoding="utf-8")
-            (queue_dir / "failed" / "b.json").write_text('{"job_id":"b"}', encoding="utf-8")
-            (queue_dir / "failed" / "b.error").write_text("boom", encoding="utf-8")
+        queue = self.queue()
+        queue.jobs.add({"job_id": "a"}, key="a", job_id="a")
+        queue.jobs.add({"job_id": "b"}, key="b", job_id="b")
+        queue.jobs.transition("b", "failed", error="boom")
 
-            snapshot = gst_queue.queue_snapshot(str(queue_dir))
+        snapshot = queue.snapshot()
 
-            self.assertEqual(snapshot["counts"]["pending"], 1)
-            self.assertEqual(snapshot["counts"]["failed"], 1)
-            self.assertEqual(snapshot["failed"][0]["error"], "boom")
+        self.assertEqual(snapshot["counts"]["pending"], 1)
+        self.assertEqual(snapshot["counts"]["failed"], 1)
+        self.assertEqual(snapshot["failed"][0]["error"], "boom")
 
+    def test_cancel_failed_job_removes_job_without_retrying(self):
+        queue = self.queue()
+        queue.jobs.add({"job_id": "cancel-me"}, key="k", job_id="cancel-me")
+        queue.jobs.transition("cancel-me", "failed", error="quota exhausted")
 
-    def test_cancel_failed_job_removes_job_and_error_without_retrying(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            queue_dir = Path(tmp)
-            failed_dir = queue_dir / "failed"
-            failed_dir.mkdir()
-            job = failed_dir / "cancel-me.json"
-            error = failed_dir / "cancel-me.error"
-            job.write_text('{"job_id":"cancel-me"}', encoding="utf-8")
-            error.write_text("quota exhausted", encoding="utf-8")
-
-            self.assertTrue(gst_queue.cancel_failed_job(str(queue_dir), "cancel-me"))
-            self.assertFalse(job.exists())
-            self.assertFalse(error.exists())
-            self.assertFalse((queue_dir / "pending" / "cancel-me.json").exists())
-            self.assertFalse(gst_queue.cancel_failed_job(str(queue_dir), "cancel-me"))
-
+        self.assertTrue(queue.cancel("cancel-me"))
+        self.assertIsNone(queue.jobs.get("cancel-me"))
+        self.assertEqual(queue.snapshot()["counts"]["pending"], 0)
+        self.assertFalse(queue.cancel("cancel-me"))
 
     def test_retry_failed_job_starts_a_fresh_provider_retry_cycle(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            queue_dir = Path(tmp)
-            failed_dir = queue_dir / "failed"
-            failed_dir.mkdir()
-            failed = failed_dir / "retry-me.json"
-            failed.write_text(
-                json.dumps(
-                    {
-                        "job_id": "retry-me",
-                        "provider_retry_count": 3,
-                        "retry_at": 1_234,
-                        "deferred_reason": "provider-unavailable",
-                        "last_error": "503 UNAVAILABLE",
-                        "use_fallback_model": True,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            failed.with_suffix(".error").write_text("503 UNAVAILABLE", encoding="utf-8")
+        queue = self.queue()
+        queue.jobs.add(
+            {
+                "job_id": "retry-me",
+                "provider_retry_count": 3,
+                "retry_at": 1_234,
+                "deferred_reason": "provider-unavailable",
+                "last_error": "503 UNAVAILABLE",
+                "use_fallback_model": True,
+            },
+            key="k", job_id="retry-me",
+        )
+        queue.jobs.transition("retry-me", "failed", error="503 UNAVAILABLE")
 
-            self.assertTrue(gst_queue.retry_failed_job(str(queue_dir), "retry-me"))
+        self.assertTrue(queue.retry("retry-me"))
 
-            pending = json.loads((queue_dir / "pending" / "retry-me.json").read_text(encoding="utf-8"))
-            self.assertNotIn("provider_retry_count", pending)
-            self.assertNotIn("retry_at", pending)
-            self.assertNotIn("deferred_reason", pending)
-            self.assertNotIn("last_error", pending)
-            self.assertNotIn("use_fallback_model", pending)
-            self.assertFalse((queue_dir / "pending" / "retry-me.error").exists())
-
+        pending = queue.jobs.get("retry-me")
+        self.assertEqual(pending["state"], "queued")
+        for field in ("provider_retry_count", "retry_at", "deferred_reason", "last_error", "use_fallback_model", "error"):
+            self.assertNotIn(field, pending)
 
     def test_queue_worker_waits_for_settle_window_before_translation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             queue_dir = root / "queue"
-            for state in ("pending", "processing", "done", "failed"):
-                (queue_dir / state).mkdir(parents=True)
             subtitle = root / "Movie.en.srt"
             output = root / "Movie.zh.srt"
             subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
             os.utime(subtitle, (1_000, 1_000))
-            job = {
+            self.drop(queue_dir, {
                 "job_id": "settle-race",
                 "created_at": 1_000,
                 "subtitle_path": str(subtitle),
@@ -267,21 +259,20 @@ class TestWorkerQueueTests(unittest.TestCase):
                 "source_code": "en",
                 "target_code": "zh",
                 "provider": "embeddedsubtitles",
-            }
-            (queue_dir / "pending" / "settle-race.json").write_text(json.dumps(job), encoding="utf-8")
-            queue_worker = worker.QueueWorker(
-                str(queue_dir),
+            })
+            queue_worker = self.worker(
+                queue_dir,
                 {"bazarr_url": "http://bazarr:6767", "bazarr_api_key": "", "tmdb_api_key": "", "job_settle_seconds": 120},
-                gst_http.MemoryCache(),
-                FakeHTTP({}),
             )
+            jobs = queue_worker.queue.jobs
 
             self.assertFalse(queue_worker.process_once(now=1_060))
-            self.assertTrue((queue_dir / "pending" / "settle-race.json").exists())
+            self.assertEqual(jobs.get("settle-race")["wait_reason"], "settle")  # waiting, and it says why
+            self.assertEqual(jobs.get("settle-race")["not_before"], 1_120)
 
             output.write_text("embedded zh subtitle", encoding="utf-8")
             self.assertTrue(queue_worker.process_once(now=1_121))
-            self.assertTrue((queue_dir / "done" / "settle-race.json").exists())
+            self.assertEqual(jobs.state_of("settle-race"), "skipped")
             self.assertEqual(output.read_text(encoding="utf-8"), "embedded zh subtitle")
 
     def test_no_settle_window_means_a_subtitle_stamped_slightly_ahead_of_the_clock_still_starts(self):
@@ -289,35 +280,29 @@ class TestWorkerQueueTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             queue_dir = root / "queue"
-            for state in ("pending", "processing", "done", "failed"):
-                (queue_dir / state).mkdir(parents=True)
             subtitle = root / "Movie.en.srt"
             output = root / "Movie.zh.srt"
             subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
             output.write_text("embedded zh subtitle", encoding="utf-8")
             os.utime(subtitle, (1_000.005, 1_000.005))
-            job = {
+            self.drop(queue_dir, {
                 "job_id": "ahead", "created_at": 1_000, "subtitle_path": str(subtitle), "output_path": str(output),
                 "source_code": "en", "target_code": "zh", "provider": "embeddedsubtitles",
-            }
-            (queue_dir / "pending" / "ahead.json").write_text(json.dumps(job), encoding="utf-8")
-            queue_worker = worker.QueueWorker(
-                str(queue_dir), {"job_settle_seconds": 0}, gst_http.MemoryCache(), FakeHTTP({}),
-            )
+            })
+            queue_worker = self.worker(queue_dir, {"job_settle_seconds": 0})
 
             self.assertTrue(queue_worker.process_once(now=1_000.0))  # the clock is 5 ms behind the file
-            self.assertTrue((queue_dir / "done" / "ahead.json").exists())
+            self.assertEqual(queue_worker.queue.jobs.state_of("ahead"), "skipped")
 
     def test_queue_worker_processes_old_subtitle_without_waiting_for_new_queue_event(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             queue_dir = root / "queue"
-            gst_queue.ensure_queue_dirs(str(queue_dir))
             subtitle = root / "Movie.en.srt"
             output = root / "Movie.zh.srt"
             subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
             os.utime(subtitle, (1_000, 1_000))
-            job = {
+            self.drop(queue_dir, {
                 "job_id": "old-subtitle",
                 "created_at": 1_119,
                 "subtitle_path": str(subtitle),
@@ -325,199 +310,148 @@ class TestWorkerQueueTests(unittest.TestCase):
                 "source_code": "en",
                 "target_code": "zh",
                 "provider": "embeddedsubtitles",
-            }
-            (queue_dir / "pending" / "old-subtitle.json").write_text(json.dumps(job), encoding="utf-8")
-            queue_worker = worker.QueueWorker(
-                str(queue_dir),
+            })
+            queue_worker = self.worker(
+                queue_dir,
                 {"bazarr_url": "http://bazarr:6767", "bazarr_api_key": "", "tmdb_api_key": "", "job_settle_seconds": 120},
-                gst_http.MemoryCache(),
-                FakeHTTP({}),
             )
 
             output.write_text("embedded zh subtitle", encoding="utf-8")
             self.assertTrue(queue_worker.process_once(now=1_120))
-            self.assertTrue((queue_dir / "done" / "old-subtitle.json").exists())
+            self.assertEqual(queue_worker.queue.jobs.state_of("old-subtitle"), "skipped")
 
-
-    def test_queue_worker_defers_503_and_retries_only_after_retry_at(self):
+    def test_queue_worker_waits_out_a_503_and_retries_when_the_wait_is_over(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue_dir = Path(tmp) / "queue"
-            gst_queue.ensure_queue_dirs(str(queue_dir))
-            job = {
+            self.drop(queue_dir, {
                 "job_id": "overloaded",
                 "created_at": 1_000,
                 "subtitle_path": str(Path(tmp) / "Movie.en.srt"),
                 "output_path": str(Path(tmp) / "Movie.zh.srt"),
                 "source_code": "en",
                 "target_code": "zh",
-            }
-            (queue_dir / "pending" / "overloaded.json").write_text(json.dumps(job), encoding="utf-8")
-            queue_worker = worker.QueueWorker(
-                str(queue_dir),
-                {"job_settle_seconds": 0},
-                gst_http.MemoryCache(),
-                FakeHTTP({}),
-            )
+            })
+            queue_worker = self.worker(queue_dir, {"job_settle_seconds": 0})
+            jobs = queue_worker.queue.jobs
 
             with patch(
                 "worker.process_job",
                 side_effect=[gst_translation.ProviderUnavailableError("503 UNAVAILABLE"), "translated"],
-            ) as process_job, patch("worker.time.time", return_value=1_300):
+            ) as process_job:
                 self.assertTrue(queue_worker.process_once(now=1_000))
-                deferred_path = queue_dir / "deferred" / "overloaded.json"
-                self.assertTrue(deferred_path.exists())
-                deferred = json.loads(deferred_path.read_text(encoding="utf-8"))
-                self.assertEqual(deferred["retry_at"], 1_600)
-                self.assertEqual(deferred["provider_retry_count"], 1)
+                waiting = jobs.get("overloaded")
+                self.assertEqual((waiting["state"], waiting["wait_reason"]), ("waiting", "rate"))
+                self.assertEqual(waiting["not_before"], 1_030)  # below the breaker threshold: soon
 
-                self.assertFalse(queue_worker.process_once(now=1_599))
-                self.assertTrue(queue_worker.process_once(now=1_600))
+                self.assertFalse(queue_worker.process_once(now=1_029))
+                self.assertTrue(queue_worker.process_once(now=1_030))
 
             self.assertEqual(process_job.call_count, 2)
-            self.assertTrue((queue_dir / "done" / "overloaded.json").exists())
-
+            self.assertEqual(jobs.state_of("overloaded"), "done")
 
     def test_processing_snapshot_includes_runtime_status_and_cue_progress(self):
+        queue = self.queue()
+        queue.jobs.add({"job_id": "active", "stage": "Translating 120/300 cues", "progress_done": 120,
+                        "progress_total": 300, "started_at": 1000}, key="k", job_id="active")
+        queue.jobs.transition("active", "running")
+
+        active = queue.snapshot()["processing"][0]
+
+        self.assertEqual(active["stage"], "Translating 120/300 cues")
+        self.assertEqual((active["progress_done"], active["progress_total"]), (120, 300))
+
+    def test_queue_worker_recovers_interrupted_job_on_startup(self):
         with tempfile.TemporaryDirectory() as tmp:
-            queue_dir = Path(tmp) / "queue"
-            gst_queue.ensure_queue_dirs(str(queue_dir))
-            job = {
-                "job_id": "active",
-                "stage": "Translating 120/300 cues",
-                "progress_done": 120,
-                "progress_total": 300,
-                "started_at": 1000,
-            }
-            (queue_dir / "processing" / "active.json").write_text(json.dumps(job), encoding="utf-8")
+            store = Store(":memory:")
+            self.addCleanup(store.close)
+            first = JobQueue(store)
+            first.jobs.add({"job_id": "interrupted", "stage": "Sending subtitle batches to Gemini"}, key="k", job_id="interrupted")
+            first.jobs.transition("interrupted", "running")
 
-            active = gst_queue.queue_snapshot(str(queue_dir))["processing"][0]
+            started = worker.QueueWorker(str(Path(tmp) / "queue"), {"job_settle_seconds": 0}, gst_http.MemoryCache(),
+                                         FakeHTTP({}), store=store)
 
-            self.assertEqual(active["stage"], "Translating 120/300 cues")
-            self.assertEqual((active["progress_done"], active["progress_total"]), (120, 300))
-
-
-    def test_queue_worker_recovers_interrupted_processing_job_on_startup(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            queue_dir = Path(tmp) / "queue"
-            gst_queue.ensure_queue_dirs(str(queue_dir))
-            interrupted = {"job_id": "interrupted", "stage": "Sending subtitle batches to Gemini"}
-            (queue_dir / "processing" / "interrupted.json").write_text(json.dumps(interrupted), encoding="utf-8")
-
-            worker.QueueWorker(str(queue_dir), {"job_settle_seconds": 0}, gst_http.MemoryCache(), FakeHTTP({}))
-
-            recovered_path = queue_dir / "pending" / "interrupted.json"
-            self.assertTrue(recovered_path.exists())
-            self.assertFalse((queue_dir / "processing" / "interrupted.json").exists())
-            recovered = json.loads(recovered_path.read_text(encoding="utf-8"))
+            recovered = started.queue.jobs.get("interrupted")
+            self.assertEqual((recovered["state"], recovered["attempts"]), ("queued", 1))
             self.assertEqual(recovered["stage"], "Recovered after service restart")
 
-
-    def test_daily_quota_blocks_enqueue_and_retry_until_expiry(self):
+    def test_a_spent_daily_quota_does_not_refuse_enqueue_or_retry_it_makes_them_wait(self):
         with tempfile.TemporaryDirectory() as tmp:
-            queue_dir = Path(tmp) / "queue"
-            gst_queue.ensure_queue_dirs(str(queue_dir))
+            queue = self.queue()
+            queue.configure({}, ("m",), "gemini")
             source = Path(tmp) / "movie.en.srt"
             source.write_text("subtitle", encoding="utf-8")
-            pause = queue_dir / "provider-pause.json"
-            pause.write_text(json.dumps({"reason": "daily-quota", "retry_at": 2000}), encoding="utf-8")
-            failed = queue_dir / "failed" / "retry.json"
-            failed.write_text('{"job_id":"retry"}', encoding="utf-8")
+            queue.jobs.add({"job_id": "retry"}, key="retry", job_id="retry")
+            queue.jobs.transition("retry", "failed", error="x")
+            queue.jobs.set_health("gemini", "m", queue_policy.after_quota(queue_policy.Health(), time.time() + 5000))
             base = {"subtitle_path": str(source), "source_code": "en"}
             targets = [{"code": "zh", "language": "Chinese", "enabled": True}]
-            with patch("gst_worker.queue.time.time", return_value=1000):
-                self.assertEqual(
-                    gst_queue.queue_snapshot(str(queue_dir))["daily_quota_pause"],
-                    {"retry_at": 2000},
-                )
-                with self.assertRaisesRegex(ValueError, "Daily Gemini quota"):
-                    gst_queue.enqueue_translation_jobs(str(queue_dir), base, targets)
-                with self.assertRaisesRegex(ValueError, "Daily Gemini quota"):
-                    gst_queue.retry_failed_job(str(queue_dir), "retry")
-            self.assertTrue(failed.exists())
-            self.assertEqual(list((queue_dir / "pending").glob("*.json")), [])
-            with patch("gst_worker.queue.time.time", return_value=2001):
-                self.assertIsNone(gst_queue.queue_snapshot(str(queue_dir))["daily_quota_pause"])
-                self.assertEqual(len(gst_queue.enqueue_translation_jobs(str(queue_dir), base, targets)), 1)
-                self.assertTrue(gst_queue.retry_failed_job(str(queue_dir), "retry"))
 
+            self.assertIsNotNone(queue.snapshot()["daily_quota_pause"])
+            self.assertEqual(len(queue.enqueue(base, targets)), 1)  # NFR-1: the request is kept, not refused
+            self.assertTrue(queue.retry("retry"))
 
     def test_cancel_pending_preserves_processing_job(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            gst_queue.ensure_queue_dirs(tmp)
-            pending = Path(tmp) / "pending" / "cancel.json"
-            processing = Path(tmp) / "processing" / "active.json"
-            pending.write_text("{}", encoding="utf-8")
-            processing.write_text("{}", encoding="utf-8")
-            self.assertTrue(gst_queue.delete_queue_job(tmp, "pending", "cancel"))
-            self.assertFalse(gst_queue.delete_queue_job(tmp, "pending", "active"))
-            self.assertFalse(pending.exists())
-            self.assertTrue(processing.exists())
+        queue = self.queue()
+        queue.jobs.add({}, key="a", job_id="cancel")
+        queue.jobs.add({}, key="b", job_id="active")
+        queue.jobs.transition("active", "running")
 
+        self.assertTrue(queue.delete("pending", "cancel"))
+        self.assertFalse(queue.delete("pending", "active"))
+        self.assertFalse(queue.delete("processing", "active"))
+        self.assertEqual(queue.jobs.state_of("cancel"), "cancelled")
+        self.assertEqual(queue.jobs.state_of("active"), "running")
 
-    def test_queue_worker_daily_quota_pauses_other_jobs(self):
+    def test_queue_worker_daily_quota_makes_other_jobs_wait_it_fails_none(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue_dir = Path(tmp) / "queue"
-            gst_queue.ensure_queue_dirs(str(queue_dir))
             for job_id in ("first", "second"):
-                job = {
+                self.drop(queue_dir, {
                     "job_id": job_id,
                     "created_at": 1_000,
                     "subtitle_path": str(Path(tmp) / f"{job_id}.en.srt"),
                     "output_path": str(Path(tmp) / f"{job_id}.zh.srt"),
                     "source_code": "en",
                     "target_code": "zh",
-                }
-                (queue_dir / "pending" / f"{job_id}.json").write_text(json.dumps(job), encoding="utf-8")
-            queue_worker = worker.QueueWorker(
-                str(queue_dir),
-                {"job_settle_seconds": 0},
-                gst_http.MemoryCache(),
-                FakeHTTP({}),
-            )
+                })
+            queue_worker = self.worker(queue_dir, {"job_settle_seconds": 0, "gst_model": "m"})
+            jobs = queue_worker.queue.jobs
 
             with patch(
                 "worker.process_job",
                 side_effect=gst_translation.DailyQuotaExceededError("429 daily quota exhausted"),
-            ) as process_job, patch("worker.time.time", return_value=1_000):
+            ) as process_job:
                 self.assertTrue(queue_worker.process_once(now=1_000))
                 self.assertFalse(queue_worker.process_once(now=1_001))
 
             self.assertEqual(process_job.call_count, 1)
-            pause = json.loads((queue_dir / "provider-pause.json").read_text(encoding="utf-8"))
-            self.assertEqual(pause["retry_at"], 87_400)
-            self.assertEqual(len(list((queue_dir / "deferred").glob("*.json"))), 0)
-            self.assertEqual(len(list((queue_dir / "pending").glob("*.json"))), 0)
-            self.assertEqual(len(list((queue_dir / "failed").glob("*.json"))), 2)
+            counts = jobs.counts()
+            self.assertEqual((counts["failed"], counts["deferred"], counts["pending"]), (0, 2, 0))
+            self.assertEqual({job["wait_reason"] for job in jobs.by_state("waiting")}, {"quota"})
+            self.assertEqual(jobs.health_map()[("gemini", "m")].state, "exhausted")
+            self.assertFalse((queue_dir / "provider-pause.json").exists())  # the pause lives in the database now
 
-
-    def test_queue_worker_fails_503_after_four_delayed_retries_without_fallback(self):
+    def test_queue_worker_keeps_a_503_job_waiting_it_does_not_fail_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             queue_dir = Path(tmp) / "queue"
-            gst_queue.ensure_queue_dirs(str(queue_dir))
-            job = {
+            self.drop(queue_dir, {
                 "job_id": "still-overloaded",
                 "created_at": 1_000,
                 "subtitle_path": str(Path(tmp) / "Movie.en.srt"),
                 "output_path": str(Path(tmp) / "Movie.zh.srt"),
                 "source_code": "en",
                 "target_code": "zh",
-                "provider_retry_count": 4,
-            }
-            pending_path = queue_dir / "pending" / "still-overloaded.json"
-            pending_path.write_text(json.dumps(job), encoding="utf-8")
-            queue_worker = worker.QueueWorker(
-                str(queue_dir),
-                {"job_settle_seconds": 0},
-                gst_http.MemoryCache(),
-                FakeHTTP({}),
-            )
+            })
+            queue_worker = self.worker(queue_dir, {"job_settle_seconds": 0, "gst_model": "m"})
+            jobs = queue_worker.queue.jobs
 
-            with patch(
-                "worker.process_job",
-                side_effect=gst_translation.ProviderUnavailableError("503 UNAVAILABLE"),
-            ):
-                self.assertTrue(queue_worker.process_once(now=1_000))
+            with patch("worker.process_job", side_effect=gst_translation.ProviderUnavailableError("503 UNAVAILABLE")):
+                now = 1_000
+                for _ in range(3):  # three failures in a row open the breaker
+                    queue_worker.process_once(now=now)
+                    now += 31
 
-            self.assertTrue((queue_dir / "failed" / "still-overloaded.json").exists())
-            self.assertFalse((queue_dir / "deferred" / "still-overloaded.json").exists())
-
+            job = jobs.get("still-overloaded")
+            self.assertEqual((job["state"], job["wait_reason"]), ("waiting", "provider"))
+            self.assertEqual(jobs.counts()["failed"], 0)

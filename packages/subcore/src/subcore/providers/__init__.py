@@ -3,6 +3,7 @@
 from .base import (
     AuthError,
     BadOutput,
+    Blocked,
     Capabilities,
     DeadlineExceeded,
     LLMRequest,
@@ -22,6 +23,7 @@ __all__ = [
     "OpenAICompatProvider",
     "AuthError",
     "BadOutput",
+    "Blocked",
     "CallLog",
     "Capabilities",
     "DeadlineExceeded",

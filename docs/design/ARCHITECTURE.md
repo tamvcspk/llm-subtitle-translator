@@ -252,6 +252,8 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 
 **Đánh đổi:** migration lớn (viết lại `queue.py` ~850 dòng và các test hàng đợi); đổi lại bỏ được ba nơi lưu trạng thái (file queue, SQLite, JSON cấu hình) thành một. Cổng nhận file từ `gst_enqueue.sh` (importer định kỳ) giữ đến P10 để không gãy hệ thống đang chạy.
 
+**Đã làm ở P8 (chốt các điểm ADR để ngỏ):** (1) publish là *thông báo → đổi tên → xác nhận* (FR-16.5); khi khởi động, file khớp sha256 của bản đã thông báo thì xác nhận, không khớp thì huỷ: bản đó thành `candidate`, bản đang nằm trên đĩa được đưa lại thành `current` nếu khớp, còn không thì file được ghi nhận là `external` và là `current` (không mất nội dung nào). (2) Xoá phụ đề đích tạo một phiên bản `removed` chứa bản sao nội dung, để hoàn tác được; file bị xoá ngoài console được ghi nhận cùng cách lúc khởi động. (3) Sửa cue gộp trong `edit_coalesce_minutes` bằng cách ghi đè bản sao của chính phiên bản `edit` đó, không tạo phiên bản mới. (4) Job `replace` lấy `base_version` lúc bắt đầu chạy, không lúc vào hàng đợi. (5) Phụ đề đích xuất hiện trong lúc job tự động chạy, hoặc nguồn đổi, thì kết quả thành `candidate` (không ghi đè, không bỏ mất).
+
 ### ADR-12 · Port chỉ ở biên không sở hữu (điều chỉnh ADR-8)
 
 **Quyết định:** giữ port cho thứ ta **không sở hữu**: Bazarr (`MediaLibrary`), TMDB (`Metadata`), provider LLM (`ProviderFactory`). SQLite là phần của ứng dụng: `AuthRepo`, `UsageLog`, `VersionRepo`, `MemoryRepo`, `CatalogRepo`, `JobQueue` trở thành các repository cụ thể trên SQLite (module `db/`, vẫn trả kiểu có tên), và test chạy trên SQLite `:memory:` thật với đúng chuỗi migration. Core được import `db`; vẫn cấm import HTTP client, SDK provider, adapter Bazarr/TMDB.

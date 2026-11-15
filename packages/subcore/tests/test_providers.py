@@ -6,6 +6,7 @@ from google.genai import errors
 from subcore.providers.base import (
     AuthError,
     BadOutput,
+    Blocked,
     LLMRequest,
     ModelNotFound,
     ProviderError,
@@ -105,6 +106,23 @@ class GeminiProviderTests(unittest.TestCase):
     def test_empty_response_is_bad_output(self):
         with self.assertRaises(BadOutput):
             GeminiProvider("k", client=FakeClient([chunk("", None, "SAFETY")])).generate(REQ)
+
+    def test_a_refused_answer_is_blocked_not_just_empty(self):
+        with self.assertRaises(Blocked):
+            GeminiProvider("k", client=FakeClient([chunk("", None, "SAFETY")])).generate(REQ)
+        with self.assertRaises(Blocked):
+            GeminiProvider("k", client=FakeClient([chunk("", None, "PROHIBITED_CONTENT")])).generate(REQ)
+        refused = chunk("")
+        refused.prompt_feedback = SimpleNamespace(block_reason=SimpleNamespace(name="PROHIBITED_CONTENT"))
+        with self.assertRaises(Blocked) as raised:
+            GeminiProvider("k", client=FakeClient([refused])).generate(REQ)
+        self.assertIn("PROHIBITED_CONTENT", str(raised.exception))
+        with self.assertRaises(BadOutput) as plain:  # an empty answer that was not refused stays plain bad output
+            GeminiProvider("k", client=FakeClient([chunk("", None, "STOP")])).generate(REQ)
+        self.assertNotIsInstance(plain.exception, Blocked)
+        # a refusal after some text is a cut-off like any other: what arrived is kept for repair
+        kept = GeminiProvider("k", client=FakeClient([chunk('[{"i":1,"text":"a"}', None, "SAFETY")])).generate(REQ)
+        self.assertEqual(kept.finish_reason, "SAFETY")
 
     def test_sdk_errors_become_typed_errors(self):
         client = FakeClient(raises=api_error(503, "UNAVAILABLE"))

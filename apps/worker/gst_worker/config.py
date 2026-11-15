@@ -97,6 +97,17 @@ LOG_INT_CONFIG_KEYS = {
 }
 # Price of a million tokens in the admin's own currency; 0 = no cost estimate on the call records.
 LOG_FLOAT_CONFIG_KEYS = ("llm_cost_in_per_mtok", "llm_cost_out_per_mtok")
+# The job queue's limits (P8, FR-15, FR-17). key -> (default, minimum); 0 turns a cap off where the key is a cap.
+QUEUE_INT_CONFIG_KEYS = {
+    "breaker_threshold": (3, 1),  # RateLimited/Unavailable in a row, after the retries inside a call, that open the breaker
+    "max_crashes": (3, 1),  # a job found running after this many restarts fails as `crashed`
+    "max_calls_per_job": (20, 0),
+    "max_calls_per_day": (0, 0),  # 0 = no daily cap (turn on with a paid key)
+    "transient_retry_seconds": (30, 0),  # how soon a job tries again after a failure that has not opened the breaker
+    "edit_coalesce_minutes": (10, 0),  # cue edits closer than this to each other are one version (FR-16.7)
+}
+# The zone whose midnight resets the provider's daily quota (FR-17.4); Gemini counts days in Pacific time.
+QUOTA_RESET_TZ = "America/Los_Angeles"
 DEFAULT_APP_CONFIG = {
     "source_languages": DEFAULT_SOURCE_LANGUAGES,
     "target_languages": DEFAULT_TARGET_LANGUAGES,
@@ -128,6 +139,8 @@ DEFAULT_APP_CONFIG = {
     "log_prompt_bodies": "all",
     **{key: default for key, (default, _) in LOG_INT_CONFIG_KEYS.items()},
     **{key: 0.0 for key in LOG_FLOAT_CONFIG_KEYS},
+    **{key: default for key, (default, _) in QUEUE_INT_CONFIG_KEYS.items()},
+    "quota_reset_tz": QUOTA_RESET_TZ,
 }
 
 
@@ -248,6 +261,12 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
             normalized[key] = max(0.0, float(normalized.get(key) or 0.0))
         except (TypeError, ValueError):
             normalized[key] = 0.0
+    for key, (default, minimum) in QUEUE_INT_CONFIG_KEYS.items():
+        try:
+            normalized[key] = max(minimum, int(normalized.get(key, default)))
+        except (TypeError, ValueError):
+            normalized[key] = default
+    normalized["quota_reset_tz"] = str(normalized.get("quota_reset_tz") or "").strip() or QUOTA_RESET_TZ
     try:
         normalized["scan_limit"] = max(1, int(normalized.get("scan_limit", 200)))
     except (TypeError, ValueError):

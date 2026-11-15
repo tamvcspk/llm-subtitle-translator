@@ -10,6 +10,7 @@ import difflib
 import json
 import logging
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -23,7 +24,8 @@ from subcore.providers import ProviderError
 from .config import DEFAULT_MODEL, model_for_task
 from .glossaries import GlossaryFiles
 from .library import Library
-from .ports import CURRENT, Correction, JobQueue, MissingApiKey, Output, ProviderFactory, Telemetry, Unit, UsageLog
+from .ports import CURRENT, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit, UsageLog
+from .queue import JobQueue
 from .memory import MEMORY_MODES, StoryMemory, parse_anchor, unit_label
 from .rules import correction_position
 from .telemetry import Telemetry as TelemetrySink
@@ -124,18 +126,35 @@ class UnitService:
         except srt.SrtError as exc:
             raise ValueError(f"the target subtitle cannot be read: {exc}") from None
 
+    REFRESH_ATTEMPTS = 3
+    REFRESH_DELAY_SECONDS = 5.0
+
     def _bazarr_refresh(self, unit: Unit) -> None:
+        """Ask Bazarr to rescan the unit in the background (FR-16 `refresh`): the file is already in place, so a
+        slow or failing Bazarr neither delays the console nor changes any job's result."""
         if self._refresh is None:
             return
         series = self.catalog.get_series(unit.series_id) if unit.series_id is not None else None
-        try:
-            self._refresh({
-                "media_type": unit.media_type or ("series" if series else "movie"),
-                "series_id": series.bazarr_id if series else "",
-                "media_id": unit.bazarr_id,
-            })
-        except Exception as exc:  # noqa: BLE001 - the file is already published; Bazarr rescans on its own schedule
-            logging.warning("Bazarr scan after a subtitle change failed (%s)", type(exc).__name__)
+        payload = {
+            "media_type": unit.media_type or ("series" if series else "movie"),
+            "series_id": series.bazarr_id if series else "",
+            "media_id": unit.bazarr_id,
+        }
+        threading.Thread(target=self._refresh_with_retry, args=(payload,), name="bazarr-refresh", daemon=True).start()
+
+    def _refresh_with_retry(self, payload: dict[str, Any]) -> bool:
+        for attempt in range(1, self.REFRESH_ATTEMPTS + 1):
+            try:
+                self._refresh(payload)  # type: ignore[misc] - checked by _bazarr_refresh
+                return True
+            except Exception as exc:  # noqa: BLE001 - Bazarr rescans on its own schedule if this never lands
+                logging.warning(
+                    "Bazarr scan after a subtitle change failed (%s), attempt %d of %d",
+                    type(exc).__name__, attempt, self.REFRESH_ATTEMPTS,
+                )
+                if attempt < self.REFRESH_ATTEMPTS:
+                    time.sleep(self.REFRESH_DELAY_SECONDS * attempt)
+        return False
 
     # -- detail ----------------------------------------------------------------------
     def detail(self, unit_id: int) -> dict[str, Any]:
@@ -316,6 +335,7 @@ class UnitService:
             parsed[ordinal] = text
         edited = [cue.with_text(parsed.get(n, cue.text)) for n, cue in enumerate(target, start=1)]
         current = self.version_repo.current_version(output_path)
+        self.versions.coalesce_seconds = float(self._settings().get("edit_coalesce_minutes", 10)) * 60
         published = self.versions.publish(
             output_path, srt.serialize(edited), trigger=CUE_EDIT,
             source_path=unit.source_path, source_sha256=current.source_sha256 if current else "",
@@ -344,6 +364,41 @@ class UnitService:
         )
         self._bazarr_refresh(unit)
         return {"ok": True, "scope": "episode", "ids": ids, "version": published.version, "warnings": warnings}
+
+    # -- a job waiting for earlier episodes (FR-15.11) ------------------------------------
+    def request_prerequisites(self, job_id: str) -> dict[str, Any]:
+        """The "request that episode" button of a job that waits for story facts: queue the earlier episodes it
+        waits for, those whose source subtitle is on disk. The others cannot be translated yet and are named, so
+        the admin knows what is still missing; the job itself goes on waiting (or runs without them after
+        ``memory_gap_wait_seconds``, FR-5.4)."""
+        job = self.jobs.jobs.get(job_id)
+        if job is None or job.get("wait_reason") != "context":
+            raise ValueError("the job is not waiting for earlier episodes")
+        lang = str(job.get("target_code") or "")
+        language = str(job.get("target_language") or lang)
+        requested: list[str] = []
+        unavailable: list[str] = []
+        for unit_id in job.get("missing_unit_ids") or []:
+            unit = self.catalog.get_unit(int(unit_id))
+            if unit is None:
+                continue
+            if not unit.source_path or not Path(unit.source_path).is_file():
+                unavailable.append(unit_label(unit))
+                continue
+            series = self.catalog.get_series(unit.series_id) if unit.series_id is not None else None
+            made = self.jobs.enqueue({
+                "provider": "gemini-console", "video_path": unit.video_path, "subtitle_path": unit.source_path,
+                "source_code": unit.source_code or str(job.get("source_code") or "en"),
+                "source_language": unit.source_language or unit.source_code,
+                "media_type": unit.media_type or ("series" if series else "movie"),
+                "series_id": series.bazarr_id if series else "", "media_id": unit.bazarr_id, "unit_id": unit.id,
+            }, [{"code": lang, "language": language, "enabled": True}])
+            requested.extend(made)
+        self.telemetry.event(
+            "job.prerequisites_requested", job_id=job_id, reason="the admin asked for the earlier episodes the job waits for",
+            requested=requested, unavailable=unavailable,
+        )
+        return {"requested": requested, "unavailable": unavailable}
 
     # -- retranslation ------------------------------------------------------------------
     def retranslate(self, unit_id: int, body: dict[str, Any]) -> dict[str, Any]:
@@ -429,7 +484,7 @@ class UnitService:
             "modified_outside": self.library.target_info(unit, out)["modified_outside"],
             "versions": [
                 {
-                    "version": r.version, "trigger": r.trigger, "status": r.status,
+                    "version": r.version, "trigger": r.trigger, "origin": r.origin, "status": r.status,
                     "parent_version": r.parent_version, "model": r.model, "sha256": r.sha256,
                     "tokens_in": r.tokens_in, "tokens_out": r.tokens_out, "created_at": r.created_at,
                     "current": r.status == CURRENT and on_disk,
@@ -437,6 +492,23 @@ class UnitService:
                 for r in reversed(rows)
             ],
         }
+
+    def adopt(self, unit_id: int, version: int, lang: str | None = None) -> dict[str, Any]:
+        """"Dùng bản này" (FR-16.4): a candidate goes on disk and becomes the current version."""
+        unit = self.unit(unit_id)
+        out = self.output(unit, lang)
+        published = self.versions.adopt(out.output_path, version)
+        self._bazarr_refresh(unit)
+        return {"ok": True, "version": published.version, "adopted": version}
+
+    def remove_output(self, unit_id: int, lang: str | None = None) -> dict[str, Any]:
+        """Delete the target subtitle from the console (FR-16.6): the history keeps a removed version and the unit
+        is not requested again automatically."""
+        unit = self.unit(unit_id)
+        out = self.output(unit, lang)
+        published = self.versions.remove(out.output_path)
+        self._bazarr_refresh(unit)
+        return {"ok": True, "version": published.version}
 
     def _version_cues(self, out: Output, version: int) -> list[srt.Cue]:
         row = self.version_repo.get_version(out.output_path, version)

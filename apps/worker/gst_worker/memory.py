@@ -274,12 +274,14 @@ class StoryMemory:
         prior: list[tuple[Unit, Facts]] = []
         missing: list[str] = []
         gap: list[str] = []
+        gap_ids: list[int] = []
         for earlier in self.prior_units(unit, units, series):
             facts, how = self.ensure_facts(earlier, title, settings, provider_for)
             if facts is None:
                 missing.append(unit_label(earlier))
                 if how == "no-source":
                     gap.append(unit_label(earlier))
+                    gap_ids.append(earlier.id)
             else:
                 prior.append((earlier, facts))
 
@@ -290,7 +292,7 @@ class StoryMemory:
                 retry_at = now + min(GAP_RECHECK_SECONDS, since + options.gap_wait_seconds - now)
                 raise ContextGapError(
                     f"Waiting for the source subtitle of {', '.join(gap)} before translating {unit_label(unit)}",
-                    retry_at=retry_at, since=since, missing=gap,
+                    retry_at=retry_at, since=since, missing=gap, missing_ids=gap_ids,
                 )
 
         own, _ = self.ensure_facts(unit, title, settings, provider_for)

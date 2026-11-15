@@ -17,6 +17,7 @@ from subcore import srt
 from subcore.providers import (
     AuthError,
     BadOutput,
+    Blocked,
     FakeProvider,
     LLMRequest,
     ModelNotFound,
@@ -287,9 +288,15 @@ class Criterion22bTypedErrors(ServerCase):
         self.raises(Reply(body=b"<html>hi</html>", headers={"Content-Type": "text/html"}), BadOutput)
 
     def test_an_empty_answer_is_bad_output_with_its_finish_reason(self):
+        for reply in (plain("", finish="length"), sse("", finish="length")):
+            with self.subTest(streamed=reply.events is not None):
+                self.assertIn("length", str(self.raises(reply, BadOutput)))
+
+    def test_an_answer_the_content_filter_refused_is_blocked_a_kind_of_bad_output(self):
         for reply in (plain("", finish="content_filter"), sse("", finish="content_filter")):
             with self.subTest(streamed=reply.events is not None):
-                self.assertIn("content_filter", str(self.raises(reply, BadOutput)))
+                self.assertIn("content_filter", str(self.raises(reply, Blocked)))
+                self.assertTrue(issubclass(Blocked, BadOutput))
 
     def test_an_error_inside_the_event_stream_is_typed_too(self):
         stream = Reply(events=[json.dumps({"error": {"code": 502, "message": "upstream died"}})])

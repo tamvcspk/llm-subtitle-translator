@@ -19,7 +19,7 @@ from gst_worker import library_api
 from gst_worker import queue as gst_queue
 from gst_worker.bazarr import list_series_episodes
 from gst_worker.glossaries import GlossaryFiles
-from gst_worker.queue import FileJobQueue
+from gst_worker.queue import JobQueue
 from gst_worker.library import Library
 from gst_worker.memory import StoryMemory, parse_anchor, unit_label
 from gst_worker.ports import EpisodeListing, Series, Unit
@@ -84,7 +84,7 @@ class Env:
             provider_factory=lambda settings, model, **kw: self.fake,
         )
         self.service = UnitService(
-            self.library, self.glossaries, self.versions, FileJobQueue(str(self.root / "queue")), memory=self.memory,
+            self.library, self.glossaries, self.versions, JobQueue(self.store), memory=self.memory,
             settings_source=lambda: self.settings, provider_factory=lambda settings, model, **kw: self.fake,
         )
         self.episodes = range(1, 7)
@@ -579,10 +579,11 @@ class QueueDeferralTests(unittest.TestCase):
             source = root / "Show.S01E04.en.srt"
             source.write_text("x", encoding="utf-8")
             os.utime(source, (100, 100))  # long settled, so the queue may start it at the fake clock
-            queue_dir = str(root / "queue")
-            jobs = gst_queue.JobQueue(queue_dir)
-            gst_queue.enqueue_translation_jobs(
-                queue_dir, {"subtitle_path": str(source), "source_code": "en"},
+            store = Store(":memory:")
+            self.addCleanup(store.close)
+            jobs = JobQueue(store)
+            [job_id] = jobs.enqueue(
+                {"subtitle_path": str(source), "source_code": "en"},
                 [{"code": "vi", "language": "Vietnamese", "enabled": True}],
             )
 
@@ -590,11 +591,11 @@ class QueueDeferralTests(unittest.TestCase):
                 raise ContextGapError("Waiting for S01E03", retry_at=1300.0, since=1000.0, missing=["S01E03"])
 
             self.assertTrue(jobs.process_once(waiting, now=1000))
-            snapshot = gst_queue.queue_snapshot(queue_dir)
+            snapshot = jobs.snapshot()
             self.assertEqual(snapshot["counts"]["deferred"], 1)
             deferred = snapshot["deferred"][0]
-            self.assertEqual((deferred["deferred_reason"], deferred["gap_since"], deferred["retry_at"]),
-                             ("context-gap", 1000.0, 1300.0))
+            self.assertEqual((deferred["wait_reason"], deferred["gap_since"], deferred["retry_at"], deferred["missing_units"]),
+                             ("context", 1000.0, 1300.0, ["S01E03"]))
             self.assertIn("S01E03", deferred["error"])
             self.assertFalse(jobs.process_once(waiting, now=1299))  # not before its time
 
@@ -606,7 +607,8 @@ class QueueDeferralTests(unittest.TestCase):
 
             self.assertTrue(jobs.process_once(finish, now=1300))
             self.assertEqual(seen["gap_since"], 1000.0)
-            done = gst_queue.queue_snapshot(queue_dir)["done"][0]
+            done = jobs.snapshot()["done"][0]
+            self.assertEqual(done["job_id"], job_id)
             self.assertNotIn("gap_since", done)  # cleared once the job finishes
 
 

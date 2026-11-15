@@ -21,6 +21,7 @@ __all__ = [
     "QuotaExhausted",
     "Unavailable",
     "BadOutput",
+    "Blocked",
     "DeadlineExceeded",
 ]
 
@@ -66,6 +67,14 @@ class Unavailable(ProviderError):
 
 class BadOutput(ProviderError):
     """The call succeeded but produced nothing usable (blocked, empty, truncated)."""
+
+
+class Blocked(BadOutput):
+    """The provider refused to answer because of the content (a safety or policy filter), not because it failed.
+
+    It is a ``BadOutput``, so the translator repairs and splits as for any unusable answer (the offending cues
+    may sit in one small part); the type lets the caller say *why* a job that stays invalid ended (FR-17.2).
+    """
 
 
 class DeadlineExceeded(ProviderError):

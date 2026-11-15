@@ -7,7 +7,7 @@ export const QUEUE_STATES = ["pending", "processing", "deferred", "done", "faile
 export const STATE_LABELS = {
   pending: "Pending",
   processing: "Translating",
-  deferred: "Deferred",
+  deferred: "Waiting",
   done: "Done",
   failed: "Failed",
 };
@@ -24,13 +24,25 @@ function progressBlock(job) {
     h("div", { class: "muted" }, facts.length ? facts.join(" · ") : "Waiting for Gemini response…"));
 }
 
+// A job waits for something, and says what (FR-15.8): a wait is never a failure.
+export const WAIT_LABELS = {
+  quota: "Waiting · daily quota spent",
+  provider: "Waiting · provider (key, model or breaker)",
+  context: "Waiting · earlier episodes' facts",
+  settle: "Waiting · source subtitle changed a moment ago",
+  rate: "Waiting · provider busy, trying again",
+};
+
 function metaLine(job, state) {
   const parts = [];
-  if (state === "deferred" && job.retry_at) {
-    parts.push(h("span", { class: "meta-strong" }, icon("clock"), `Retry after ${formatDateTime(job.retry_at)}`));
-    if (job.deferred_reason) parts.push(h("span", { text: job.deferred_reason }));
+  if (state === "deferred") {
+    parts.push(h("span", { class: "meta-strong" }, icon("clock"), WAIT_LABELS[job.wait_reason] || "Waiting"));
+    const until = Number(job.retry_at);
+    if (until > 0 && until < 1e17) parts.push(h("span", { text: `until ${formatDateTime(until)}` }));
+    if (job.wait_reason === "context" && Array.isArray(job.missing_units) && job.missing_units.length)
+      parts.push(h("span", { text: `missing: ${job.missing_units.join(", ")}` }));
   }
-  if (job.provider_retry_count) parts.push(h("span", { text: `Provider retries: ${job.provider_retry_count}` }));
+  if (job.attempts) parts.push(h("span", { text: `Restarted after a crash: ${job.attempts}` }));
   if (state === "done" && job.output_path) parts.push(h("span", { text: `Wrote ${basename(job.output_path)}` }));
   if (job.created_at) parts.push(h("span", {}, "Queued ", h("span", { dataset: { rel: job.created_at } })));
   return parts.length ? h("div", { class: "job-meta" }, parts) : null;

@@ -19,6 +19,7 @@ from typing import Callable
 from .base import (
     AuthError,
     BadOutput,
+    Blocked,
     Capabilities,
     DeadlineExceeded,
     LLMRequest,
@@ -146,6 +147,7 @@ _OUTCOMES: tuple[tuple[type[ProviderError], str], ...] = (
     (RateLimited, "rate_limited"),
     (QuotaExhausted, "quota_exhausted"),
     (Unavailable, "unavailable"),
+    (Blocked, "blocked"),  # before BadOutput, which it is a kind of
     (BadOutput, "bad_output"),
     (AuthError, "auth_error"),
     (ModelNotFound, "model_not_found"),

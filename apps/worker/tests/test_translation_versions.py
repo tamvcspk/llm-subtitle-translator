@@ -37,8 +37,10 @@ class PublishTests(VersionsTestCase):
         self.versions.publish(self.output, "system\n", trigger=AUTO)
         self.assertEqual(self.versions.publish(self.output, "again\n", trigger=AUTO).status, SKIPPED_EXISTING)
         Path(self.output).write_text("hand edited\n", encoding="utf-8")
-        self.assertEqual(self.versions.publish(self.output, "again\n", trigger=AUTO).status, SKIPPED_EXISTING)
+        # The hand edit is kept as an external version; the automatic result waits as a candidate (FR-16.3).
+        self.assertEqual(self.versions.publish(self.output, "again\n", trigger=AUTO).status, "candidate")
         self.assertEqual(Path(self.output).read_text(encoding="utf-8"), "hand edited\n")
+        self.assertEqual(self.store.current_version(self.output).origin, "external")
 
     def test_hand_edited_file_is_no_longer_a_system_file(self):
         self.versions.publish(self.output, "system\n", trigger=AUTO)
@@ -134,14 +136,14 @@ class StoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "nested" / "app.db"
             first = Store(path)
-            self.assertEqual(first.schema_version, 7)
+            self.assertEqual(first.schema_version, 9)
             first.record_llm_call(
                 "j", provider="p", model="m", task="translate", tokens_in=3, tokens_out=4, latency_ms=5, outcome="ok"
             )
             first.close()
             second = Store(path)
             try:
-                self.assertEqual(second.schema_version, 7)
+                self.assertEqual(second.schema_version, 9)
                 self.assertEqual(second.token_totals(), TokenTotals(calls=1, tokens_in=3, tokens_out=4))
             finally:
                 second.close()

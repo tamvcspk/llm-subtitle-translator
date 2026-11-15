@@ -71,6 +71,8 @@ ROUTES: list[tuple[str, str, Handler]] = [
         ),
     ),
     ("POST", r"/api/units/(\d+)/versions/(\d+)/revert", lambda s, m, q, b: s.revert(int(m[1]), int(m[2]), _lang(q, b))),
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/adopt", lambda s, m, q, b: s.adopt(int(m[1]), int(m[2]), _lang(q, b))),
+    ("POST", r"/api/units/(\d+)/output/remove", lambda s, m, q, b: s.remove_output(int(m[1]), _lang(q, b))),
     ("GET", r"/api/units/(\d+)/context", lambda s, m, q, b: s.context(int(m[1]), _lang(q))),
     ("POST", r"/api/units/(\d+)/context/extract", lambda s, m, q, b: s.refresh_context(int(m[1]))),
     ("GET", r"/api/series/(\d+)/memory", lambda s, m, q, b: s.series_memory(int(m[1]))),

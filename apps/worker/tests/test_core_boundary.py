@@ -1,10 +1,10 @@
-"""Core of the worker must not import infrastructure (SPEC ADR-8, NFR-10, criterion 10a).
+"""Core of the worker must not import infrastructure we do not own (SPEC ADR-8, ADR-12, NFR-10, criterion 10a).
 
 Every module in ``gst_worker`` is *core* unless it is listed as an adapter or the composition root, so a
-new module is checked by default. A core module may not import ``sqlite3``, an HTTP client, or an adapter
-module. The violations that exist today are listed in ``KNOWN_VIOLATIONS`` with the P0d step that removes
-them. The list may only shrink: a new violation fails the test, and so does an entry that no longer
-occurs (delete it), until the list is empty and P0d part 1 is done.
+new module is checked by default. A core module may not import an HTTP client, a socket, or an adapter
+module (Bazarr, TMDB, the provider SDKs, the HTTP server). SQLite is the application's own storage since P8
+(ADR-12): ``store``, ``jobs`` and the queue are core and tested on ``:memory:``, not behind a port.
+The violations that exist are listed in ``KNOWN_VIOLATIONS``; the list may only shrink.
 
 ``urllib.parse`` and ``http.cookies`` are pure string handling, not clients, and stay allowed.
 """
@@ -18,7 +18,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent.parent / PACKAGE
 
 # Infrastructure: implements a port (or will) and may touch storage, files, sockets.
 ADAPTERS = frozenset({
-    "store", "queue", "http", "bazarr", "tmdb", "gemini", "llm", "backups", "connection_tests",
+    "http", "bazarr", "tmdb", "gemini", "llm", "backups", "connection_tests",
     "settings",  # environment + config files + Bazarr's own config
     "web",  # the console's HTTP handler
 })
@@ -26,7 +26,6 @@ ADAPTERS = frozenset({
 COMPOSITION_ROOT = frozenset({"runtime"})
 
 FORBIDDEN_EXTERNAL = (
-    "sqlite3",
     "socket",
     "ssl",
     "http.client",
@@ -90,8 +89,8 @@ class CoreBoundaryTests(unittest.TestCase):
         self.assertFalse(stale, f"no longer a violation, delete from KNOWN_VIOLATIONS: {sorted(stale)}")
 
     def test_entry_point_wires_adapters_but_touches_no_infrastructure_itself(self):
-        """``worker.py`` is the process's composition root: it may import any adapter, but sockets, SQLite and
-        the stdlib HTTP server stay inside the adapters (``store``, ``http``, ``web``)."""
+        """``worker.py`` is the process's composition root: it may import any adapter, but sockets and the
+        stdlib HTTP server stay inside the adapters (``http``, ``web``)."""
         source = (PACKAGE_DIR.parent / "worker.py").read_text(encoding="utf-8")
         direct = {
             name for name in imported_modules(source)
@@ -164,12 +163,12 @@ class ScannerTests(unittest.TestCase):
         return {name for _, name in violations_in("core_module", source)}
 
     def test_sees_top_level_and_nested_imports(self):
-        self.assertEqual(self.hits("import sqlite3"), {"sqlite3"})
-        self.assertEqual(self.hits("def f():\n    import sqlite3\n"), {"sqlite3"})
+        self.assertEqual(self.hits("import socket"), {"socket"})
+        self.assertEqual(self.hits("def f():\n    import socket\n"), {"socket"})
 
     def test_resolves_relative_and_absolute_adapter_imports(self):
-        self.assertEqual(self.hits("from .store import Store"), {"gst_worker.store"})
-        self.assertEqual(self.hits("from gst_worker.queue import enqueue"), {"gst_worker.queue"})
+        self.assertEqual(self.hits("from .bazarr import BazarrMedia"), {"gst_worker.bazarr"})
+        self.assertEqual(self.hits("from gst_worker.tmdb import TmdbMetadata"), {"gst_worker.tmdb"})
         self.assertEqual(self.hits("from . import http"), {"gst_worker.http"})
         self.assertEqual(self.hits("def f():\n    from .http import first_data\n"), {"gst_worker.http"})
 
@@ -179,8 +178,8 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(self.hits("from http.client import HTTPSConnection"), {"http.client"})
 
     def test_allows_pure_modules(self):
-        source = "from urllib.parse import urlsplit\nfrom http.cookies import SimpleCookie\nfrom .rules import x\nimport json"
-        self.assertEqual(self.hits(source), set())
+        source = "from urllib.parse import urlsplit\nfrom http.cookies import SimpleCookie\nfrom .rules import x\nimport json\nimport sqlite3\nfrom .store import Store"
+        self.assertEqual(self.hits(source), set())  # the application's own SQLite is core (ADR-12)
 
 
 if __name__ == "__main__":

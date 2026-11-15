@@ -29,6 +29,7 @@ from typing import Any
 from .base import (
     AuthError,
     BadOutput,
+    Blocked,
     Capabilities,
     LLMRequest,
     LLMResponse,
@@ -273,6 +274,8 @@ class OpenAICompatProvider:
             # Timeouts, refused or dropped connections: transient as far as the caller can tell.
             raise Unavailable(f"network error: {type(exc).__name__}") from None
         if not text.strip():
+            if finish == "content_filter":
+                raise Blocked("blocked by the content filter (content_filter)")
             raise BadOutput(f"empty response (finish_reason={finish or 'unknown'})")
         # A cut-off ("length") is returned as-is: the cues that made it are kept and the rest repaired or split.
         return LLMResponse(

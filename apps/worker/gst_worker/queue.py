@@ -1,159 +1,49 @@
+"""The job queue: how jobs are made, claimed, run, waited on and ended (FR-15, FR-17, ADR-11).
+
+Jobs are rows of the ``jobs`` table (``jobs.JobStore``); this module is the lifecycle on top of them. What it
+decides comes from ``queue_policy`` (pure): which job goes next, when a provider may be called again, when a
+daily quota resets. A failure of the provider never fails a job: the job *waits* with a reason and runs when the
+provider can be called again (NFR-1, FR-15.8); ``failed`` is for the job's own faults.
+"""
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import re
+import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .config import ADMISSION_AUTO, ADMISSION_HOLD, enabled_target_languages
+from . import queue_policy as policy
+from .config import ADMISSION_AUTO, QUOTA_RESET_TZ, enabled_target_languages
+from .jobs import (
+    CANCELLED, DONE, FAILED, HELD, LEGACY_STATES, OPEN_STATES, QUEUED, REJECTED, REPLACE, RUNNING, SKIPPED, WAITING,
+    JobStore, FROM_LEGACY, job_key, retranslation_key,
+)
 from .ports import HeldJob, Telemetry
+from .queue_policy import Health
+from .store import Store
 from .subtitles import existing_target_subtitle, target_output_path
 from .telemetry import NULL as NULL_TELEMETRY
-from .translation import ContextGapError, DailyQuotaExceededError, HardJobError, ProviderUnavailableError, redact
-from .queue_policy import PROVIDER_RETRY_DELAYS, daily_quota_retry_at, provider_retry_decision, select_model
-
-
-# `held` and `rejected` are the admission states of FR-12: a held job is received and stored but never claimed
-# or run (no model call, no quota); a rejected job is the remembered "no" that keeps the Bazarr script and scans
-# from queueing the same job again. Neither is picked up by `_ready_job_path`, quota failing or recovery.
-HELD = "held"
-REJECTED = "rejected"
-QUEUE_STATES = ("pending", "processing", "deferred", "done", "failed", HELD, REJECTED)
+from .translation import (
+    CallBudgetError, ContextGapError, DailyQuotaExceededError, HardJobError, JobStopped, ModelNotFoundError,
+    ProviderAuthError, ProviderUnavailableError, redact,
+)
 
 # A job that already went through admission carries an `admission` field: "admin" (made by the console),
 # "auto" (running or open when `hold` was switched on), "approved" (released from held). The script's own
 # jobs have none, which is how the worker tells "new from Bazarr" from "already admitted" (FR-12.2, 12.3).
 ADMISSION_FIELD = "admission"
+RETRANSLATE_PRIORITY = policy.RETRANSLATE
+SETTINGS_SNAPSHOT_KEYS = (
+    "llm_provider", "llm_base_url", "gst_model", "gst_fallback_model", "gst_temperature", "gst_thinking_budget",
+    "gst_no_thinking", "memory_enabled", "memory_model", "summarize_model", "research_model",
+    "max_calls_per_job", "max_calls_per_day", "breaker_threshold",
+)
 
 
-def _write_job(path: Path, job: dict[str, Any]) -> None:
-    temporary = path.with_name(f".{path.stem}.tmp")
-    temporary.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(path)
-
-
-def _read_job(path: Path) -> dict[str, Any] | None:
-    try:
-        job = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError):
-        return None
-    return job if isinstance(job, dict) else None
-
-
-def _safe_job_id(job_id: str) -> bool:
-    """A job id names a file in the queue directory; anything that is not a plain file name is refused."""
-    return bool(job_id) and job_id == Path(job_id).name and job_id not in {".", ".."}
-
-
-def _move_job(source: Path, destination: Path, error: str | None = None) -> None:
-    source.replace(destination)
-    source.with_suffix(".error").unlink(missing_ok=True)
-    error_path = destination.with_suffix(".error")
-    if error is None:
-        error_path.unlink(missing_ok=True)
-    else:
-        error_path.write_text(error, encoding="utf-8")
-
-
-def _layer(model: str | None, models: tuple[str, ...]) -> str:
-    """``light`` for the default model, ``strong`` for the second one (FR-9.5)."""
-    if not model:
-        return "none"
-    return "strong" if len(models) > 1 and model == models[1] else "light"
-
-
-def _claim_reason(job: dict[str, Any]) -> str:
-    if job.get("trigger") == "retranslate":
-        return "an explicit retranslation runs ahead of automatic work"
-    if job.get(ADMISSION_FIELD) == "approved":
-        return "approved by the admin"
-    if job.get("escalated_from") or job.get("use_fallback_model"):
-        return "second attempt on the strong model"
-    return "oldest ready job"
-
-
-def _model_reason(model: str | None, models: tuple[str, ...], paused: dict[str, float], job: dict[str, Any]) -> str:
-    if not model:
-        return "no model is configured"
-    if len(models) > 1 and model == models[1]:
-        if job.get("escalated_from"):
-            return f"the job is hard: {job['escalated_from']} could not produce valid output"
-        if models[0] in paused:
-            return f"the daily quota of {models[0]} is spent"
-        return f"{models[0]} was unavailable; the strong model takes over"
-    return "the default model takes every job it can"
-
-
-def _reset_retry(job: dict[str, Any]) -> None:
-    for key in ("provider_retry_count", "retry_at", "deferred_reason", "last_error", "use_fallback_model", "gap_since"):
-        job.pop(key, None)
-
-
-def _read_provider_pause(queue_dir: str) -> dict[str, Any]:
-    try:
-        pause = json.loads((Path(queue_dir) / "provider-pause.json").read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError):
-        return {}
-    return pause if isinstance(pause, dict) else {}
-
-
-def daily_quota_pause_until(queue_dir: str, now: float | None = None) -> float | None:
-    """The global pause: every configured model has exhausted its daily quota."""
-    pause = _read_provider_pause(queue_dir)
-    try:
-        retry_at = float(pause.get("retry_at") or 0)
-    except (TypeError, ValueError):
-        return None
-    if pause.get("reason") == "daily-quota" and retry_at > (time.time() if now is None else now):
-        return retry_at
-    return None
-
-
-def model_quota_pauses(queue_dir: str, now: float | None = None) -> dict[str, float]:
-    """Models whose own daily quota is exhausted, mapped to when each may be used again."""
-    current_time = time.time() if now is None else now
-    models = _read_provider_pause(queue_dir).get("models")
-    paused: dict[str, float] = {}
-    if isinstance(models, dict):
-        for model, retry_at in models.items():
-            try:
-                if float(retry_at) > current_time:
-                    paused[str(model)] = float(retry_at)
-            except (TypeError, ValueError):
-                continue
-    return paused
-
-
-def sync_daily_quota_pause(queue_dir: str, models: tuple[str, ...], now: float | None = None) -> float | None:
-    """Re-derive the global pause from per-model pauses for the models configured now.
-
-    Switching to a model that still has quota lifts the pause; the pause file is
-    rewritten so the Bazarr enqueue script sees the same admission decision.
-    """
-    current_time = time.time() if now is None else now
-    pause = _read_provider_pause(queue_dir)
-    if not models or not isinstance(pause.get("models"), dict):
-        return daily_quota_pause_until(queue_dir, current_time)
-    paused = model_quota_pauses(queue_dir, current_time)
-    if all(model in paused for model in models):
-        updated = {**pause, "retry_at": min(paused[model] for model in models), "reason": "daily-quota", "models": paused}
-    else:
-        updated = {"models": paused}
-    if updated != pause:
-        _write_job(Path(queue_dir) / "provider-pause.json", updated)
-    return daily_quota_pause_until(queue_dir, current_time)
-
-
-def reject_daily_quota(queue_dir: str) -> None:
-    if daily_quota_pause_until(queue_dir) is not None:
-        raise ValueError("Daily Gemini quota exhausted; new jobs and retries are disabled until the quota pause expires.")
-
-
+# --- what may be translated at all (kept from the file queue: pure checks on a job dict) ----------------------
 def allowed_path_prefixes() -> tuple[str, ...]:
     """Folders automatic jobs may come from (`GST_ONLY_PATHS`, comma separated); empty means anywhere.
 
@@ -178,16 +68,6 @@ def max_open_jobs() -> int:
         return max(0, int(os.getenv("GST_MAX_PENDING", "0") or 0))
     except ValueError:
         return 0
-
-
-def open_job_count(queue_dir: str) -> int:
-    root = Path(queue_dir)
-    return sum(len(list((root / state).glob("*.json"))) for state in ("pending", "processing", "deferred"))
-
-
-def queue_is_full(queue_dir: str) -> bool:
-    limit = max_open_jobs()
-    return limit > 0 and open_job_count(queue_dir) >= limit
 
 
 def skip_reason(job: dict[str, Any]) -> str | None:
@@ -221,715 +101,49 @@ def should_skip_job(job: dict[str, Any]) -> bool:
     return skip_reason(job) is not None
 
 
-def ensure_queue_dirs(queue_dir: str) -> None:
-    root = Path(queue_dir)
-    for state in QUEUE_STATES:
-        (root / state).mkdir(parents=True, exist_ok=True)
-
-
 def job_id_for(subtitle_path: str, output_path: str, target_code: str) -> str:
-    raw = f"{subtitle_path}|{output_path}|{target_code}"
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
-
-
-def retry_failed_job(queue_dir: str, job_id: str) -> bool:
-    reject_daily_quota(queue_dir)
-    ensure_queue_dirs(queue_dir)
-    failed = Path(queue_dir) / "failed" / f"{job_id}.json"
-    pending = Path(queue_dir) / "pending" / f"{job_id}.json"
-    if not failed.exists() or pending.exists():
-        return False
-    try:
-        job = json.loads(failed.read_text(encoding="utf-8"))
-        _reset_retry(job)
-        job.pop("escalated_from", None)
-        job.pop("escalation_reason", None)
-        job[ADMISSION_FIELD] = "admin"  # the admin asked for this run, so `hold` does not catch it
-        _write_job(failed, job)
-    except (OSError, TypeError, ValueError):
-        pass
-    _move_job(failed, pending)
-    return True
-
-
-def cancel_failed_job(queue_dir: str, job_id: str) -> bool:
-    """Permanently remove a failed job without scheduling another attempt."""
-    return delete_queue_job(queue_dir, "failed", job_id)
-
-
-def delete_queue_job(queue_dir: str, state: str, job_id: str) -> bool:
-    # A held job leaves through approve or reject (so the "no" is remembered), never by plain deletion.
-    if state not in QUEUE_STATES or state == HELD or not _safe_job_id(job_id):
-        return False
-    path = Path(queue_dir) / state / f"{job_id}.json"
-    if not path.exists():
-        return False
-    path.unlink()
-    error = path.with_suffix(".error")
-    if error.exists():
-        error.unlink()
-    return True
-
-
-def enqueue_translation_jobs(
-    queue_dir: str,
-    base_job: dict[str, Any],
-    targets: list[dict[str, Any]],
-    telemetry: Telemetry | None = None,
-) -> list[str]:
-    telemetry = telemetry or NULL_TELEMETRY
-    reject_daily_quota(queue_dir)
-    ensure_queue_dirs(queue_dir)
-    created: list[str] = []
-    subtitle_path = str(base_job.get("subtitle_path", ""))
-    name = Path(subtitle_path).name
-
-    def skipped(reason: str, target_code: str = "", job_id: str = "", level: str = "INFO") -> None:
-        telemetry.event("enqueue.skipped", level=level, job_id=job_id, reason=reason, subtitle=name,
-                        target=target_code or None, unit_id=base_job.get("unit_id") or None)
-
-    if not subtitle_path or not Path(subtitle_path).exists():
-        skipped("the source subtitle does not exist")
-        return created
-    source_code = str(base_job.get("source_code") or base_job.get("language") or "en").split(":", 1)[0].strip()
-    source_language = str(base_job.get("source_language") or source_code or "English")
-    if outside_allowed_paths(subtitle_path):
-        logging.warning("Not queueing %s: outside GST_ONLY_PATHS", subtitle_path)
-        skipped("the subtitle is outside GST_ONLY_PATHS", level="WARNING")
-        return created
-
-    for target in enabled_target_languages({"target_languages": targets}):
-        target_code = str(target["code"])
-        if source_code.lower() == target_code.lower():
-            skipped("the source and the target language are the same", target_code)
-            continue
-        output_path = str(base_job.get("output_path") or target_output_path(subtitle_path, target_code, source_code=source_code))
-        jid = job_id_for(subtitle_path, output_path, target_code)
-        # Only a language that is missing gets translated: any sibling subtitle already in it counts.
-        if Path(output_path).exists():
-            skipped("the target subtitle already exists", target_code, jid)
-            continue
-        sibling = existing_target_subtitle(subtitle_path, target_code, source_code)
-        if sibling:
-            skipped(f"a {target_code} subtitle is already present: {Path(sibling).name}", target_code, jid)
-            continue
-        pending = Path(queue_dir) / "pending" / f"{jid}.json"
-        processing = Path(queue_dir) / "processing" / f"{jid}.json"
-        deferred = Path(queue_dir) / "deferred" / f"{jid}.json"
-        if pending.exists() or processing.exists() or deferred.exists():
-            skipped("the same job is already waiting or running", target_code, jid)
-            continue
-        # Waiting for approval, or refused: not queued again (FR-12.5), even by a scan.
-        if (Path(queue_dir) / HELD / pending.name).exists() or (Path(queue_dir) / REJECTED / pending.name).exists():
-            skipped("the same job is held for approval or was rejected", target_code, jid)
-            continue
-        if queue_is_full(queue_dir):
-            logging.warning("Not queueing %s (%s): GST_MAX_PENDING=%s jobs are already waiting",
-                            subtitle_path, target_code, max_open_jobs())
-            skipped(f"GST_MAX_PENDING={max_open_jobs()} jobs are already waiting", target_code, jid, level="WARNING")
-            break
-        if retry_failed_job(queue_dir, jid):
-            created.append(str(pending))
-            telemetry.event("job.created", job_id=jid, reason="a failed job for the same file was put back in line",
-                            subtitle=name, target=target_code, origin="retry")
-            continue
-
-        job = {
-            **base_job,
-            "job_id": jid,
-            "created_at": int(time.time()),
-            "source_code": source_code,
-            "source_language": source_language,
-            "target_code": target_code,
-            "target_language": str(target["language"]),
-            "output_path": output_path,
-            ADMISSION_FIELD: "admin",
-        }
-        _write_job(pending, job)
-        created.append(str(pending))
-        telemetry.event("job.created", job_id=jid, unit_id=base_job.get("unit_id") or None,
-                        reason="queued from the console: the target language is missing", subtitle=name,
-                        target=target_code, origin="console")
-    return created
-
-
-RETRANSLATE_PRIORITY = 100  # automatic jobs have none (0); FR-11.3.4
-
-
-def enqueue_retranslation(queue_dir: str, job: dict[str, Any], telemetry: Telemetry | None = None) -> str:
-    """Queue one explicit retranslation ahead of automatic work; one per target at a time."""
-    telemetry = telemetry or NULL_TELEMETRY
-    reject_daily_quota(queue_dir)
-    ensure_queue_dirs(queue_dir)
-    subtitle_path, output_path = str(job.get("subtitle_path", "")), str(job.get("output_path", ""))
-    target_code = str(job.get("target_code", ""))
-    root = Path(queue_dir)
-    prefix = hashlib.sha1(f"retranslate|{subtitle_path}|{output_path}|{target_code}".encode("utf-8")).hexdigest()
-    for state in ("pending", "processing", "deferred"):
-        if any((root / state).glob(f"{prefix}-*.json")):
-            raise ValueError("A retranslation of this subtitle is already queued")
-    jid = f"{prefix}-{time.time_ns()}"
-    pending = root / "pending" / f"{jid}.json"
-    _write_job(pending, {
-        **job, "job_id": jid, "trigger": "retranslate", "priority": RETRANSLATE_PRIORITY,
-        "created_at": int(time.time()), ADMISSION_FIELD: "admin",
-    })
-    window = (job.get("retranslate") or {}).get("range") if isinstance(job.get("retranslate"), dict) else None
-    telemetry.event("job.created", job_id=jid, unit_id=job.get("unit_id") or None,
-                    reason="an explicit retranslation: it runs ahead of automatic work and may replace the target",
-                    subtitle=Path(subtitle_path).name, target=target_code, origin="retranslate", range=window)
-    return jid
-
-
-def _job_files(queue_dir: str, state: str) -> list[Path]:
-    return sorted((Path(queue_dir) / state).glob("*.json"), key=lambda path: (path.stat().st_mtime, path.name))
-
-
-def list_jobs(queue_dir: str, state: str) -> list[dict[str, Any]]:
-    """Every job in `state`, oldest first, without the limit `queue_snapshot` applies (the Held inbox can be long)."""
-    ensure_queue_dirs(queue_dir)
-    jobs: list[dict[str, Any]] = []
-    for path in _job_files(queue_dir, state):
-        job = _read_job(path)
-        if job is not None:
-            jobs.append({**job, "job_id": str(job.get("job_id") or path.stem)})
-    return jobs
-
-
-def approve_jobs(queue_dir: str, job_ids: list[str]) -> list[str]:
-    """Release held jobs into the normal queue (FR-12.5); returns the ids that moved to pending.
-
-    Approval is only an admission: the job still meets `skip_reason` (target already present, FR-12.6)
-    and the language check when it runs, and `GST_MAX_PENDING` does not apply to it (FR-12.7).
-    """
-    reject_daily_quota(queue_dir)
-    ensure_queue_dirs(queue_dir)
-    root = Path(queue_dir)
-    approved: list[str] = []
-    for job_id in dict.fromkeys(job_ids):
-        if not _safe_job_id(job_id):
-            continue
-        source = root / HELD / f"{job_id}.json"
-        job = _read_job(source) if source.exists() else None
-        if job is None:
-            continue
-        if any((root / state / source.name).exists() for state in ("pending", "processing", "deferred")):
-            source.unlink(missing_ok=True)  # already open under that id: the held copy is a leftover
-            continue
-        job[ADMISSION_FIELD] = "approved"
-        job["approved_at"] = time.time()
-        _write_job(source, job)
-        _move_job(source, root / "pending" / source.name)
-        approved.append(job_id)
-    return approved
-
-
-def _move_between(queue_dir: str, job_ids: list[str], source_state: str, destination_state: str, **stamp: Any) -> list[str]:
-    ensure_queue_dirs(queue_dir)
-    root = Path(queue_dir)
-    moved: list[str] = []
-    for job_id in dict.fromkeys(job_ids):
-        if not _safe_job_id(job_id):
-            continue
-        source = root / source_state / f"{job_id}.json"
-        job = _read_job(source) if source.exists() else None
-        if job is None:
-            continue
-        destination = root / destination_state / source.name
-        if destination.exists():
-            source.unlink(missing_ok=True)
-            continue
-        _write_job(source, {**job, **stamp, "decided_at": time.time()})
-        _move_job(source, destination)
-        moved.append(job_id)
-    return moved
-
-
-def reject_jobs(queue_dir: str, job_ids: list[str]) -> list[str]:
-    """Refuse held jobs: they never run, and the script or a scan cannot bring them back (FR-12.5)."""
-    return _move_between(queue_dir, job_ids, HELD, REJECTED)
-
-
-def restore_jobs(queue_dir: str, job_ids: list[str]) -> list[str]:
-    """Take rejected jobs back to the inbox (held), where they can be approved."""
-    return _move_between(queue_dir, job_ids, REJECTED, HELD)
-
-
-def stamp_open_jobs(queue_dir: str) -> int:
-    """Mark the jobs already waiting as admitted, at the moment `hold` is switched on (FR-12.8).
-
-    Changing the mode does not touch what is in line: jobs without an admission mark are the script's new
-    arrivals, and these are not new. File times are kept so the order of the line does not change.
-    """
-    ensure_queue_dirs(queue_dir)
-    stamped = 0
-    for state in ("pending", "deferred"):
-        for path in _job_files(queue_dir, state):
-            job = _read_job(path)
-            if job is None or ADMISSION_FIELD in job:
-                continue
-            times = (path.stat().st_atime, path.stat().st_mtime)
-            _write_job(path, {**job, ADMISSION_FIELD: ADMISSION_AUTO})
-            os.utime(path, times)
-            stamped += 1
-    return stamped
-
-
-def queue_snapshot(queue_dir: str, limit: int = 100) -> dict[str, Any]:
-    ensure_queue_dirs(queue_dir)
-    root = Path(queue_dir)
-    pause_until = daily_quota_pause_until(queue_dir)
-    snapshot: dict[str, Any] = {
-        "counts": {}, "total": 0,
-        "daily_quota_pause": {"retry_at": pause_until} if pause_until is not None else None,
-    }
-    for state in QUEUE_STATES:
-        jobs: list[dict[str, Any]] = []
-        files = sorted((root / state).glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        snapshot["counts"][state] = len(files)
-        snapshot["total"] += len(files)
-        for path in files[:limit]:
-            try:
-                job = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                job = {"job_id": path.stem}
-            job["_state"] = state
-            job["_path"] = str(path)
-            if state in {"deferred", "failed"}:
-                error_path = path.with_suffix(".error")
-                if error_path.exists():
-                    job["error"] = error_path.read_text(encoding="utf-8")[-2000:]
-                elif job.get("last_error"):
-                    job["error"] = str(job["last_error"])[-2000:]
-            jobs.append(job)
-        snapshot[state] = jobs
-    return snapshot
-
-
-def layer_report(queue_dir: str) -> dict[str, Any]:
-    """How the two model layers are doing, from the job files: is the strong model worth having?
-
-    ``by_model`` counts finished translations per model; ``escalated`` counts jobs the default model could
-    not finish (invalid output after repair) that moved to the strong model, and how those ended. If few
-    jobs escalate, or the strong model does not rescue most of them, the layer is not earning its place.
-    """
-    root = Path(queue_dir)
-    by_model: dict[str, dict[str, int]] = {}
-    escalated = {"total": 0, "done": 0, "failed": 0, "waiting": 0}
-    for state in QUEUE_STATES:
-        for path in (root / state).glob("*.json"):
-            try:
-                job = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if job.get("escalated_from"):
-                escalated["total"] += 1
-                key = state if state in ("done", "failed") else "waiting"
-                escalated[key] += 1
-            if state in ("done", "failed") and job.get("gst_model") and (state == "failed" or job.get("result") == "translated"):
-                counts = by_model.setdefault(str(job["gst_model"]), {"done": 0, "failed": 0})
-                counts[state] += 1
-    return {"by_model": by_model, "escalated": escalated}
-
-
-class JobQueue:
-    """Own queue state transitions; execute work through an injected callback."""
-
-    def __init__(self, queue_dir: str, telemetry: Telemetry | None = None) -> None:
-        self.queue_dir = Path(queue_dir)
-        self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
-        ensure_queue_dirs(queue_dir)
-
-    def _event(self, kind: str, job: dict[str, Any] | None, reason: str, *, level: str = "INFO",
-               name: str = "", **data: Any) -> None:
-        """One decision of the queue, with the job it concerns (FR-19.1). ``name`` is the job file stem."""
-        job = job or {}
-        self.telemetry.event(
-            kind, level=level, job_id=str(job.get("job_id") or name), unit_id=job.get("unit_id") or None,
-            reason=reason, subtitle=Path(str(job.get("subtitle_path") or "")).name or None,
-            target=job.get("target_code") or None, **data,
-        )
-
-    def recover_interrupted_jobs(self) -> None:
-        """Return work interrupted by a service restart to the pending queue."""
-        for processing_path in sorted((self.queue_dir / "processing").glob("*.json")):
-            pending_path = self.queue_dir / "pending" / processing_path.name
-            if pending_path.exists():
-                logging.warning("Keeping interrupted job %s in processing; pending copy already exists", processing_path.name)
-                self._event("job.recovery_skipped", _read_job(processing_path), "a pending copy of the job already exists",
-                            level="WARNING", name=processing_path.stem)
-                continue
-            try:
-                job = json.loads(processing_path.read_text(encoding="utf-8"))
-                job["stage"] = "Recovered after service restart"
-                job["updated_at"] = time.time()
-                _write_job(processing_path, job)
-            except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                pass
-            _move_job(processing_path, pending_path)
-            logging.info("Recovered interrupted job %s to pending", processing_path.name)
-            self._event("job.recovered", _read_job(pending_path), "the worker stopped while the job ran; it goes back to pending",
-                        level="WARNING", name=processing_path.stem)
-
-    def admit_new_jobs(self, mode: str) -> int:
-        """Apply the admission mode to what the Bazarr script just wrote (FR-12.2, 12.3); returns how many were held.
-
-        The script writes straight into ``pending/`` and knows nothing of this mode, so the worker decides on
-        receipt: in ``hold`` a job without an admission mark moves to ``held/``. Whatever the mode, a job the
-        script queues again under an id that is held or rejected is dropped (the "no" is remembered, FR-12.5).
-        A job outside ``GST_ONLY_PATHS`` is not held: it is left to end as skipped (FR-12.7).
-        """
-        held = 0
-        for path in sorted((self.queue_dir / "pending").glob("*.json")):
-            if (self.queue_dir / HELD / path.name).exists() or (self.queue_dir / REJECTED / path.name).exists():
-                dropped = _read_job(path)
-                path.unlink(missing_ok=True)
-                logging.info("Dropped %s: the same job is held or was rejected", path.name)
-                self._event("job.dropped", dropped, "the same job is already held for approval or was rejected",
-                            name=path.stem)
-                continue
-            if mode != ADMISSION_HOLD:
-                continue
-            job = _read_job(path)
-            if job is None or ADMISSION_FIELD in job or outside_allowed_paths(str(job.get("subtitle_path", ""))):
-                continue
-            destination = self.queue_dir / HELD / path.name
-            _write_job(destination, {**job, "held_at": time.time()})
-            path.unlink(missing_ok=True)
-            held += 1
-            logging.info("Held job %s | %s -> %s | waiting for approval", path.stem,
-                         Path(str(job.get("subtitle_path", ""))).name, job.get("target_code", "?"))
-            self._event("job.held", job, "admission_mode is hold: the job waits for the admin's approval", name=path.stem)
-        return held
-
-    def _fail_waiting_quota_jobs(self) -> None:
-        for state in ("pending", "deferred"):
-            for path in (self.queue_dir / state).glob("*.json"):
-                destination = self.queue_dir / "failed" / path.name
-                try:
-                    _move_job(
-                        path, destination,
-                        "Daily Gemini quota exhausted; automatic retry cancelled. Submit again after the quota pause expires.",
-                    )
-                except FileNotFoundError:
-                    continue
-                self._event("job.failed", _read_job(destination), "the daily quota is exhausted for every configured model",
-                            level="WARNING", name=path.stem, cause="daily-quota", was=state)
-
-    def _promote_deferred_jobs(self, now: float) -> None:
-        for deferred_path in sorted(
-            (self.queue_dir / "deferred").glob("*.json"),
-            key=lambda path: path.stat().st_mtime,
-        ):
-            try:
-                job = json.loads(deferred_path.read_text(encoding="utf-8"))
-                retry_at = float(job.get("retry_at") or 0)
-            except Exception:
-                retry_at = 0
-            if retry_at > now:
-                continue
-            pending_path = self.queue_dir / "pending" / deferred_path.name
-            if pending_path.exists():
-                continue
-            _move_job(deferred_path, pending_path)
-            moved = _read_job(pending_path) or {}
-            self._event("job.requeued", moved, "the wait is over; the job is pending again",
-                        name=deferred_path.stem, waited_for=str(moved.get("deferred_reason") or "") or None)
-
-    def _provider_hold_active(self, now: float) -> bool:
-        """While one job waits out a Gemini outage, others would only spend quota on the same errors."""
-        for deferred_path in (self.queue_dir / "deferred").glob("*.json"):
-            try:
-                job = json.loads(deferred_path.read_text(encoding="utf-8"))
-                if job.get("deferred_reason") == "provider-unavailable" and float(job.get("retry_at") or 0) > now:
-                    return True
-            except (OSError, TypeError, ValueError):
-                continue
-        return False
-
-    def _record_model_quota_pause(self, model: str, retry_at: float, now: float) -> dict[str, float]:
-        paused = model_quota_pauses(str(self.queue_dir), now)
-        paused[model] = retry_at
-        _write_job(self.queue_dir / "provider-pause.json", {"models": paused})
-        return paused
-
-    def _ready_job_path(self, settle_seconds: int, now: float | None = None, models: tuple[str, ...] = ()) -> Path | None:
-        current_time = time.time() if now is None else now
-        if sync_daily_quota_pause(str(self.queue_dir), models, current_time) is not None:
-            self._fail_waiting_quota_jobs()
-            return None
-        self._promote_deferred_jobs(current_time)
-        if self._provider_hold_active(current_time):
-            return None
-        settle_seconds = max(0, settle_seconds)
-        jobs = sorted((self.queue_dir / "pending").glob("*.json"), key=lambda path: path.stat().st_mtime)
-        best: tuple[int, Path] | None = None  # highest priority wins; oldest first within a priority
-        for job_path in jobs:
-            priority = 0
-            try:
-                job = json.loads(job_path.read_text(encoding="utf-8"))
-                priority = int(job.get("priority") or 0)
-                subtitle_path = Path(str(job.get("subtitle_path") or ""))
-                # The settle window protects an actively written subtitle, not
-                # the queue event.  A manually queued, already-stable subtitle
-                # should therefore start immediately.
-                settled_from = subtitle_path.stat().st_mtime if subtitle_path.exists() else float(
-                    job.get("created_at") or job_path.stat().st_mtime
-                )
-            except Exception:
-                settled_from = float("-inf")  # unreadable: let the run fail it visibly
-            # No settle window means start at once: a file stamped a few ms "in the future" (Windows rounds its
-            # modification time up) must not wait for the clock to catch up.
-            settled = settle_seconds == 0 or current_time - settled_from >= settle_seconds
-            if settled and (best is None or priority > best[0]):
-                best = (priority, job_path)
-        return best[1] if best else None
-
-    def process_once(
-        self,
-        execute: Callable[..., str],
-        *,
-        settle_seconds: int = 0,
-        now: float | None = None,
-        models: tuple[str, ...] = (),
-    ) -> bool:
-        """Run one ready job; `models` is the primary model then an optional fallback."""
-        current_time = time.time() if now is None else now
-        job_path = self._ready_job_path(settle_seconds, now=current_time, models=models)
-        if job_path is None:
-            return False
-
-        processing_path = self.queue_dir / "processing" / job_path.name
-        try:
-            _move_job(job_path, processing_path)
-        except FileNotFoundError:
-            return False
-
-        started = time.monotonic()
-        error = None
-        job: dict[str, Any] = {}
-        try:
-            job = json.loads(processing_path.read_text(encoding="utf-8"))
-            # Once it runs a job is admitted for good: recovery after a restart must not hold it.
-            job.setdefault(ADMISSION_FIELD, ADMISSION_AUTO)
-            paused_models = model_quota_pauses(str(self.queue_dir), current_time)
-            model = select_model(models, paused_models, prefer_fallback=bool(job.get("use_fallback_model")))
-            if model:
-                job["gst_model"] = model
-            self._event(
-                "job.claimed", job, f"the job is the next ready one ({_claim_reason(job)})", name=processing_path.stem,
-                priority=int(job.get("priority") or 0), trigger=str(job.get("trigger") or "auto"),
-                admission=str(job.get(ADMISSION_FIELD) or ""),
-            )
-            self._event(
-                "model.selected", job, _model_reason(model, models, paused_models, job), name=processing_path.stem,
-                model=model or None, layer=_layer(model, models), escalated_from=job.get("escalated_from"),
-            )
-
-            def update_status(stage: str, **fields: Any) -> None:
-                job["started_at"] = float(job.get("started_at") or time.time())
-                job["updated_at"] = time.time()
-                job["stage"] = stage
-                job.update(fields)
-                _write_job(processing_path, job)
-
-            logging.info("Job %s started | %s | %s -> %s", processing_path.stem,
-                         Path(str(job.get("subtitle_path", ""))).name,
-                         job.get("source_code", "?"), job.get("target_code", "?"))
-            update_status("Starting translation")
-            status = execute(job, update_status)
-            _reset_retry(job)
-            for key in ("progress_done", "progress_total"):
-                job.pop(key, None)
-            job["result"] = status
-            _write_job(processing_path, job)
-            destination = self.queue_dir / "done" / processing_path.name
-            logging.info("Job %s finished | status=%s | duration=%.1fs", processing_path.stem, status, time.monotonic() - started)
-            self._event("job.done", job, f"the job ended with status {status}", name=processing_path.stem,
-                        status=status, seconds=round(time.monotonic() - started, 1), model=job.get("gst_model"))
-        except DailyQuotaExceededError as exc:
-            failure_time = time.time()
-            retry_at = daily_quota_retry_at(failure_time)
-            job.pop("retry_at", None)
-            job.pop("deferred_reason", None)
-            job["last_error"] = redact(str(exc))
-            _write_job(processing_path, job)
-            model = str(job.get("gst_model") or "")
-            paused = self._record_model_quota_pause(model, retry_at, failure_time) if model and models else {}
-            remaining = [candidate for candidate in models if candidate not in paused]
-            if paused and remaining:
-                # Quota is per model: keep the checkpoint and continue on a model that still has quota.
-                destination = self.queue_dir / "pending" / processing_path.name
-                logging.warning("Job %s: daily Gemini quota exhausted for %s until %s; continuing on %s.",
-                                processing_path.stem, model,
-                                datetime.fromtimestamp(retry_at, timezone.utc).isoformat(), remaining[0])
-                self._event("quota.model_paused", job, f"the daily quota of {model} is spent; the job continues on {remaining[0]}",
-                            level="WARNING", name=processing_path.stem, model=model, until=retry_at, continues_on=remaining[0])
-            else:
-                if paused:
-                    retry_at = min(paused[candidate] for candidate in models)
-                destination = self.queue_dir / "failed" / processing_path.name
-                error = str(exc)
-                _write_job(
-                    self.queue_dir / "provider-pause.json",
-                    {"retry_at": retry_at, "reason": "daily-quota", "error": str(exc), "models": paused},
-                )
-                self._fail_waiting_quota_jobs()
-                logging.warning("Job %s stopped: daily Gemini quota exhausted. New jobs blocked until %s; waiting jobs marked failed.",
-                                processing_path.stem, datetime.fromtimestamp(retry_at, timezone.utc).isoformat())
-                self._event("quota.paused", job, "the daily quota is spent on every configured model; no job runs until it resets",
-                            level="WARNING", name=processing_path.stem, until=retry_at, models=list(models))
-                self._event("job.failed", job, "the daily quota is exhausted for every configured model",
-                            level="WARNING", name=processing_path.stem, cause="daily-quota")
-        except ProviderUnavailableError as exc:
-            fallback_available = (
-                len(models) > 1
-                and job.get("gst_model") != models[1]
-                and models[1] not in model_quota_pauses(str(self.queue_dir))
-            )
-            decision = provider_retry_decision(int(job.get("provider_retry_count") or 0), time.time(), fallback_available)
-            if decision.state == "fallback":
-                job.pop("retry_at", None)
-                job.pop("deferred_reason", None)
-                job["use_fallback_model"] = True
-                job["last_error"] = redact(str(exc))
-                _write_job(processing_path, job)
-                destination = self.queue_dir / "pending" / processing_path.name
-                logging.warning(
-                    "Gemini %s remained unavailable after %s delayed retries; job %s continues on fallback model %s",
-                    job.get("gst_model"), len(PROVIDER_RETRY_DELAYS), processing_path.name, models[1],
-                )
-                self._event("job.escalated", job, f"{job.get('gst_model')} stayed unavailable after {len(PROVIDER_RETRY_DELAYS)} delayed retries; the job continues on {models[1]}",
-                            level="WARNING", name=processing_path.stem, cause="provider-unavailable",
-                            from_model=job.get("gst_model"), to_model=models[1])
-            elif decision.state == "deferred":
-                retry_count = decision.retry_count or 0
-                failure_time = time.time()
-                retry_at = decision.retry_at or failure_time
-                job["provider_retry_count"] = retry_count
-                job["retry_at"] = retry_at
-                job["deferred_reason"] = "provider-unavailable"
-                job["last_error"] = redact(str(exc))
-                _write_job(processing_path, job)
-                destination = self.queue_dir / "deferred" / processing_path.name
-                error = str(exc)
-                logging.warning(
-                    "Gemini unavailable; job %s deferred until %s (retry %s/%s)",
-                    processing_path.name,
-                    datetime.fromtimestamp(retry_at, timezone.utc).isoformat(),
-                    retry_count,
-                    len(PROVIDER_RETRY_DELAYS),
-                )
-                self._event("job.deferred", job, f"the provider is unavailable; retry {retry_count} of {len(PROVIDER_RETRY_DELAYS)} at the time given",
-                            level="WARNING", name=processing_path.stem, cause="provider-unavailable",
-                            retry_at=retry_at, retry=retry_count)
-            else:
-                destination = self.queue_dir / "failed" / processing_path.name
-                error = str(exc)
-                logging.error(
-                    "Gemini remained unavailable after %s delayed retries; job %s failed",
-                    len(PROVIDER_RETRY_DELAYS),
-                    processing_path.name,
-                )
-                self._event("job.failed", job, f"the provider stayed unavailable after {len(PROVIDER_RETRY_DELAYS)} delayed retries",
-                            level="ERROR", name=processing_path.stem, cause="provider-unavailable")
-        except ContextGapError as exc:
-            # An earlier episode has no source subtitle yet (FR-5.4): wait for it without holding the queue.
-            job["gap_since"] = exc.since
-            job["retry_at"] = exc.retry_at
-            job["deferred_reason"] = "context-gap"
-            job["last_error"] = redact(str(exc))
-            _write_job(processing_path, job)
-            destination = self.queue_dir / "deferred" / processing_path.name
-            error = str(exc)
-            logging.info("Job %s deferred until %s: %s", processing_path.stem,
-                         datetime.fromtimestamp(exc.retry_at, timezone.utc).isoformat(), exc)
-            self._event("job.deferred", job, f"an earlier episode has no source subtitle yet: {exc}", name=processing_path.stem,
-                        cause="context-gap", retry_at=exc.retry_at, missing=list(exc.missing))
-        except HardJobError as exc:
-            strong_available = (
-                len(models) > 1
-                and job.get("gst_model") != models[1]
-                and models[1] not in model_quota_pauses(str(self.queue_dir))
-            )
-            if strong_available:
-                # A hard job: the default model could not produce valid output. Try the strong model once.
-                job["escalated_from"] = job.get("gst_model")
-                job["escalation_reason"] = str(exc)[-300:]
-                job["use_fallback_model"] = True
-                job["last_error"] = redact(str(exc))
-                _write_job(processing_path, job)
-                destination = self.queue_dir / "pending" / processing_path.name
-                logging.warning("Job %s: %s could not produce valid output; continuing on strong model %s",
-                                processing_path.stem, job.get("gst_model"), models[1])
-                self._event("job.escalated", job, f"{job.get('gst_model')} could not produce valid output after repair and splitting; the job goes to {models[1]}",
-                            level="WARNING", name=processing_path.stem, cause="hard-job",
-                            from_model=job.get("gst_model"), to_model=models[1], detail=str(exc)[-300:])
-            else:
-                destination = self.queue_dir / "failed" / processing_path.name
-                error = str(exc)
-                logging.error("Job %s failed on %s: %s", processing_path.stem, job.get("gst_model"),
-                              str(exc).splitlines()[0][:240] if str(exc) else type(exc).__name__)
-                self._event("job.failed", job, "the output stayed invalid after repair and splitting and no stronger model is left to try",
-                            level="ERROR", name=processing_path.stem, cause="hard-job", detail=str(exc)[-300:],
-                            model=job.get("gst_model"))
-        except Exception as exc:
-            destination = self.queue_dir / "failed" / processing_path.name
-            error = str(exc)
-            logging.exception("Job %s failed after %.1fs: %s", processing_path.stem, time.monotonic() - started, str(exc).splitlines()[0][:240] if str(exc) else type(exc).__name__)
-            self._event("job.failed", job, f"{type(exc).__name__}: {str(exc).splitlines()[0][:200] if str(exc) else ''}",
-                        level="ERROR", name=processing_path.stem, cause="error", model=job.get("gst_model"))
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        # Whatever a failure said may name a key (a library's error text); the file is shown in the console (FR-19.3).
-        _move_job(processing_path, destination, redact(error) if error else error)
-        return True
-
-
-class FileJobQueue:
-    """The :class:`~gst_worker.ports.JobQueue` port over the queue directory tree (the JSON files that
-    ``gst_enqueue.sh`` also writes)."""
-
-    def __init__(self, queue_dir: str, telemetry: Telemetry | None = None) -> None:
-        self.queue_dir = queue_dir
-        self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
-
-    def enqueue(self, base_job: dict[str, Any], targets: list[dict[str, Any]]) -> list[str]:
-        return enqueue_translation_jobs(self.queue_dir, base_job, targets, self.telemetry)
-
-    def enqueue_retranslation(self, job: dict[str, Any]) -> str:
-        return enqueue_retranslation(self.queue_dir, job, self.telemetry)
-
-    def retry(self, job_id: str) -> bool:
-        return retry_failed_job(self.queue_dir, job_id)
-
-    def cancel(self, job_id: str) -> bool:
-        return cancel_failed_job(self.queue_dir, job_id)
-
-    def delete(self, state: str, job_id: str) -> bool:
-        return delete_queue_job(self.queue_dir, state, job_id)
-
-    def held(self) -> list[HeldJob]:
-        return [_held_job(job) for job in list_jobs(self.queue_dir, HELD)]
-
-    def rejected(self) -> list[HeldJob]:
-        return [_held_job(job) for job in list_jobs(self.queue_dir, REJECTED)]
-
-    def _decided(self, kind: str, ids: list[str], reason: str) -> list[str]:
-        for job_id in ids:
-            self.telemetry.event(kind, job_id=job_id, reason=reason)
-        return ids
-
-    def approve(self, job_ids: list[str]) -> list[str]:
-        return self._decided("job.approved", approve_jobs(self.queue_dir, list(job_ids)), "the admin approved the held job")
-
-    def reject(self, job_ids: list[str]) -> list[str]:
-        return self._decided("job.rejected", reject_jobs(self.queue_dir, list(job_ids)),
-                             "the admin rejected the held job; it is not queued again")
-
-    def restore(self, job_ids: list[str]) -> list[str]:
-        return self._decided("job.restored", restore_jobs(self.queue_dir, list(job_ids)),
-                             "the admin took the rejected job back to the held inbox")
+    return job_key(subtitle_path, output_path, target_code)
+
+
+# --- reasons shown in the event log ---------------------------------------------------------------------------------
+def _claim_reason(job: dict[str, Any]) -> str:
+    if job.get("trigger") == "retranslate":
+        return "an explicit retranslation runs ahead of automatic work"
+    if job.get(ADMISSION_FIELD) == "approved":
+        return "approved by the admin"
+    if job.get("tier") == "strong" or job.get("escalated_from"):
+        return "second attempt on the strong model"
+    return f"the best ready job ({policy.priority_class(int(job.get('prio') or 0))} class)"
+
+
+def _model_reason(model: str | None, models: tuple[str, ...], paused: set[str], job: dict[str, Any]) -> str:
+    if not model:
+        return "no model is configured"
+    if len(models) > 1 and model == models[1]:
+        if job.get("escalated_from"):
+            return f"the job is hard: {job['escalated_from']} could not produce valid output"
+        if models[0] in paused:
+            return f"{models[0]} cannot be called now (quota or breaker); the strong model takes over"
+        return f"{models[0]} was unavailable; the strong model takes over"
+    return "the default model takes every job it can"
+
+
+def _reset_retry(job: dict[str, Any]) -> None:
+    for key in ("provider_retry_count", "retry_at", "deferred_reason", "last_error", "use_fallback_model", "gap_since",
+                "missing_units", "missing_unit_ids"):
+        job.pop(key, None)
+
+
+def _held_job(job: dict[str, Any]) -> HeldJob:
+    subtitle_path = str(job.get("subtitle_path") or "")
+    return HeldJob(
+        job_id=str(job.get("job_id") or ""), subtitle_path=subtitle_path, video_path=str(job.get("video_path") or ""),
+        source_code=str(job.get("source_code") or ""), target_code=str(job.get("target_code") or ""),
+        source_language=str(job.get("source_language") or ""), target_language=str(job.get("target_language") or ""),
+        series_id=str(job.get("series_id") or ""), media_type=str(job.get("media_type") or ""),
+        created_at=float(job.get("created_at") or 0), held_at=float(job.get("held_at") or 0),
+        cue_count=_cue_count(subtitle_path) if subtitle_path else 0,
+    )
 
 
 _CUE_COUNTS: dict[tuple[str, float], int] = {}
@@ -952,19 +166,710 @@ def _cue_count(subtitle_path: str) -> int:
     return _CUE_COUNTS[key]
 
 
-def _held_job(job: dict[str, Any]) -> HeldJob:
-    subtitle_path = str(job.get("subtitle_path") or "")
-    return HeldJob(
-        job_id=str(job.get("job_id") or ""),
-        subtitle_path=subtitle_path,
-        video_path=str(job.get("video_path") or ""),
-        source_code=str(job.get("source_code") or ""),
-        target_code=str(job.get("target_code") or ""),
-        source_language=str(job.get("source_language") or ""),
-        target_language=str(job.get("target_language") or ""),
-        series_id=str(job.get("series_id") or ""),
-        media_type=str(job.get("media_type") or ""),
-        created_at=float(job.get("created_at") or 0),
-        held_at=float(job.get("held_at") or 0),
-        cue_count=_cue_count(subtitle_path) if subtitle_path else 0,
-    )
+class _Heartbeat(threading.Thread):
+    """Renews a running job's lease while the worker thread is inside a long model call (FR-15.9)."""
+
+    def __init__(self, jobs: JobStore, job_id: str, lease_seconds: float) -> None:
+        super().__init__(daemon=True, name=f"lease-{job_id[:8]}")
+        self._jobs, self._job_id, self._lease = jobs, job_id, lease_seconds
+        self._stop_event = threading.Event()
+
+    def run(self) -> None:
+        while not self._stop_event.wait(max(1.0, self._lease / 3)):
+            try:
+                self._jobs.heartbeat(self._job_id, self._lease)
+            except Exception:  # noqa: BLE001 - a missed beat only shortens the lease
+                logging.debug("heartbeat of %s failed", self._job_id, exc_info=True)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+
+class JobQueue:
+    """Makes jobs, picks the next one, runs it and decides what each ending means."""
+
+    def __init__(
+        self,
+        store: Store,
+        telemetry: Telemetry | None = None,
+        *,
+        clock: Callable[[], float] = time.time,
+        monotonic: Callable[[], float] = time.monotonic,
+        key_ok: Callable[[], bool] | None = None,
+    ) -> None:
+        self.store = store
+        self.jobs = JobStore(store, clock=clock, monotonic=monotonic)
+        self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
+        # Whether the provider has a key that was not refused: a refused key clears itself once the admin fixes it.
+        self.key_ok = key_ok
+        self.provider = "gemini"
+        self.models: tuple[str, ...] = ()
+        self.settings: dict[str, Any] = {}
+
+    # -- configuration --------------------------------------------------------------------------------------------
+    @property
+    def clock(self) -> Callable[[], float]:
+        return self.jobs.clock
+
+    def configure(self, settings: dict[str, Any], models: tuple[str, ...], provider: str = "") -> None:
+        """Adopt the settings and models in force. A model the admin changed to is a fresh start: what was learnt
+        about a model name that is no longer configured (a wrong name above all) is forgotten."""
+        previous = set(self.models)
+        self.settings = settings or {}
+        self.models = tuple(models)
+        self.provider = provider or str(self.settings.get("llm_provider") or "") or self.provider
+        if previous and set(self.models) != previous:
+            for (prov, model), health in self.jobs.health_map().items():
+                if model != policy.ALL_MODELS and health.state == policy.INVALID and model not in self.models:
+                    self.jobs.set_health(prov, model, Health())
+
+    def _setting(self, key: str, default: Any) -> Any:
+        value = self.settings.get(key)
+        return default if value is None or value == "" else value
+
+    def _emit(self, kind: str, **data: Any) -> None:
+        """Telemetry never decides a job's outcome (NFR-11): whatever it does, the queue goes on."""
+        try:
+            self.telemetry.event(kind, **data)
+        except Exception:  # noqa: BLE001
+            logging.debug("telemetry event %s failed", kind, exc_info=True)
+
+    def _event(self, kind: str, job: dict[str, Any] | None, reason: str, *, level: str = "INFO", **data: Any) -> None:
+        """One decision of the queue, with the job it concerns (FR-19.1)."""
+        job = job or {}
+        self._emit(
+            kind, level=level, job_id=str(job.get("job_id") or ""), unit_id=job.get("unit_id") or None,
+            reason=reason, subtitle=Path(str(job.get("subtitle_path") or "")).name or None,
+            target=job.get("target_code") or None, **data,
+        )
+
+    # -- making jobs -----------------------------------------------------------------------------------------------
+    def enqueue(
+        self, base_job: dict[str, Any], targets: list[dict[str, Any]], *, origin: str = "manual",
+        prio: int = policy.INTERACTIVE,
+    ) -> list[str]:
+        """One job per enabled target language that is still missing; returns the ids queued (the admin's own
+        requests are the interactive class). A day's quota being spent does not stop a request: it waits (NFR-1)."""
+        created: list[str] = []
+        subtitle_path = str(base_job.get("subtitle_path", ""))
+        name = Path(subtitle_path).name
+
+        def skipped(reason: str, target_code: str = "", job_id: str = "", level: str = "INFO") -> None:
+            self._emit("enqueue.skipped", level=level, job_id=job_id, reason=reason, subtitle=name,
+                                 target=target_code or None, unit_id=base_job.get("unit_id") or None)
+
+        if not subtitle_path or not Path(subtitle_path).exists():
+            skipped("the source subtitle does not exist")
+            return created
+        source_code = str(base_job.get("source_code") or base_job.get("language") or "en").split(":", 1)[0].strip()
+        source_language = str(base_job.get("source_language") or source_code or "English")
+        if outside_allowed_paths(subtitle_path):
+            logging.warning("Not queueing %s: outside GST_ONLY_PATHS", subtitle_path)
+            skipped("the subtitle is outside GST_ONLY_PATHS", level="WARNING")
+            return created
+
+        for target in enabled_target_languages({"target_languages": targets}):
+            target_code = str(target["code"])
+            if source_code.lower() == target_code.lower():
+                skipped("the source and the target language are the same", target_code)
+                continue
+            output_path = str(base_job.get("output_path") or target_output_path(subtitle_path, target_code, source_code=source_code))
+            key = job_key(subtitle_path, output_path, target_code)
+            # Only a language that is missing gets translated: any sibling subtitle already in it counts.
+            if Path(output_path).exists():
+                skipped("the target subtitle already exists", target_code, key)
+                continue
+            sibling = existing_target_subtitle(subtitle_path, target_code, source_code)
+            if sibling:
+                skipped(f"a {target_code} subtitle is already present: {Path(sibling).name}", target_code, key)
+                continue
+            # Waiting for approval, or refused: not queued again (FR-12.5), even by a scan.
+            if self.jobs.has_decided(key, HELD, REJECTED):
+                skipped("the same job is held for approval or was rejected", target_code, key)
+                continue
+            if self.jobs.open_for(key) is not None:
+                self.jobs.add({}, key=key, prio=prio)  # a higher class lifts the job already in line
+                skipped("the same job is already waiting or running", target_code, key)
+                continue
+            if self.is_full():
+                logging.warning("Not queueing %s (%s): GST_MAX_PENDING=%s jobs are already waiting",
+                                subtitle_path, target_code, max_open_jobs())
+                skipped(f"GST_MAX_PENDING={max_open_jobs()} jobs are already waiting", target_code, key, level="WARNING")
+                break
+            failed = self.jobs.latest_for(key, FAILED)
+            if failed is not None and self.retry(failed["job_id"]):
+                created.append(failed["job_id"])
+                continue
+            job = {
+                **base_job, "created_at": int(time.time()), "source_code": source_code, "source_language": source_language,
+                "target_code": target_code, "target_language": str(target["language"]), "output_path": output_path,
+                ADMISSION_FIELD: "admin",
+            }
+            added = self.jobs.add(job, key=key, origin=origin, prio=prio)
+            if added.job_id:
+                created.append(added.job_id)
+                self._emit(
+                    "job.created", job_id=added.job_id, unit_id=base_job.get("unit_id") or None, subtitle=name,
+                    reason="queued from the console: the target language is missing", target=target_code, origin="console",
+                )
+        return created
+
+    def enqueue_retranslation(self, job: dict[str, Any]) -> str:
+        """One explicit retranslation ahead of automatic work. A request for a target that already has an open
+        ``fill`` job turns that job into the retranslation (FR-15.3); a second retranslation is refused."""
+        subtitle_path, output_path = str(job.get("subtitle_path", "")), str(job.get("output_path", ""))
+        target_code = str(job.get("target_code", ""))
+        key = job_key(subtitle_path, output_path, target_code)
+        payload = {**job, "trigger": "retranslate", "priority": RETRANSLATE_PRIORITY, "created_at": int(time.time()),
+                   ADMISSION_FIELD: "admin"}
+        window = (job.get("retranslate") or {}).get("range") if isinstance(job.get("retranslate"), dict) else None
+        open_job = self.jobs.open_for(key)
+        if open_job is not None:
+            if open_job["mode"] == REPLACE:
+                raise ValueError("A retranslation of this subtitle is already queued")
+            if not self.jobs.merge_retranslation(open_job["job_id"], payload, RETRANSLATE_PRIORITY):
+                raise ValueError("This subtitle is being translated right now; retranslate it when the job ends")
+            job_id = open_job["job_id"]
+        else:
+            added = self.jobs.add(
+                payload, key=key, mode=REPLACE, origin="retranslate", prio=RETRANSLATE_PRIORITY,
+                job_id=f"{retranslation_key(subtitle_path, output_path, target_code)}-{time.time_ns()}",
+            )
+            if not added.job_id:  # raced with another request between the check and the insert
+                raise ValueError("A retranslation of this subtitle is already queued")
+            job_id = added.job_id
+        self._emit(
+            "job.created", job_id=job_id, unit_id=job.get("unit_id") or None, subtitle=Path(subtitle_path).name,
+            reason="an explicit retranslation: it runs ahead of automatic work and may replace the target",
+            target=target_code, origin="retranslate", range=window,
+        )
+        return job_id
+
+    def is_full(self) -> bool:
+        limit = max_open_jobs()
+        return limit > 0 and self.jobs.open_count() >= limit
+
+    def retry(self, job_id: str) -> bool:
+        """Put a failed job back in line with a fresh retry cycle (an admin's request)."""
+        job = self.jobs.retry(job_id)
+        if job is None:
+            return False
+        self._event("job.created", job, "a failed job for the same file was put back in line", origin="retry")
+        return True
+
+    def cancel(self, job_id: str) -> bool:
+        """Remove a failed job for good."""
+        return self.jobs.delete((FAILED,), job_id)
+
+    def delete(self, state: str, job_id: str) -> bool:
+        """Remove a job from the list it is in. A held job leaves through approve or reject (so the refusal is
+        remembered); a running one is stopped, not deleted."""
+        states = FROM_LEGACY.get(state)
+        if not states or state in (HELD, "processing") or not job_id:
+            return False
+        if state in ("pending", "deferred"):  # waiting to run: cancelling keeps a record, it does not erase one
+            return self.jobs.state_of(job_id) in states and self.jobs.request_stop(job_id) == "cancelled"
+        return self.jobs.delete(states, job_id)
+
+    def stop(self, job_id: str) -> str | None:
+        """Stop a job: at once when it has not started, at the next batch boundary when it runs (FR-15.11)."""
+        outcome = self.jobs.request_stop(job_id)
+        if outcome:
+            self._event("job.stop_requested", self.jobs.get(job_id), f"the admin stopped the job ({outcome})")
+        return outcome
+
+    # -- held jobs (FR-12) -------------------------------------------------------------------------------------------
+    def held(self) -> list[HeldJob]:
+        return [_held_job(job) for job in self.jobs.by_state(HELD)]
+
+    def rejected(self) -> list[HeldJob]:
+        return [_held_job(job) for job in self.jobs.by_state(REJECTED)]
+
+    def _decided(self, kind: str, ids: list[str], reason: str) -> list[str]:
+        for job_id in ids:
+            self._emit(kind, job_id=job_id, reason=reason)
+        return ids
+
+    def approve(self, job_ids: list[str]) -> list[str]:
+        """Release held jobs into the queue. Approval is only an admission: the job still meets `skip_reason`
+        and the missing-language check when it runs (FR-12.6), and `GST_MAX_PENDING` does not apply (FR-12.7)."""
+        moved = self.jobs.move(job_ids, HELD, QUEUED, **{ADMISSION_FIELD: "approved", "approved_at": time.time()})
+        return self._decided("job.approved", moved, "the admin approved the held job")
+
+    def reject(self, job_ids: list[str]) -> list[str]:
+        moved = self.jobs.move(job_ids, HELD, REJECTED)
+        return self._decided("job.rejected", moved, "the admin rejected the held job; it is not queued again")
+
+    def restore(self, job_ids: list[str]) -> list[str]:
+        moved = self.jobs.move(job_ids, REJECTED, HELD)
+        return self._decided("job.restored", moved, "the admin took the rejected job back to the held inbox")
+
+    # -- looking at the queue ------------------------------------------------------------------------------------------
+    def snapshot(self, limit: int = 100) -> dict[str, Any]:
+        counts = self.jobs.counts()
+        pause = self.quota_pause_until()
+        snapshot: dict[str, Any] = {
+            "counts": counts, "total": sum(counts.values()),
+            "daily_quota_pause": {"retry_at": pause} if pause is not None else None,
+            "providers": self.health_report(),
+        }
+        for name in LEGACY_STATES:
+            snapshot[name] = self.jobs.by_state(*FROM_LEGACY[name], limit=limit, newest_first=True)
+        return snapshot
+
+    def layer_report(self) -> dict[str, Any]:
+        """How the two model layers are doing, from the jobs: is the strong model worth having?
+
+        ``by_model`` counts finished translations per model; ``escalated`` counts jobs the default model could
+        not finish (invalid output after repair) that moved to the strong model, and how those ended. If few
+        jobs escalate, or the strong model does not rescue most of them, the layer is not earning its place.
+        """
+        by_model: dict[str, dict[str, int]] = {}
+        escalated = {"total": 0, "done": 0, "failed": 0, "waiting": 0}
+        for state, job in self.jobs.all_payloads():
+            if state in (CANCELLED, REJECTED):
+                continue
+            if job.get("escalated_from"):
+                escalated["total"] += 1
+                escalated[state if state in (DONE, FAILED) else "waiting"] += 1
+            if state in (DONE, FAILED) and job.get("gst_model") and (state == FAILED or job.get("result") == "translated"):
+                counts = by_model.setdefault(str(job["gst_model"]), {"done": 0, "failed": 0})
+                counts[state] += 1
+        return {"by_model": by_model, "escalated": escalated}
+
+    def health_report(self) -> list[dict[str, Any]]:
+        """The state of each configured model, as Settings and Insights show it (FR-17.7)."""
+        now = self.clock()
+        health = self.jobs.health_map()
+        whole = health.get((self.provider, policy.ALL_MODELS), Health())
+        report = []
+        for model in self.models:
+            h = health.get((self.provider, model), Health())
+            shown = whole if whole.state == policy.INVALID else h
+            until = shown.until if shown.state in (policy.OPEN, policy.EXHAUSTED) else None
+            report.append({
+                "provider": self.provider, "model": model, "state": shown.state, "reason": shown.reason,
+                "until": until, "failures": h.failures, "usable": self._usable(model, health, now),
+            })
+        return report
+
+    def quota_pause_until(self) -> float | None:
+        """When every configured model has spent its daily quota, the earliest moment one of them is back."""
+        if not self.models:
+            return None
+        now = self.clock()
+        health = self.jobs.health_map()
+        untils = []
+        for model in self.models:
+            h = health.get((self.provider, model), Health())
+            if h.state != policy.EXHAUSTED or h.until <= now:
+                return None
+            untils.append(h.until)
+        return min(untils)
+
+    # -- usability of models ---------------------------------------------------------------------------------------------
+    def _usable(self, model: str, health: dict[tuple[str, str], Health], now: float) -> bool:
+        whole = health.get((self.provider, policy.ALL_MODELS), Health())
+        return policy.health_usable(whole, now) and policy.health_usable(health.get((self.provider, model), Health()), now)
+
+    def _paused(self, health: dict[tuple[str, str], Health], now: float) -> set[str]:
+        return {model for model in self.models if not self._usable(model, health, now)}
+
+    # -- start-up ---------------------------------------------------------------------------------------------------------
+    def recover(self) -> int:
+        """Give back the jobs a stopped worker was running (FR-15.9). Runs once at startup, explicitly: making a
+        ``JobQueue`` recovers nothing."""
+        recovered = self.jobs.recover(int(self._setting("max_crashes", policy.MAX_CRASHES)))
+        for job, state in recovered:
+            if state == FAILED:
+                self._event("job.failed", job, "the worker stopped while the job ran, too many times", level="ERROR",
+                            cause="crashed", attempts=job.get("attempts"))
+            else:
+                self._event("job.recovered", job, "the worker stopped while the job ran; it goes back in line",
+                            level="WARNING", attempts=job.get("attempts"))
+        return len(recovered)
+
+    # -- one tick of the scheduler -----------------------------------------------------------------------------------------
+    def _settled_from(self, payload: dict[str, Any], created_at: float, now: float) -> float:
+        """The settle window protects an actively written subtitle, not the queue event: a manually queued,
+        already-stable subtitle starts at once."""
+        subtitle = Path(str(payload.get("subtitle_path") or ""))
+        try:
+            return subtitle.stat().st_mtime if subtitle.exists() else float(payload.get("created_at") or created_at)
+        except (OSError, TypeError, ValueError):
+            return float("-inf")  # unreadable: let the run fail it visibly
+
+    def sweep(self, now: float, settle_seconds: int = 0) -> None:
+        """Before each claim: take back jobs whose lease ran out, let waiting jobs go when their wait is over, and
+        make the jobs that cannot run now (provider, quota, settle window) wait visibly instead of sitting in line."""
+        for job, state in self.jobs.recover(int(self._setting("max_crashes", policy.MAX_CRASHES)), expired_only=True):
+            self._event("job.recovered" if state != FAILED else "job.failed", job,
+                        "the lease of the job ran out: the worker stopped renewing it", level="WARNING", cause="lease")
+        health = self.jobs.health_map()
+        self._clear_fixed(health, now)
+        health = self.jobs.health_map()
+        paused = self._paused(health, now)
+        day_cap_until = self._day_cap_until(now)
+        for job in self.jobs.by_state(WAITING):
+            reason = job["wait_reason"]
+            if reason in ("quota", "provider") and self.models:
+                # These wait for the provider, not for a time: the health rows already hold the time (an open breaker or a
+                # spent quota is usable again at `until`), and a fixed key or a new model lifts them at once.
+                if day_cap_until is not None or policy.pick_model(self.models, paused, job["tier"]) is None:
+                    continue
+            elif job["not_before"] > now or (reason == "quota" and day_cap_until is not None):
+                continue  # a time to wait for, and with no model configured there is no health to ask
+            if self.jobs.transition(job["job_id"], QUEUED, only_from=(WAITING,)):
+                self._event("job.requeued", job, "the wait is over; the job is in line again", waited_for=reason or None)
+        for job in self.jobs.by_state(QUEUED):
+            blocked = self._blocked(job, health, paused, now, day_cap_until)
+            if blocked is None and settle_seconds > 0:
+                settled_from = self._settled_from(job, float(job["created_at"] or now), now)
+                if now - settled_from < settle_seconds:
+                    blocked = ("settle", settled_from + settle_seconds)
+            if blocked is not None:
+                reason, until = blocked
+                if self.jobs.transition(job["job_id"], WAITING, wait_reason=reason, not_before=until, only_from=(QUEUED,)):
+                    self._event("job.waiting", job, self._wait_text(reason, until), wait=reason, until=until or None)
+
+    @staticmethod
+    def _wait_text(reason: str, until: float) -> str:
+        return {
+            "quota": "the daily quota is spent; the job waits for the reset",
+            "provider": "the provider cannot be called now (a refused key, an unknown model or an open breaker)",
+            "settle": "the source subtitle changed a moment ago; the job waits for it to settle",
+            "rate": "the provider was busy; the job tries again shortly",
+            "context": "an earlier episode is not ready; the job waits for its facts",
+        }.get(reason, reason)
+
+    def _day_cap_until(self, now: float) -> float | None:
+        cap = int(self._setting("max_calls_per_day", 0))
+        if cap <= 0:
+            return None
+        midnight = policy.next_utc_midnight(now)
+        return midnight if self.store.calls_since(midnight - 86_400) >= cap else None
+
+    def _blocked(
+        self, job: dict[str, Any], health: dict[tuple[str, str], Health], paused: set[str], now: float,
+        day_cap_until: float | None,
+    ) -> tuple[str, float] | None:
+        """``(wait reason, until)`` when the job cannot run now because of the provider, else None."""
+        if day_cap_until is not None:
+            return "quota", day_cap_until
+        if not self.models or policy.pick_model(self.models, paused, job["tier"]) is not None:
+            return None
+        relevant = self.models[1:2] if job["tier"] == "strong" else self.models
+        states = [health.get((self.provider, m), Health()) for m in relevant]
+        whole = health.get((self.provider, policy.ALL_MODELS), Health())
+        if whole.state == policy.INVALID or any(h.state == policy.INVALID for h in states):
+            return "provider", 0.0
+        if any(h.state == policy.HALF_OPEN for h in states):
+            return None  # the one trial call is out: the jobs stay in line until it answers
+        if all(h.state == policy.EXHAUSTED for h in states):
+            return "quota", min(h.until for h in states)
+        return "provider", min((h.until for h in states if h.state in (policy.OPEN, policy.EXHAUSTED)), default=0.0)
+
+    def _clear_fixed(self, health: dict[tuple[str, str], Health], now: float) -> None:
+        """A refused key lifts when the admin has put in one the provider has not refused (FR-17.5); a quota that
+        has reset is forgotten."""
+        for (provider, model), h in health.items():
+            if provider != self.provider:
+                continue
+            if h.state == policy.INVALID and model == policy.ALL_MODELS and self.key_ok is not None and self.key_ok():
+                self.jobs.set_health(provider, model, Health())
+                self._emit("provider.resumed", reason="a key the provider has not refused is in place; the jobs run again")
+            elif h.state == policy.EXHAUSTED and h.until <= now:
+                self.jobs.set_health(provider, model, Health())
+
+    def resume_provider(self) -> None:
+        """The admin's "test key" passed: the provider is open again (FR-17.5)."""
+        self.jobs.set_health(self.provider, policy.ALL_MODELS, Health())
+
+    # -- claiming and running ------------------------------------------------------------------------------------------------
+    def _decide(self, settle_seconds: int, now: float):
+        def decide(candidate, payload, health):
+            paused = self._paused(health, now)
+            model: str | None = None
+            if self.models:
+                model = policy.pick_model(self.models, paused, candidate.tier)
+                if model is None:
+                    return None  # needs a model that cannot be called now: it waits, the others go on (FR-15.7)
+            if settle_seconds > 0 and now - self._settled_from(payload, candidate.created_at, now) < settle_seconds:
+                return None
+            stamp: dict[str, Any] = {}
+            changes: dict[tuple[str, str], Health] = {}
+            if model:
+                stamp["gst_model"] = model
+                current = health.get((self.provider, model), Health())
+                tried = policy.begin_trial(current, now)  # an open breaker whose rest is over lets exactly one call through
+                if tried != current:
+                    changes[(self.provider, model)] = tried
+            stamp[ADMISSION_FIELD] = payload.get(ADMISSION_FIELD) or ADMISSION_AUTO  # once run, admitted for good
+            return stamp, changes
+        return decide
+
+    def process_once(
+        self,
+        execute: Callable[..., str],
+        *,
+        settle_seconds: int = 0,
+        now: float | None = None,
+        models: tuple[str, ...] | None = None,
+        settings: dict[str, Any] | None = None,
+    ) -> bool:
+        """Run one ready job; ``models`` is the primary model then an optional fallback. Returns False when
+        nothing was ready."""
+        if models is not None or settings is not None:
+            self.configure(settings if settings is not None else self.settings, self.models if models is None else models)
+        previous_clock = self.jobs.clock
+        if now is not None:
+            fixed = now
+            self.jobs.clock = lambda: fixed
+        try:
+            current = self.clock()
+            self.sweep(current, settle_seconds)
+            job = self.jobs.claim(
+                self._decide(settle_seconds, current), lease_seconds=float(self._setting("lease_seconds", policy.LEASE_SECONDS)),
+            )
+            if job is None:
+                return False
+            self._run(job, execute, current)
+            return True
+        finally:
+            self.jobs.clock = previous_clock
+
+    def _run(self, job: dict[str, Any], execute: Callable[..., str], now: float) -> None:
+        job_id = job["job_id"]
+        model = job.get("gst_model")
+        models = self.models
+        health = self.jobs.health_map()
+        paused = self._paused(health, now)
+        lease = float(self._setting("lease_seconds", policy.LEASE_SECONDS))
+        job["snapshot"] = {
+            "model": model, "tier": policy.tier_of(models, model), "provider": self.provider, "claimed_at": now,
+            "settings": {key: self.settings.get(key) for key in SETTINGS_SNAPSHOT_KEYS if key in self.settings},
+        }
+        job.pop("error", None)
+        self._event(
+            "job.claimed", job, f"the job is the next ready one ({_claim_reason(job)})",
+            priority=int(job.get("prio") or 0), trigger=str(job.get("trigger") or "auto"),
+            admission=str(job.get(ADMISSION_FIELD) or ""), klass=policy.priority_class(int(job.get("prio") or 0)),
+        )
+        self._event(
+            "model.selected", job, _model_reason(model, models, paused, job), model=model or None,
+            layer=policy.tier_of(models, model), escalated_from=job.get("escalated_from"),
+        )
+
+        def update_status(stage: str, **fields: Any) -> None:
+            job["started_at"] = float(job.get("started_at") or time.time())
+            job["updated_at"] = time.time()
+            job["stage"] = stage
+            job.update(fields)
+            # Saving is the heartbeat; it also says whether the job is still ours and whether the admin stopped it.
+            if not self.jobs.save_payload(job_id, job, lease_seconds=lease):
+                raise JobStopped("the job was taken away from the worker")
+            if self.jobs.cancel_requested(job_id):
+                raise JobStopped("the admin stopped the job")
+
+        started = time.monotonic()
+        beat = _Heartbeat(self.jobs, job_id, lease)
+        beat.start()
+        logging.info("Job %s started | %s | %s -> %s", job_id, Path(str(job.get("subtitle_path", ""))).name,
+                     job.get("source_code", "?"), job.get("target_code", "?"))
+        try:
+            update_status("Starting translation")
+            status = execute(job, update_status)
+            self._finished(job, status, started)
+        except JobStopped as exc:
+            self.jobs.transition(job_id, CANCELLED, payload=job, error=str(exc), only_from=(RUNNING,))
+            self._event("job.cancelled", job, str(exc))
+        except DailyQuotaExceededError as exc:
+            self._quota_spent(job, exc, now)
+        except ProviderUnavailableError as exc:
+            self._provider_unavailable(job, exc, now)
+        except ProviderAuthError as exc:
+            self._key_refused(job, exc, now)
+        except ModelNotFoundError as exc:
+            self._model_unknown(job, exc, now)
+        except CallBudgetError as exc:
+            self._over_budget(job, exc, now)
+        except ContextGapError as exc:
+            self._context_gap(job, exc)
+        except HardJobError as exc:
+            self._hard_job(job, exc, now)
+        except Exception as exc:  # noqa: BLE001 - whatever else went wrong is this job's fault
+            text = str(exc)
+            self.jobs.transition(job_id, FAILED, payload=job, error=redact(text), snapshot=job.get("snapshot"),
+                                 only_from=(RUNNING,))
+            logging.exception("Job %s failed after %.1fs: %s", job_id, time.monotonic() - started,
+                              text.splitlines()[0][:240] if text else type(exc).__name__)
+            self._event("job.failed", job, f"{type(exc).__name__}: {text.splitlines()[0][:200] if text else ''}",
+                        level="ERROR", cause="error", model=model)
+        finally:
+            beat.stop()
+            self._release_trial(model)
+
+    def _release_trial(self, model: str | None) -> None:
+        """A job that ended without telling whether the provider works (skipped, stopped, failed for its own
+        reason) must not leave a half-open breaker locked: the next job gets the trial call."""
+        if not model:
+            return
+        current = self.jobs.health_map().get((self.provider, model), Health())
+        if current.state == policy.HALF_OPEN:
+            self.jobs.set_health(self.provider, model, Health(policy.OPEN, current.failures, current.level, 0.0, current.reason))
+
+    # -- the endings ----------------------------------------------------------------------------------------------------------
+    def _finished(self, job: dict[str, Any], status: str, started: float) -> None:
+        model = job.get("gst_model")
+        _reset_retry(job)
+        for key in ("progress_done", "progress_total"):
+            job.pop(key, None)
+        job["result"] = status
+        state = SKIPPED if str(status).startswith("skipped") else DONE
+        self.jobs.transition(job["job_id"], state, payload=job, result=str(status), snapshot=job.get("snapshot"),
+                             only_from=(RUNNING,))
+        if model and state == DONE:
+            self.jobs.set_health(self.provider, model, policy.after_success(self.jobs.health_map().get((self.provider, model), Health())))
+        logging.info("Job %s finished | status=%s | duration=%.1fs", job["job_id"], status, time.monotonic() - started)
+        self._event("job.done", job, f"the job ended with status {status}", status=status,
+                    seconds=round(time.monotonic() - started, 1), model=model)
+
+    def _other_model(self, job: dict[str, Any], now: float) -> str | None:
+        """The other layer, when the job may and can go there now."""
+        model = job.get("gst_model")
+        if len(self.models) < 2 or not model:
+            return None
+        other = self.models[1] if model == self.models[0] else self.models[0]
+        return other if self._usable(other, self.jobs.health_map(), now) else None
+
+    def _requeue_on(self, job: dict[str, Any], other: str, kind: str, reason: str, *, tier: str = "", **data: Any) -> None:
+        """Back in line, to run on ``other``. Only a hard job is tied to the strong model (``tier``); a job sent
+        elsewhere because its model is resting takes whichever model can be called when its turn comes."""
+        self.jobs.transition(job["job_id"], QUEUED, payload=job, tier=tier, only_from=(RUNNING,))
+        self._event(kind, job, reason, level="WARNING", from_model=job.get("gst_model"), to_model=other, **data)
+
+    def _quota_spent(self, job: dict[str, Any], exc: Exception, now: float) -> None:
+        model = str(job.get("gst_model") or "")
+        zone = policy.zone_for(str(self._setting("quota_reset_tz", QUOTA_RESET_TZ)))
+        reset = policy.daily_quota_reset_at(now, zone)
+        job["last_error"] = redact(str(exc))
+        if model:
+            current = self.jobs.health_map().get((self.provider, model), Health())
+            self.jobs.set_health(self.provider, model, policy.after_quota(current, reset))
+        other = self._other_model(job, now)
+        if other:
+            # Quota is per model: keep going on the model that still has some.
+            logging.warning("Job %s: daily quota exhausted for %s until %s; continuing on %s.", job["job_id"], model,
+                            time.strftime("%Y-%m-%d %H:%M", time.gmtime(reset)), other)
+            self._event("quota.model_paused", job, f"the daily quota of {model} is spent; the job continues on {other}",
+                        level="WARNING", model=model, until=reset, continues_on=other)
+            self._requeue_on(job, other, "job.escalated", f"the daily quota of {model} is spent; the job continues on {other}",
+                             cause="quota")
+            return
+        until = self.quota_pause_until() or reset
+        self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="quota", not_before=until,
+                             error=job["last_error"], only_from=(RUNNING,))
+        logging.warning("Job %s waits: daily quota exhausted until %s.", job["job_id"], time.strftime("%Y-%m-%d %H:%M", time.gmtime(until)))
+        self._event("quota.paused", job, "the daily quota is spent on every configured model; the job waits for the reset",
+                    level="WARNING", until=until, models=list(self.models))
+        self._event("job.waiting", job, self._wait_text("quota", until), wait="quota", until=until)
+
+    def _provider_unavailable(self, job: dict[str, Any], exc: Exception, now: float) -> None:
+        model = str(job.get("gst_model") or "")
+        job["last_error"] = redact(str(exc))
+        current = self.jobs.health_map().get((self.provider, model), Health())
+        updated = policy.after_failure(current, now, int(self._setting("breaker_threshold", policy.BREAKER_THRESHOLD)))
+        if model:
+            self.jobs.set_health(self.provider, model, updated)
+        if updated.state == policy.OPEN:
+            self._event("breaker.opened", job, f"{model} failed {updated.failures} times in a row; it rests until the time given",
+                        level="WARNING", model=model, until=updated.until, failures=updated.failures)
+            other = self._other_model(job, now)
+            if other:
+                self._requeue_on(job, other, "job.escalated", f"{model} is resting after repeated failures; the job continues on {other}",
+                                 cause="provider-unavailable")
+                return
+            self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="provider", not_before=updated.until,
+                                 error=job["last_error"], only_from=(RUNNING,))
+            logging.warning("Provider unavailable; job %s waits until %s", job["job_id"], time.strftime("%H:%M:%S", time.gmtime(updated.until)))
+            self._event("job.waiting", job, self._wait_text("provider", updated.until), level="WARNING", wait="provider",
+                        until=updated.until)
+            return
+        retry_at = now + int(self._setting("transient_retry_seconds", policy.TRANSIENT_RETRY_SECONDS))
+        self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="rate", not_before=retry_at,
+                             error=job["last_error"], only_from=(RUNNING,))
+        self._event("job.waiting", job, f"the provider is unavailable (failure {updated.failures} of {self._setting('breaker_threshold', policy.BREAKER_THRESHOLD)} before the breaker opens)",
+                    level="WARNING", wait="rate", until=retry_at, failures=updated.failures)
+
+    def _key_refused(self, job: dict[str, Any], exc: Exception, now: float) -> None:
+        job["last_error"] = redact(str(exc))
+        current = self.jobs.health_map().get((self.provider, policy.ALL_MODELS), Health())
+        self.jobs.set_health(self.provider, policy.ALL_MODELS, policy.after_invalid(current, "auth"))
+        self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="provider", not_before=0.0,
+                             error=job["last_error"], only_from=(RUNNING,))
+        self._event("provider.key_invalid", job, "the provider refused the API key; jobs wait until a working key is set",
+                    level="ERROR", provider=self.provider)
+        self._event("job.waiting", job, self._wait_text("provider", 0.0), level="WARNING", wait="provider")
+
+    def _model_unknown(self, job: dict[str, Any], exc: ModelNotFoundError, now: float) -> None:
+        model = exc.model or str(job.get("gst_model") or "")
+        job["last_error"] = redact(str(exc))
+        if model:
+            current = self.jobs.health_map().get((self.provider, model), Health())
+            self.jobs.set_health(self.provider, model, policy.after_invalid(current, "model"))
+        self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="provider", not_before=0.0,
+                             error=job["last_error"], only_from=(RUNNING,))
+        self._event("provider.model_unknown", job, f"the provider does not know the model {model!r}; check the model in Settings",
+                    level="ERROR", model=model)
+        self._event("job.waiting", job, self._wait_text("provider", 0.0), level="WARNING", wait="provider")
+
+    def _over_budget(self, job: dict[str, Any], exc: CallBudgetError, now: float) -> None:
+        job["last_error"] = redact(str(exc))
+        if exc.scope == "day":
+            until = policy.next_utc_midnight(now)
+            self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="quota", not_before=until,
+                                 error=job["last_error"], only_from=(RUNNING,))
+            self._event("job.waiting", job, f"max_calls_per_day was reached; the job waits for tomorrow: {exc}",
+                        level="WARNING", wait="quota", until=until)
+            return
+        self.jobs.transition(job["job_id"], FAILED, payload=job, error=job["last_error"], snapshot=job.get("snapshot"),
+                             only_from=(RUNNING,))
+        self._event("job.failed", job, f"the job reached max_calls_per_job: {exc}", level="ERROR", cause="max_calls_per_job")
+
+    def _context_gap(self, job: dict[str, Any], exc: ContextGapError) -> None:
+        # An earlier episode has no source subtitle yet (FR-5.4): wait for it without holding the queue.
+        job["gap_since"] = exc.since
+        job["missing_units"] = list(exc.missing)
+        job["missing_unit_ids"] = list(exc.missing_ids)
+        job["last_error"] = redact(str(exc))
+        self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="context", not_before=exc.retry_at,
+                             error=job["last_error"], only_from=(RUNNING,))
+        logging.info("Job %s waits until %s: %s", job["job_id"], time.strftime("%H:%M:%S", time.gmtime(exc.retry_at)), exc)
+        self._event("job.waiting", job, f"an earlier episode has no source subtitle yet: {exc}", wait="context",
+                    until=exc.retry_at, missing=list(exc.missing))
+
+    def _hard_job(self, job: dict[str, Any], exc: HardJobError, now: float) -> None:
+        other = self._other_model(job, now)
+        model = job.get("gst_model")
+        blocked = int(getattr(exc, "blocked", 0) or 0)
+        if model:  # the provider answered (badly): it works, so a trial call has passed
+            self.jobs.set_health(self.provider, model, policy.after_success(Health()))
+        if other and len(self.models) > 1 and other == self.models[1]:
+            # A hard job: the default model could not produce valid output. Try the strong model once.
+            job["escalated_from"] = model
+            job["escalation_reason"] = str(exc)[-300:]
+            job["last_error"] = redact(str(exc))
+            logging.warning("Job %s: %s could not produce valid output; continuing on strong model %s",
+                            job["job_id"], model, other)
+            self._requeue_on(job, other, "job.escalated",
+                             f"{model} could not produce valid output after repair and splitting; the job goes to {other}",
+                             tier="strong", cause="blocked" if blocked else "hard-job", detail=str(exc)[-300:])
+            return
+        why = (f"the provider refused {blocked} call(s) for their content (blocked), and splitting did not help: "
+               if blocked else "") + str(exc)
+        self.jobs.transition(job["job_id"], FAILED, payload=job, error=redact(why), snapshot=job.get("snapshot"),
+                             only_from=(RUNNING,))
+        logging.error("Job %s failed on %s: %s", job["job_id"], model, why.splitlines()[0][:240] if why else "")
+        self._event("job.failed", job, ("blocked by the provider's content filter" if blocked else
+                                        "the output stayed invalid after repair and splitting and no stronger model is left to try"),
+                    level="ERROR", cause="blocked" if blocked else "hard-job", detail=str(exc)[-300:], model=model)

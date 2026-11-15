@@ -24,7 +24,6 @@ from .connection_tests import test_connection
 from .gemini import gemini_models, openai_models
 from .http import describe_http_error
 from .logs import clear_logs, read_log_snapshot
-from .queue import layer_report, queue_snapshot
 from .subtitles import scan_source_subtitles
 from .telemetry import events_page
 
@@ -307,7 +306,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/status":
                 self.send_json(self.api_status())
             elif parsed.path == "/api/queue":
-                self.send_json(queue_snapshot(self.ctx["queue_dir"]))
+                self.send_json(self.ctx["console"].snapshot())
             elif parsed.path in {"/api/queue/held", "/api/queue/rejected"}:
                 jobs = self.ctx["console"].held() if parsed.path.endswith("held") else self.ctx["console"].rejected()
                 self.send_json({"count": len(jobs), "items": [asdict(job) for job in jobs]})
@@ -423,6 +422,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": self.ctx["console"].retry(str(body.get("job_id", "")))})
             elif parsed.path == "/api/queue/cancel":
                 self.send_json({"ok": self.ctx["console"].cancel(str(body.get("job_id", "")))})
+            elif parsed.path == "/api/queue/request-prerequisites":
+                self.send_json(self.ctx["units"].request_prerequisites(str(body.get("job_id", ""))))
+            elif parsed.path == "/api/queue/stop":
+                outcome = self.ctx["console"].stop(str(body.get("job_id", "")))
+                self.send_json({"ok": outcome is not None, "outcome": outcome})
             elif parsed.path == "/api/queue/delete":
                 self.send_json(
                     {
@@ -492,13 +496,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def api_status(self) -> dict[str, Any]:
         settings = self.live_settings()
-        snapshot = queue_snapshot(self.ctx["queue_dir"])
+        snapshot = self.ctx["console"].snapshot()
         status = {
             "queue": snapshot["counts"],
             "daily_quota_pause": snapshot["daily_quota_pause"],
+            "providers": snapshot["providers"],
             "settings": self.settings_service.public(settings),
             "bazarr_url": settings["bazarr_url"],
-            "model_layers": layer_report(self.ctx["queue_dir"]),
+            "model_layers": self.ctx["console"].layer_report(),
         }
         try:
             status["bazarr"] = self.ctx["http"].get_json(

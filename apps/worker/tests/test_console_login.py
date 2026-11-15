@@ -12,6 +12,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import worker
+from gst_worker.console import ConsoleActions
+from gst_worker.queue import JobQueue
 from gst_worker.auth import (
     LOCK_SECONDS,
     SESSION_COOKIE,
@@ -206,6 +208,7 @@ class LoginServerTests(unittest.TestCase):
         self.ctx = {
             "static_dir": str(static),
             "queue_dir": str(static / "queue"),
+            "console": ConsoleActions(JobQueue(Store(":memory:"))),
             "log_dir": str(static / "logs"),
         }
         server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
