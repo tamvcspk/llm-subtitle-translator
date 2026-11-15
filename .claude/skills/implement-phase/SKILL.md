@@ -1,6 +1,6 @@
 ---
 name: implement-phase
-description: Implement a roadmap phase (P0, P0b, P1…P5) or a single FR/NFR from docs/design/SPEC.md and docs/design/ARCHITECTURE.md. Use when the user says "vào P1", "làm FR-3.3", "implement phase", or asks to build any feature of the redesigned translator (subcore engine, providers, glossary, memory, scheduler, SQLite store, console pages, Basic Auth).
+description: Implement a roadmap phase (P0–P16, including P0b–P0d) or a single FR/NFR from docs/design/SPEC.md and docs/design/ARCHITECTURE.md. Use when the user says "vào P1", "làm FR-3.3", "implement phase", or asks to build any feature of the redesigned translator (subcore engine, providers, glossary, memory, scheduler, SQLite store, console pages, Basic Auth).
 ---
 
 # Implement a design phase

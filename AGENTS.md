@@ -52,7 +52,7 @@ The end-to-end flow spans three independent pieces:
 2. `apps/worker/worker.py` + `gst_worker/` consume the queue one job at a time, translate in-process with `subcore`, write the target `.srt` beside the media, and ask Bazarr to rescan.
 3. `apps/worker/static/` is a dependency-free web console that talks only to the worker's own API.
 
-`packages/subcore` must stay free of Bazarr, queue, and HTTP knowledge (ADR-2); the worker depends on it, never the reverse. Roadmap phases (P0, P0b, P1–P5), their checklists, and status are in `PLAN.md`; tick items there as work lands.
+`packages/subcore` must stay free of Bazarr, queue, and HTTP knowledge (ADR-2); the worker depends on it, never the reverse. Roadmap phases (P0–P16, including P0b–P0d), their checklists, and status are in `PLAN.md`; tick items there as work lands.
 
 Seams to respect when adding code:
 

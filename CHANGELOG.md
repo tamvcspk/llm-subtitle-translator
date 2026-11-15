@@ -1,4 +1,11 @@
 # Unreleased
+- **Roadmap renumbered in execution order (docs only).** `PLAN.md` now lists the unfinished phases as
+  one linear sequence, P5 to P16 (logging, settings and keys in the database, the `openai_compat`
+  provider, jobs and versions in SQLite, file cleanup, Bazarr catalog pull, bundle and CLI, style
+  profile, suggestions and the Review inbox, suggestions from facts, Insights, research). File cleanup
+  (FR-13) moved out of P0d into its own phase, P9. `docs/design/SPEC.md` and `ARCHITECTURE.md` are v0.11:
+  one `suggestions` table and one Review inbox for every source of suggestions, research kept as a
+  required v1 feature but built last, and new acceptance criteria 21 to 23. No code changed.
 - **Fixes from the first real Bazarr trial.** A translated subtitle was written with mode 0600 (the
   private mode of the temporary file), so Bazarr and media servers running as another user could not
   read it; it now keeps the mode of the file it replaces, or 0644, and a worker running as root gives it

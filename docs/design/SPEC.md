@@ -1,6 +1,6 @@
 # SPEC — LLM Subtitle Translator for Bazarr (tên tạm)
 
-> Trạng thái: **Draft v0.10** · 2026-11-15
+> Trạng thái: **Draft v0.11** · 2026-11-15
 > Thay thế bản SRS ban đầu. Những chỗ khác SRS gốc được đánh dấu **[Đổi]** kèm lý do.
 > v0.2: chốt các câu hỏi mở của v0.1 (mục 7), thêm FR-11 (duyệt, dịch lại, correction).
 > v0.3: chốt 2 câu hỏi mở của v0.2 — thông báo để v1.1; Basic Auth bật ngay từ đầu (NFR-5).
@@ -10,6 +10,7 @@
 > v0.8: thêm FR-13 (dọn file: file job đã xong, bản sao phiên bản và glossary, file tạm mồ côi), tiêu chí nghiệm thu 12, quyết định #11; làm cùng phase P0d.
 > v0.9: ADR-8 (ranh giới và port) chuyển từ mục 9 sang ARCHITECTURE §1, §2 vì phần 1 của P0d đã làm xong; mục 9 còn một con trỏ. ARCHITECTURE lên v0.9 theo SPEC.
 > v0.10: thiết kế lại luồng job. Bazarr chỉ còn là nguồn danh mục (worker kéo, bỏ script `gst_enqueue.sh`), job và cài đặt vào SQLite, phiên bản phụ đề là thực thể riêng, quota hết thì job chờ chứ không fail. Thêm FR-14 đến FR-21 (danh mục và trạng thái Missing, job và policy, phiên bản, sức khoẻ provider, style profile, nhật ký và đo lường, cài đặt và khoá API, bundle và CLI), NFR-11, NFR-12, tiêu chí 13 đến 20, quyết định #12 đến #22, các thuật ngữ mới và bốn câu hỏi mở cần số liệu. FR-12 (`hold`) bị thay bởi FR-15.4; NFR-5 (khoá API vào DB) và NFR-10 (port chỉ ở biên ngoài, từ P8) được sửa. ARCHITECTURE lên v0.10 theo SPEC (ADR-10 đến ADR-16; ADR-8, ADR-9 được điều chỉnh).
+> v0.11: đánh số lại lộ trình các phase chưa làm theo đúng thứ tự thực hiện (P5 đến P16): nhật ký P5, cài đặt và khoá P6, provider `openai_compat` P7, lõi job P8, dọn file P9 (FR-13, tách khỏi P0d), Bazarr kéo P10, bundle P11, style P12, bảng `suggestions` và Review inbox lõi P13, đề xuất từ facts P14, Insights P15, research P16 (làm cuối lộ trình v1, vẫn là yêu cầu bắt buộc). FR-11.1.4 sửa theo glossary trong DB (FR-18.10); thêm FR-11.1.5 (nguồn đề xuất dùng chung), tiêu chí 21 đến 23 và quyết định #23. ARCHITECTURE lên v0.11 theo SPEC.
 
 ---
 
@@ -53,7 +54,7 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
 | **Port** | Interface (`Protocol`) do core của worker định nghĩa cho thứ nó cần từ bên ngoài: lưu trữ, hàng đợi, Bazarr, TMDB, provider. Trả kiểu có tên, không trả `dict` (ADR-8). |
 | **Adapter** | Cài đặt cụ thể của một port (SQLite, hàng đợi file, Bazarr HTTP…), hoặc điểm vào gọi vào core (HTTP handler, CLI, `gst_enqueue.sh`). |
 | **Use case** | Một hành động của hệ thống ở tầng ứng dụng (enqueue, retranslate, revert, edit cue, cancel…). HTTP và CLI cùng gọi một use case, không chứa nghiệp vụ riêng. |
-| **Held job** | Job do script Bazarr tạo khi `admission_mode = hold`: đã nhận, chưa gọi model, chờ admin duyệt (FR-12). Bị thay bởi trạng thái Missing và policy tự yêu cầu (FR-14, FR-15.4); gỡ ở P9. |
+| **Held job** | Job do script Bazarr tạo khi `admission_mode = hold`: đã nhận, chưa gọi model, chờ admin duyệt (FR-12). Bị thay bởi trạng thái Missing và policy tự yêu cầu (FR-14, FR-15.4); gỡ ở P10. |
 | **Job** | Việc dịch một unit sang một ngôn ngữ đích: một bản ghi SQLite có `mode` (`fill` \| `replace` \| `variant`), lớp ưu tiên và trạng thái (FR-15). "Yêu cầu dịch" chính là tạo một job; không có thực thể request riêng. |
 | **Trạng thái dẫn xuất** | Nhãn hiển thị của một (unit, ngôn ngữ đích), tính khi đọc từ danh mục Bazarr, phiên bản và job: Missing, Requested, Running, Waiting, Translated, Edited, External, Removed, Stale, Failed, Ignored (FR-14.5). Không lưu thành một cột. |
 | **Phiên bản (version)** | Một bản phụ đề đích của một unit, có `origin` (`machine`, `edit`, `revert`, `external`, `import`) và `status` (`current`, `superseded`, `removed`, `pruned`, `candidate`). Thực thể độc lập với job (FR-16). |
@@ -101,7 +102,7 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
 ### FR-4 Glossary (do người quản lý)
 
 - FR-4.1 Mỗi series (và mỗi movie, tùy chọn) có một file glossary cho mỗi ngôn ngữ đích, định dạng YAML, sửa tay được.
-  **[Đổi]** (v0.10) Từ P11 glossary nằm trong SQLite và sửa trên console; YAML chỉ còn là định dạng nhập/xuất (FR-18.10, quyết định #18).
+  **[Đổi]** (v0.10) Từ P12 glossary nằm trong SQLite và sửa trên console; YAML chỉ còn là định dạng nhập/xuất (FR-18.10, quyết định #18).
   *Lý do:* YAML chỉ dành cho cấu hình hệ thống; để quy tắc dịch ở hai nơi (file và web) chia đôi luồng làm việc.
 - FR-4.2 Nội dung:
   - `terms`: `source → target`, có thể kèm ghi chú, cờ `locked`.
@@ -111,7 +112,7 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
 - FR-4.3 Glossary được đưa vào system prompt ở mục **riêng**, ưu tiên cao hơn mọi ngữ cảnh do máy suy ra.
 - FR-4.4 Mục do máy đề xuất (FR-6, FR-7) vào trạng thái `pending`; chỉ áp dụng khi được duyệt, trừ khi bật `auto_accept` cho loại đó. Mặc định:
   - `address_rules`: **không** tự áp dụng.
-  - `terms`: tự áp dụng khi research có **≥ 2 nguồn độc lập** cho cùng bản dịch; còn lại `pending`.
+  - `terms`: tự áp dụng khi research có **≥ 2 nguồn độc lập** cho cùng bản dịch; còn lại `pending`. *(v0.11: research làm cuối cùng, P16; trước đó mọi `terms` do máy đề xuất đều `pending`.)*
   - Mục tự áp dụng vẫn hiện trong lịch sử duyệt và hoàn tác được.
 
 ### FR-5 Story memory (không phụ thuộc thứ tự dịch)
@@ -141,6 +142,7 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
   *Lý do:* (a) gộp search vào lời gọi dịch xung đột với structured output trên một số model; (b) tra cứu mỗi tập là lặp lại và tốn quota; (c) kết quả cần được lưu và duyệt.
 - FR-7.2 Kết quả vào glossary `pending` (FR-4.4).
 - FR-7.3 Provider không có web search ⇒ bỏ qua bước này, không lỗi.
+- FR-7.4 (v0.11) Research là yêu cầu **bắt buộc của v1**, không phải v1.1, nhưng là phần **làm cuối cùng** của lộ trình (P16): mọi thứ khác không phụ thuộc vào nó, và nó tốn quota có tìm kiếm. Có ngân sách riêng (số lời gọi mỗi series) để không lấn quota dịch.
 
 ### FR-8 Tích hợp Bazarr
 
@@ -150,7 +152,7 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
 
 ### FR-9 Provider LLM
 
-- FR-9.1 Gemini là provider mặc định. Phải có ít nhất một provider thứ hai tương thích OpenAI API (OpenRouter, Ollama, LM Studio…).
+- FR-9.1 Gemini là provider mặc định. Phải có ít nhất một provider thứ hai tương thích OpenAI API (OpenRouter, Ollama, LM Studio…). *(v0.11: làm ở P7, ngay sau P6, trước P8, để breaker và `provider_health` thử được trên hai provider.)*
 - FR-9.2 Mỗi provider khai báo năng lực: `max_input_tokens`, `max_output_tokens`, `structured_output`, `web_search`, giới hạn RPM/TPM/RPD.
 - FR-9.3 Model được chọn **theo tác vụ**: `translate`, `extract`, `summarize`, `research` (vd extract dùng model rẻ hơn).
 - FR-9.4 Hỗ trợ nhiều API key cho một provider (xoay vòng khi chạm quota). (v0.10: mỗi khoá có nhãn và trạng thái `ok`/`invalid`/`exhausted`, lưu trong DB; FR-20.2.)
@@ -171,7 +173,9 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
 - FR-11.1.1 Một trang liệt kê mọi mục `pending` (FR-4.4), nhóm theo series; badge số lượng trên thanh điều hướng.
 - FR-11.1.2 Mỗi mục: Chấp nhận · Sửa rồi chấp nhận · Từ chối. Có chấp nhận hàng loạt trong một series.
 - FR-11.1.3 Mỗi mục hiển thị bằng chứng: câu thoại gốc (cue + timecode) hoặc URL nguồn research, và **số bản dịch sẽ thành stale** nếu chấp nhận.
-- FR-11.1.4 Chấp nhận = ghi vào glossary YAML (FR-4). Từ chối = ghi nhớ để không đề xuất lại cùng nội dung.
+- FR-11.1.4 Chấp nhận = ghi vào glossary (FR-4). Từ chối = ghi nhớ để không đề xuất lại cùng nội dung.
+  **[Đổi]** (v0.11) Từ P12 glossary nằm trong SQLite (FR-18.10), nên chấp nhận ghi vào bảng glossary (hoặc thẻ nhân vật, FR-18.3) qua cùng use case với trang Glossary, không ghi YAML. *Lý do:* P13 làm sau P12, YAML không còn là nguồn sự thật.
+- FR-11.1.5 (v0.11) Mọi nguồn đề xuất dùng **một** bảng `suggestions` và một hộp duyệt, phân biệt bằng trường `source` (`facts` FR-6, `research` FR-7, `memory` thẻ nhân vật FR-18.3, `feedback` cue sửa lặp lại FR-19.6). Nguồn mới chỉ thêm bộ sinh đề xuất, không thêm bảng hay trang. Đề xuất giống nội dung đã từ chối (cùng dấu vân tay) không được sinh lại.
 
 **11.2 Correction**
 - FR-11.2.1 Loại correction:
@@ -184,7 +188,7 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
   | `cue_edit` | Sửa trực tiếp text của một/vài cue | **Không** — áp dụng ngay |
 
 - FR-11.2.2 Phạm vi (scope): `episode` (chỉ tập này) · `forward` (từ tập này trở đi) · `series` (cả series). `cue_edit` luôn là `episode`.
-- FR-11.2.3 Correction phạm vi `forward`/`series` được ghi vào glossary YAML (có `from`/`until` theo tập) — glossary là nguồn sự thật duy nhất cho quy tắc cấp series (từ P11 glossary nằm trong SQLite, FR-18.10). Correction phạm vi `episode` lưu trong DB, gắn với unit.
+- FR-11.2.3 Correction phạm vi `forward`/`series` được ghi vào glossary YAML (có `from`/`until` theo tập) — glossary là nguồn sự thật duy nhất cho quy tắc cấp series (từ P12 glossary nằm trong SQLite, FR-18.10). Correction phạm vi `episode` lưu trong DB, gắn với unit.
 - FR-11.2.4 `cue_edit` là **khoá**: các lần dịch lại sau giữ nguyên các cue đó và đưa chúng vào prompt như bản dịch mẫu.
 - FR-11.2.5 Tìm cue để sửa: theo timecode (nhập `00:23:10` như trên trình phát → nhảy tới cue gần nhất) hoặc tìm theo text gốc/dịch; hiển thị song song gốc–dịch.
 
@@ -197,7 +201,7 @@ Người duyệt là **admin duy nhất** (chủ homelab). Mọi thao tác nằm
 
 ### FR-12 Chế độ nhận job và duyệt job
 
-> **Bị thay thế (v0.10):** FR-12 đã làm xong ở P0d phần 2 và vẫn đúng cho code hiện tại. Cách chọn việc đổi hẳn ở FR-14 và FR-15.4: Bazarr chỉ là nguồn danh mục, không có gì tự vào hàng đợi trừ khi admin yêu cầu hoặc policy tự yêu cầu được bật; `hold` tương đương policy tắt. `held`, `rejected`, `admission_mode` và tab Held được gỡ ở P9 (importer chuyển `held` thành mục Missing, `rejected` thành Ignored). ID của FR-12 không đổi.
+> **Bị thay thế (v0.10):** FR-12 đã làm xong ở P0d phần 2 và vẫn đúng cho code hiện tại. Cách chọn việc đổi hẳn ở FR-14 và FR-15.4: Bazarr chỉ là nguồn danh mục, không có gì tự vào hàng đợi trừ khi admin yêu cầu hoặc policy tự yêu cầu được bật; `hold` tương đương policy tắt. `held`, `rejected`, `admission_mode` và tab Held được gỡ ở P10 (importer chuyển `held` thành mục Missing, `rejected` thành Ignored). ID của FR-12 không đổi.
 
 Bazarr có thể báo hàng trăm mục thiếu phụ đề và chạy script cho từng mục; ở chế độ `auto` (hiện tại) mọi job đó được dịch ngay. FR-12 cho phép Bazarr vẫn đẩy job vào, nhưng **admin chọn job nào được dịch**. Người duyệt là admin duy nhất, thao tác trong console (cùng lý do ADR-7).
 
@@ -259,7 +263,7 @@ Thay cho việc Bazarr đẩy job qua script (FR-1.1, FR-12), worker **kéo** da
 
 - FR-14.6 Mục mà ngôn ngữ đích không nằm trong language profile của Bazarr (nên Bazarr không liệt kê thiếu) có nhãn **Ngoài profile** và vẫn yêu cầu dịch được.
 - FR-14.7 Các nguyên tắc cũ giữ nguyên: job `fill` chỉ dịch ngôn ngữ còn thiếu (FR-9.6) và không bao giờ ghi đè (NFR-4). Kiểm tra lại **lúc claim và lúc publish**, vì Bazarr có thể tải phụ đề đích giữa hai thời điểm đó (xử lý ở FR-16.3).
-- FR-14.8 Script `gst_enqueue.sh`, thư mục queue chung giữa hai container và `GST_MAX_PENDING` bị bỏ ở P9; Bazarr không cần cấu hình post-processing. Worker vẫn phải thấy cùng đường dẫn media với Bazarr để ghi `.srt` cạnh media (mục 3). `GST_ONLY_PATHS` ở lại như rào an toàn cho policy tự yêu cầu (FR-15.4).
+- FR-14.8 Script `gst_enqueue.sh`, thư mục queue chung giữa hai container và `GST_MAX_PENDING` bị bỏ ở P10; Bazarr không cần cấu hình post-processing. Worker vẫn phải thấy cùng đường dẫn media với Bazarr để ghi `.srt` cạnh media (mục 3). `GST_ONLY_PATHS` ở lại như rào an toàn cho policy tự yêu cầu (FR-15.4).
 
 ### FR-15 Job, yêu cầu dịch và policy
 
@@ -327,11 +331,11 @@ Thay mục `style` chữ tự do của glossary (FR-4.2) bằng cấu trúc; ch�
 - FR-18.7 **Xem thử:** nút "Thử style" dịch khoảng 20 cue mẫu (tự chọn hoặc chọn tay) bằng model mặc định, đặt cạnh bản hiện hành. Không ghi file, không tạo phiên bản.
 - FR-18.8 **Variant và A/B.** Job `variant` dịch cả tập với style khác thành `candidate` (FR-16.4). Trang so sánh cạnh nhau theo cue; admin chọn bản tốt hơn cho từng cue hoặc cả tập; kết quả tích luỹ thành điểm theo style và prompt version (FR-19.5). Tuỳ chọn LLM-as-judge chấm theo rubric để lọc sơ, mặc định tắt vì tốn quota.
 - FR-18.9 **Một lượt hay hai lượt:** mặc định một lượt với style nằm trong prompt. Hai lượt (dịch rồi làm mượt, hoặc chỉ làm mượt các cue bị chấm "cứng": quá CPS, quá dài, giống dịch từng chữ) chỉ được bật khi số liệu từ `variant` cho thấy đáng chi phí quota (mục 8).
-- FR-18.10 Glossary (terms, characters, address_rules, correction cấp series) cùng chuyển từ YAML vào SQLite ở P11: lưu theo (series, ngôn ngữ) kèm lịch sử phiên bản thay cho `backups/glossary/`; nhập và xuất YAML làm định dạng trao đổi; YAML không còn là nguồn sự thật. Đổi ADR-5.
+- FR-18.10 Glossary (terms, characters, address_rules, correction cấp series) cùng chuyển từ YAML vào SQLite ở P12: lưu theo (series, ngôn ngữ) kèm lịch sử phiên bản thay cho `backups/glossary/`; nhập và xuất YAML làm định dạng trao đổi; YAML không còn là nguồn sự thật. Đổi ADR-5.
 
 ### FR-19 Nhật ký, log và đo lường
 
-Quyết định #19; ADR-15. Dữ liệu này không backfill được, nên làm trước (P6).
+Quyết định #19; ADR-15. Dữ liệu này không backfill được, nên làm trước (P5).
 
 - FR-19.1 **Ba tầng dữ liệu.** (1) **Nhật ký sự kiện** (`events`): mọi quyết định của hệ thống kèm job hoặc unit và lý do: đồng bộ danh mục, tạo job, bỏ qua (kèm lý do), claim, chọn model, leo thang, chờ, publish, phiên bản, đổi khoá, breaker. Trả lời được "vì sao tập này không chạy?". (2) **Log lời gọi LLM** (`llm_calls`, mở rộng NFR-7): thêm prompt version, hash bundle/style/glossary/memory, chỉ số batch, mã HTTP, finish reason, số retry, số cue phải repair, ước tính chi phí. (3) **Tín hiệu chất lượng** (`quality_signals`): cue bị admin sửa (trước/sau), hoàn tác, dịch lại, lỗi validate (số cue, độ dài dòng, CPS), sót tiếng nguồn, vi phạm glossary, kết quả A/B.
 - FR-19.2 **Body prompt và response được lưu để phân tích**, vào **file JSONL xoay vòng** trong `DATA_DIR/logs/llm/` (theo ngày, nén khi xoay), mỗi bản ghi giới hạn `log_body_max_bytes`; chỉ mục (call, file, offset) nằm trong SQLite; bundle lưu theo hash (dùng `context_snapshots`) nên không lặp. Bật tắt bằng `log_prompt_bodies` (`off` \| `errors` \| `sample` \| `all`, mặc định `all`); dung lượng chặn bằng `log_max_mb` (mặc định 500) và `log_retention_days` (mặc định 30). Body đi qua bộ lọc che bí mật (FR-20.3) trước khi ghi.
@@ -375,7 +379,7 @@ Quyết định #21; ADR-16.
 | NFR-7 Quan sát | Mỗi job ghi: số lời gọi, token vào/ra, model, thời gian, `context_hash`, `context_complete`. Console hiển thị tổng token theo ngày. |
 | NFR-8 Kiểm thử | Test không gọi mạng (fake provider). Bắt buộc có test tình huống FR-5 (tập 6 trước tập 1). |
 | NFR-9 Triển khai | Một Docker image multi-arch (amd64/arm64), một container; state trong một volume. |
-| NFR-10 Ranh giới | Core của worker (use case + domain) không import `sqlite3`, adapter lưu trữ, `urllib`/HTTP client hay module hạ tầng của hàng đợi; nó chỉ biết port và kiểu có tên (ADR-8, mục 9). Ranh giới được kiểm bằng test import (tiêu chí 10), không bằng quy ước. `subcore` vẫn không biết Bazarr, queue, HTTP (ADR-2). **[Đổi]** (v0.10, ADR-12), áp dụng từ P8: SQLite là phần của ứng dụng nên core dùng repository SQLite cụ thể; port chỉ còn ở biên mà ta không sở hữu (Bazarr, TMDB, provider LLM). Cấm core import HTTP client, SDK provider hay adapter ngoài vẫn giữ nguyên. *Lý do:* chín port, fake và test hợp đồng cho những kho chỉ có một adapter là nghi lễ; SQLite `:memory:` thật rẻ hơn fake. Đến hết P7 NFR-10 giữ nguyên. |
+| NFR-10 Ranh giới | Core của worker (use case + domain) không import `sqlite3`, adapter lưu trữ, `urllib`/HTTP client hay module hạ tầng của hàng đợi; nó chỉ biết port và kiểu có tên (ADR-8, mục 9). Ranh giới được kiểm bằng test import (tiêu chí 10), không bằng quy ước. `subcore` vẫn không biết Bazarr, queue, HTTP (ADR-2). **[Đổi]** (v0.10, ADR-12), áp dụng từ P8: SQLite là phần của ứng dụng nên core dùng repository SQLite cụ thể; port chỉ còn ở biên mà ta không sở hữu (Bazarr, TMDB, provider LLM). Cấm core import HTTP client, SDK provider hay adapter ngoài vẫn giữ nguyên. *Lý do:* chín port, fake và test hợp đồng cho những kho chỉ có một adapter là nghi lễ; SQLite `:memory:` thật rẻ hơn fake. Đến hết P6 NFR-10 giữ nguyên. |
 | NFR-11 Telemetry không chặn việc | Ghi log, event, metric và body prompt là best-effort: lỗi (đĩa đầy, ghi chậm, hàng đợi đầy) không bao giờ làm hỏng hay chặn job; chỉ ghi cảnh báo và đếm số bản ghi bị bỏ. Không nằm trong transaction của job. |
 | NFR-12 Tái hiện được | Mỗi lần dịch giữ đủ để dựng lại prompt đúng như đã gửi: hash bundle, ảnh chụp cài đặt lúc claim, prompt version, model (FR-15.10, FR-19.2, FR-21.2). Với cùng bundle và fake provider, CLI và worker cho cùng prompt và cùng đầu ra. |
 
@@ -401,10 +405,13 @@ Quyết định #21; ADR-16.
 14. **Job và scheduler (FR-15, FR-17):** với fake provider và đồng hồ giả: (a) job khác lớp chạy đúng thứ tự `interactive` > `retranslate` > `auto`, hai series xen kẽ, aging đưa job cũ lên; (b) hai thread claim cùng lúc không bao giờ lấy cùng một job; (c) giả lập chết giữa chừng → khởi động lại job về `queued` với `attempts + 1`, quá `max_crashes` thì `failed` lý do `crashed`; (d) 429 hết quota ngày → job `waiting · quota` đến mốc reset, không job nào `failed`, sau reset chạy tiếp; (e) `breaker_threshold` lần `Unavailable` liên tiếp sau retry → breaker mở, không có lời gọi provider trong thời gian nghỉ, một lời gọi thử ở nửa mở; (f) `AuthError` → khoá `invalid`, job `waiting · provider`; đặt khoá hợp lệ → job tự chạy tiếp, không job nào `failed`; (g) job cần model mạnh đang tạm dừng không chặn job chạy được bằng model nhẹ; (h) đổi model trong Settings khi job đang chạy không đổi model của job đó và ảnh chụp ghi đúng; (i) thiếu facts tập trước → "Waiting · thiếu facts" kèm nút yêu cầu tập đó, quá `gap_wait` thì dịch với `context_complete = false`; (j) lỗi ghi log hay metric không làm job fail (NFR-11); (k) `Blocked` → chia nhỏ batch, đổi tầng, rồi `failed` kèm lý do; (l) chạm `max_calls_per_job` → dừng với lý do rõ.
 15. **Phiên bản (FR-16):** (a) dịch hai lần → v1 `superseded`, v2 `current`, `parent = v1`; (b) sửa cue → phiên bản `edit`, các lần sửa liên tiếp trong cửa sổ gộp thành một phiên bản; (c) file đích bị sửa ngoài → ghi nhận `external` và không bị đè; (d) job `replace` bắt đầu ở v1, admin sửa cue (thành v2) lúc job chạy → kết quả thành `candidate`, file đích không đổi; (e) Bazarr tải `vi` thật khi job `fill` đang chạy → kết quả thành `candidate`, không ghi đè; (f) xoá từ console → `removed`, mục thành "Missing · Removed", không tự yêu cầu kể cả khi `auto_request` bật; (g) hoàn tác → phiên bản `revert` cùng sha256 với đích (tiêu chí 8); (h) sập giữa rename và commit → khởi động đối chiếu hash, phiên bản và file nhất quán; (i) "Dùng bản này" cho `candidate` → thành `current`, bản cũ `superseded`.
 16. **Style (FR-18):** (a) cùng một trục đặt ở series và ở thẻ nhân vật → prompt mang giá trị của thẻ; term `locked` luôn thắng; (b) đổi style của series → các bản dịch phụ thuộc `stale`, không có job nào tự tạo; (c) "Thử style" gọi provider đúng cho khoảng 20 cue, không ghi file, không tạo phiên bản; (d) job `variant` tạo `candidate`, không đụng file đích; (e) few-shot chỉ lấy cue đã sửa của đúng series và trong ngân sách token; (f) preset được gợi ý theo thể loại TMDB (metadata giả); (g) glossary nhập rồi xuất YAML qua DB cho kết quả tương đương (round-trip).
-17. **Nhật ký và đo lường (FR-19, NFR-11):** (a) mỗi quyết định ở tiêu chí 13–15 để lại event có job hoặc unit và lý do (một job bị bỏ qua có lý do đọc được); (b) `llm_calls` có prompt version, hash bundle/style/glossary và số repair; (c) body ghi vào JSONL xoay vòng; vượt `log_max_mb` hay `log_retention_days` thì file cũ bị xoá và chỉ mục vẫn nhất quán; `log_prompt_bodies = off` không ghi body; (d) đổi `log_level` có hiệu lực ngay, không cần khởi động lại; (e) khoá API, mật khẩu, cookie, header không có trong log, event, body và `/api/*`; (f) sửa cue, hoàn tác, dịch lại sinh `quality_signals` đúng; (g) lỗi ghi log (đĩa đầy giả lập) không làm job fail; (h) `GET /api/metrics` trả các chỉ số FR-19.5 khớp số liệu trên DB thử (kiểm ở P12).
+17. **Nhật ký và đo lường (FR-19, NFR-11):** (a) mỗi quyết định ở tiêu chí 13–15 để lại event có job hoặc unit và lý do (một job bị bỏ qua có lý do đọc được); (b) `llm_calls` có prompt version, hash bundle/style/glossary và số repair; (c) body ghi vào JSONL xoay vòng; vượt `log_max_mb` hay `log_retention_days` thì file cũ bị xoá và chỉ mục vẫn nhất quán; `log_prompt_bodies = off` không ghi body; (d) đổi `log_level` có hiệu lực ngay, không cần khởi động lại; (e) khoá API, mật khẩu, cookie, header không có trong log, event, body và `/api/*`; (f) sửa cue, hoàn tác, dịch lại sinh `quality_signals` đúng; (g) lỗi ghi log (đĩa đầy giả lập) không làm job fail; (h) `GET /api/metrics` trả các chỉ số FR-19.5 khớp số liệu trên DB thử (kiểm ở P15).
 18. **Bundle và CLI (FR-21):** (a) cùng bundle và `--provider fake`: CLI và worker cho cùng prompt (so sánh từng byte) và cùng đầu ra; (b) `render-prompt` không gọi provider; (c) test import: `subcore` và CLI không import `gst_worker` hay `sqlite3`; (d) bundle xuất từ console không chứa khoá hay đường dẫn máy; (e) thứ tự khoá flag > env > file; (f) `validate` cho cùng kết quả khi worker gọi; (g) `compare` ra bảng số cho hai cấu hình trên cùng mẫu; (h) bundle có `bundle_version` cũ vẫn chạy lại được.
 19. **Cài đặt và khoá (FR-20):** (a) đổi cài đặt trong console có hiệu lực không cần khởi động lại, giá trị trong DB ghi đè env/yml; (b) khoá được gieo từ env lần đầu, env đổi về sau không ghi đè giá trị trong DB; (c) `/api/settings` và `/api/keys` chỉ trả 4 ký tự cuối của khoá; (d) đặt khoá mới trong lúc có job `waiting · provider` → job chạy tiếp (liên kết 14f); (e) backup mặc định không chứa `api_keys`; (f) importer đưa `config.json` vào `settings` một lần, chạy lại không đè giá trị đã sửa.
 20. **Insights và vòng phản hồi (FR-19.5–19.6):** (a) cue đã sửa theo cùng một mẫu từ 3 lần → đề xuất rule `pending` kèm bằng chứng; (b) bộ golden của series gồm đúng các cue đã sửa, và `compare` với golden cho điểm khác nhau giữa hai prompt version trên fixture; (c) điểm A/B tích luỹ theo style và prompt version; (d) tỉ lệ cue bị sửa tính đúng trên DB thử.
+21. **Đề xuất và Review inbox (FR-4.4, FR-6, FR-11.1):** với fake provider: (a) facts có cặp nhân vật với vai vế rõ → đề xuất `address_rule` `pending` kèm cue và timecode làm bằng chứng, chưa áp dụng vào bản dịch nào; (b) tên riêng xuất hiện ở ≥ 2 tập mà chưa có trong glossary → đề xuất `term` `pending`; (c) chấp nhận ghi đúng vào glossary trong DB và hiện số bản dịch bị `stale`, không dịch lại tự động; (d) sửa rồi chấp nhận ghi giá trị đã sửa; từ chối rồi chạy lại bộ sinh không tạo lại cùng nội dung; (e) chấp nhận hàng loạt trong một series chỉ đụng series đó; (f) `auto_accept` bật cho một loại thì mục thuộc loại đó tự áp dụng, hiện trong lịch sử và hoàn tác được, loại khác vẫn `pending`; (g) badge trên nav bằng số mục `pending`; (h) mọi `source` (FR-11.1.5) đi qua cùng use case chấp nhận.
+22. **Provider thứ hai (FR-9.1–9.3):** với server HTTP giả tương thích OpenAI chạy cục bộ, không gọi mạng ngoài: (a) cùng fixture dịch qua `fake` và `openai_compat` cho đầu ra qua cùng bước validate; (b) 401 → `AuthError`, 429 → `RateLimited` hoặc `QuotaExhausted`, 5xx và timeout → `Unavailable`, đầu ra sai định dạng → `BadOutput`, đều là exception có kiểu của `subcore`; (c) provider không hỗ trợ structured output vẫn dịch được qua JSON mode và validate chặt hơn; (d) model chọn theo tác vụ `translate`, `extract`, `summarize`, `research`; (e) khoá của `openai_compat` lấy từ `api_keys` và không xuất hiện trong log, event, body prompt.
+23. **Research (FR-7):** với fake provider có `web_search`: (a) chạy đúng một lần cho mỗi series (và khi có term mới), không lặp ở mỗi tập; (b) URL nguồn lấy từ grounding metadata, không lấy từ chữ model tự viết; (c) kết quả vào `suggestions` `pending`, và `term` có ≥ 2 nguồn độc lập khớp thì tự áp dụng khi bật `auto_accept` cho `terms` (FR-4.4); (d) provider không có `web_search` thì bỏ qua, không lỗi, không job `failed`; (e) vượt ngân sách lời gọi research mỗi series thì dừng và ghi event, không ảnh hưởng quota dịch.
 
 ---
 
@@ -423,27 +430,28 @@ Quyết định #21; ADR-16.
 | 8 | Form đăng nhập thay vì chỉ Basic Auth; đổi mật khẩu; quên mật khẩu; Basic Auth cho script | **Một tài khoản**, hai cách vào: form đăng nhập (cookie phiên) cho trình duyệt, Basic Auth cho script. Tài khoản khởi tạo từ env `CONSOLE_USER`/`CONSOLE_PASSWORD`; người dùng đổi mật khẩu trong Settings và mật khẩu đã lưu thắng env. Quên mật khẩu: `CONSOLE_PASSWORD_RESET=1` + env, khởi động lại. Giữ Basic Auth song song (FR-10.3). Làm ở phase P0c. |
 | 9 | Refactor worker sang kiến trúc cổng–adapter (hexagon): DB là phụ thuộc cụ thể hay nằm sau interface | **Nằm sau port**, có chọn lọc (ADR-8, mục 9): `Store` tách thành port hẹp trả kiểu có tên; tầng use case dùng chung cho HTTP và CLI; `subcore` giữ nguyên. Hàng đợi vẫn là cây thư mục JSON, chỉ bọc bằng port `JobQueue` (bảng `jobs` vẫn hoãn). Port trả kiểu có tên ngay từ đầu, không có giai đoạn trả `dict`. Ưu tiên cao: làm ở phase P0d, trước P5. |
 | 10 | Chế độ "manual": để Bazarr đẩy job vào nhưng admin chọn job nào được dịch | **Chế độ `hold`** (FR-12): `admission_mode = auto \| hold`, toàn cục, mặc định `auto`. Job từ script Bazarr thành `held` chờ duyệt (duyệt một/nhiều/theo series/tất cả, từ chối nhớ để không đưa lại); thao tác của admin không bị giữ. Worker áp dụng chế độ, script và giao thức file không đổi. Làm cùng phase P0d, **sau** phần ranh giới vì cần tầng use case và port `JobQueue`. |
-| 11 | Dọn file tự sinh (file job đã xong, bản sao phiên bản/glossary, file tạm) | **Có dọn tự động** (FR-13) theo cửa sổ giữ cấu hình được (`retention_*`), kèm xem trước và nút Dọn ngay; không bao giờ đụng thư mục media, job chưa kết thúc, job `held`/từ chối, phiên bản `current` hay cache facts. Xoá bản sao phiên bản giữ lại dòng lịch sử (`pruned`). Làm cùng phase P0d (phần 3), độc lập với `hold`. Lên lịch lại sau P8 (FR-13.7). |
-| 12 | Cách Bazarr đưa việc vào (thay quyết định #10) | Worker **kéo** danh mục từ Bazarr API; Library duyệt mọi series, phim, tập như duyệt trong Bazarr; trạng thái "thiếu" là trạng thái hiện tại của đối tượng, không phải sự kiện đẩy sang. Script `gst_enqueue.sh`, thư mục queue chung và `GST_MAX_PENDING` bỏ ở P9 (FR-14, ADR-10). |
+| 11 | Dọn file tự sinh (file job đã xong, bản sao phiên bản/glossary, file tạm) | **Có dọn tự động** (FR-13) theo cửa sổ giữ cấu hình được (`retention_*`), kèm xem trước và nút Dọn ngay; không bao giờ đụng thư mục media, job chưa kết thúc, job `held`/từ chối, phiên bản `current` hay cache facts. Xoá bản sao phiên bản giữ lại dòng lịch sử (`pruned`). Làm ở P9, ngay sau P8 (FR-13.7). |
+| 12 | Cách Bazarr đưa việc vào (thay quyết định #10) | Worker **kéo** danh mục từ Bazarr API; Library duyệt mọi series, phim, tập như duyệt trong Bazarr; trạng thái "thiếu" là trạng thái hiện tại của đối tượng, không phải sự kiện đẩy sang. Script `gst_enqueue.sh`, thư mục queue chung và `GST_MAX_PENDING` bỏ ở P10 (FR-14, ADR-10). |
 | 13 | "Yêu cầu" và `hold` | Không có thực thể request: yêu cầu dịch là tạo job; nhãn Requested là job `queued`. Trạng thái hiển thị dẫn xuất từ phiên bản, job và quyết định (FR-14.5). `hold` thay bằng policy tự yêu cầu, mặc định **tắt**, bật theo series hoặc toàn cục (FR-15.4). Dịch lại được trên bất kỳ mục nào, có hay chưa có phụ đề đích. |
 | 14 | Nơi lưu job và cài đặt (sửa quyết định #9, FR-1.1) | SQLite: bảng `jobs`, `settings`, `api_keys`. Cây thư mục queue bỏ, importer một lần từ file cũ. Một worker, claim nguyên tử; HTTP thread cũng ghi nên dùng WAL và transaction ngắn (FR-15, FR-20; ADR-11, ADR-13). yml/env chỉ cho cấu hình hệ thống. |
 | 15 | Trạng thái phụ đề | Phiên bản là thực thể riêng, không phải trạng thái của job: `origin`, `status`, `candidate`, khoá lạc quan `base_version`, `removed` có nhớ, `external` khi phát hiện sửa ngoài (FR-16; ADR-11). |
 | 16 | Quota và lỗi provider | Hết quota thì job **chờ**, không `failed` (làm đúng NFR-1); lỗi provider tách khỏi lỗi job; breaker theo (khoá, model); chờ đến mốc reset thật; khoá hết hạn thì job chờ và tự chạy tiếp khi đổi khoá (FR-15.8, FR-17). |
 | 17 | Port và hạ tầng (sửa quyết định #9, ADR-8) | Port chỉ ở biên mà ta không sở hữu: Bazarr, TMDB, provider LLM. SQLite là phần của ứng dụng, dùng repository cụ thể, test trên SQLite `:memory:`; bỏ fake và test hợp đồng cho các kho của chính mình. Áp dụng từ P8, gỡ dần khi chạm vào, không refactor riêng (ADR-12, NFR-10). |
 | 18 | Tone, style và glossary | Style profile có cấu trúc, chỉnh trên form, lưu DB, xếp tầng, glossary luôn thắng; thẻ nhân vật, preset thể loại, few-shot từ cue đã sửa, xem thử, variant và A/B. Glossary chuyển từ YAML vào DB, YAML chỉ nhập/xuất (FR-18; ADR-14; sửa ADR-5). |
-| 19 | Log và dữ liệu cải tiến chất lượng | Lưu body prompt và response (JSONL xoay vòng, có mức log, bật tắt được, che bí mật); ba tầng event, `llm_calls` mở rộng, `quality_signals`; Insights; vòng phản hồi từ cue đã sửa; telemetry không chặn việc (FR-19, NFR-11; ADR-15). Làm đầu tiên (P6) vì dữ liệu không backfill được. |
+| 19 | Log và dữ liệu cải tiến chất lượng | Lưu body prompt và response (JSONL xoay vòng, có mức log, bật tắt được, che bí mật); ba tầng event, `llm_calls` mở rộng, `quality_signals`; Insights; vòng phản hồi từ cue đã sửa; telemetry không chặn việc (FR-19, NFR-11; ADR-15). Làm đầu tiên (P5) vì dữ liệu không backfill được. |
 | 20 | Khoá API | Là cấu hình: lưu DB, đổi trên console, hiệu lực ngay, gieo từ env lần đầu; CLI nhận qua flag, env hoặc file; bundle không chứa khoá; backup mặc định không gồm khoá (FR-20, NFR-5, ADR-13). Sửa phát biểu "chỉ qua env" của NFR-5. |
 | 21 | CLI và console | Bỏ CLI cho worker: console và HTTP API là giao diện duy nhất của worker. CLI của `subcore` là công cụ eval khai báo, không biết DB; worker gom bundle, CLI chạy lại bundle (FR-21; ADR-16). Sửa ADR-8 điểm 6. |
 | 22 | Quan hệ với upstream | Dừng đồng bộ upstream: fork đã thay hàng đợi, script và store nên cherry-pick định kỳ không còn ý nghĩa. Quy tắc "sync hàng tháng" của ADR-2 và skill `upstream-sync` không còn dùng. |
+| 23 | Thứ tự của provider thứ hai, đề xuất, Review inbox, research | Bốn phần riêng. P7 `openai_compat` ngay sau P6; P13 `suggestions` + Review inbox lõi ngay sau P12 (glossary đã trong DB); P14 bộ sinh đề xuất từ facts và thẻ nhân vật; P16 research **làm cuối** lộ trình v1 và vẫn bắt buộc (FR-7.4). Một bảng `suggestions` và một hộp duyệt cho mọi nguồn (FR-11.1.5), nên P15 (cue sửa lặp lại) và P12 (thẻ nhân vật) cắm vào đó, không dựng chỗ hiển thị tạm trong Insights. Nhiều khoá (FR-9.4) không còn là việc của các phase này: đã thuộc P6 (FR-20.2). |
 
 ## 8. Câu hỏi mở
 
 Cả bốn câu cần số liệu thật nên chưa chốt được trên giấy.
 
 1. **Mốc reset quota ngày của Gemini.** Có vẻ theo giờ Pacific, chưa kiểm chứng. Cần xác nhận trước khi cài FR-17.4; nếu không xác nhận được thì dùng mốc ước lượng và thử lại theo breaker.
-2. **Endpoint Bazarr nào dựng được danh mục.** Series, phim, tập và `wanted`: cái nào phân trang được, nặng đến đâu với thư viện hàng nghìn tập, có trả `missing_subtitles` cho cả thư viện không; ngưỡng `catalog_shrink_guard` (20%) có hợp lý không. Thăm dò chỉ đọc ở đầu P9.
-3. **Hai lượt dịch (làm mượt) có đáng quota không** (FR-18.9). Quyết bằng số liệu `variant` và A/B ở P11 và P12.
-4. **Giá trị mặc định** của `breaker_threshold`, `max_calls_per_job`, `log_max_mb`, `log_retention_days`: chốt khi có số liệu từ P6.
+2. **Endpoint Bazarr nào dựng được danh mục.** Series, phim, tập và `wanted`: cái nào phân trang được, nặng đến đâu với thư viện hàng nghìn tập, có trả `missing_subtitles` cho cả thư viện không; ngưỡng `catalog_shrink_guard` (20%) có hợp lý không. Thăm dò chỉ đọc ở đầu P10.
+3. **Hai lượt dịch (làm mượt) có đáng quota không** (FR-18.9). Quyết bằng số liệu `variant` và A/B ở P12 và P15.
+4. **Giá trị mặc định** của `breaker_threshold`, `max_calls_per_job`, `log_max_mb`, `log_retention_days`: chốt khi có số liệu từ P5.
 
 ---
 

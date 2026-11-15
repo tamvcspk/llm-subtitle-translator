@@ -1,6 +1,6 @@
 # ARCHITECTURE — LLM Subtitle Translator for Bazarr
 
-> Trạng thái: **Draft v0.10** · 2026-11-15 (v0.10: thiết kế lại luồng job — ADR-10 đến ADR-16, §2 sơ đồ đích, §4 schema đích, §5, §6, §8; ADR-8 được điều chỉnh bởi ADR-12, ADR-9 bị thay bởi ADR-10/11, ADR-5 điều chỉnh, quy tắc upstream của ADR-2 bỏ; v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8; v0.9: ADR-8 ranh giới và port chuyển từ SPEC mục 9 sang §1 và §2, theo số phiên bản của SPEC; thêm ADR-9 chế độ `hold` ở §1, P0d phần 2) · Hiện thực hoá [SPEC.md](SPEC.md)
+> Trạng thái: **Draft v0.11** · 2026-11-15 (v0.11: đánh số lại phase P5–P16 theo thứ tự làm — §3.5 research làm cuối, §3.6 đề xuất và Review inbox, §4 `suggestions` thêm `source`; v0.10: thiết kế lại luồng job — ADR-10 đến ADR-16, §2 sơ đồ đích, §4 schema đích, §5, §6, §8; ADR-8 được điều chỉnh bởi ADR-12, ADR-9 bị thay bởi ADR-10/11, ADR-5 điều chỉnh, quy tắc upstream của ADR-2 bỏ; v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8; v0.9: ADR-8 ranh giới và port chuyển từ SPEC mục 9 sang §1 và §2, theo số phiên bản của SPEC; thêm ADR-9 chế độ `hold` ở §1, P0d phần 2) · Hiện thực hoá [SPEC.md](SPEC.md)
 > Tài liệu này mô tả kiến trúc **đích**. Kiến trúc hiện tại kế thừa từ upstream nằm ở [docs/ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
@@ -109,7 +109,7 @@ class Provider(Protocol):
 
 **[Đổi so với SRS]** SRS đề xuất JSON/TXT trước, SQLite sau. Bỏ giai đoạn file: truy vấn staleness/prerequisite trên file JSON sẽ phải viết lại khi lên SQLite.
 
-**Điều chỉnh (v0.10).** Hai hàng của bảng trên đổi ở các phase sau: (1) **queue đầu vào** không còn là file, nó là bảng `jobs`; script Bazarr bị bỏ nên không còn thư mục `incoming` (ADR-10, ADR-11, P8–P9). (2) **glossary** chuyển từ YAML vào SQLite, YAML chỉ nhập/xuất (ADR-14, P11). Nguyên tắc "SQLite cho máy, YAML cho người" thành "SQLite cho cả hai; YAML chỉ cho cấu hình hệ thống lúc khởi động và làm định dạng trao đổi". Đến hết phase trước đó bảng trên vẫn mô tả đúng code.
+**Điều chỉnh (v0.10).** Hai hàng của bảng trên đổi ở các phase sau: (1) **queue đầu vào** không còn là file, nó là bảng `jobs`; script Bazarr bị bỏ nên không còn thư mục `incoming` (ADR-10, ADR-11, P8–P10). (2) **glossary** chuyển từ YAML vào SQLite, YAML chỉ nhập/xuất (ADR-14, P12). Nguyên tắc "SQLite cho máy, YAML cho người" thành "SQLite cho cả hai; YAML chỉ cho cấu hình hệ thống lúc khởi động và làm định dạng trao đổi". Đến hết phase trước đó bảng trên vẫn mô tả đúng code.
 
 ### ADR-6 · Memory: facts theo tập + fold xác định, không dùng memory framework
 
@@ -193,7 +193,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 
 ### ADR-9 · Chế độ `hold`: worker quyết định lúc nhận job (FR-12)
 
-> **Bị thay thế (v0.10)** bởi ADR-10 (Bazarr chỉ là nguồn danh mục; không có gì tự vào hàng đợi) và ADR-11 (job trong SQLite). Mô tả dưới đây đúng cho code hiện tại cho đến P9, khi `held/`, `rejected/`, `admission_mode` và tab Held được gỡ.
+> **Bị thay thế (v0.10)** bởi ADR-10 (Bazarr chỉ là nguồn danh mục; không có gì tự vào hàng đợi) và ADR-11 (job trong SQLite). Mô tả dưới đây đúng cho code hiện tại cho đến P10, khi `held/`, `rejected/`, `admission_mode` và tab Held được gỡ.
 
 **Quyết định:** script Bazarr không đổi (nó không đọc được cài đặt của worker, FR-12.3) và vẫn ghi thẳng vào `pending/`; **worker** áp chế độ ngay trước mỗi lần claim (`QueueWorker.process_once` → `queue.JobQueue.admit_new_jobs`). Đã làm xong ở P0d phần 2.
 
@@ -208,7 +208,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 
 ### ADR-10 · Bazarr là nguồn danh mục; worker kéo, không nhận đẩy (FR-14)
 
-**Quyết định:** worker đồng bộ danh mục series, phim, tập và `missing_subtitles` từ Bazarr API vào bảng `catalog_items` (cache có dấu thời gian). Trang Library duyệt cache đó như duyệt trong Bazarr. Bỏ `gst_enqueue.sh`, thư mục queue chung giữa hai container, và `GST_MAX_PENDING`. Làm ở P9.
+**Quyết định:** worker đồng bộ danh mục series, phim, tập và `missing_subtitles` từ Bazarr API vào bảng `catalog_items` (cache có dấu thời gian). Trang Library duyệt cache đó như duyệt trong Bazarr. Bỏ `gst_enqueue.sh`, thư mục queue chung giữa hai container, và `GST_MAX_PENDING`. Làm ở P10.
 
 **Lý do:**
 - "Thiếu phụ đề" là **trạng thái hiện tại** của một đối tượng, không phải sự kiện. Đẩy sự kiện buộc phải xử lý `superseded`, trùng lặp, trạng thái lệch và việc đếm `pending` trước khi worker quét (đã gây lỗi thật: `GST_MAX_PENDING=5` cắt mất 5/10 tập ở lần thử đầu).
@@ -221,7 +221,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 3. **Định danh** bằng id Bazarr (+ `series_key`); đường dẫn là thuộc tính phân giải lúc chạy.
 4. **Trạng thái dẫn xuất** (FR-14.5) tính trong read model của `Library` từ `catalog_items`, `versions`, `jobs`, `unit_decisions`; không có cột trạng thái tổng.
 5. **Policy tự yêu cầu** (FR-15.4) chạy sau mỗi lần đồng bộ: tạo job `fill` `origin = policy` cho mục Missing trong phạm vi, bỏ Ignored và Removed.
-6. **Chuyển tiếp:** script và `hold` vẫn chạy đến P9. P9 thêm importer một lần (`held` → Missing, `rejected` → `unit_decisions(ignored)`, `pending`/`deferred` → `jobs`, `done`/`failed` → lịch sử, đưa cây thư mục cũ sang `queue.migrated/`), rồi gỡ script, hướng dẫn gỡ post-processing khỏi Bazarr (`docs/BAZARR.md`) và volume postprocess khỏi compose.
+6. **Chuyển tiếp:** script và `hold` vẫn chạy đến P10. P10 thêm importer một lần (`held` → Missing, `rejected` → `unit_decisions(ignored)`, `pending`/`deferred` → `jobs`, `done`/`failed` → lịch sử, đưa cây thư mục cũ sang `queue.migrated/`), rồi gỡ script, hướng dẫn gỡ post-processing khỏi Bazarr (`docs/BAZARR.md`) và volume postprocess khỏi compose.
 
 **Đánh đổi:** mất tín hiệu "provider nào vừa tải xong" của post-processing. Chấp nhận: cửa `settle` đã dựa trên mtime của file nguồn, không cần tín hiệu đó; polling vài phút là đủ cho phụ đề. Thêm tải lên Bazarr khi thư viện lớn, giảm bằng đồng bộ tăng dần (mục 8, câu hỏi 2).
 
@@ -232,7 +232,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 **Lý do:** những thứ cần ở đây file không làm được: ràng buộc một job mở mỗi (unit, ngôn ngữ, loại), chọn việc theo lớp ưu tiên và vòng tròn series, lease và heartbeat, metrics (FR-19.5), thống kê `model_layers` không bị cửa sổ file giới hạn (FR-13.7).
 
 **Quyết định cụ thể:**
-1. **Trạng thái job:** `queued` · `running` · `waiting` (cột `wait_reason`: `quota` \| `provider` \| `context` \| `settle` \| `rate`) · `done` · `failed` · `cancelled` · `skipped`. Từ P8 đến P9 có thêm `held` cho job do script tạo (ADR-9), bỏ ở P9. `failed` chỉ cho lỗi của job (FR-15.8).
+1. **Trạng thái job:** `queued` · `running` · `waiting` (cột `wait_reason`: `quota` \| `provider` \| `context` \| `settle` \| `rate`) · `done` · `failed` · `cancelled` · `skipped`. Từ P8 đến P10 có thêm `held` cho job do script tạo (ADR-9), bỏ ở P10. `failed` chỉ cho lỗi của job (FR-15.8).
 2. **Chọn việc** là một câu lệnh nguyên tử trong `BEGIN IMMEDIATE`, sắp theo lớp ưu tiên, vòng tròn series (`series_rr`), `created_at`, có aging. Job cần tầng model đang tạm dừng bị lọc ra, không chặn hàng đợi. Không cắt ngang job đang chạy: một tập chỉ chạy vài phút, và thêm điểm dừng ở ranh giới batch chỉ làm khi có số liệu.
 3. **"Một luồng" chỉ đúng với worker.** HTTP server là các thread khác cũng ghi, nên SQLite dùng WAL, `busy_timeout`, transaction ngắn; thao tác của người dùng (yêu cầu, huỷ, đổi ưu tiên) là các lệnh ghi riêng, không giữ khoá lâu.
 4. **Lease:** `lease_until` gia hạn bởi heartbeat. Recovery chạy tường minh lúc khởi động và khi quét lease hết hạn (giữ invariant "tạo handle không recover"); `attempts + 1`; quá `max_crashes` thì `failed` lý do `crashed`.
@@ -241,9 +241,9 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 7. **Breaker và chính sách chờ** nằm trong `queue_policy.py` (thuần, mở rộng): `provider_health(key_id, model, state, consecutive_failures, until, reason)`; ngưỡng, backoff và mốc reset là hàm thuần có test. Lỗi provider (`AuthError`, `QuotaExhausted`…) đi từ `TranslationAttempt` lên bằng kiểu, chuyển job về `waiting` kèm lý do (FR-17.1, ADR-3).
 8. **Phiên bản:** `origin`, `status` (`current` \| `superseded` \| `removed` \| `pruned` \| `candidate`), `parent`; tối đa một `current` mỗi (unit, ngôn ngữ) (chỉ mục duy nhất có điều kiện). Các lần sửa cue liên tiếp gộp trong `edit_coalesce_minutes`. `removed` là tombstone nhớ ý định của admin (FR-16.6).
 9. **Importer một lần** từ cây thư mục queue và `translations` hiện có, idempotent theo job id (sha1 cũ giữ làm khoá nhập), chạy lại không nhân đôi (tiêu chí 13i). Cây cũ đưa sang `queue.migrated/`, không xoá.
-10. **Dọn file (FR-13.7):** nhóm file job thành dọn dòng `jobs`; P0d phần 3 làm sau P8.
+10. **Dọn file (FR-13.7):** nhóm file job thành dọn dòng `jobs`; P9 làm sau P8.
 
-**Đánh đổi:** migration lớn (viết lại `queue.py` ~850 dòng và các test hàng đợi); đổi lại bỏ được ba nơi lưu trạng thái (file queue, SQLite, JSON cấu hình) thành một. Cổng nhận file từ `gst_enqueue.sh` (importer định kỳ) giữ đến P9 để không gãy hệ thống đang chạy.
+**Đánh đổi:** migration lớn (viết lại `queue.py` ~850 dòng và các test hàng đợi); đổi lại bỏ được ba nơi lưu trạng thái (file queue, SQLite, JSON cấu hình) thành một. Cổng nhận file từ `gst_enqueue.sh` (importer định kỳ) giữ đến P10 để không gãy hệ thống đang chạy.
 
 ### ADR-12 · Port chỉ ở biên không sở hữu (điều chỉnh ADR-8)
 
@@ -257,7 +257,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 
 ### ADR-13 · Cài đặt và khoá API trong DB (FR-20)
 
-**Quyết định:** hai bảng: `settings(key, value_json, updated_at)` và `api_keys(id, provider, label, value, status, last_used_at)`. Thứ tự ưu tiên: **DB > env/yml > mặc định**. yml/env chỉ chứa cấu hình hệ thống lúc khởi động (đường dẫn, cổng, `DATA_DIR`, đường dẫn DB, tài khoản console khởi tạo); danh sách khoá hệ thống không ghi đè được từ UI cố định trong code. Làm ở P7.
+**Quyết định:** hai bảng: `settings(key, value_json, updated_at)` và `api_keys(id, provider, label, value, status, last_used_at)`. Thứ tự ưu tiên: **DB > env/yml > mặc định**. yml/env chỉ chứa cấu hình hệ thống lúc khởi động (đường dẫn, cổng, `DATA_DIR`, đường dẫn DB, tài khoản console khởi tạo); danh sách khoá hệ thống không ghi đè được từ UI cố định trong code. Làm ở P6.
 
 **Cơ chế:**
 1. **Hiệu lực ngay:** `RuntimeContext.apply_settings` (đã có) mở rộng; `ProviderFactory` lấy khoá từ nguồn sống mỗi lần dựng provider, nên đổi khoá không cần khởi động lại. `subcore` chỉ nhận khoá qua tham số.
@@ -268,7 +268,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 
 ### ADR-14 · Style profile và glossary trong DB (FR-18)
 
-**Quyết định:** style là dữ liệu có cấu trúc lưu SQLite, chỉnh bằng form; glossary chuyển từ YAML vào SQLite. YAML chỉ còn là định dạng nhập/xuất. Làm ở P11, sau bundle (P10).
+**Quyết định:** style là dữ liệu có cấu trúc lưu SQLite, chỉnh bằng form; glossary chuyển từ YAML vào SQLite. YAML chỉ còn là định dạng nhập/xuất. Làm ở P12, sau bundle (P11).
 
 **Cơ chế:**
 1. **Bảng:** `style_profiles(id, scope /* global|preset|series|unit */, scope_id, doc_json, version)`, `character_cards(id, series_id, name, doc_json, version)`, `glossaries(id, series_id, lang, doc_json, rules_hash, version, updated_at)` kèm bảng lịch sử thay cho `backups/glossary/`. `subcore.glossary` giữ phần nạp/kiểm tra, nay nhận và trả `doc` thay vì đường dẫn YAML.
@@ -282,7 +282,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 
 ### ADR-15 · Nhật ký, log và đo lường (FR-19)
 
-**Quyết định:** ba tầng dữ liệu trong SQLite cộng file JSONL xoay vòng cho body prompt. Làm ở P6, trước mọi thay đổi khác, vì dữ liệu không backfill được.
+**Quyết định:** ba tầng dữ liệu trong SQLite cộng file JSONL xoay vòng cho body prompt. Làm ở P5, trước mọi thay đổi khác, vì dữ liệu không backfill được.
 
 **Cơ chế:**
 1. **Bảng:** `events(id, at, level, kind, job_id, unit_id, data_json)`; `llm_calls` thêm cột (prompt version, hash bundle/style/glossary, batch, mã HTTP, finish reason, retries, repairs, chi phí ước tính); `llm_bodies(call_id, file, offset, length)`; `quality_signals(id, at, kind, unit_id, version_id, cue, before, after, meta_json)`; `metrics_daily(day, name, labels_json, value)` để giữ số liệu dài hạn khi `events` bị dọn (`events_retention_days`, mặc định 90).
@@ -296,7 +296,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 
 ### ADR-16 · Bundle và CLI khai báo (FR-21)
 
-**Quyết định:** `subcore` nhận một **bundle** đã gom đủ và không biết nó đến từ đâu. Worker gom bundle từ DB (`gst_worker/gather.py`). CLI của `subcore` chạy bundle hoặc flag, không biết web, job hay DB. Không làm CLI cho worker. Làm ở P10.
+**Quyết định:** `subcore` nhận một **bundle** đã gom đủ và không biết nó đến từ đâu. Worker gom bundle từ DB (`gst_worker/gather.py`). CLI của `subcore` chạy bundle hoặc flag, không biết web, job hay DB. Không làm CLI cho worker. Làm ở P11.
 
 **Cơ chế:**
 1. **`subcore.bundle`:** dataclass bất biến `TranslationBundle` (cue nguồn, glossary, `address_rules`, style hiệu lực, corrections, few-shot, các phần memory, mô tả TMDB, tham số model), có `bundle_version`, `to_json`/`from_json` và hash. Bundle là phần mở rộng của "context bundle" (SPEC mục 2): `context_hash` vẫn tính trên phần context; hash bundle bao cả cue và tham số.
@@ -375,7 +375,7 @@ flowchart LR
   ROOT[worker.py + RuntimeContext] -. nối dây .-> OUT
 ```
 
-**Đích (v0.10, từ P9):** Bazarr không còn đẩy gì vào; worker kéo danh mục, mọi việc đi qua bảng `jobs` trong SQLite (ADR-10, ADR-11). Sơ đồ ở trên mô tả code hiện tại cho đến lúc đó.
+**Đích (v0.10, từ P10):** Bazarr không còn đẩy gì vào; worker kéo danh mục, mọi việc đi qua bảng `jobs` trong SQLite (ADR-10, ADR-11). Sơ đồ ở trên mô tả code hiện tại cho đến lúc đó.
 
 ```mermaid
 flowchart LR
@@ -458,7 +458,7 @@ sequenceDiagram
    - Toàn bộ cue nguồn của unit (để có ngữ cảnh), đánh dấu dải cần dịch nếu có nhiều phần
    ```
    Timecode trong mục 6 được quy đổi sang **cue index** trước khi đưa vào, vì model không nhìn thấy timecode.
-   **Đích (v0.10, ADR-14, P11):** sau mục 3 thêm *Style hiệu lực* và *Giọng nhân vật*, và few-shot từ cue đã sửa ở cuối phần system. Cả prompt được dựng từ một bundle bằng một hàm duy nhất (ADR-16).
+   **Đích (v0.10, ADR-14, P12):** sau mục 3 thêm *Style hiệu lực* và *Giọng nhân vật*, và few-shot từ cue đã sửa ở cuối phần system. Cả prompt được dựng từ một bundle bằng một hàm duy nhất (ADR-16).
 3. **Validate** theo FR-3.2 → **repair**: gom các `i` lỗi, gửi lại chỉ những cue đó + 5 cue lân cận làm ngữ cảnh, tối đa 2 vòng → nếu vẫn lỗi, tăng số phần (planner ×2) → fail.
 
 ### 3.4 Memory (`subcore.memory`)
@@ -502,6 +502,18 @@ sequenceDiagram
 - Lời gọi 1 (có Google Search, không schema): "Bản dịch tiếng Việt phổ biến của các tên/thuật ngữ sau trong *<series>*, kèm nguồn".
 - Lời gọi 2 (model rẻ, structured output): chuyển kết quả thành `[{source, target, sources[], confidence}]` → bảng `suggestions` (pending).
 - Lấy URL nguồn từ grounding metadata của response, không tin URL model tự viết.
+- **Thứ tự (v0.11):** làm cuối cùng của lộ trình v1 (PLAN P16), sau Review inbox (P13) và bộ sinh đề xuất từ facts (P14); vẫn bắt buộc (SPEC FR-7.4). Đây là lúc `auto_accept` cho `terms` có ≥ 2 nguồn độc lập (FR-4.4) bắt đầu có nghĩa. Ngân sách: số lời gọi research mỗi series (cài đặt `research_max_calls_per_series`, thêm vào `docs/CONFIGURATION.md` khi cài), tính vào `llm_calls` với tác vụ `research` để Insights tách được.
+
+### 3.6 Đề xuất và Review inbox (`gst_worker/suggestions.py`)
+
+Mới ở v0.11 (SPEC FR-11.1.5, quyết định #23). Một use case `SuggestionService` và một bảng `suggestions` cho mọi nguồn; nguồn chỉ là bộ sinh, không có logic duyệt riêng.
+
+- **Bộ sinh** (`source`): `facts` (FR-6, P14), `memory` (thẻ nhân vật, FR-18.3, P14), `feedback` (cue sửa lặp lại, FR-19.6, P15), `research` (FR-7, P16). Mỗi bộ sinh trả danh sách đề xuất thuần (kind, payload, bằng chứng, nguồn); `SuggestionService.propose` lọc trùng và đã từ chối rồi mới ghi.
+- **Dấu vân tay:** hash của `(series, ngôn ngữ, kind, payload chuẩn hoá)`; đề xuất đã `rejected` có cùng dấu vân tay không được sinh lại, đã `accepted` thì bỏ qua (FR-6, FR-11.1.4).
+- **Chấp nhận** gọi cùng use case ghi glossary hoặc thẻ nhân vật của P12, rồi tính số bản dịch bị `stale` bằng hash luật (`rules.py`); không bao giờ dịch lại tự động (FR-5.6). `auto_accept` theo loại (FR-4.4) đi cùng đường này và đặt `auto_accepted = 1`, có lịch sử và hoàn tác.
+- **API:** `GET /api/suggestions?series=&status=&source=`, `POST /api/suggestions/{id}/accept|reject` (kèm `payload` đã sửa khi "sửa rồi chấp nhận"), `POST /api/suggestions/bulk` (theo series, có xác nhận số lượng). Chưa có trong `docs/API.md` cho đến P13.
+- **Console:** trang Review (nhóm theo series, bằng chứng, số bản dịch sẽ stale), badge `pending` trên nav. Trang này thay chỗ hiển thị tạm trong Insights từng được dự kiến cho P15.
+- **Phụ thuộc:** cần P12 (glossary và thẻ nhân vật trong DB). Không cần P8 hay P10 để chạy, nhưng Library mới (P10) cho đường dẫn từ đề xuất tới tập chứa bằng chứng.
 
 ---
 
@@ -519,9 +531,11 @@ translations(id PK, unit_id FK, target_lang, version, output_path, backup_path, 
              context_hash, context_complete, missing_units_json,
              trigger /* auto|retranslate|cue_edit|revert */, parent_version,
              status /* current|stale|superseded */, created_at)
-suggestions(id PK, series_id FK, target_lang, kind /* term|address_rule|character */,
+suggestions(id PK, series_id FK, target_lang, kind /* term|address_rule|character|correction */,
+            source /* facts|memory|feedback|research */, fingerprint /* hash dùng chống sinh lại */,
             payload_json, evidence_json, sources_json, auto_accepted,
-            status /* pending|accepted|rejected */, decided_at, created_at)
+            status /* pending|accepted|rejected */, decided_at, created_at,
+            UNIQUE(series_id, target_lang, fingerprint))  -- v0.11, xem §3.6
 corrections(id PK, unit_id FK, target_lang, kind /* term|address|note|cue_edit */,
             payload_json /* cue_edit: {cue, text} */, created_at, active)
             -- chỉ scope=episode; scope forward/series ghi vào glossary YAML
@@ -541,7 +555,7 @@ Nếu sha256 file đang nằm trên đĩa **không** khớp phiên bản `curren
 Thêm hoặc đổi so với khối trên; tên cột có thể chỉnh khi cài đặt. `jobs` ở khối trên chỉ là dự kiến ban đầu và được thay bằng định nghĩa dưới đây (ADR-11). Bảng nào làm ở phase nào ghi ở PLAN.
 
 ```sql
--- P9: danh mục Bazarr (ADR-10)
+-- P10: danh mục Bazarr (ADR-10)
 catalog_items(id PK, kind /* series|movie|episode */, bazarr_id, parent_id, series_key, season, episode,
               title, video_path, subtitles_json, missing_json, synced_at, gone_at)
 unit_decisions(unit_id FK, target_lang, decision /* ignored */, at, PRIMARY KEY(unit_id, target_lang))
@@ -549,7 +563,7 @@ unit_decisions(unit_id FK, target_lang, decision /* ignored */, at, PRIMARY KEY(
 -- P8: job, phiên bản, sức khoẻ provider (ADR-11)
 jobs(id PK, unit_id FK, target_lang, mode /* fill|replace|variant */,
      origin /* manual|policy|retranslate|cue_edit|revert */, class /* interactive|retranslate|auto */,
-     state /* queued|running|waiting|done|failed|cancelled|skipped (+held đến P9) */,
+     state /* queued|running|waiting|done|failed|cancelled|skipped (+held đến P10) */,
      wait_reason /* quota|provider|context|settle|rate */, not_before, lease_until, attempts,
      base_version FK NULL, source_sha256, snapshot_json /* model, tham số, hash style/glossary/rules/bundle */,
      params_json, error, created_at, updated_at)
@@ -560,11 +574,11 @@ versions /* mở rộng `translations` */(..., origin /* machine|edit|revert|ext
      -- chỉ mục duy nhất có điều kiện: tối đa một status = current mỗi (unit_id, target_lang)
 provider_health(key_id FK, model, state /* closed|open|half_open */, consecutive_failures, until, reason)
 
--- P7: cài đặt và khoá (ADR-13)
+-- P6: cài đặt và khoá (ADR-13)
 settings(key PK, value_json, updated_at)
 api_keys(id PK, provider, label, value, status /* ok|invalid|exhausted */, last_used_at, updated_at)
 
--- P6: nhật ký và đo lường (ADR-15)
+-- P5: nhật ký và đo lường (ADR-15)
 events(id PK, at, level, kind, job_id, unit_id, data_json)
 llm_calls(... + prompt_version, bundle_hash, style_hash, glossary_hash, batch, http_status,
           finish_reason, retries, repairs, cost_est)
@@ -573,7 +587,7 @@ quality_signals(id PK, at, kind /* cue_edit|revert|retranslate|validate|ab */, u
                 cue, before, after, meta_json)
 metrics_daily(day, name, labels_json, value)
 
--- P11: style và glossary (ADR-14)
+-- P12: style và glossary (ADR-14)
 style_profiles(id PK, scope /* global|preset|series|unit */, scope_id, doc_json, version, updated_at)
 character_cards(id PK, series_id FK, name, doc_json, version)
 glossaries(id PK, series_id FK, lang, doc_json, rules_hash, version, updated_at)
@@ -602,20 +616,20 @@ Trạng thái hiển thị (Missing, Requested, Translated, Edited, External, Re
 
 **Đã làm ở P3** (các điểm thiết kế để ngỏ): (1) thêm bảng `unit_outputs(unit, lang → output_path)`; `translations` vẫn khoá theo `output_path`, có thêm `unit_id`, `glossary_hash`, `context_complete`. (2) Trước P4, `stale` = `glossary_hash` lưu trong phiên bản khác hash của luật hiện hành (glossary YAML đã lọc theo tập + correction `term/address/note` đang bật); `cue_edit` không nằm trong hash. P4 sẽ thay bằng `context_hash` đầy đủ. (3) `term` trong glossary có `from`/`until` mức tập; `address_rules` giữ mức timecode. (4) `note` chỉ có scope `episode` (glossary không có mục ghi chú). (5) Unit nhận diện từ id Bazarr rồi tên file; `series_key` = `tvdb-<id>` › `bazarr-<id>` › slug tên. (6) `GET /api/units/{id}/context` làm ở P4, cùng `POST /api/units/{id}/context/extract` và `GET/PUT /api/series/{id}/memory` (xem docs/API.md). (7) `retranslate.correction_ids` giới hạn correction dùng cho lần dịch lại (mặc định: tất cả đang bật).
 
-**Đích (v0.10).** API thêm theo phase; endpoint của `hold` (`/api/queue/held`, `/api/queue/approve|reject|restore`, `/api/queue/rejected`) gỡ ở P9.
+**Đích (v0.10).** API thêm theo phase; endpoint của `hold` (`/api/queue/held`, `/api/queue/approve|reject|restore`, `/api/queue/rejected`) gỡ ở P10.
 
 | Method & path | Việc | Phase |
 |---|---|---|
-| `GET /api/events?job=&unit=&kind=` | Nhật ký quyết định | P6 |
-| `GET/PUT /api/settings` (đổi sang bảng `settings`) · `GET/PUT /api/keys` · `POST /api/keys/{id}/test` | Cài đặt, khoá (chỉ 4 ký tự cuối), Thử khoá | P7 |
-| `GET /api/jobs?state=&unit=` · `POST /api/jobs/{id}/cancel` · `…/priority` · `GET /api/jobs/{id}/spec` | Danh sách job, huỷ, đổi ưu tiên, xuất bundle | P8, P10 |
+| `GET /api/events?job=&unit=&kind=` | Nhật ký quyết định | P5 |
+| `GET/PUT /api/settings` (đổi sang bảng `settings`) · `GET/PUT /api/keys` · `POST /api/keys/{id}/test` | Cài đặt, khoá (chỉ 4 ký tự cuối), Thử khoá | P6 |
+| `GET /api/jobs?state=&unit=` · `POST /api/jobs/{id}/cancel` · `…/priority` · `GET /api/jobs/{id}/spec` | Danh sách job, huỷ, đổi ưu tiên, xuất bundle | P8, P11 |
 | `POST /api/units/{id}/versions/{v}/promote` · `DELETE /api/units/{id}/target?lang=` | Dùng candidate; xoá phụ đề đích (→ `removed`) | P8 |
-| `POST /api/catalog/sync` · `GET /api/catalog/status` | Đồng bộ ngay, tuổi cache và lỗi gần nhất | P9 |
-| `GET /api/library/series?status=&q=` (mở rộng) · `POST /api/jobs` (`{items, lang, mode, estimate_only?}`) | Duyệt mọi mục, yêu cầu hàng loạt kèm ước lượng | P9 |
-| `POST /api/units/{id}/ignore` · `DELETE /api/units/{id}/ignore` | Bỏ qua và khôi phục | P9 |
-| `POST /api/units/{id}/preview-style` · `GET/PUT /api/styles/{scope}/{id}` · `GET/PUT /api/series/{id}/characters` | Xem thử style, form style, thẻ nhân vật | P11 |
-| `GET/PUT /api/series/{id}/glossary?lang=` (JSON; `?format=yaml` nhập/xuất) | Glossary trong DB | P11 |
-| `GET /api/metrics` | Metrics vận hành và chất lượng | P12 |
+| `POST /api/catalog/sync` · `GET /api/catalog/status` | Đồng bộ ngay, tuổi cache và lỗi gần nhất | P10 |
+| `GET /api/library/series?status=&q=` (mở rộng) · `POST /api/jobs` (`{items, lang, mode, estimate_only?}`) | Duyệt mọi mục, yêu cầu hàng loạt kèm ước lượng | P10 |
+| `POST /api/units/{id}/ignore` · `DELETE /api/units/{id}/ignore` | Bỏ qua và khôi phục | P10 |
+| `POST /api/units/{id}/preview-style` · `GET/PUT /api/styles/{scope}/{id}` · `GET/PUT /api/series/{id}/characters` | Xem thử style, form style, thẻ nhân vật | P12 |
+| `GET/PUT /api/series/{id}/glossary?lang=` (JSON; `?format=yaml` nhập/xuất) | Glossary trong DB | P12 |
+| `GET /api/metrics` | Metrics vận hành và chất lượng | P15 |
 
 ---
 
@@ -624,13 +638,13 @@ Trạng thái hiển thị (Missing, Requested, Translated, Edited, External, Re
 - `.env`: đường dẫn, cổng, secrets (`GEMINI_API_KEY*`, `OPENAI_COMPAT_*`, `BAZARR_API_KEY`, `TMDB_API_KEY`, `CONSOLE_USER`, `CONSOLE_PASSWORD` — tài khoản khởi tạo, bị bỏ qua khi đã có tài khoản lưu; `CONSOLE_PASSWORD_RESET=1` để ghi đè tài khoản đã lưu; `CONSOLE_AUTH=off` để tắt xác thực).
 - `/data/config.yaml` (sửa qua console): providers, model theo task (`translate`, `extract`, `summarize`, `research`), giới hạn RPM/TPM/RPD, `settle_window`, `gap_wait`, `stale_policy` mặc định, budget context, ngôn ngữ nguồn/đích.
 
-**Đích (v0.10, ADR-13).** Hai bullet trên mô tả hiện tại. Từ P7: env/yml chỉ cho cấu hình **hệ thống** lúc khởi động (đường dẫn, cổng, `DATA_DIR`, đường dẫn DB, `CONSOLE_*` khởi tạo, `CONSOLE_AUTH`); mọi cài đặt khác nằm trong bảng `settings`, sửa trên console, hiệu lực ngay, và **ghi đè** env/yml; khoá API nằm trong `api_keys`, gieo từ env lần đầu (`GEMINI_API_KEY*`, `OPENAI_COMPAT_*`) rồi DB thắng. Cài đặt mới (ghi vào `docs/CONFIGURATION.md` khi cài đặt, không phải bây giờ): `catalog_sync_interval`, `catalog_shrink_guard`, `auto_request` (+ ghi đè theo series), `auto_request_daily_cap`, `max_crashes`, `breaker_threshold`, `max_calls_per_job`, `max_calls_per_day`, `edit_coalesce_minutes`, `log_level`, `log_prompt_bodies`, `log_body_max_bytes`, `log_max_mb`, `log_retention_days`, `events_retention_days`. `admission_mode`, `GST_MAX_PENDING` và `/queue/incoming` bỏ ở P9; `GST_ONLY_PATHS` giữ cho policy tự yêu cầu.
+**Đích (v0.10, ADR-13).** Hai bullet trên mô tả hiện tại. Từ P6: env/yml chỉ cho cấu hình **hệ thống** lúc khởi động (đường dẫn, cổng, `DATA_DIR`, đường dẫn DB, `CONSOLE_*` khởi tạo, `CONSOLE_AUTH`); mọi cài đặt khác nằm trong bảng `settings`, sửa trên console, hiệu lực ngay, và **ghi đè** env/yml; khoá API nằm trong `api_keys`, gieo từ env lần đầu (`GEMINI_API_KEY*`, `OPENAI_COMPAT_*`) rồi DB thắng. Cài đặt mới (ghi vào `docs/CONFIGURATION.md` khi cài đặt, không phải bây giờ): `catalog_sync_interval`, `catalog_shrink_guard`, `auto_request` (+ ghi đè theo series), `auto_request_daily_cap`, `max_crashes`, `breaker_threshold`, `max_calls_per_job`, `max_calls_per_day`, `edit_coalesce_minutes`, `log_level`, `log_prompt_bodies`, `log_body_max_bytes`, `log_max_mb`, `log_retention_days`, `events_retention_days`. `admission_mode`, `GST_MAX_PENDING` và `/queue/incoming` bỏ ở P10; `GST_ONLY_PATHS` giữ cho policy tự yêu cầu.
 
 ---
 
 ## 7. Lộ trình
 
-Đã chuyển sang [PLAN.md](../../PLAN.md) ở gốc repo: phase P0–P5 (và P0b), phạm vi từng phase dạng checklist, kết quả kiểm chứng, trạng thái, backlog sau v1. Mục này chỉ giữ để các liên kết cũ vẫn tìm được chỗ.
+Đã chuyển sang [PLAN.md](../../PLAN.md) ở gốc repo: phase P0–P16 (kể cả P0b, P0c, P0d), phạm vi từng phase dạng checklist, kết quả kiểm chứng, trạng thái, backlog sau v1. Mục này chỉ giữ để các liên kết cũ vẫn tìm được chỗ.
 
 ---
 
@@ -645,7 +659,7 @@ Trạng thái hiển thị (Missing, Requested, Translated, Edited, External, Re
 | Console ghi được mà không có auth | Xác thực bật mặc định từ P0b (NFR-5); tắt phải tường minh. Basic Auth và form đăng nhập đều gửi mật khẩu không mã hoá ⇒ khuyến nghị chỉ expose trong LAN / sau reverse proxy có TLS. Từ P0c: khoá sau 5 lần sai, cookie `HttpOnly`/`SameSite=Strict`, kiểm `Origin` cho thao tác ghi. |
 | Form đăng nhập là ngoại lệ duy nhất của middleware (CSRF, brute force, lộ tài nguyên) | Ngoại lệ chỉ gồm `GET /login`, tài nguyên tĩnh của trang đó và `POST /api/auth/login`; test bắt buộc: mọi đường dẫn khác không cookie → `401`/chuyển hướng (liệt kê đường dẫn từ router, không từ danh sách tay). |
 | Đồng bộ danh mục sai (Bazarr lỗi, trả rỗng hoặc thiếu) làm mục bị coi là "không còn thiếu" hoặc Removed oan | Cache có tuổi; chỉ áp lần đồng bộ đầy đủ và hợp lý (`catalog_shrink_guard`); lỗi giữ cache cũ và cảnh báo; tiêu chí 13b (ADR-10). |
-| Migration hàng đợi sang SQLite làm mất hoặc nhân đôi job | Importer một lần, idempotent theo job id, cây cũ chuyển sang `queue.migrated/` không xoá; cổng nhận file của script giữ đến P9; tiêu chí 13i (ADR-11). |
+| Migration hàng đợi sang SQLite làm mất hoặc nhân đôi job | Importer một lần, idempotent theo job id, cây cũ chuyển sang `queue.migrated/` không xoá; cổng nhận file của script giữ đến P10; tiêu chí 13i (ADR-11). |
 | Bế tắc hoặc đói trong scheduler (job chờ tiên quyết không bao giờ được yêu cầu; lớp thấp bị đẩy mãi) | `gap_wait` + nút yêu cầu tập tiên quyết (FR-15.11); aging và vòng tròn series (FR-15.7); lọc job theo tầng model nên không chặn đầu hàng (tiêu chí 14). |
 | Job chết giữa chừng hoặc sập giữa ghi file và ghi DB | Lease và heartbeat, `max_crashes`; trình tự publish có `publishing` và đối chiếu sha256 lúc khởi động (FR-15.9, FR-16.5, tiêu chí 14c, 15h). |
 | Ghi đè chỉnh sửa của admin khi job `replace` chạy lâu | Khoá lạc quan `base_version`; kết quả thành `candidate` (FR-16.3, tiêu chí 15d). |

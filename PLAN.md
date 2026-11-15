@@ -2,7 +2,6 @@
 
 > Lộ trình triển khai [docs/design/SPEC.md](docs/design/SPEC.md) (cái gì) theo [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) (như thế nào).
 > File này là **nguồn sự thật duy nhất** cho phase, phạm vi, trạng thái. Đổi yêu cầu → sửa SPEC/ARCHITECTURE; đổi thứ tự/tiến độ → sửa file này.
-> Cập nhật: 2026-11-15 (thiết kế lại luồng job, SPEC/ARCHITECTURE v0.10: thêm P6–P12, lên lịch lại P0d phần 3 và P5)
 
 Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa làm.
 "Tiêu chí N" = tiêu chí nghiệm thu SPEC §6.
@@ -14,27 +13,36 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P0** | Fork, uv workspace, CI xanh, chưa đổi hành vi | Test upstream vẫn pass | `[~]` CI + image xanh; còn kiểm tra Dependabot |
 | **P0b** | Basic Auth bắt buộc cho console + API (NFR-5) | Thiếu/sai credential → 401; thiếu env → 503; `CONSOLE_AUTH=off` → mở; mật khẩu không có trong log | `[x]` CI GitHub xanh (f9b8605) |
 | **P0c** | Form đăng nhập + đổi mật khẩu trong Settings cho tài khoản duy nhất; Basic Auth giữ cho script (NFR-5, tiêu chí 9) | Tiêu chí 9: chưa đăng nhập → chuyển tới form / `401`; đăng nhập, đăng xuất, đổi mật khẩu vô hiệu phiên cũ và mật khẩu env cũ; `CONSOLE_PASSWORD_RESET=1` ghi đè; sai 5 lần → khoá; không rò mật khẩu/cookie vào log, API | `[x]` |
-| **P0d** | **Ưu tiên cao.** Ba phần: (1) ranh giới và port cho core worker (ADR-8, SPEC mục 9): `Store` tách thành port hẹp trả kiểu có tên, tầng use case dùng chung cho HTTP/CLI, `JobQueue`/`MediaLibrary`/`Metadata`/`ProviderFactory` thành port; (2) chế độ `hold` và duyệt job (FR-12) xây trên phần 1; (3) dọn file tự sinh (FR-13) | Tiêu chí 10 (phần 1): test import không còn ngoại lệ; test hợp đồng mỗi port chạy trên adapter thật và fake; toàn bộ test cũ pass; `schema_version`, queue JSON, `gst_enqueue.sh`, HTTP API không đổi. Tiêu chí 11 (phần 2): hold/duyệt/từ chối/khôi phục đúng, `auto` y như cũ. Tiêu chí 12 (phần 3): dọn đúng nhóm, không đụng media/job chưa xong/`held`/phiên bản `current` | `[ ]` Đã ghi ADR-8, FR-12, FR-13 (SPEC v0.8). Phần 1 xong về code và docs (9 port, tầng use case, `KNOWN_VIOLATIONS` rỗng, ADR-8 chuyển sang ARCHITECTURE v0.9); CI GitHub xanh (bac2098); phần 2 (hold) xong về code, docs và đã thử trên Bazarr thật (2026-11-14); phần 3 (dọn file) chưa làm. Từ v0.10 phần 3 làm sau P8 vì nhóm file job biến thành dòng `jobs` (FR-13.7), nên P0d chỉ đóng sau P8; `hold` bị thay ở P9 (FR-15.4) |
+| **P0d** | Ranh giới và port cho core worker (ADR-8): `Store` tách thành port hẹp trả kiểu có tên, tầng use case dùng chung cho HTTP, `JobQueue`/`MediaLibrary`/`Metadata`/`ProviderFactory` thành port (phần 1); chế độ `hold` và duyệt job (FR-12, phần 2) | Tiêu chí 10: test import không còn ngoại lệ; test hợp đồng mỗi port chạy trên adapter thật và fake; toàn bộ test cũ pass; `schema_version`, queue JSON, `gst_enqueue.sh`, HTTP API không đổi. Tiêu chí 11: hold/duyệt/từ chối/khôi phục đúng, `auto` y như cũ | `[~]` Phần 1 xong, CI xanh (bac2098). Phần 2 xong về code, docs và đã thử trên Bazarr thật (2026-11-14); còn CI xanh cho phần 2. Việc dọn file (FR-13) thành P9 |
 | **P1** | `subcore`: srt, provider gemini + fake, translator (planner/prompt/validate/repair), glossary YAML, CLI | Tiêu chí 3, 4, 5 (qua CLI) | `[x]` CI xanh; thử Gemini thật 4 file; 50 file thật hoãn (xem dưới) |
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[~]` Code + test xong (xem dưới); còn bảng `jobs`/importer và chạy thật với Bazarr |
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong, CI xanh (e5babb1); còn thử giao diện trên trình duyệt thật |
 | **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[~]` Code + test xong (tiêu chí 1, 2 bằng fake provider); đã đo chất lượng trên 3 series, CI GitHub xanh (263c048); còn thử giao diện trên trình duyệt thật |
-| **P5** | Đề xuất + research grounding + Review inbox; provider `openai_compat` | FR-6, FR-7, FR-9.1, FR-11.1 | `[ ]` Từ v0.10 làm **sau P11** (Review inbox và `suggestions` dựa trên glossary trong DB và Library mới); riêng `openai_compat` làm độc lập được bất kỳ lúc nào |
-| **P6** | Nhật ký và đo lường (FR-19, NFR-11, ADR-15): `events`, `llm_calls` mở rộng, body prompt JSONL xoay vòng, mức log, `quality_signals`. Chưa đổi luồng job | Tiêu chí 17 a–g: mỗi quyết định có event kèm lý do; body xoay vòng đúng giới hạn và bật tắt được; khoá, mật khẩu, cookie không rò; lỗi ghi log không làm job fail | `[ ]` |
-| **P7** | Cài đặt và khoá API trong DB (FR-20, NFR-5, ADR-13): `settings`, `api_keys`, hiệu lực ngay, Thử khoá | Tiêu chí 19: đổi cài đặt và khoá không cần khởi động lại; khoá gieo từ env lần đầu; chỉ trả 4 ký tự cuối; backup không gồm khoá | `[ ]` |
+| **P5** | Nhật ký và đo lường (FR-19, NFR-11, ADR-15): `events`, `llm_calls` mở rộng, body prompt JSONL xoay vòng, mức log, `quality_signals`. Chưa đổi luồng job | Tiêu chí 17 a–g: mỗi quyết định có event kèm lý do; body xoay vòng đúng giới hạn và bật tắt được; khoá, mật khẩu, cookie không rò; lỗi ghi log không làm job fail | `[ ]` |
+| **P6** | Cài đặt và khoá API trong DB (FR-20, NFR-5, ADR-13): `settings`, `api_keys`, hiệu lực ngay, Thử khoá | Tiêu chí 19: đổi cài đặt và khoá không cần khởi động lại; khoá gieo từ env lần đầu; chỉ trả 4 ký tự cuối; backup không gồm khoá | `[ ]` |
+| **P7** | Provider thứ hai `openai_compat` (FR-9.1–9.3) | Tiêu chí 22: cùng fixture qua `fake` và `openai_compat` (server giả cục bộ) cho cùng kết quả validate; 401/429/5xx/đầu ra sai thành exception có kiểu; model chọn theo tác vụ; khoá lấy từ `api_keys`, không lộ | `[ ]` |
 | **P8** | Lõi job và phiên bản trong SQLite (FR-15, FR-16, FR-17, ADR-11, ADR-12): `jobs`, scheduler, lease, breaker, chờ thay vì fail, phiên bản có `candidate`/`removed`, importer từ queue file, bỏ port nội bộ | Tiêu chí 14 a–l và 15 a–i; test cũ chuyển sang SQLite `:memory:` vẫn pass; `gst_enqueue.sh` vẫn chạy được qua importer | `[ ]` |
-| **P9** | Bazarr kéo và Library/Missing (FR-14, FR-15.4–15.6, ADR-10): `catalog_items`, đồng bộ, nhãn dẫn xuất, yêu cầu hàng loạt có ước lượng, Ignored, policy tự yêu cầu; gỡ script, `held`/`rejected`, tab Held | Tiêu chí 13 a–i; chạy thật trên Bazarr thật (Malcolm): yêu cầu tay, rồi bật `auto_request` cho một series | `[ ]` |
-| **P10** | Bundle và CLI khai báo (FR-21, ADR-16): `subcore.bundle`, `gather`, `render-prompt`/`validate`/`compare`, xuất job spec | Tiêu chí 18: cùng bundle cho cùng prompt ở CLI và worker; `subcore` không import `gst_worker`/`sqlite3`; bundle không chứa khoá | `[ ]` |
-| **P11** | Style profile và glossary vào DB (FR-18, ADR-14): form style, thẻ nhân vật, preset thể loại, few-shot từ cue đã sửa, xem thử, `variant` + A/B | Tiêu chí 16 a–g | `[ ]` |
-| **P12** | Insights và vòng phản hồi (FR-19.5–19.6): metrics, trang Insights, đề xuất rule từ cue đã sửa, bộ golden + `compare` | Tiêu chí 20 a–d và 17h | `[ ]` |
+| **P9** | Dọn file (FR-13): dòng `jobs` đã xong, bản sao phiên bản, lịch sử glossary, file tạm; `retention_*`, xem trước và **Dọn ngay** | Tiêu chí 12 a–f: dọn đúng nhóm, không đụng media, job chưa xong, phiên bản `current` | `[ ]` |
+| **P10** | Bazarr kéo và Library/Missing (FR-14, FR-15.4–15.6, ADR-10): `catalog_items`, đồng bộ, nhãn dẫn xuất, yêu cầu hàng loạt có ước lượng, Ignored, policy tự yêu cầu; gỡ script, `held`/`rejected`, tab Held | Tiêu chí 13 a–i; chạy thật trên Bazarr thật (Malcolm): yêu cầu tay, rồi bật `auto_request` cho một series | `[ ]` |
+| **P11** | Bundle và CLI khai báo (FR-21, ADR-16): `subcore.bundle`, `gather`, `render-prompt`/`validate`/`compare`, xuất job spec | Tiêu chí 18: cùng bundle cho cùng prompt ở CLI và worker; `subcore` không import `gst_worker`/`sqlite3`; bundle không chứa khoá | `[ ]` |
+| **P12** | Style profile và glossary vào DB (FR-18, ADR-14): form style, thẻ nhân vật, preset thể loại, few-shot từ cue đã sửa, xem thử, `variant` + A/B | Tiêu chí 16 a–g | `[ ]` |
+| **P13** | `suggestions` + Review inbox lõi (FR-4.4, FR-11.1, FR-11.1.5) | Tiêu chí 21 c–h: chấp nhận/sửa/từ chối/hàng loạt ghi vào glossary trong DB, hiện số bản dịch stale, từ chối không bị sinh lại, `auto_accept` theo loại, badge nav; mọi `source` qua cùng use case | `[ ]` |
+| **P14** | Bộ sinh đề xuất từ facts và thẻ nhân vật (FR-6, FR-18.3) | Tiêu chí 21 a–b: đề xuất `address_rule` và `term` `pending` kèm bằng chứng cue và timecode, chưa áp dụng vào bản dịch nào | `[ ]` |
+| **P15** | Insights và vòng phản hồi (FR-19.5–19.6): metrics, trang Insights, đề xuất rule từ cue đã sửa, bộ golden + `compare` | Tiêu chí 20 a–d và 17h | `[ ]` |
+| **P16** | Research grounding (FR-7), làm cuối cùng nhưng vẫn bắt buộc của v1 (FR-7.4) | Tiêu chí 23: một lần mỗi series, URL từ grounding metadata, kết quả vào `suggestions`, `term` ≥ 2 nguồn tự áp dụng khi bật, provider không có `web_search` thì bỏ qua, có ngân sách lời gọi | `[ ]` |
 
-**Vì sao thứ tự này:** P1 dùng được ngay bằng CLI trước khi động vào worker — cách nhanh nhất để đánh giá chất lượng dịch với glossary thật. P3 đứng trước memory vì correction + dịch lại là "lưới an toàn" chất lượng cần có trước khi tự động hoá thêm. P0b đứng đầu vì console hiện tại đã ghi được (settings, backup/restore, retry) và SPEC chốt Basic Auth "ngay từ đầu". P0d (đánh số theo nhóm hạ tầng P0x, nhưng làm **sau** P4 và **trước** P5): P5 thêm bảng `suggestions` và provider mới, nếu chưa có port thì chúng nằm tiếp vào `Store` hơn 30 method; mọi tính năng mới sau đó cũng cần đi qua tầng use case để có cả HTTP lẫn CLI. P0d không chặn việc "Chạy thật với Bazarr" của P2 (hai việc độc lập; chạy thật vẫn phải có `GST_ONLY_PATHS`/`GST_MAX_PENDING`). Chế độ `hold` (FR-12) nằm cùng P0d nhưng làm **sau** phần ranh giới: "duyệt job" là một use case phục vụ cả console lẫn CLI và chạm vòng đời hàng đợi, nên cần tầng use case và port `JobQueue` có trước. Khi `hold` xong, cách nối Bazarr an toàn nhất là `hold` kèm `GST_ONLY_PATHS`; hai rào cũ vẫn giữ.
+**Thứ tự làm là thứ tự số.** Mỗi phase chỉ cần các phase đứng trước nó:
 
-**Thứ tự P6–P12 (thêm ở v0.10):** P6 trước hết vì dữ liệu log không backfill được: mọi lần dịch từ đó về sau là dữ liệu để cải tiến, và nó không đổi luồng job nên rủi ro thấp. P7 sau, nhỏ và độc lập, mở đường cho luồng đổi khoá (FR-17.5). P8 là phần lớn nhất: job và phiên bản vào SQLite, cần P6 (ghi event ngay từ đầu) và P7 (settings/khoá trong DB); có thể tách P8a (jobs, scheduler, breaker) và P8b (phiên bản) khi vào làm. P9 cần P8 (có `jobs` và `versions` để Library dẫn xuất nhãn) và là lúc gỡ script Bazarr và `hold`. P10 (bundle) đứng trước P11 vì style, xem thử và variant đều chạy trên bundle. P11 cần P10; P12 cần dữ liệu đã tích luỹ từ P6 và A/B của P11. P0d phần 3 (dọn file) lên lịch lại sau P8; P5 sau P11. Triển khai lên homeserver vẫn là bước riêng khi bạn yêu cầu (AGENTS.md).
+- **P0b → P0c** trước P1 vì console đã ghi được (settings, backup, retry) và SPEC chốt xác thực "ngay từ đầu". **P1** (CLI) cho đánh giá chất lượng dịch với glossary thật trước khi động vào worker; **P3** (correction, dịch lại) là lưới an toàn chất lượng cần có trước khi tự động hoá thêm (P4). **P0d** (port, `hold`) đứng trước mọi tính năng mới để chúng đi qua tầng use case thay vì mọc thêm trên `Store`.
+- **P5** (nhật ký, đo lường) trước hết vì dữ liệu log không backfill được: mọi lần dịch từ đó về sau là dữ liệu để cải tiến, và phase này không đổi luồng job. **P6** (cài đặt và khoá trong DB) nhỏ, độc lập, mở đường cho luồng đổi khoá (FR-17.5). **P7** (`openai_compat`) dùng khoá theo provider và lỗi có kiểu của P6, và cho breaker ở P8 một provider thứ hai để thử.
+- **P8** (job và phiên bản vào SQLite) là phần lớn nhất, cần ghi event ngay từ đầu (P5) và settings, khoá trong DB (P6); có thể tách P8a (jobs, scheduler, breaker) và P8b (phiên bản) khi vào làm. **P9** (dọn file) làm ngay sau vì nhóm file job đã thành dòng `jobs`.
+- **P10** (Bazarr kéo, Library/Missing) cần `jobs` và `versions` của P8 để dẫn xuất nhãn, và là lúc gỡ script Bazarr và `hold`. **P11** (bundle) đứng trước **P12** (style, xem thử, variant) vì mọi thứ đó chạy trên bundle.
+- **P13** (`suggestions` + Review inbox) cần glossary và thẻ nhân vật trong DB (P12) để "chấp nhận" ghi vào đó. **P14** (đề xuất từ facts) là nguồn đầu tiên của inbox. **P15** (Insights, vòng phản hồi) cắm cue sửa lặp lại vào cùng inbox và cần số liệu tích luỹ từ P5 và A/B của P12. **P16** (research) làm cuối vì không phase nào phụ thuộc nó và nó tốn quota có tìm kiếm, nhưng vẫn bắt buộc của v1 (FR-7.4).
+
+Triển khai lên homeserver là bước riêng khi bạn yêu cầu (AGENTS.md).
 
 **Mỗi phase xong khi:** test của tiêu chí nghiệm thu pass bằng fake provider (không gọi mạng), CI xanh trên GitHub, docs liên quan đã cập nhật (`docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md`, `AGENTS.md`), có mục `CHANGELOG.md`, và trạng thái ở file này được đánh dấu. Quy trình chi tiết: skill `implement-phase`.
 
----
 
 ## P0 — uv workspace `[~]`
 
@@ -77,9 +85,9 @@ SPEC NFR-5, quyết định #8, tiêu chí 9; ARCHITECTURE ADR-7 "Xác thực", 
 - [x] Docs khi làm xong: `docs/API.md`, `docs/CONFIGURATION.md` (`CONSOLE_PASSWORD_RESET`, đổi mật khẩu), `AGENTS.md` (invariant xác thực không còn "chỉ từ env"), `README.md`, `.env.example`, `docker-compose.yml`, `CHANGELOG.md`.
 - [x] Workflow **CI** trên GitHub xanh cho commit P0c (f3c914c; image build xanh, thử bằng curl trên container local: đăng nhập, đổi mật khẩu, phiên sống qua restart, reset, khoá). Đã deploy thử trên homeserver (sha-f3c914c) và đăng nhập bằng form thành công; container đã dừng sau khi thử (2026-11-14).
 
-## P0d — Ranh giới và port cho core worker; hold và duyệt job; dọn file `[ ]`
+## P0d — Ranh giới và port cho core worker; hold và duyệt job `[~]`
 
-SPEC mục 9 (ADR-8), NFR-10, tiêu chí 10, quyết định #9; FR-12, tiêu chí 11, quyết định #10; FR-13, tiêu chí 12, quyết định #11. **Ưu tiên cao:** làm trước P5. Ba phần: phần 1 không đổi hành vi và làm trước; phần 2 (hold) và phần 3 (dọn file) thêm tính năng, độc lập nhau, đều sau mốc CI xanh của phần 1. Mỗi bước một commit, CI xanh sau từng bước. Danh sách port là dự kiến (SPEC mục 9), kiểm lại số chỗ gọi khi làm từng port.
+SPEC mục 9 (ADR-8), NFR-10, tiêu chí 10, quyết định #9; FR-12, tiêu chí 11, quyết định #10. **Ưu tiên cao:** làm trước P5. Hai phần: phần 1 không đổi hành vi và làm trước; phần 2 (hold) thêm tính năng, sau mốc CI xanh của phần 1. Việc dọn file (FR-13) là P9. Mỗi bước một commit, CI xanh sau từng bước. Danh sách port là dự kiến (SPEC mục 9), kiểm lại số chỗ gọi khi làm từng port.
 
 ### Phần 1 — Ranh giới và port (hành vi không đổi)
 
@@ -107,24 +115,9 @@ Chỉ bắt đầu sau mốc CI xanh của phần 1.
 - [x] Test tiêu chí 11 (a–j; `apps/worker/tests/test_admission_hold.py` + hợp đồng port trong `test_job_queue_contract.py`) bằng fake provider, gồm kiểm `auto` y như cũ với bản `gst_enqueue.sh` cũ.
 - [x] Docs: `docs/CONFIGURATION.md` (`admission_mode`), `docs/API.md`, `docs/BAZARR.md` (mục "Manual Wanted Workflow"), `CONTEXT.md` (Held job, vòng đời), `AGENTS.md` (held không gọi model; duyệt không bỏ qua kiểm tra thiếu ngôn ngữ), `CHANGELOG.md`; chuyển phần thiết kế FR-12 vào ARCHITECTURE.
 - [x] Thử trên Bazarr thật: `hold` + `GST_ONLY_PATHS` một series, xem job `held` xuất hiện, duyệt một job và đọc bản dịch. Xong 2026-11-14 (Malcolm in the Middle S07E01, en → vi, 518 cue, `gemini-3.1-flash-lite`): script chạy trong container Bazarr, job vào `held`, duyệt, bản dịch đọc tốt và Bazarr nhận ra phụ đề `vi`. Lần thử lộ hai lỗi, đã sửa (a3c4164): file đầu ra bị chmod 0600 và lỗi timeout khi báo Bazarr quét lại làm hỏng job đã dịch xong. Duyệt trong lần thử này đi bằng hàm `approve_jobs`, chưa bấm nút trong console.
-- **Bỏ (v0.10, FR-21.5, quyết định #21):** CLI cho worker không làm nữa. Console và HTTP API là giao diện duy nhất của worker; CLI của `subcore` chạy khai báo trên bundle (P10).
+- **Không làm** (FR-21.5, quyết định #21): CLI cho worker. Console và HTTP API là giao diện duy nhất của worker; CLI của `subcore` chạy khai báo trên bundle (P11).
 - [ ] Workflow **CI** trên GitHub xanh cho commit P0d phần 2.
 
-### Phần 3 — Dọn file (FR-13)
-
-**Lên lịch lại (v0.10): làm sau P8.** Nhóm "file job `done/`, `failed/`" không còn tồn tại ở dạng file khi hàng đợi vào SQLite, nên nó thành dọn dòng `jobs` (FR-13.7) và đi cùng P8; các nhóm còn lại (bản sao phiên bản, lịch sử glossary thay cho `backups/glossary/`, file tạm) không đổi. Danh sách dưới đây giữ nguyên làm phạm vi; khi vào làm, đổi các mục nhắm vào `done/`/`failed/` và port `JobQueue` thành nhắm vào bảng `jobs`.
-
-Chỉ bắt đầu sau mốc CI xanh của phần 1; độc lập với phần 2. Riêng quy tắc "không dọn `held` và dấu từ chối" chỉ kiểm được khi phần 2 xong (trước đó các trạng thái này chưa tồn tại).
-
-- [ ] Use case dọn file với `dry_run`: quét `done/`, `failed/` (kèm `.error`), `backups/subtitles/`, `backups/glossary/`, file tạm mồ côi trong queue và `DATA_DIR`; trả số file và dung lượng theo nhóm (FR-13.1, 13.4).
-- [ ] Phiên bản bản dịch: đánh dấu `pruned` trong lịch sử khi xoá bản sao; giữ `current`, phiên bản đầu và N mới nhất; Hoàn tác về phiên bản `pruned` bị từ chối với lý do; tab Lịch sử hiện trạng thái `pruned` (FR-13.3).
-- [ ] Ranh giới an toàn: không đụng thư mục media (file tạm mồ côi cạnh media chỉ được liệt kê), job `pending`/`processing`/`deferred`/`held`, dấu từ chối, facts/summary/snapshot, SQLite (FR-13.2). Đi qua port `JobQueue` và `VersionRepo` của phần 1, không đụng file trực tiếp từ use case.
-- [ ] Cài đặt `retention_done_days`, `retention_failed_days`, `retention_versions_keep`, `retention_glossary_keep` (`0` tắt nhóm); chạy mỗi ngày cùng bảo trì backup (`BackupMaintenance`) và nút **Dọn ngay** trong Settings có xem trước rồi xác nhận (FR-13.4); log tóm tắt, không log nội dung (FR-13.5).
-- [ ] `model_layers` ghi rõ cửa sổ thống kê theo `retention_*` trên API và console (FR-13.6). **Lưu ý:** việc "đánh giá tầng thứ hai có đáng giữ không" ở P2 đọc `model_layers`, nên làm xong đánh giá đó (hoặc ghi lại số liệu) trước khi bật dọn `done/` với cửa sổ ngắn.
-- [ ] HTTP API (`dry_run`) + `docs/API.md`.
-- [ ] Test tiêu chí 12 (a–f), gồm cây thư mục media giả có phụ đề và `.tmp` mồ côi để chắc không file nào bị đụng.
-- [ ] Docs: `docs/CONFIGURATION.md` (`retention_*`), `docs/API.md`, `CONTEXT.md` nếu có thuật ngữ mới, `AGENTS.md` (dọn file không bao giờ đụng media), `CHANGELOG.md`; chuyển phần thiết kế FR-13 vào ARCHITECTURE.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P0d phần 3 (chỉ đánh dấu `[x]` cho cả phase P0d sau bước này, khi cả ba phần xong).
 
 ## P1 — Engine `subcore` + CLI `[x]`
 
@@ -147,7 +140,7 @@ Tiêu chí 3, 4, 5. ADR-1, ADR-3; ARCHITECTURE §3.3.
 Tiêu chí 6, 8. ADR-4, ADR-5; ARCHITECTURE §4, NFR-1/2/3/7.
 
 - [x] Store SQLite `app.db` (`DATA_DIR`, mặc định `STATE_DIR`; migration theo `user_version`): bảng `translations` (version, bản sao, sha256, trigger, `context_hash`) và `llm_calls` (`gst_worker/store.py`). `translations` khoá theo `output_path` cho đến khi có `units` (P3/P4).
-- [ ] Bảng `jobs` + importer `/queue/incoming/*.json` → `jobs`. **Làm ở P8 (v0.10, ADR-11).** Hoãn trước đó có chủ ý: hàng đợi vẫn là cây thư mục JSON (`pending/processing/...`) mà `gst_enqueue.sh`, `JobQueue`, console và ~40 test đang dùng; chuyển sang SQLite đụng cả script Bazarr lẫn console nên làm riêng. `units` đã có từ P3 nhưng hàng đợi vẫn là cây thư mục JSON (job dịch lại là một file trong `pending/` có `priority`); bảng `jobs` vẫn hoãn: scheduler P4 chạy prerequisite inline và gap là trạng thái `deferred` của hàng đợi thư mục, nên chưa cần.
+- [ ] Bảng `jobs` + importer `/queue/incoming/*.json` → `jobs`. **Làm ở P8 (ADR-11).** Hàng đợi hiện vẫn là cây thư mục JSON (`pending/processing/...`) mà `gst_enqueue.sh`, `JobQueue`, console và ~40 test đang dùng; job dịch lại là một file trong `pending/` có `priority`, gap là trạng thái `deferred`.
 - [x] Worker gọi `subcore` trong process thay cho subprocess `gst`; lỗi nhà cung cấp là exception có kiểu (`QuotaExhausted` → `DailyQuotaExceededError`, `RateLimited`/`Unavailable` → `ProviderUnavailableError`), không còn phân loại bằng chuỗi stdout (`translation_attempt.py`). Mất: resume từ `.partial`/`.progress` (một lần dịch lỗi chạy lại từ đầu).
 - [x] Rate limiter RPM/TPM/RPD theo API key + backoff có jitter, tôn trọng `retry-after` (`subcore.providers.limiter`); hết quota ngày → queue pause như cũ (NFR-1). Nhiều key: chuyển key khi hết quota (FR-9.4). Giới hạn qua `LLM_RPM/TPM/RPD`.
 - [x] Timeout 300 s mỗi lời gọi (đã có ở adapter Gemini), watchdog 30 phút mỗi job (`JOB_TIMEOUT_SECONDS`, kiểm tra trước mỗi lời gọi); idempotent theo sha256 nguồn + `context_hash` (model, temperature, prompt version, mô tả TMDB) — chạy lại không gọi LLM (NFR-2, NFR-3).
@@ -178,8 +171,6 @@ Tiêu chí 7. FR-10, FR-11.2, FR-11.3; ADR-7; API §5.
 - [ ] Thử giao diện trên trình duyệt thật (desktop + điện thoại): chưa làm được trong phiên này, chỉ có kiểm cú pháp JS, cấu trúc HTML và test HTTP.
 - [x] Workflow **CI** trên GitHub xanh cho commit P3 (e5babb1: "Python 3.14" và "Build and publish image" đều thành công). Đã chạy image đó trên homeserver bằng container `--rm` (tmpfs, fake provider): auth, Library, cue edit, diff, stale theo term `forward`, glossary validate/dry-run/lưu, hoàn tác, xếp hàng dịch lại. Dịch lại chưa chạy tới cùng (không có key Gemini, cửa sổ settle 600 s).
 
----
-
 ## P4 — Story memory `[~]`
 
 Tiêu chí 1, 2. FR-5; ADR-6; ARCHITECTURE §3.1, §3.2, §3.4 (các điểm lệch có chủ ý ghi ở "Đã làm ở P4" trong `docs/design/ARCHITECTURE.md` §3.4).
@@ -195,33 +186,25 @@ Tiêu chí 1, 2. FR-5; ADR-6; ARCHITECTURE §3.1, §3.2, §3.4 (các điểm l�
 - [x] Thử giao diện (tab Context, Settings, Library, Glossary) trên trình duyệt thật, desktop và điện thoại (2026-11-13/14, container `--rm` trên homeserver với dữ liệu giả và fake provider). Tìm ra và sửa: chữ "null" trong breadcrumb (lỗi từ P3), section Context hiện `[object HTMLDetailsElement]`, lỗi kết nối Bazarr hiện nguyên `<urlopen error …>` (nay là một câu rõ ràng); thêm log lý do từ chối đăng nhập (không chứa mật khẩu). Lưu ý: bản thử gắn code đã vá lên image `072c10a`, nên image GitHub vẫn chứa các lỗi này cho đến khi push và build lại.
 - [x] Workflow **CI** trên GitHub xanh cho P4: 072c10a đỏ vì test `test_continuous_429_stays_within_configured_rpm` (làm tròn số thực ~1e-13 s ở mép cửa sổ 60 s, không phải lỗi của limiter hay P4; đã sửa test, kiểm trên 3000 seed), 263c048 xanh. "Docker image" xanh cho 072c10a.
 
-## P5 — Đề xuất, research, Review inbox, provider thứ hai `[ ]`
-
-FR-6, FR-7, FR-9.1, FR-11.1.
-
-- [ ] Đề xuất `address_rules` và `terms` → bảng `suggestions` (`pending`), auto-accept theo FR-4.4.
-- [ ] Research grounding một lần mỗi series; URL nguồn lấy từ grounding metadata.
-- [ ] **Review inbox**: nhóm theo series, badge trên nav, chấp nhận/sửa/từ chối, chấp nhận hàng loạt, bằng chứng + số bản dịch sẽ stale.
-- [ ] Provider `openai_compat` (OpenRouter, Ollama, LM Studio…); model theo tác vụ (FR-9.3); nhiều API key (FR-9.4).
 
 ---
 
-## P6 — Nhật ký và đo lường `[ ]`
+## P5 — Nhật ký và đo lường `[ ]`
 
-FR-19, NFR-11; ADR-15; tiêu chí 17 a–g. Làm đầu tiên trong nhóm thiết kế lại vì dữ liệu không backfill được; không đổi luồng job. Câu hỏi mở 4 (giá trị mặc định) chốt ở đây khi có số liệu.
+FR-19, NFR-11; ADR-15; tiêu chí 17 a–g. Làm đầu tiên vì dữ liệu không backfill được; không đổi luồng job. Câu hỏi mở 4 (giá trị mặc định) chốt ở đây khi có số liệu.
 
-- [ ] Migration: bảng `events`, `llm_bodies`, `quality_signals`; mở rộng `llm_calls` (prompt version, hash bundle/style/glossary, batch, mã HTTP, finish reason, retries, repairs, chi phí ước tính). Hash bundle/style chưa có thì để trống cho tới P10, P11.
+- [ ] Migration: bảng `events`, `llm_bodies`, `quality_signals`; mở rộng `llm_calls` (prompt version, hash bundle/style/glossary, batch, mã HTTP, finish reason, retries, repairs, chi phí ước tính). Hash bundle/style chưa có thì để trống cho tới P11, P12.
 - [ ] Sink telemetry có giới hạn, một thread ghi, bỏ bản ghi và đếm khi đầy hoặc lỗi; không nằm trong transaction của job (NFR-11).
 - [ ] Bộ lọc che bí mật dùng chung cho log, event, body, báo cáo lỗi (khoá API, mật khẩu, cookie, header).
 - [ ] Body prompt/response → JSONL theo ngày, nén khi xoay; `log_prompt_bodies`, `log_body_max_bytes`, `log_max_mb`, `log_retention_days`; dọn đúng giới hạn và chỉ mục còn nhất quán.
-- [ ] `log_level` đổi nóng qua Settings (tạm thời `config.json` cho đến P7); event ghi dạng JSON một dòng.
+- [ ] `log_level` đổi nóng qua Settings (tạm thời `config.json` cho đến P6); event ghi dạng JSON một dòng.
 - [ ] Ghi event tại các quyết định có trong code hiện tại: bỏ qua (kèm lý do), claim, chọn model, leo thang, hoãn, publish, version.
 - [ ] Ghi `quality_signals` cho sửa cue, hoàn tác, dịch lại và lỗi validate.
-- [ ] `GET /api/events` (đọc đơn giản); chưa có trang Insights (P12).
+- [ ] `GET /api/events` (đọc đơn giản); chưa có trang Insights (P15).
 - [ ] Test tiêu chí 17 a–g bằng fake provider; docs: `docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md`, `CHANGELOG.md`.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P6.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P5.
 
-## P7 — Cài đặt và khoá API trong DB `[ ]`
+## P6 — Cài đặt và khoá API trong DB `[ ]`
 
 FR-20, NFR-5 (sửa); ADR-13; tiêu chí 19.
 
@@ -231,27 +214,51 @@ FR-20, NFR-5 (sửa); ADR-13; tiêu chí 19.
 - [ ] `AuthError` và `ModelNotFound` thành lỗi có kiểu trong `subcore.providers`; hiện cảnh báo khoá không hợp lệ. Việc chuyển job sang `waiting` thuộc P8 (hành vi hàng đợi cũ giữ đến lúc đó).
 - [ ] Backup (`backups.py`) mặc định loại `api_keys` và `auth`; restore không đè `auth`.
 - [ ] Test tiêu chí 19 a–c, e, f (d cần P8); docs: `docs/CONFIGURATION.md`, `docs/API.md`, `AGENTS.md` (invariant khoá), `.env.example`, `CHANGELOG.md`.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P7.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P6.
+
+## P7 — Provider `openai_compat` `[ ]`
+
+FR-9.1–9.3; ARCHITECTURE ADR-3; tiêu chí 22. Làm ngay sau P6, trước P8.
+
+- [ ] Kiểm code hiện tại đã chọn model theo tác vụ chưa (`translation_attempt.py` đã tách model cho `extract`); bổ sung tác vụ `summarize`, `research` còn thiếu trong cài đặt (FR-9.3).
+- [ ] `subcore.providers.openai_compat`: chat completions với `base_url` cấu hình được; structured output khi có, nếu không thì JSON mode + `json-repair` + validate chặt hơn; khai báo `Capabilities` (FR-9.2); ánh xạ lỗi sang `AuthError`, `RateLimited`/`QuotaExhausted`, `Unavailable`, `BadOutput`.
+- [ ] `ProviderFactory` chọn adapter theo `provider` của khoá trong `api_keys` (P6); khoá và `base_url` đổi nóng, không rò vào log (tiêu chí 22e).
+- [ ] Test hợp đồng provider chạy trên `fake` và `openai_compat` với server giả `http.server` cục bộ, không gọi mạng ngoài (tiêu chí 22a–d).
+- [ ] Thử tay một provider thật (Ollama hoặc OpenRouter) và ghi kết quả vào phase này; không bắt buộc cho CI.
+- [ ] Docs: `docs/CONFIGURATION.md`, `docs/API.md`, `docs/design/ARCHITECTURE.md` §3 (năng lực suy giảm), `CHANGELOG.md`. Workflow **CI** trên GitHub xanh cho commit P7.
 
 ## P8 — Lõi job và phiên bản trong SQLite `[ ]`
 
 FR-15, FR-16, FR-17, FR-13.7; ADR-11, ADR-12; NFR-10 (sửa); tiêu chí 14, 15. Có thể tách P8a (job, scheduler, breaker) và P8b (phiên bản) khi vào làm; thứ tự dưới đây đã theo hướng đó.
 
 - [ ] **Sửa sớm:** hết quota ngày không còn đánh `failed` job đang chờ (`_fail_waiting_quota_jobs`; trái NFR-1, FR-15.8); sửa `CONTEXT.md` cùng lúc.
-- [ ] Bảng `jobs`, `provider_health`; ràng buộc một job mở mỗi (unit, ngôn ngữ, loại); trạng thái `waiting` + `wait_reason`; `held` tạm cho job do script tạo (bỏ ở P9).
+- [ ] Bảng `jobs`, `provider_health`; ràng buộc một job mở mỗi (unit, ngôn ngữ, loại); trạng thái `waiting` + `wait_reason`; `held` tạm cho job do script tạo (bỏ ở P10).
 - [ ] Scheduler: claim nguyên tử (`BEGIN IMMEDIATE`, `UPDATE … RETURNING`), lớp ưu tiên, vòng tròn series, aging, lọc theo tầng model; WAL, `busy_timeout`, transaction ngắn cho các thread HTTP.
 - [ ] Lease và heartbeat; recovery tường minh lúc khởi động; `max_crashes`; ảnh chụp cài đặt lúc claim; huỷ hợp tác.
 - [ ] Breaker (`queue_policy.py`), nghỉ tăng dần, nửa mở, mốc reset quota thật (kiểm chứng câu hỏi mở 1 trước khi cài), `AuthError`/`Blocked` có kiểu, `max_calls_per_job`/`max_calls_per_day`.
 - [ ] Gap: "Waiting · thiếu facts" kèm nút yêu cầu tập tiên quyết (FR-15.11).
 - [ ] Phiên bản: `origin`, `status` (`candidate`, `removed`), `parent`, chỉ mục duy nhất `current`, khoá lạc quan `base_version`, trình tự publish có `publishing` và đối chiếu sha256 lúc khởi động, gộp phiên sửa cue, "Dùng bản này", xoá phụ đề đích → `removed`.
 - [ ] `refresh` Bazarr chạy nền, thử lại được, không đổi kết quả job.
-- [ ] Importer một lần từ cây thư mục queue và `translations`, idempotent theo job id; cây cũ sang `queue.migrated/`; cổng nhận file của `gst_enqueue.sh` (importer định kỳ) giữ đến P9.
+- [ ] Importer một lần từ cây thư mục queue và `translations`, idempotent theo job id; cây cũ sang `queue.migrated/`; cổng nhận file của `gst_enqueue.sh` (importer định kỳ) giữ đến P10.
 - [ ] ADR-12: gỡ `JobQueue`, `queue.py` và các port nội bộ khi chạm vào; test hợp đồng đổi thành test trên SQLite `:memory:`; sửa `tests/test_core_boundary.py` và tiêu chí 10; cập nhật phần "Seams" của `AGENTS.md`.
-- [ ] Làm **P0d phần 3** (dọn file) ngay sau bước này, với nhóm file job thành dọn dòng `jobs` (FR-13.7); đánh dấu `[x]` cho P0d khi xong.
 - [ ] Test tiêu chí 14 a–l và 15 a–i; docs: `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md` (Job, Waiting, Candidate, Lease, Breaker), `CHANGELOG.md`.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P8.
 
-## P9 — Bazarr kéo, Library/Missing, policy `[ ]`
+## P9 — Dọn file (FR-13) `[ ]`
+
+FR-13, tiêu chí 12, quyết định #11. Làm ngay sau P8: nhóm "file job `done/`, `failed/`" đã thành dòng `jobs` (FR-13.7), nên dọn file nhắm vào bảng `jobs` chứ không còn nhắm vào thư mục queue.
+
+- [ ] Use case dọn file với `dry_run`: quét dòng `jobs` `done`/`failed` quá hạn, `backups/subtitles/`, `backups/glossary/`, file tạm mồ côi trong `DATA_DIR`; trả số lượng và dung lượng theo nhóm (FR-13.1, 13.4).
+- [ ] Phiên bản bản dịch: đánh dấu `pruned` trong lịch sử khi xoá bản sao; giữ `current`, phiên bản đầu và N mới nhất; Hoàn tác về phiên bản `pruned` bị từ chối với lý do; tab Lịch sử hiện trạng thái `pruned` (FR-13.3).
+- [ ] Ranh giới an toàn: không đụng thư mục media (file tạm mồ côi cạnh media chỉ được liệt kê), job chưa kết thúc (kể cả `held`), dấu từ chối, facts/summary/snapshot, SQLite (FR-13.2). Đi qua kho `jobs` và `versions` của P8, không đụng file trực tiếp từ use case.
+- [ ] Cài đặt `retention_done_days`, `retention_failed_days`, `retention_versions_keep`, `retention_glossary_keep` (`0` tắt nhóm); chạy mỗi ngày cùng bảo trì backup (`BackupMaintenance`) và nút **Dọn ngay** trong Settings có xem trước rồi xác nhận (FR-13.4); log tóm tắt, không log nội dung (FR-13.5).
+- [ ] `model_layers` ghi rõ cửa sổ thống kê theo `retention_*` trên API và console (FR-13.6). **Lưu ý:** việc "đánh giá tầng thứ hai có đáng giữ không" ở P2 đọc `model_layers`, nên làm xong đánh giá đó (hoặc ghi lại số liệu) trước khi bật dọn `done` với cửa sổ ngắn.
+- [ ] HTTP API (`dry_run`) + `docs/API.md`.
+- [ ] Test tiêu chí 12 (a–f), gồm cây thư mục media giả có phụ đề và `.tmp` mồ côi để chắc không file nào bị đụng.
+- [ ] Docs: `docs/CONFIGURATION.md` (`retention_*`), `docs/API.md`, `CONTEXT.md` nếu có thuật ngữ mới, `AGENTS.md` (dọn file không bao giờ đụng media), `CHANGELOG.md`; chuyển phần thiết kế FR-13 vào ARCHITECTURE.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P9.
+
+## P10 — Bazarr kéo, Library/Missing, policy `[ ]`
 
 FR-14, FR-15.4–15.6, FR-15.12; ADR-10; tiêu chí 13.
 
@@ -263,9 +270,9 @@ FR-14, FR-15.4–15.6, FR-15.12; ADR-10; tiêu chí 13.
 - [ ] Gỡ: `gst_enqueue.sh`, `held/`, `rejected/`, `admission_mode`, `GST_MAX_PENDING`, tab Held, `/api/queue/held|rejected|approve|reject|restore`; `docs/BAZARR.md` hướng dẫn gỡ post-processing; compose bỏ volume postprocess. Cập nhật `AGENTS.md` (invariant admission, Bazarr script).
 - [ ] Thử trên Bazarr thật (Malcolm in the Middle): yêu cầu tay một tập, rồi bật `auto_request` cho đúng series đó. **Triển khai lên homeserver chỉ khi bạn yêu cầu.**
 - [ ] Test tiêu chí 13 a–i; docs: `docs/API.md`, `docs/CONFIGURATION.md`, `docs/BAZARR.md`, `CONTEXT.md`, `CHANGELOG.md`.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P9.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P10.
 
-## P10 — Bundle và CLI khai báo `[ ]`
+## P11 — Bundle và CLI khai báo `[ ]`
 
 FR-21, NFR-12; ADR-16; tiêu chí 18.
 
@@ -274,11 +281,11 @@ FR-21, NFR-12; ADR-16; tiêu chí 18.
 - [ ] CLI: `translate` (flag hoặc `--bundle`), `render-prompt`, `validate` (dùng chung hàm với worker), `compare`; khoá `--api-key`/`--api-key-file`/env/file theo thứ tự flag > env > file; `--provider fake`.
 - [ ] `GET /api/jobs/{id}/spec` và nút **Xuất job spec** trên console.
 - [ ] Test tiêu chí 18 a–h, gồm test import (`subcore`/CLI không import `gst_worker`, `sqlite3`); docs: `packages/subcore/README.md`, `docs/API.md`, `AGENTS.md` ("Development Commands" và ranh giới), `CHANGELOG.md`.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P10.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P11.
 
-## P11 — Style profile, glossary vào DB, xem thử, variant `[ ]`
+## P12 — Style profile, glossary vào DB, xem thử, variant `[ ]`
 
-FR-18, FR-4.1 (sửa), FR-11.2.3 (sửa); ADR-14; tiêu chí 16. Cần P10.
+FR-18, FR-4.1 (sửa), FR-11.2.3 (sửa); ADR-14; tiêu chí 16. Cần P11.
 
 - [ ] Bảng `style_profiles`, `character_cards`, `glossaries`, `glossary_history`; importer đọc `series/<key>/glossary.<lang>.yaml` một lần; nhập/xuất YAML; `rules.py` đưa style vào hash luật; bỏ `backups/glossary/` (lịch sử thay thế).
 - [ ] `subcore.style`: `resolve_style(layers)`, render vào prompt (mục *Style hiệu lực* và *Giọng nhân vật*); quy tắc ngôn ngữ `vi` làm tầng thấp nhất.
@@ -287,18 +294,50 @@ FR-18, FR-4.1 (sửa), FR-11.2.3 (sửa); ADR-14; tiêu chí 16. Cần P10.
 - [ ] **Thử style** (~20 cue, không ghi file), job `variant` → `candidate`, trang so sánh cạnh nhau, A/B ghi `quality_signals`.
 - [ ] Đo bằng `variant` trên vài tập thật để trả lời câu hỏi mở 3 (hai lượt dịch) và ghi kết quả.
 - [ ] Test tiêu chí 16 a–g; docs: `docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md` (Style profile, Bundle), `AGENTS.md`, `CHANGELOG.md`; `docs/design/ARCHITECTURE.md` §3.3 ghi prompt thực tế.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P11.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P12.
 
-## P12 — Insights và vòng phản hồi `[ ]`
+## P13 — `suggestions` + Review inbox lõi `[ ]`
+
+FR-4.4, FR-11.1, FR-11.1.5; ARCHITECTURE §3.6; tiêu chí 21 c–h. Làm **ngay sau P12** (cần glossary và thẻ nhân vật trong DB).
+
+- [ ] Migration bảng `suggestions` (có `source`, `fingerprint`, `UNIQUE(series_id, target_lang, fingerprint)`); importer không cần vì chưa có dữ liệu cũ.
+- [ ] `SuggestionService` (`gst_worker/suggestions.py`): `propose` (lọc trùng và đã từ chối), accept, sửa rồi accept, reject, accept hàng loạt theo series; accept đi qua use case ghi glossary/thẻ nhân vật của P12 và tính số bản dịch stale bằng `rules.py`; `auto_accept` theo loại (mặc định tắt cho `address_rules`, FR-4.4), có lịch sử và hoàn tác.
+- [ ] HTTP API `/api/suggestions…` + `docs/API.md`.
+- [ ] Console: trang **Review** nhóm theo series, bằng chứng (cue + timecode hoặc URL nguồn), số bản dịch sẽ stale, xác nhận khi hàng loạt, badge `pending` trên nav, dùng được trên điện thoại.
+- [ ] Test tiêu chí 21 c–h bằng bộ sinh giả; docs: `docs/CONFIGURATION.md` (`auto_accept`), `CONTEXT.md` (Suggestion), `CHANGELOG.md`. Workflow **CI** trên GitHub xanh cho commit P13.
+
+## P14 — Bộ sinh đề xuất từ facts `[ ]`
+
+FR-6, FR-18.3; tiêu chí 21 a–b. Làm ngay sau P13.
+
+- [ ] Bộ sinh `address_rules` từ facts (giới tính, tuổi tương đối, vai vế, mức thân mật) cho ngôn ngữ đích (FR-6.1), bằng chứng là cue và timecode trong facts.
+- [ ] Bộ sinh `terms` cho tên riêng xuất hiện ≥ 2 tập mà chưa có trong glossary (FR-6.2).
+- [ ] Bộ sinh thẻ nhân vật từ memory (FR-18.3).
+- [ ] Chạy sau khi facts của tập mới xong; dùng model tác vụ `extract` (rẻ), tính vào `llm_calls`; không bao giờ làm job dịch chậm hoặc fail khi bộ sinh lỗi.
+- [ ] Thử trên Malcolm in the Middle đã có facts và đọc chất lượng đề xuất trong inbox; ghi nhận xét vào phase này.
+- [ ] Test tiêu chí 21 a–b; docs; `CHANGELOG.md`. Workflow **CI** trên GitHub xanh cho commit P14.
+
+## P15 — Insights và vòng phản hồi `[ ]`
 
 FR-19.5–19.6; ADR-15; tiêu chí 17h, 20.
 
 - [ ] `metrics_daily`, `GET /api/metrics`, trang **Insights** (vận hành và chất lượng; theo model, prompt version, style; trạng thái khoá, breaker, quota).
-- [ ] `gst_worker/feedback.py`: cue sửa lặp theo một mẫu → đề xuất correction hoặc rule `pending` (hiện trong Insights cho đến khi Review inbox của P5 xong).
+- [ ] `gst_worker/feedback.py`: cue sửa lặp theo một mẫu → đề xuất correction hoặc rule vào `suggestions` (`source = feedback`, `pending`); hiện trong Review inbox của P13, không có chỗ hiển thị tạm trong Insights.
 - [ ] Bộ golden theo series từ cue đã sửa; `subcore compare` với golden; quy trình "đo trước khi đổi prompt hoặc style" ghi vào `docs/`.
 - [ ] LLM-as-judge tuỳ chọn, mặc định tắt.
 - [ ] Test tiêu chí 17h và 20 a–d; docs; `CHANGELOG.md`.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P12.
+- [ ] Workflow **CI** trên GitHub xanh cho commit P15.
+
+## P16 — Research grounding `[ ]`
+
+FR-7, FR-7.4; ARCHITECTURE §3.5; tiêu chí 23. **Làm cuối cùng của lộ trình v1, sau P15, nhưng vẫn bắt buộc.**
+
+- [ ] `subcore.glossary.research`: lời gọi 1 có tìm kiếm (không schema), lời gọi 2 structured output; URL nguồn lấy từ grounding metadata, không tin URL model tự viết.
+- [ ] Chạy một lần mỗi series và khi có term mới; ngân sách `research_max_calls_per_series`; tác vụ `research` ghi riêng trong `llm_calls`.
+- [ ] Kết quả vào `suggestions` (`source = research`); `terms` có ≥ 2 nguồn độc lập tự áp dụng khi bật `auto_accept` cho `terms` (FR-4.4).
+- [ ] Provider không có `web_search` thì bỏ qua, không lỗi (FR-7.3).
+- [ ] Dùng số liệu P5/P15 (tên riêng bị sửa lặp lại) để kiểm tra research có cải thiện thật không và ghi kết quả.
+- [ ] Test tiêu chí 23 a–e bằng fake provider có `web_search`; docs; `CHANGELOG.md`. Workflow **CI** trên GitHub xanh cho commit P16.
 
 ---
 
