@@ -558,6 +558,34 @@
           </div>
         </section>
 
+        <section class="settings-card">
+          <div class="settings-intro">
+            <h2>Clean-up</h2>
+            <p>Once a day the worker deletes what it made for itself and no longer needs. It never touches your media folders, a job that is not finished, a subtitle's current version or the story memory. 0 switches a group off. See what would go, and clean now, under <a class="link" href="#system">Backups</a>.</p>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="f-retention_done_days">Keep finished jobs (days)</label>
+              <input id="f-retention_done_days" name="retention_done_days" class="input" type="number" min="0" max="3650" data-type="int" data-default="30">
+              <p class="hint">Done, skipped and cancelled jobs. The model statistics in the status answer (<code>model_layers</code>) only reach back this far.</p>
+            </div>
+            <div class="field">
+              <label for="f-retention_failed_days">Keep failed jobs (days)</label>
+              <input id="f-retention_failed_days" name="retention_failed_days" class="input" type="number" min="0" max="3650" data-type="int" data-default="90">
+            </div>
+            <div class="field">
+              <label for="f-retention_versions_keep">Copies kept per subtitle</label>
+              <input id="f-retention_versions_keep" name="retention_versions_keep" class="input" type="number" min="0" max="1000" data-type="int" data-default="5">
+              <p class="hint">Besides the current version and the first one. An older version stays in History but can no longer be restored.</p>
+            </div>
+            <div class="field">
+              <label for="f-retention_glossary_keep">Glossary backups kept</label>
+              <input id="f-retention_glossary_keep" name="retention_glossary_keep" class="input" type="number" min="0" max="1000" data-type="int" data-default="20">
+              <p class="hint">Per series and language.</p>
+            </div>
+          </div>
+        </section>
+
         <div id="settings-savebar" class="savebar" hidden>
           <span>You have unsaved changes.</span>
           <div class="toolbar">
@@ -624,6 +652,21 @@
           <p class="hint">Import restores app settings and post-processing targets. A pre-import backup is created first. Queue state, logs and caches are not restored.</p>
         </div>
         <div id="backup-list" class="rows"></div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-head panel-head-wrap">
+          <div>
+            <h2>Clean up files</h2>
+            <p class="panel-sub">Old finished jobs, stored copies of older subtitle versions, glossary backups and leftover temporary files, by the windows set in Settings. It runs by itself once a day. Media folders are never touched.</p>
+          </div>
+          <div class="toolbar">
+            <button id="cleanup-preview" type="button" class="btn" data-icon="scan">Preview</button>
+            <button id="cleanup-run" type="button" class="btn btn-primary" data-icon="trash">Clean up now</button>
+          </div>
+        </header>
+        <p class="hint">Preview shows what would go and deletes nothing. Clean up now shows the same list and asks before it deletes.</p>
+        <div id="cleanup-report" class="rows"></div>
       </section>
     </section>
 

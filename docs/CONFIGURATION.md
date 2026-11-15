@@ -230,7 +230,11 @@ Saved settings with their defaults (the Settings page shows the same fields; key
   "log_retention_days": 30,
   "events_retention_days": 90,
   "llm_cost_in_per_mtok": 0.0,
-  "llm_cost_out_per_mtok": 0.0
+  "llm_cost_out_per_mtok": 0.0,
+  "retention_done_days": 30,
+  "retention_failed_days": 90,
+  "retention_versions_keep": 5,
+  "retention_glossary_keep": 20
 }
 ```
 
@@ -466,6 +470,34 @@ address_rules:
 A glossary file that is not valid stops translation jobs for that series with the
 reason in the job error; fix the file (or restore the copy in `backups/glossary/`)
 and retry.
+
+## File Clean-up
+
+The worker makes files for itself and, left alone, would keep them for ever. Once a day (with the backup check, and
+once soon after a start-up that finds the last run more than a day old) and on **Clean up now** on the Backups page, it
+deletes the following. Every window is a setting (Settings → Clean-up, live at once); `0` switches that group off.
+
+| Group | What goes | Setting (default) |
+|---|---|---|
+| Finished jobs | `done`, `skipped` and `cancelled` job rows older than the window | `retention_done_days` (30) |
+| Failed jobs | `failed` job rows older than the window | `retention_failed_days` (90) |
+| Subtitle versions | the stored copy in `backups/subtitles/` of every version of a target file except its current version, its first version and the newest N | `retention_versions_keep` (5) |
+| Glossary backups | files in `backups/glossary/` beyond the newest N of each series and language | `retention_glossary_keep` (20) |
+| Temporary files | `.*.tmp` left by a crash in `QUEUE_DIR` and `DATA_DIR`, older than a day | always on |
+
+A deleted version copy leaves its line in the subtitle's History, marked **pruned**; it can no longer be restored or
+compared, and the page says so. The current version and the first one always keep their copy.
+
+What it never touches: any file in a media folder (a `.tmp` left beside a subtitle is listed on the Backups page and in
+the answer of `POST /api/cleanup`, not deleted: the folders in `media_roots` and the folder of every target subtitle are
+protected even when they lie inside the data or queue folder), a job that is not finished (queued, running, waiting,
+held), the refusals of rejected jobs, the current version of any subtitle, the story memory and the glossary files
+themselves, the database, backup zips and log files (those keep their own limits).
+
+Finished jobs are also what the dashboard's model statistics (`model_layers`) count, so they reach back only as far as
+`retention_done_days` and `retention_failed_days`; the status answer says so. Look at them, and at whether the strong
+model earns its place, before shortening those windows. The run writes one summary line to the log (group, files, rows,
+bytes; no file names and no subtitle text) and a `cleanup.run` event.
 
 ## Backup
 

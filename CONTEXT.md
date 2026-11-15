@@ -43,6 +43,16 @@ A running job's claim on the worker, renewed by a heartbeat while the translatio
 A job whose lease runs out, or that is still marked running when the worker starts, goes
 back in line with one more attempt.
 
+**Clean-up** (settings `retention_*`, FR-13):
+The daily and on-demand deletion of what the worker made for itself: finished job rows,
+stored copies of older subtitle versions, glossary backups and leftover temporary files.
+It always starts as a preview (`dry_run`), and never touches a media folder, an unfinished
+or held job, a rejection, a current version or the story memory. `0` switches a group off.
+
+**Pruned** (version status):
+A subtitle version whose stored copy clean-up deleted. Its line stays in History, but it
+cannot be restored or compared. The current version and the first one are never pruned.
+
 **Blocked answer**:
 A model answer refused by the provider's content filter. It is repaired and split like
 any unusable answer; if it still fails, the job fails with the reason saying so.

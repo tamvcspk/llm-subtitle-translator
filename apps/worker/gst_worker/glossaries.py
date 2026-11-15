@@ -17,8 +17,12 @@ from pathlib import Path
 
 from subcore import glossary as g
 
+from .ports import Reclaimed
+
 SERIES = "series"
 MOVIES = "movies"
+# How `write` names a backup: `<lang>-<YYYYmmdd-HHMMSS>.yaml`; the language may itself hold a dash (`pt-br`).
+BACKUP_NAME = re.compile(r"^(?P<lang>.+)-(?P<stamp>\d{8}-\d{6})\.yaml$")
 
 
 def safe_name(value: str) -> str:
@@ -77,6 +81,38 @@ class GlossaryFiles:
                 pass
             raise
         return path
+
+    def prune_backups(self, keep: int, *, dry_run: bool = False) -> Reclaimed:
+        """Keep the ``keep`` newest backups of each (series, language) and delete the older ones (FR-13.1).
+
+        Only files named the way ``write`` names them are considered; anything else in the folder is left alone,
+        and the glossary files themselves are never touched."""
+        root = self.root / "backups" / "glossary"
+        files = size = 0
+        if keep < 1 or not root.is_dir():
+            return Reclaimed()
+        for folder in sorted(p for p in root.glob("*/*") if p.is_dir()):
+            groups: dict[str, list[tuple[str, Path]]] = {}
+            for path in folder.iterdir():
+                match = BACKUP_NAME.match(path.name)
+                if match and path.is_file():
+                    groups.setdefault(match["lang"], []).append((match["stamp"], path))
+            for entries in groups.values():
+                for _, path in sorted(entries, key=lambda item: (item[0], item[1].name), reverse=True)[keep:]:
+                    try:
+                        length = path.stat().st_size
+                        if not dry_run:
+                            path.unlink()
+                    except OSError:
+                        continue
+                    files += 1
+                    size += length
+            if not dry_run:
+                try:
+                    folder.rmdir()  # only succeeds when empty
+                except OSError:
+                    pass
+        return Reclaimed(files=files, bytes=size)
 
     def save(self, kind: str, key: str, lang: str, glossary: g.Glossary) -> Path:
         if not glossary.target_lang:

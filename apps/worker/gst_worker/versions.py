@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .ports import CANDIDATE, CURRENT, REMOVED, SUPERSEDED, Telemetry, TranslationVersion
+from .ports import CANDIDATE, CURRENT, PRUNED, REMOVED, SUPERSEDED, Reclaimed, Telemetry, TranslationVersion
 from .store import Store
 from .telemetry import NULL as NULL_TELEMETRY
 
@@ -92,6 +92,11 @@ class TranslationVersions:
         os.replace(temporary, path)
 
     def _read_copy(self, version: TranslationVersion) -> bytes:
+        if version.status == PRUNED or not version.stored_path:
+            raise ValueError(
+                f"version {version.version} was pruned by the retention settings (FR-13.3): its stored copy is gone, "
+                "so it cannot be restored or compared"
+            )
         try:
             data = Path(version.stored_path).read_bytes()
         except OSError:
@@ -123,7 +128,7 @@ class TranslationVersions:
             return None
         data = path.read_bytes()
         digest = sha256_bytes(data)
-        known = next((r for r in self.repo.versions(output_path) if r.sha256 == digest), None)
+        known = next((r for r in self.repo.versions(output_path) if r.sha256 == digest and r.status != PRUNED), None)
         if known is not None:
             return None
         version = self.repo.next_version(output_path)
@@ -411,6 +416,49 @@ class TranslationVersions:
             )
             counts["vanished"] += 1
         return counts
+
+    # -- retention (FR-13.1, FR-13.3) -------------------------------------------------
+    def prune(self, keep: int, *, dry_run: bool = False) -> Reclaimed:
+        """Delete the stored copies retention no longer needs and mark their versions ``pruned``.
+
+        Each target file keeps its current version, its first version and the ``keep`` newest; nothing else of
+        the history is touched (the lines stay, only the copies go). A copy is deleted only when it lies inside
+        the backup folder: a row whose path points anywhere else (a media folder, say) is left alone. The copy goes
+        first and the mark second, so a crash in between is finished by the next run.
+        """
+        root = self.backup_dir.resolve()
+        files = size = 0
+        for row in self.repo.prunable_versions(keep):
+            stored = Path(row.stored_path)
+            try:
+                inside = stored.resolve().is_relative_to(root)
+            except OSError:
+                inside = False
+            if not inside:
+                continue
+            try:
+                length = stored.stat().st_size
+            except OSError:
+                length = None  # already gone: only the mark is missing
+            if not dry_run:
+                try:
+                    stored.unlink(missing_ok=True)
+                except OSError:
+                    logging.warning("Retention could not delete %s; the version stays as it is", stored.name)
+                    continue
+                self.repo.set_version(row.output_path, row.version, status=PRUNED, stored_path="")
+                self._remove_empty_folder(stored.parent, root)
+            files += 1 if length is not None else 0
+            size += length or 0
+        return Reclaimed(files=files, bytes=size)
+
+    @staticmethod
+    def _remove_empty_folder(folder: Path, root: Path) -> None:
+        try:
+            if folder != root and folder.is_relative_to(root) and not any(folder.iterdir()):
+                folder.rmdir()
+        except OSError:
+            pass
 
     def _read_copy_or_none(self, version: TranslationVersion) -> bytes | None:
         try:

@@ -435,7 +435,13 @@ class JobQueue:
             if state in (DONE, FAILED) and job.get("gst_model") and (state == FAILED or job.get("result") == "translated"):
                 counts = by_model.setdefault(str(job["gst_model"]), {"done": 0, "failed": 0})
                 counts[state] += 1
-        return {"by_model": by_model, "escalated": escalated}
+        # The counts come from the job rows, and cleanup deletes finished ones past `retention_*_days` (FR-13.6):
+        # the report says how far back it can see (0 = nothing is deleted, so it is the whole history).
+        window = {
+            "done_days": int(self._setting("retention_done_days", 30)),
+            "failed_days": int(self._setting("retention_failed_days", 90)),
+        }
+        return {"by_model": by_model, "escalated": escalated, "window": window}
 
     def health_report(self) -> list[dict[str, Any]]:
         """The state of each configured model, as Settings and Insights show it (FR-17.7)."""

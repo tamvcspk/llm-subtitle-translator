@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from gst_worker.backups import BackupMaintenance, create_scheduled_backup_if_due, purge_old_backups
 from gst_worker.auth import ConsoleAuth
+from gst_worker.cleanup import Cleanup
 from gst_worker.bazarr import BazarrIntegration, BazarrMedia
 from gst_worker.logs import configure_logging
 from gst_worker.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
@@ -192,8 +193,10 @@ def backup_maintenance_once(
 
 
 def run_backup_scheduler(
-    state_dir: str, config_path: str, postprocess_targets_path: str, sleep_seconds: int, settings: Any = None
+    state_dir: str, config_path: str, postprocess_targets_path: str, sleep_seconds: int, settings: Any = None,
+    cleanup: Cleanup | None = None,
 ) -> None:
+    """The daily maintenance: scheduled backup, then file cleanup (FR-13.4), each failing alone."""
     while True:
         try:
             backup = backup_maintenance_once(state_dir, config_path, postprocess_targets_path, settings)
@@ -201,6 +204,11 @@ def run_backup_scheduler(
                 logging.info("Scheduled backup created: %s", backup["path"])
         except Exception:
             logging.exception("Scheduled backup maintenance failed")
+        if cleanup is not None:
+            try:
+                cleanup.run_if_due()
+            except Exception:
+                logging.exception("Scheduled file cleanup failed")
         time.sleep(sleep_seconds)
 
 
@@ -278,6 +286,12 @@ def main() -> int:
         telemetry=telemetry,
     )
     backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path, settings=settings_service)
+    cleanup = Cleanup(
+        worker.queue.jobs, versions, glossaries, store, settings_source=live_settings,
+        temp_roots=lambda: [data_dir, queue_dir],
+        media_roots=lambda: settings_service.app_config().get("media_roots") or [],
+        telemetry=telemetry,
+    )
     telemetry.event(
         "worker.started", reason="the worker process started", model=settings.get("gst_model"),
         fallback_model=settings.get("gst_fallback_model") or None, admission_mode=settings.get("admission_mode"),
@@ -291,7 +305,7 @@ def main() -> int:
 
         threading.Thread(
             target=run_backup_scheduler,
-            args=(state_dir, config_path, postprocess_targets_path, backup_check_seconds, settings_service),
+            args=(state_dir, config_path, postprocess_targets_path, backup_check_seconds, settings_service, cleanup),
             daemon=True,
         ).start()
 
@@ -316,6 +330,7 @@ def main() -> int:
             units=units,
             telemetry=telemetry,
             settings_service=settings_service,
+            cleanup=cleanup,
         ).as_handler_context()
         if not args.no_worker:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()

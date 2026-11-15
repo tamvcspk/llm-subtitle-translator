@@ -97,13 +97,16 @@ Returns queue counts, current settings, Bazarr URL, and Bazarr ping status.
       "gemini-3.1-flash-lite": {"done": 41, "failed": 1},
       "gemini-3.5-flash": {"done": 3, "failed": 1}
     },
-    "escalated": {"total": 5, "done": 3, "failed": 1, "waiting": 1}
+    "escalated": {"total": 5, "done": 3, "failed": 1, "waiting": 1},
+    "window": {"done_days": 30, "failed_days": 90}
   }
 }
 ```
 
-`model_layers` is read from the job files and shows whether the strong model is
-worth having. `by_model` counts translated and failed jobs per model that ran
+`model_layers` is read from the job rows and shows whether the strong model is
+worth having. File cleanup deletes finished jobs past `retention_done_days` and
+`retention_failed_days`, so the counts reach back only that far: `window` says how far
+(`0` means that kind is never deleted). `by_model` counts translated and failed jobs per model that ran
 them last; `escalated` counts jobs the default model could not finish (output
 still invalid after repair) that moved to the strong model, split by how they
 ended. Few escalations, or a strong model that rescues few of them, means the
@@ -440,6 +443,34 @@ The console account is never restored. The worker creates a `pre-import` backup 
 replacing anything. Queue state, logs, and caches are not restored. A backup member that is not valid JSON
 refuses the whole import with `400` before anything changes.
 
+## POST /api/cleanup
+
+File cleanup by the `retention_*` settings (FR-13; see "File Clean-up" in `docs/CONFIGURATION.md`). Body
+`{"dry_run": true}` or `{"dry_run": false}`. **It is a preview unless the body says `"dry_run": false`**: an empty
+body, `true`, `"false"` or anything else deletes nothing. Reply:
+
+```json
+{
+  "dry_run": true,
+  "at": 1784000000.0,
+  "groups": [
+    {"name": "jobs_done", "enabled": true, "window": 30, "files": 0, "rows": 412, "bytes": 1832040, "error": ""},
+    {"name": "jobs_failed", "enabled": true, "window": 90, "files": 0, "rows": 3, "bytes": 8120, "error": ""},
+    {"name": "versions", "enabled": true, "window": 5, "files": 87, "rows": 0, "bytes": 5402112, "error": ""},
+    {"name": "glossary", "enabled": false, "window": 0, "files": 0, "rows": 0, "bytes": 0, "error": ""},
+    {"name": "temp", "enabled": true, "window": null, "files": 1, "rows": 0, "bytes": 2048, "error": ""}
+  ],
+  "total": {"files": 88, "rows": 415, "bytes": 7244320},
+  "media_temp": ["/media/Show/.Ep1.vi.srt.publish.tmp"]
+}
+```
+
+`window` is the setting of the group (days, or how many copies to keep; `null` for temporary files), and `enabled` is
+`false` when it is `0`. `files` are files on disk, `rows` are database rows (finished jobs), `bytes` is what they hold.
+A dry run and the real run right after it report the same numbers. `error` is set when one group failed; the others
+still ran. `media_temp` lists leftover temporary files beside subtitles in media folders: they are never deleted.
+The same cleanup runs by itself once a day.
+
 ## POST /api/test-connection
 
 Tests a configured or form-entered API key without saving it. `kind` can be
@@ -572,7 +603,8 @@ kept in `backups/subtitles/`.
 `origin` is `machine`, `edit`, `revert` or `external`. `status` is `current`, `superseded`, `candidate` (a result that is
 not on disk: the file appeared while the job ran, the subtitle changed under a replace job, or the source changed; adopt it to
 publish it), `removed` (the admin deleted the subtitle; restoring it is a revert) or `pruned` (its stored copy was
-removed by retention, FR-13.3, P9; not restorable).
+removed by file cleanup, FR-13.3: the line stays, there is no copy to restore or to diff, and reverting to it answers
+`400` with the reason).
 
 ### GET /api/units/{id}/versions/{v}/diff?against=&lang=
 Cue-level changes from `against` (default: the previous version) to `v`:

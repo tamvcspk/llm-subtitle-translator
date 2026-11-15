@@ -87,6 +87,15 @@ Domain code is split under `gst_worker/`:
   prerequisite fact extraction, gap waiting, the context bundle and its staleness;
 - `versions.py`: `TranslationVersions`, publishing with version history, backup
   before overwrite, and revert;
+- `cleanup.py`: `Cleanup`, the file clean-up use case (FR-13): `run(dry_run)` returns a
+  `CleanupReport` per group (finished `jobs` rows, version copies, glossary backups,
+  leftover `.*.tmp`), and `run_if_due` is the daily run called from the backup scheduler
+  thread (its last run is a `_cleanup_last_run` marker in `settings`). It deletes nothing
+  itself except temporary files: rows go through `JobStore.delete_expired` (which refuses
+  any state that is not finished), copies through `TranslationVersions.prune` (only
+  inside `backups/subtitles/`, marking the version `pruned`), backups through
+  `GlossaryFiles.prune_backups`. The temporary-file sweep skips every media root and the
+  folder of every target subtitle, and only lists what it finds there;
 - `tmdb.py`: TMDB lookup and translation description generation;
 - `bazarr.py`: Bazarr API refresh, wanted-item lookup, and API-key parsing;
 - `backups.py`: server-side backup listing, creation and restore. The configuration

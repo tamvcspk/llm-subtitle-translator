@@ -849,6 +849,26 @@ class Store:
             rows = self._db.execute("SELECT * FROM translations WHERE status = 'current' ORDER BY output_path").fetchall()
         return [_version_from_row(row) for row in rows]
 
+    def prunable_versions(self, keep: int) -> list[TranslationVersion]:
+        """Versions whose stored copy retention may delete (FR-13.1, FR-13.2): not the current one, not the first of
+        its file, not one of the ``keep`` newest, not one still being published, and one that still has a copy."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT t.* FROM translations t WHERE t.status NOT IN ('current', 'pruned') AND t.publishing = 0"
+                " AND t.stored_path <> ''"
+                " AND t.version > (SELECT MIN(f.version) FROM translations f WHERE f.output_path = t.output_path)"
+                " AND t.version <= (SELECT MAX(f.version) FROM translations f WHERE f.output_path = t.output_path) - ?"
+                " ORDER BY t.output_path, t.version",
+                (max(0, int(keep)),),
+            ).fetchall()
+        return [_version_from_row(row) for row in rows]
+
+    def output_paths(self) -> list[str]:
+        """Every target file that has a history."""
+        with self._lock:
+            rows = self._db.execute("SELECT DISTINCT output_path FROM translations ORDER BY output_path").fetchall()
+        return [str(row["output_path"]) for row in rows]
+
     # -- series and units (P3) ---------------------------------------------
     def upsert_series(self, key: str, *, title: str = "", bazarr_id: str = "") -> int:
         with self._lock:
@@ -1072,7 +1092,7 @@ class Store:
         with self._lock:
             rows = self._db.execute(
                 "SELECT * FROM translations WHERE source_sha256 = ? AND target_lang = ? AND context_hash = ?"
-                " AND trigger IN ('auto', 'retranslate') ORDER BY id DESC",
+                " AND trigger IN ('auto', 'retranslate') AND status <> 'pruned' ORDER BY id DESC",
                 (source_sha256, target_lang, context_hash),
             ).fetchall()
         return [_version_from_row(row) for row in rows]

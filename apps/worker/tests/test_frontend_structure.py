@@ -51,6 +51,18 @@ class FrontendStructureTests(unittest.TestCase):
             self.assertIn(element, system)
             self.assertNotIn(element, settings)
 
+    def test_cleanup_previews_before_it_deletes_and_pruned_versions_cannot_be_restored(self):
+        html = read_html()
+        scripts = read_scripts()
+
+        system = view_section(html, "system")
+        for element in ('id="cleanup-preview"', 'id="cleanup-run"', 'id="cleanup-report"'):
+            self.assertIn(element, system)
+        self.assertIn('"/api/cleanup", { dry_run: true }', scripts)  # the preview is the default and is asked first
+        self.assertIn('"/api/cleanup", { dry_run: false }', scripts)
+        self.assertIn("Clean up now?", scripts)  # the confirmation comes between the two
+        self.assertIn('item.status !== "pruned"', scripts)
+
     def test_frontend_copy_is_not_english_only(self):
         html = read_html()
         scripts = read_scripts()
@@ -73,6 +85,7 @@ class FrontendStructureTests(unittest.TestCase):
             "memory_recent_episodes",
             "log_level", "log_prompt_bodies", "log_max_mb", "log_retention_days", "log_body_max_bytes",
             "events_retention_days", "llm_cost_in_per_mtok", "llm_cost_out_per_mtok",
+            "retention_done_days", "retention_failed_days", "retention_versions_keep", "retention_glossary_keep",
         })
         self.assertIn('<select id="f-gst_model" name="gst_model"', settings)
         self.assertIn('<select id="f-gst_fallback_model" name="gst_fallback_model"', settings)

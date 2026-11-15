@@ -459,6 +459,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                         )
                     }
                 )
+            elif parsed.path == "/api/cleanup":
+                # A preview unless the request says `"dry_run": false` in so many words (FR-13.4).
+                cleanup = self.ctx.get("cleanup")
+                if cleanup is None:
+                    self.send_error_json("file cleanup is not available", status=404)
+                else:
+                    self.send_json(cleanup.run(dry_run=body.get("dry_run") is not False).as_dict())
             elif parsed.path == "/api/test-connection":
                 self.send_json(self.test_connection_payload(body))
             elif parsed.path == "/api/logs/clear":

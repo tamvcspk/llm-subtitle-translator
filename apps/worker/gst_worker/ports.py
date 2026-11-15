@@ -145,6 +145,18 @@ PRUNED = "pruned"  # a stored copy removed by retention; the history line stays 
 
 
 @dataclass(frozen=True)
+class Reclaimed:
+    """What one cleanup group removed, or would remove in a dry run (FR-13.4): files, their bytes, database rows."""
+
+    files: int = 0
+    bytes: int = 0
+    rows: int = 0
+
+    def __add__(self, other: "Reclaimed") -> "Reclaimed":
+        return Reclaimed(self.files + other.files, self.bytes + other.bytes, self.rows + other.rows)
+
+
+@dataclass(frozen=True)
 class TranslationVersion:
     """One stored version of a target subtitle file (FR-8.1, FR-16.1). ``status`` is current | superseded |
     candidate | removed | pruned; ``trigger`` is auto | retranslate | revert | external | cue_edit | remove;

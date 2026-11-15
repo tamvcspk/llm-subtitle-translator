@@ -13,7 +13,10 @@ const TRIGGERS = {
   auto: "Translated", retranslate: "Retranslated", cue_edit: "Cue edit", revert: "Restored", external: "Edited outside the worker",
   remove: "Deleted from the console",
 };
-const STATUS_LABELS = { candidate: "Candidate · not on disk", removed: "Removed", superseded: "" };
+const STATUS_LABELS = {
+  candidate: "Candidate · not on disk", removed: "Removed", superseded: "",
+  pruned: "Pruned · copy deleted by clean-up",
+};
 const WATCH_MS = 30 * 60 * 1000;
 
 const state = { unitId: null, lang: null, detail: null, cues: null, corrections: [], versions: null, context: null, query: "", watch: null };
@@ -232,9 +235,9 @@ function renderVersions() {
           h("span", { class: "muted", text: [formatDateTime(item.created_at), item.model, item.tokens_out ? `${item.tokens_out} tokens out` : ""].filter(Boolean).join(" · ") }),
           h("span", { class: "muted mono", title: item.sha256, text: item.sha256.slice(0, 10) })),
         h("div", { class: "version-actions" },
-          hasEarlier && actionButton("Changes", (button) => toggleDiff(item.version, holder, button)),
+          hasEarlier && item.status !== "pruned" && actionButton("Changes", (button) => toggleDiff(item.version, holder, button)),
           item.status === "candidate" && actionButton("Use this version", () => adopt(item.version), { variant: "btn-primary" }),
-          !item.current && item.status !== "candidate" && actionButton("Restore", () => revert(item.version), { iconName: "retry" }),
+          !item.current && item.status !== "candidate" && item.status !== "pruned" && actionButton("Restore", () => revert(item.version), { iconName: "retry" }),
           item.current && actionButton("Delete subtitle", removeSubtitle)),
         holder);
     }));

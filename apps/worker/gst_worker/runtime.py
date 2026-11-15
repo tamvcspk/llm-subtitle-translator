@@ -24,6 +24,7 @@ class RuntimeContext:
     units: Any = None  # UnitService: library, corrections, retranslation, versions, glossaries
     telemetry: Any = None  # Telemetry: the event log behind GET /api/events (P5)
     settings_service: Any = None  # SettingsService: settings and API keys in the database (P6, FR-20)
+    cleanup: Any = None  # Cleanup: the retention use case behind POST /api/cleanup (P9, FR-13)
 
     def as_handler_context(self) -> dict[str, Any]:
         return self.__dict__.copy()

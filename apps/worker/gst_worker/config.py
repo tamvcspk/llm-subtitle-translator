@@ -106,6 +106,13 @@ QUEUE_INT_CONFIG_KEYS = {
     "transient_retry_seconds": (30, 0),  # how soon a job tries again after a failure that has not opened the breaker
     "edit_coalesce_minutes": (10, 0),  # cue edits closer than this to each other are one version (FR-16.7)
 }
+# File cleanup (P9, FR-13). key -> (default, minimum); 0 turns the group off (keep forever).
+RETENTION_INT_CONFIG_KEYS = {
+    "retention_done_days": (30, 0),  # finished jobs (done, skipped, cancelled) older than this are deleted
+    "retention_failed_days": (90, 0),
+    "retention_versions_keep": (5, 0),  # newest stored copies kept per target file, besides `current` and the first
+    "retention_glossary_keep": (20, 0),  # newest glossary backups kept per series and language
+}
 # The zone whose midnight resets the provider's daily quota (FR-17.4); Gemini counts days in Pacific time.
 QUOTA_RESET_TZ = "America/Los_Angeles"
 DEFAULT_APP_CONFIG = {
@@ -140,6 +147,7 @@ DEFAULT_APP_CONFIG = {
     **{key: default for key, (default, _) in LOG_INT_CONFIG_KEYS.items()},
     **{key: 0.0 for key in LOG_FLOAT_CONFIG_KEYS},
     **{key: default for key, (default, _) in QUEUE_INT_CONFIG_KEYS.items()},
+    **{key: default for key, (default, _) in RETENTION_INT_CONFIG_KEYS.items()},
     "quota_reset_tz": QUOTA_RESET_TZ,
 }
 
@@ -261,7 +269,7 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
             normalized[key] = max(0.0, float(normalized.get(key) or 0.0))
         except (TypeError, ValueError):
             normalized[key] = 0.0
-    for key, (default, minimum) in QUEUE_INT_CONFIG_KEYS.items():
+    for key, (default, minimum) in {**QUEUE_INT_CONFIG_KEYS, **RETENTION_INT_CONFIG_KEYS}.items():
         try:
             normalized[key] = max(minimum, int(normalized.get(key, default)))
         except (TypeError, ValueError):

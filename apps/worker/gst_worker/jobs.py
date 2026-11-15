@@ -17,12 +17,14 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
 from . import queue_policy as policy
+from .ports import Reclaimed
 from .queue_policy import Candidate, Health
 from .store import Store
 
 QUEUED, RUNNING, WAITING, HELD, REJECTED = "queued", "running", "waiting", "held", "rejected"
 DONE, FAILED, CANCELLED, SKIPPED = "done", "failed", "cancelled", "skipped"
 OPEN_STATES = (QUEUED, RUNNING, WAITING, HELD)
+ENDED_STATES = (DONE, FAILED, CANCELLED, SKIPPED)  # what cleanup may delete; `rejected` is a standing decision (FR-12.5)
 STATES = (QUEUED, RUNNING, WAITING, HELD, REJECTED, DONE, FAILED, CANCELLED, SKIPPED)
 
 # What the console has always called the states (the queue was a folder tree), kept for the HTTP API and the
@@ -427,6 +429,32 @@ class JobStore:
                            (destination, json.dumps(payload, ensure_ascii=False), now, row["id"]))
                 moved.append(job_id)
         return moved
+
+    def expired(self, states: tuple[str, ...], finished_before: float) -> Reclaimed:
+        """Finished jobs in ``states`` that ended before ``finished_before``: how many rows and how much text they
+        hold (payload, snapshot, error). Only ended states can be asked for, so no job that is still open (queued,
+        running, waiting, held) and no refusal (``rejected``) can ever be counted or deleted (FR-13.2)."""
+        marks = self._ended(states)
+        row = self.store.query(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(payload_json) + LENGTH(snapshot_json) + LENGTH(error)), 0) AS size"
+            f" FROM jobs WHERE state IN ({marks}) AND COALESCE(finished_at, updated_at) < ?",
+            (*states, finished_before),
+        )[0]
+        return Reclaimed(rows=int(row["n"]), bytes=int(row["size"]))
+
+    def delete_expired(self, states: tuple[str, ...], finished_before: float) -> int:
+        marks = self._ended(states)
+        with self.store.transaction() as db:
+            return db.execute(
+                f"DELETE FROM jobs WHERE state IN ({marks}) AND COALESCE(finished_at, updated_at) < ?",
+                (*states, finished_before),
+            ).rowcount
+
+    @staticmethod
+    def _ended(states: tuple[str, ...]) -> str:
+        if not states or not set(states) <= set(ENDED_STATES):
+            raise ValueError(f"only finished jobs can be cleaned up, not {sorted(set(states) - set(ENDED_STATES))}")
+        return ",".join("?" * len(states))
 
     def has_decided(self, key: str, *states: str) -> bool:
         marks = ",".join("?" * len(states))

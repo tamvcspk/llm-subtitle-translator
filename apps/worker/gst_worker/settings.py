@@ -33,6 +33,7 @@ from .config import (
     PROVIDER_GEMINI,
     PROVIDER_OPENAI_COMPAT,
     QUEUE_INT_CONFIG_KEYS,
+    RETENTION_INT_CONFIG_KEYS,
     SECRET_CONFIG_KEYS,
     SECRET_MASK,
     SYSTEM_SETTING_KEYS,
@@ -225,7 +226,7 @@ class SettingsService:
             settings[key] = int(app[key])
         for key in LOG_FLOAT_CONFIG_KEYS:
             settings[key] = float(app[key])
-        for key in QUEUE_INT_CONFIG_KEYS:
+        for key in (*QUEUE_INT_CONFIG_KEYS, *RETENTION_INT_CONFIG_KEYS):
             settings[key] = int(app[key])
         settings["quota_reset_tz"] = str(app["quota_reset_tz"])
         for key in ("llm_rpm", "llm_tpm", "llm_rpd"):

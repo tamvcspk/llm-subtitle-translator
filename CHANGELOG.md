@@ -1,4 +1,16 @@
 # Unreleased
+- **P9: file clean-up (FR-13).** The worker now deletes what it made for itself and no longer needs, once a day
+  (with the backup check) and on **Clean up now** on the Backups page, which shows a preview and asks first. Four
+  new settings, live at once, `0` switching a group off: `retention_done_days` (30; done, skipped and cancelled job
+  rows), `retention_failed_days` (90), `retention_versions_keep` (5: the stored copies of older subtitle versions,
+  keeping the current one, the first one and the newest N) and `retention_glossary_keep` (20 backups per series and
+  language); leftover `.*.tmp` files older than a day in the queue and data folders always go. A version whose
+  copy was deleted stays in History as **pruned**: it cannot be restored or compared, and restoring it answers
+  `400` with the reason. Never touched: media folders (a leftover beside a subtitle is only listed), jobs that are
+  not finished or held, rejected jobs, current versions, story memory, the database. `POST /api/cleanup` takes
+  `{"dry_run": ...}` and previews unless it says `false`; a dry run and the real run after it report the same
+  numbers. `model_layers` in `GET /api/status` now carries `window` (how far back finished jobs are kept). The
+  summary is logged without names or subtitle text.
 - **P8: jobs and versions in SQLite (FR-15, FR-17, ADR-11, ADR-12).** A translation job is now a row of the `jobs`
   table, not a JSON file. The worker claims one job atomically (`BEGIN IMMEDIATE`), orders them by class
   (interactive > retranslate > auto), round-robin per series, with aging, and skips jobs whose model cannot be
@@ -21,7 +33,7 @@
   Schema 9. ADR-12: the application's own SQLite is no longer behind ports (`AuthRepo`, `UsageLog`,
   `VersionRepo`, `MemoryRepo`, `CatalogRepo`, `SettingsRepo`, `TelemetryRepo` are gone); core code takes `Store`
   and its tests run on `Store(":memory:")`. A start-up check no longer turns a media share that is not mounted
-  into removed subtitles. Not done yet: the `pruned` state (P9), the Library label "Removed" (the flag is in
+  into removed subtitles. Not done yet: the Library label "Removed" (the flag is in
   the API, the console badge is not), and the CI run on GitHub.
 - Fix: with `job_settle_seconds` at 0 a job no longer waits when its subtitle's modification time is a few
   milliseconds ahead of the clock (Windows rounds file times up).

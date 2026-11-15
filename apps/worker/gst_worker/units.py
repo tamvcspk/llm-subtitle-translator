@@ -24,7 +24,7 @@ from subcore.providers import ProviderError
 from .config import DEFAULT_MODEL, model_for_task
 from .glossaries import GlossaryFiles
 from .library import Library
-from .ports import CURRENT, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit
+from .ports import CURRENT, PRUNED, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit
 from .store import Store
 from .queue import JobQueue
 from .memory import MEMORY_MODES, StoryMemory, parse_anchor, unit_label
@@ -515,6 +515,8 @@ class UnitService:
         row = self.version_repo.get_version(out.output_path, version)
         if row is None:
             raise LookupError(f"no version {version}")
+        if row.status == PRUNED:
+            raise ValueError(f"version {version} was pruned by the retention settings: its stored copy is gone, so there is nothing to compare")
         try:
             return srt.parse(Path(row.stored_path).read_text(encoding="utf-8-sig"))
         except OSError:
