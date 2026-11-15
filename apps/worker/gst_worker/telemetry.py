@@ -22,7 +22,7 @@ from typing import Any
 
 from .bodies import DEFAULT_BODY_MAX_BYTES, MAX_SEGMENT_BYTES, BodyLog
 from .logs import normalize_log_level, set_log_level
-from .ports import TelemetryRepo, UsageLog
+from .store import Store
 from .redaction import DEFAULT, Redactor
 
 _LEVELS = {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "WARNING": logging.WARNING, "ERROR": logging.ERROR}
@@ -107,9 +107,9 @@ class Telemetry:
 
     def __init__(
         self,
-        repo: TelemetryRepo | None = None,
+        repo: Store | None = None,
         *,
-        usage: UsageLog | None = None,
+        usage: Store | None = None,
         bodies: BodyLog | None = None,
         settings_source: Callable[[], Mapping[str, Any]] | None = None,
         redactor: Redactor | None = None,
@@ -261,7 +261,7 @@ class Telemetry:
         }
 
     def _write_call(
-        self, usage: UsageLog, job_id: str, fields: dict[str, Any], body: dict[str, Any] | None, max_bytes: int,
+        self, usage: Store, job_id: str, fields: dict[str, Any], body: dict[str, Any] | None, max_bytes: int,
         segment_bytes: int,
     ) -> None:
         call_id = usage.record_llm_call(job_id, **fields)

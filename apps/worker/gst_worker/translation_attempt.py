@@ -29,7 +29,8 @@ from subcore.translate import PromptContext, TranslateOptions, TranslationError,
 from .config import DEFAULT_MODEL, model_for_task
 from .library import Library
 from .memory import StoryMemory
-from .ports import MissingApiKey, ProviderFactory, Telemetry, Unit, UsageLog
+from .ports import MissingApiKey, ProviderFactory, Telemetry, Unit
+from .store import Store
 from .rules import UnitRules
 from .subtitles import target_output_path
 from .telemetry import Telemetry as TelemetrySink
@@ -140,7 +141,7 @@ class TranslationAttempt:
     def __init__(
         self,
         versions: TranslationVersions | None = None,
-        usage: UsageLog | None = None,
+        usage: Store | None = None,
         provider_factory: ProviderFactory | None = None,
         library: Library | None = None,
         memory: StoryMemory | None = None,

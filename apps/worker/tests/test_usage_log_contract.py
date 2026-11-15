@@ -1,41 +1,15 @@
-"""Contract of the UsageLog port (SPEC criterion 10b): the same checks on SQLite and on an in-memory fake."""
+"""Contract of the LLM call log on the real SQLite store (ADR-12)."""
 
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-from gst_worker.ports import LlmCall, TokenTotals, UsageLog
+from gst_worker.ports import LlmCall, TokenTotals
 from gst_worker.store import Store
 
 
-class InMemoryUsageLog:
-    """Fake UsageLog for tests that do not need a database."""
-
-    def __init__(self) -> None:
-        self._calls: list[LlmCall] = []
-
-    def record_llm_call(self, job_id, *, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at=None,
-                        **details):
-        call = LlmCall(
-            id=len(self._calls) + 1, job_id=job_id, provider=provider, model=model, task=task,
-            tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms, outcome=outcome,
-            at=at or time.time(), **details,
-        )
-        self._calls.append(call)
-        return call.id
-
-    def llm_calls(self, job_id=None):
-        return [c for c in self._calls if job_id is None or c.job_id == job_id]
-
-    def token_totals(self, since=0.0):
-        calls = [c for c in self._calls if c.at >= since]
-        return TokenTotals(
-            calls=len(calls), tokens_in=sum(c.tokens_in for c in calls), tokens_out=sum(c.tokens_out for c in calls)
-        )
-
-
-def record(log: UsageLog, job_id="j1", *, tokens_in=10, tokens_out=5, at=None, task="translate", outcome="ok"):
+def record(log: Store, job_id="j1", *, tokens_in=10, tokens_out=5, at=None, task="translate", outcome="ok"):
     log.record_llm_call(
         job_id, provider="gemini", model="m-1", task=task, tokens_in=tokens_in, tokens_out=tokens_out,
         latency_ms=120, outcome=outcome, at=at,
@@ -45,10 +19,7 @@ def record(log: UsageLog, job_id="j1", *, tokens_in=10, tokens_out=5, at=None, t
 class UsageLogContract:
     """Mixed into a TestCase that provides ``self.log``."""
 
-    log: UsageLog
-
-    def test_satisfies_the_port(self):
-        self.assertIsInstance(self.log, UsageLog)
+    log: Store
 
     def test_empty_log(self):
         self.assertEqual(self.log.llm_calls(), [])
@@ -117,11 +88,6 @@ class SqliteUsageLogTests(UsageLogContract, unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.log = Store(Path(directory.name) / "app.db")
         self.addCleanup(self.log.close)
-
-
-class InMemoryUsageLogTests(UsageLogContract, unittest.TestCase):
-    def setUp(self):
-        self.log = InMemoryUsageLog()
 
 
 if __name__ == "__main__":

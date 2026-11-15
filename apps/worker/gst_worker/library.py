@@ -21,7 +21,8 @@ from subcore import glossary as g
 from subcore import srt
 
 from .glossaries import MOVIES, SERIES, GlossaryFiles
-from .ports import CatalogRepo, MediaLibrary, Output, Unit
+from .ports import MediaLibrary, Output, Unit
+from .store import Store
 from .rules import UnitRules, build_rules
 from .versions import TranslationVersions
 
@@ -126,7 +127,7 @@ def enrich_job_identity(job: dict[str, Any], media: MediaLibrary) -> None:
 
 class Library:
     def __init__(
-        self, catalog: CatalogRepo, glossaries: GlossaryFiles, versions: TranslationVersions, memory: Any = None
+        self, catalog: Store, glossaries: GlossaryFiles, versions: TranslationVersions, memory: Any = None
     ) -> None:
         self.catalog = catalog
         self.glossaries = glossaries

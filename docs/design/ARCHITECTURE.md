@@ -190,13 +190,13 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 | `Metadata` | mô tả phim/series cho prompt | `tmdb.TmdbMetadata` (đọc settings sống) |
 | `ProviderFactory` | dựng provider theo model và key | `llm.build_provider` (`subcore.providers`) |
 
-**Kiểm bằng test, không bằng quy ước (tiêu chí 10):** `tests/test_core_boundary.py` (10a: core không import hạ tầng, danh sách ngoại lệ đã rỗng và chỉ được thu hẹp; 10c: port không trả `dict`/`Any`/`Row`) và một bộ test hợp đồng cho mỗi port chạy trên adapter thật và trên fake trong bộ nhớ (10b: `tests/test_*_contract.py`).
+**Kiểm bằng test, không bằng quy ước (tiêu chí 10):** `tests/test_core_boundary.py` (10a: core không import hạ tầng, danh sách ngoại lệ đã rỗng và chỉ được thu hẹp; 10c: port không trả `dict`/`Any`/`Row`) và một bộ test hợp đồng cho mỗi port chạy trên adapter thật và trên fake trong bộ nhớ (10b: `tests/test_*_contract.py`). **Từ P8 (ADR-12):** 10b chỉ còn cho port biên ngoài (`MediaLibrary`, `Metadata`, `ProviderFactory`); các kho SQLite có test hợp đồng trên `Store` thật, không có fake; 10c cũng kiểm các phương thức công khai của `Store`.
 
 **Đánh đổi chấp nhận:** nhiều file hơn và thêm một lớp gián tiếp; với một người dùng và một SQLite, phần lớn port chỉ có một adapter thật, lợi ích chính là test không cần hạ tầng và cửa để đổi storage sau này. `Store` chưa tách thành một file mỗi port: không có người gọi nào còn phụ thuộc vào nó, nên việc tách chỉ là dọn dẹp và được hoãn cho tới khi có lý do (một adapter thứ hai).
 
 **Không làm (trong ADR-8):** chuyển hàng đợi vào SQLite; đổi schema; bọc filesystem bằng port; thêm DB khác (Postgres chỉ là cửa để ngỏ, theo ADR-4); đổi `subcore`.
 
-**Điều chỉnh (v0.10, ADR-12).** Điểm 2, 3, 4, 7 và bảng port bên trên mô tả code hiện tại. Từ P8, port chỉ giữ ở biên mà ta không sở hữu (`MediaLibrary`, `Metadata`, `ProviderFactory`); `AuthRepo`, `UsageLog`, `VersionRepo`, `MemoryRepo`, `CatalogRepo`, `JobQueue` thành repository SQLite cụ thể. Điểm 6 (CLI cho worker) bỏ: không có adapter vào thứ hai (ADR-16). Điểm 7 (hàng đợi là cây thư mục) hết hiệu lực khi `jobs` vào SQLite (ADR-11).
+**Điều chỉnh (v0.10, ADR-12).** Điểm 2, 3, 4, 7 và bảng port bên trên mô tả code hiện tại. Từ P8, port chỉ giữ ở biên mà ta không sở hữu (`MediaLibrary`, `Metadata`, `ProviderFactory`); `AuthRepo`, `UsageLog`, `VersionRepo`, `MemoryRepo`, `CatalogRepo`, `JobQueue` thành repository SQLite cụ thể. Điểm 6 (CLI cho worker) bỏ: không có adapter vào thứ hai (ADR-16). Điểm 7 (hàng đợi là cây thư mục) hết hiệu lực khi `jobs` vào SQLite (ADR-11). **Đã làm ở P8:** các Protocol `AuthRepo`, `UsageLog`, `VersionRepo`, `MemoryRepo`, `CatalogRepo`, `SettingsRepo`, `TelemetryRepo` bị gỡ khỏi `ports.py` (các kiểu bản ghi có tên vẫn ở đó); core nhận `Store` trực tiếp, không tách module `db/` riêng; các fake trong bộ nhớ và test `isinstance(…, Port)` bị gỡ cùng lúc. `JobStore` (`jobs.py`) vẫn trả `dict` cho payload của job: đây là điểm lệch còn lại so với 10c.
 
 ### ADR-9 · Chế độ `hold`: worker quyết định lúc nhận job (FR-12)
 
@@ -370,7 +370,7 @@ flowchart LR
     DOM[rules · queue_policy · memory · versions · library]
   end
   subgraph PORTS[ports.py]
-    P[AuthRepo · UsageLog · VersionRepo · MemoryRepo · CatalogRepo · JobQueue · MediaLibrary · Metadata · ProviderFactory]
+    P[Store SQLite · MediaLibrary · Metadata · ProviderFactory · Telemetry]
   end
   subgraph OUT[Adapter ra]
     ST[Store / SQLite]

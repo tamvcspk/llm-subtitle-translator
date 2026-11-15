@@ -22,7 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .ports import CANDIDATE, CURRENT, REMOVED, SUPERSEDED, Telemetry, TranslationVersion, VersionRepo
+from .ports import CANDIDATE, CURRENT, REMOVED, SUPERSEDED, Telemetry, TranslationVersion
+from .store import Store
 from .telemetry import NULL as NULL_TELEMETRY
 
 SKIPPED_EXISTING = "skipped-existing-output"
@@ -57,14 +58,14 @@ class Published:
 class TranslationVersions:
     def __init__(
         self,
-        repo: VersionRepo,
+        repo: Store,
         backup_dir: str | Path,
         telemetry: Telemetry | None = None,
         *,
         coalesce_seconds: float = DEFAULT_COALESCE_SECONDS,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        self.repo = repo  # the VersionRepo port; callers outside this module read versions through it
+        self.repo = repo  # the application's own SQLite store (ADR-12); callers outside read versions through it
         self.backup_dir = Path(backup_dir)
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
         self.coalesce_seconds = coalesce_seconds

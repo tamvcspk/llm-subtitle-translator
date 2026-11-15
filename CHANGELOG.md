@@ -18,8 +18,11 @@
   is not requested again automatically. Publishing is announced before the rename and settled at start-up.
   A hand-edited file is kept once as an `external` version. Consecutive cue edits within
   `edit_coalesce_minutes` are one version. The Bazarr rescan after a change runs in the background with retries.
-  Schema 9. Not done yet: the `ADR-12` port cleanup beyond `JobQueue`, the `pruned` state (P9), the Library
-  label "Removed" (the flag is in the API, the console badge is not), and the CI run on GitHub.
+  Schema 9. ADR-12: the application's own SQLite is no longer behind ports (`AuthRepo`, `UsageLog`,
+  `VersionRepo`, `MemoryRepo`, `CatalogRepo`, `SettingsRepo`, `TelemetryRepo` are gone); core code takes `Store`
+  and its tests run on `Store(":memory:")`. A start-up check no longer turns a media share that is not mounted
+  into removed subtitles. Not done yet: the `pruned` state (P9), the Library label "Removed" (the flag is in
+  the API, the console badge is not), and the CI run on GitHub.
 - Fix: with `job_settle_seconds` at 0 a job no longer waits when its subtitle's modification time is a few
   milliseconds ahead of the clock (Windows rounds file times up).
 - **P7: a second provider, `openai_compat` (FR-9.1-9.3, ADR-3).** The models can now run on any server that speaks

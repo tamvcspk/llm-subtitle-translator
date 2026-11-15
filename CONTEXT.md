@@ -82,8 +82,9 @@ recovery, retries, quota pauses, and terminal outcomes.
 
 **Port**:
 A narrow interface (`Protocol`, in `gst_worker/ports.py`) for something the worker core
-needs from outside: storage, the job queue, Bazarr, TMDB, the model provider. It returns
-named immutable types, never a `dict` or a database row.
+needs from outside and does not own: Bazarr, TMDB, the model provider. It returns named
+immutable types, never a `dict` or a database row. The application's own SQLite
+(`Store`) is not behind a port: the core uses it directly, and tests run it on `:memory:`.
 
 **Adapter**:
 The code behind a port that touches the outside world (SQLite, the queue directory,

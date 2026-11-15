@@ -1,77 +1,17 @@
-"""Contract of the VersionRepo port (SPEC criterion 10b): the same checks on SQLite and on an in-memory fake."""
+"""Contract of the version history on the real SQLite store (ADR-12)."""
 
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-from gst_worker.ports import CURRENT, REMOVED, SUPERSEDED, TranslationVersion, VersionRepo
+from gst_worker.ports import CURRENT, REMOVED, SUPERSEDED, TranslationVersion
 from gst_worker.store import Store
 
 OUT = "/media/Show.S01E01.vi.srt"
 
 
-class InMemoryVersionRepo:
-    """Fake VersionRepo for tests that do not need a database."""
-
-    def __init__(self) -> None:
-        self._rows: list[TranslationVersion] = []
-
-    def current_version(self, output_path):
-        return next((r for r in self._rows if r.output_path == output_path and r.status == CURRENT), None)
-
-    def versions(self, output_path):
-        return sorted((r for r in self._rows if r.output_path == output_path), key=lambda r: r.version)
-
-    def get_version(self, output_path, version):
-        return next((r for r in self._rows if r.output_path == output_path and r.version == version), None)
-
-    def next_version(self, output_path):
-        return max((r.version for r in self._rows if r.output_path == output_path), default=0) + 1
-
-    def add_version(self, output_path, *, version, stored_path, sha256, trigger, make_current=True, missing_units=(),
-                    status=None, **fields):
-        status = status or (CURRENT if make_current else SUPERSEDED)
-        if status in (CURRENT, REMOVED):
-            self._rows = [
-                TranslationVersion(**{**r.__dict__, "status": SUPERSEDED})
-                if r.output_path == output_path and r.status == CURRENT else r
-                for r in self._rows
-            ]
-        self._rows.append(TranslationVersion(
-            output_path=output_path, version=version, stored_path=stored_path, sha256=sha256, trigger=trigger,
-            status=status, created_at=time.time(), missing_units=tuple(missing_units), **fields,
-        ))
-
-    def set_version(self, output_path, version, **fields):
-        if fields.get("status") == CURRENT:
-            self._rows = [
-                TranslationVersion(**{**r.__dict__, "status": SUPERSEDED})
-                if r.output_path == output_path and r.status == CURRENT and r.version != version else r
-                for r in self._rows
-            ]
-        self._rows = [
-            TranslationVersion(**{**r.__dict__, **fields})
-            if r.output_path == output_path and r.version == version else r
-            for r in self._rows
-        ]
-
-    def publishing_versions(self):
-        return [r for r in self._rows if r.publishing]
-
-    def current_versions(self):
-        return [r for r in self._rows if r.status == CURRENT]
-
-    def cached_versions(self, source_sha256, target_lang, context_hash):
-        hits = [
-            r for r in self._rows
-            if (r.source_sha256, r.target_lang, r.context_hash) == (source_sha256, target_lang, context_hash)
-            and r.trigger in ("auto", "retranslate")
-        ]
-        return list(reversed(hits))
-
-
-def add(repo: VersionRepo, version: int, *, output=OUT, trigger="auto", **kwargs):
+def add(repo: Store, version: int, *, output=OUT, trigger="auto", **kwargs):
     repo.add_version(output, version=version, stored_path=f"/b/v{version}", sha256=f"sha{version}",
                      trigger=trigger, **kwargs)
 
@@ -79,10 +19,7 @@ def add(repo: VersionRepo, version: int, *, output=OUT, trigger="auto", **kwargs
 class VersionRepoContract:
     """Mixed into a TestCase that provides ``self.repo``."""
 
-    repo: VersionRepo
-
-    def test_satisfies_the_port(self):
-        self.assertIsInstance(self.repo, VersionRepo)
+    repo: Store
 
     def test_empty_repo(self):
         self.assertIsNone(self.repo.current_version(OUT))
@@ -159,12 +96,7 @@ class SqliteVersionRepoTests(VersionRepoContract, unittest.TestCase):
         self.addCleanup(self.repo.close)
 
 
-class InMemoryVersionRepoTests(VersionRepoContract, unittest.TestCase):
-    def setUp(self):
-        self.repo = InMemoryVersionRepo()
-
-
-class TranslationVersionsOnAFakeTests(unittest.TestCase):
+class TranslationVersionsOnAMemoryStoreTests(unittest.TestCase):
     """The publish/revert rules need only the port: no SQLite in this test."""
 
     def test_publish_retranslate_and_revert_through_the_port(self):
@@ -173,7 +105,7 @@ class TranslationVersionsOnAFakeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = str(Path(tmp) / "media" / "Show.vi.srt")
             Path(output).parent.mkdir()
-            versions = TranslationVersions(InMemoryVersionRepo(), Path(tmp) / "backups")
+            versions = TranslationVersions(Store(":memory:"), Path(tmp) / "backups")
             versions.publish(output, "one\n", trigger=AUTO)
             versions.publish(output, "two\n", trigger=RETRANSLATE)
             self.assertEqual(Path(output).read_text(encoding="utf-8"), "two\n")

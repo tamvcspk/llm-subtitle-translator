@@ -1,40 +1,18 @@
-"""Contract of the AuthRepo port (SPEC criterion 10b): one set of checks, run on the real SQLite adapter
-and on an in-memory fake, so a fake that drifts from the real behavior fails here, not in some other test."""
+"""Contract of the console account storage on the real SQLite store (ADR-12)."""
 
 import secrets
 import tempfile
 import unittest
 from pathlib import Path
 
-from gst_worker.ports import Account, AuthRepo
+from gst_worker.ports import Account
 from gst_worker.store import Store
-
-
-class InMemoryAuthRepo:
-    """Fake AuthRepo for tests that need an account without a database."""
-
-    def __init__(self) -> None:
-        self._account: Account | None = None
-        self._secret: str | None = None
-
-    def auth_account(self) -> Account | None:
-        return self._account
-
-    def save_auth_account(self, user: str, password_hash: str) -> None:
-        self._account = Account(user=user, password_hash=password_hash)
-        self._secret = secrets.token_hex(32)
-
-    def auth_session_secret(self) -> str | None:
-        return self._secret
 
 
 class AuthRepoContract:
     """Mixed into a TestCase that provides ``self.repo``."""
 
-    repo: AuthRepo
-
-    def test_satisfies_the_port(self):
-        self.assertIsInstance(self.repo, AuthRepo)
+    repo: Store
 
     def test_empty_repo_has_no_account_and_no_secret(self):
         self.assertIsNone(self.repo.auth_account())
@@ -74,18 +52,13 @@ class SqliteAuthRepoTests(AuthRepoContract, unittest.TestCase):
         self.addCleanup(self.repo.close)
 
 
-class InMemoryAuthRepoTests(AuthRepoContract, unittest.TestCase):
-    def setUp(self):
-        self.repo = InMemoryAuthRepo()
-
-
-class ConsoleAuthOnAFakeTests(unittest.TestCase):
+class ConsoleAuthOnAMemoryStoreTests(unittest.TestCase):
     """ConsoleAuth only needs the port: no SQLite anywhere in this test."""
 
     def test_seed_verify_and_change_password_through_the_port(self):
         from gst_worker.auth import ConsoleAuth
 
-        repo = InMemoryAuthRepo()
+        repo = Store(":memory:")
         auth = ConsoleAuth.from_env({"CONSOLE_USER": "admin", "CONSOLE_PASSWORD": "password-1"}, repo)
         self.assertTrue(auth.verify("admin", "password-1"))
         secret = auth.session_secret()

@@ -1,4 +1,4 @@
-"""Contract of the CatalogRepo port (SPEC criterion 10b): the same checks on SQLite and on an in-memory fake."""
+"""Contract of the catalog (series, units, outputs, corrections) on the real SQLite store (ADR-12)."""
 
 import dataclasses
 import tempfile
@@ -6,109 +6,17 @@ import time
 import unittest
 from pathlib import Path
 
-from gst_worker.ports import CatalogRepo, Correction, Output, Series, Unit
+from gst_worker.ports import Correction, Output, Series, Unit
 from gst_worker.store import Store
-
-
-class InMemoryCatalogRepo:
-    """Fake CatalogRepo for tests that do not need a database."""
-
-    def __init__(self) -> None:
-        self._series: dict[int, Series] = {}
-        self._units: dict[int, Unit] = {}
-        self._outputs: dict[tuple[int, str], Output] = {}
-        self._corrections: dict[int, Correction] = {}
-
-    def upsert_series(self, key, *, title="", bazarr_id=""):
-        for found in self._series.values():
-            if found.key == key:
-                changes = {k: v for k, v in (("title", title), ("bazarr_id", bazarr_id)) if v and v != getattr(found, k)}
-                if changes:
-                    self._series[found.id] = dataclasses.replace(found, **changes)
-                return found.id
-        new_id = len(self._series) + 1
-        self._series[new_id] = Series(id=new_id, key=key, title=title, bazarr_id=bazarr_id, created_at=time.time())
-        return new_id
-
-    def get_series(self, series_id):
-        return self._series.get(series_id)
-
-    def list_series(self):
-        return sorted(self._series.values(), key=lambda s: (s.title.casefold(), s.id))
-
-    def set_series_memory(self, series_id, *, memory=None, specials_after=None):
-        changes = {k: v for k, v in (("memory", memory), ("specials_after", specials_after)) if v is not None}
-        self._series[series_id] = dataclasses.replace(self._series[series_id], **changes)
-
-    def upsert_unit(self, *, series_id=None, movie_key=None, season=None, episode=None, title="", media_type="",
-                    bazarr_id="", video_path="", source_path="", source_code="", source_language=""):
-        if (series_id is None) == (movie_key is None):
-            raise ValueError("a unit is either an episode of a series or a movie")
-        fields = dict(title=title, media_type=media_type, bazarr_id=bazarr_id, video_path=video_path,
-                      source_path=source_path, source_code=source_code, source_language=source_language)
-        for found in self._units.values():
-            same = (found.series_id, found.season, found.episode) == (series_id, season, episode) if series_id is not None \
-                else found.movie_key == movie_key
-            if same:
-                merged = {k: v or getattr(found, k) for k, v in fields.items()}
-                self._units[found.id] = dataclasses.replace(found, **merged, updated_at=time.time())
-                return found.id
-        new_id = len(self._units) + 1
-        now = time.time()
-        self._units[new_id] = Unit(id=new_id, series_id=series_id, movie_key=movie_key, season=season,
-                                   episode=episode, created_at=now, updated_at=now, **fields)
-        return new_id
-
-    def get_unit(self, unit_id):
-        return self._units.get(unit_id)
-
-    def find_unit(self, series_id, season, episode):
-        return next((u for u in self._units.values() if (u.series_id, u.season, u.episode) == (series_id, season, episode)), None)
-
-    def list_units(self, series_id=None, *, movies=False):
-        if movies:
-            return sorted((u for u in self._units.values() if u.series_id is None), key=lambda u: (u.title.casefold(), u.id))
-        found = (u for u in self._units.values() if u.series_id == series_id)
-        return sorted(found, key=lambda u: (u.season, u.episode, u.id))
-
-    def set_output(self, unit_id, target_lang, output_path, target_language=""):
-        old = self._outputs.get((unit_id, target_lang))
-        language = target_language or (old.target_language if old else "")
-        self._outputs[(unit_id, target_lang)] = Output(unit_id, target_lang, output_path, language)
-
-    def outputs(self, unit_id):
-        return sorted((o for o in self._outputs.values() if o.unit_id == unit_id), key=lambda o: o.target_lang)
-
-    def add_correction(self, unit_id, target_lang, kind, payload):
-        new_id = len(self._corrections) + 1
-        self._corrections[new_id] = Correction(new_id, unit_id, target_lang, kind, dict(payload), time.time(), True)
-        return new_id
-
-    def get_correction(self, correction_id):
-        return self._corrections.get(correction_id)
-
-    def corrections(self, unit_id, target_lang, *, active_only=True):
-        return [c for c in self._corrections.values()
-                if (c.unit_id, c.target_lang) == (unit_id, target_lang) and (c.active or not active_only)]
-
-    def deactivate_correction(self, correction_id):
-        found = self._corrections.get(correction_id)
-        if found is None or not found.active:
-            return False
-        self._corrections[correction_id] = dataclasses.replace(found, active=False)
-        return True
 
 
 class CatalogRepoContract:
     """Mixed into a TestCase that provides ``self.repo``."""
 
-    repo: CatalogRepo
+    repo: Store
 
     def episode(self, series_id, season=1, episode=1, **fields):
         return self.repo.upsert_unit(series_id=series_id, season=season, episode=episode, **fields)
-
-    def test_satisfies_the_port(self):
-        self.assertIsInstance(self.repo, CatalogRepo)
 
     def test_empty_catalog(self):
         self.assertIsNone(self.repo.get_series(1))
@@ -245,11 +153,6 @@ class SqliteCatalogRepoTests(CatalogRepoContract, unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.repo = Store(Path(directory.name) / "app.db")
         self.addCleanup(self.repo.close)
-
-
-class InMemoryCatalogRepoTests(CatalogRepoContract, unittest.TestCase):
-    def setUp(self):
-        self.repo = InMemoryCatalogRepo()
 
 
 if __name__ == "__main__":

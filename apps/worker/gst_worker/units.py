@@ -24,7 +24,8 @@ from subcore.providers import ProviderError
 from .config import DEFAULT_MODEL, model_for_task
 from .glossaries import GlossaryFiles
 from .library import Library
-from .ports import CURRENT, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit, UsageLog
+from .ports import CURRENT, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit
+from .store import Store
 from .queue import JobQueue
 from .memory import MEMORY_MODES, StoryMemory, parse_anchor, unit_label
 from .rules import correction_position
@@ -81,7 +82,7 @@ class UnitService:
         memory: StoryMemory | None = None,
         settings_source: Callable[[], dict[str, Any]] | None = None,
         provider_factory: ProviderFactory | None = None,
-        usage: UsageLog | None = None,
+        usage: Store | None = None,
         telemetry: Telemetry | None = None,
     ) -> None:
         self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)

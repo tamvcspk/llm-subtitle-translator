@@ -142,6 +142,21 @@ class PortTypeTests(unittest.TestCase):
         self.assertFalse(offenders, f"port methods must return named types: {offenders}")
 
 
+    # Low-level helpers of the store itself, used by ``JobStore`` for its own SQL; every other public method is a
+    # repository method and must return a named type (ADR-12).
+    STORE_HELPERS = {"query", "transaction"}
+
+    def test_no_store_method_returns_a_dict_like_type(self):
+        tree = ast.parse((PACKAGE_DIR / "store.py").read_text(encoding="utf-8"))
+        store = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Store")
+        offenders = [
+            f"Store.{fn.name}"
+            for fn in store.body
+            if isinstance(fn, ast.FunctionDef) and not fn.name.startswith("_") and fn.name not in self.STORE_HELPERS
+            and fn.returns is not None and self.offends(fn.returns)
+        ]
+        self.assertFalse(offenders, f"Store methods must return named types: {offenders}")
+
     def test_the_check_itself_tells_records_from_indexes(self):
         def bad(annotation):
             return self.offends(ast.parse(annotation, mode="eval").body)

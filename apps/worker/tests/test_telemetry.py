@@ -27,7 +27,7 @@ from gst_worker.config import normalize_app_config
 from gst_worker.glossaries import GlossaryFiles
 from gst_worker.library import Library
 from gst_worker.logs import RedactingFormatter, set_log_level
-from gst_worker.ports import BodyRef, Telemetry as TelemetryPort, TelemetryRepo
+from gst_worker.ports import BodyRef, Telemetry as TelemetryPort
 from gst_worker.redaction import REDACTED, Redactor
 from gst_worker.settings import SettingsService
 from gst_worker.store import Store
@@ -789,9 +789,6 @@ class StoreRecordTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.store = Store(Path(directory.name) / "app.db")
         self.addCleanup(self.store.close)
-
-    def test_the_store_is_the_telemetry_repo(self):
-        self.assertIsInstance(self.store, TelemetryRepo)
 
     def test_events_come_back_newest_first_as_named_values_and_filter(self):
         a = self.store.add_event("job.claimed", job_id="j1", unit_id=1, reason="first", data={"model": "m"}, at=10.0)

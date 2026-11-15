@@ -42,7 +42,8 @@ from subcore.memory import (
 )
 from subcore.providers import Provider
 
-from .ports import CatalogRepo, MediaLibrary, MemoryRepo, Series, TranslationVersion, Unit
+from .ports import MediaLibrary, Series, TranslationVersion, Unit
+from .store import Store
 from .translation import ContextGapError
 from .versions import RETRANSLATE, sha256_file
 
@@ -104,8 +105,8 @@ class MemoryPlan:
 class StoryMemory:
     def __init__(
         self,
-        facts: MemoryRepo,
-        units: CatalogRepo,
+        facts: Store,
+        units: Store,
         *,
         settings_source: Callable[[], dict[str, Any]] | None = None,
         media: MediaLibrary | None = None,

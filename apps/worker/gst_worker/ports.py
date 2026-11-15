@@ -1,12 +1,11 @@
-"""Ports of the worker core (SPEC ADR-8).
+"""Ports of the worker core, and the named types its storage returns (SPEC ADR-8, ADR-12).
 
-A port is a narrow ``Protocol`` that the core defines for something it needs from outside: storage, the
-queue, Bazarr, TMDB, the provider. Adapters (``store.py`` for SQLite today) implement it; the core only
-ever sees these types. Ports return named, immutable types, never ``dict`` or ``sqlite3.Row``, so column
-names exist only inside the adapter. Wiring happens in ``RuntimeContext`` and ``worker.py``.
-
-While ``Store`` still implements several ports at once, a port's method names carry the port's prefix
-(``auth_account``) so they do not collide there.
+A port is a narrow ``Protocol`` for something the core needs from outside and does not own: Bazarr
+(``MediaLibrary``), TMDB (``Metadata``), the model provider (``ProviderFactory``), and the ``Telemetry`` sink.
+Adapters implement them; the core only ever sees these types. The application's own SQLite (``store.py``) is
+not behind a port since P8: the core uses ``Store`` directly and tests run it on ``:memory:``. The record
+types below are what ``Store`` returns, so column names stay inside it; ``test_core_boundary`` checks that no
+``Store`` method returns a ``dict`` or ``sqlite3.Row``. Wiring happens in ``RuntimeContext`` and ``worker.py``.
 """
 
 from __future__ import annotations
@@ -55,35 +54,6 @@ class SettingRow:
     key: str
     value: Any
     updated_at: float = 0.0
-
-
-@runtime_checkable
-class SettingsRepo(Protocol):
-    """Where the console settings and the API keys live (FR-20, ADR-13). ``setting_*`` and ``api_key_*``."""
-
-    def settings_rows(self) -> list[SettingRow]:
-        """Every stored setting, including the importer's own markers (keys that start with ``_``)."""
-
-    def setting_save(self, values: dict[str, Any]) -> None:
-        """Insert or replace these settings in one transaction."""
-
-    def api_keys(self, provider: str | None = None) -> list[ApiKey]:
-        """Stored keys oldest first (the order they were added), for one provider or all."""
-
-    def api_key_add(self, provider: str, label: str, value: str, status: str = KEY_OK) -> ApiKey:
-        """Add a key and return it."""
-
-    def api_key_update(
-        self, key_id: int, *, label: str | None = None, value: str | None = None, status: str | None = None,
-    ) -> ApiKey | None:
-        """Change a key; a new ``value`` also sets the status to ``ok`` unless ``status`` says otherwise.
-        None when there is no such key."""
-
-    def api_key_delete(self, key_id: int) -> bool:
-        """Remove a key; False when there was none."""
-
-    def api_key_touch(self, key_id: int, at: float | None = None) -> None:
-        """Record that the key was just used."""
 
 
 @dataclass(frozen=True)
@@ -284,97 +254,6 @@ class Correction:
 
 
 @runtime_checkable
-class AuthRepo(Protocol):
-    """The single console account and the key its sessions are signed with."""
-
-    def auth_account(self) -> Account | None:
-        """The account, or None before the first run has created one."""
-
-    def save_auth_account(self, user: str, password_hash: str) -> None:
-        """Create or overwrite the account. Every write also rotates the session secret, ending all sessions."""
-
-    def auth_session_secret(self) -> str | None:
-        """Hex session secret; None without an account. Stable until the account is next written."""
-
-
-@runtime_checkable
-class UsageLog(Protocol):
-    """Record of every provider call, for the call history and token totals."""
-
-    def record_llm_call(
-        self,
-        job_id: str,
-        *,
-        provider: str,
-        model: str,
-        task: str,
-        tokens_in: int,
-        tokens_out: int,
-        latency_ms: int,
-        outcome: str,
-        at: float | None = None,
-        kind: str = "",
-        prompt_version: str = "",
-        bundle_hash: str = "",
-        style_hash: str = "",
-        glossary_hash: str = "",
-        batch: int = 0,
-        http_status: int | None = None,
-        finish_reason: str = "",
-        retries: int = 0,
-        repairs: int = 0,
-        cost_est: float = 0.0,
-    ) -> int:
-        """Append one call and return its id; ``at`` defaults to now. Everything after ``at`` is optional."""
-
-    def llm_calls(self, job_id: str | None = None) -> list[LlmCall]:
-        """Calls in the order recorded, for one job or (without ``job_id``) all of them."""
-
-    def token_totals(self, since: float = 0.0) -> TokenTotals:
-        """Number of calls and token sums for calls at or after ``since`` (epoch seconds)."""
-
-
-@runtime_checkable
-class TelemetryRepo(Protocol):
-    """Where the event log, quality signals and the body index live (FR-19, ADR-15)."""
-
-    def add_event(
-        self, kind: str, *, level: str = "INFO", job_id: str = "", unit_id: int | None = None, reason: str = "",
-        data: dict[str, Any] | None = None, at: float | None = None,
-    ) -> int:
-        """Append one event and return its id."""
-
-    def events(
-        self, *, job_id: str | None = None, unit_id: int | None = None, kind: str | None = None,
-        since: float | None = None, before_id: int | None = None, limit: int = 100,
-    ) -> list[EventRecord]:
-        """Events newest first. ``kind`` matches exactly, or as a prefix when it ends with a dot (``job.``)."""
-
-    def prune_events(self, before: float) -> int:
-        """Delete events older than ``before`` (epoch seconds); returns how many."""
-
-    def add_signal(
-        self, kind: str, *, unit_id: int | None = None, version: int | None = None, cue: int | None = None,
-        before: str = "", after: str = "", meta: dict[str, Any] | None = None, at: float | None = None,
-    ) -> int:
-        """Append one quality signal and return its id."""
-
-    def signals(
-        self, *, kind: str | None = None, unit_id: int | None = None, limit: int = 100
-    ) -> list[QualitySignal]:
-        """Quality signals newest first."""
-
-    def add_body_ref(self, call_id: int, file: str, offset: int, length: int) -> None:
-        """Remember where the body of a call was written."""
-
-    def body_ref(self, call_id: int) -> BodyRef | None:
-        """Where the body of a call is, or None when none was kept."""
-
-    def mark_bodies_rotated(self, files: Iterable[str]) -> int:
-        """Mark every body index row of these segment names as rotated; returns how many rows."""
-
-
-@runtime_checkable
 class Telemetry(Protocol):
     """What the core uses to leave a trace of its decisions. Best effort: it never raises and never blocks
     the job (NFR-11). ``kind`` of an event is a dotted name; ``reason`` is a sentence for the admin."""
@@ -396,167 +275,6 @@ class Telemetry(Protocol):
         bundle_hash: str = "", style_hash: str = "",
     ) -> None:
         """Record one provider call and, as the settings allow, its prompt and answer."""
-
-
-@runtime_checkable
-class VersionRepo(Protocol):
-    """History of every target subtitle file, keyed by output path, plus the result cache (NFR-3)."""
-
-    def current_version(self, output_path: str) -> TranslationVersion | None:
-        """The version whose ``status`` is ``current``, if any."""
-
-    def versions(self, output_path: str) -> list[TranslationVersion]:
-        """All versions of one file, oldest first."""
-
-    def get_version(self, output_path: str, version: int) -> TranslationVersion | None:
-        """One version by number."""
-
-    def next_version(self, output_path: str) -> int:
-        """Number the next version of this file should get (1 for a new file)."""
-
-    def add_version(
-        self,
-        output_path: str,
-        *,
-        version: int,
-        stored_path: str,
-        sha256: str,
-        trigger: str,
-        make_current: bool = True,
-        source_path: str = "",
-        source_sha256: str = "",
-        target_lang: str = "",
-        context_hash: str = "",
-        parent_version: int | None = None,
-        model: str = "",
-        tokens_in: int = 0,
-        tokens_out: int = 0,
-        unit_id: int | None = None,
-        glossary_hash: str = "",
-        context_complete: bool = True,
-        memory_hash: str = "",
-        missing_units: Iterable[str] = (),
-        status: str | None = None,
-        origin: str = "",
-        publishing: bool = False,
-        job_id: str = "",
-        edited_at: float = 0.0,
-    ) -> None:
-        """Record a version. ``status`` defaults to current (or superseded without ``make_current``). A ``current``
-        or ``removed`` version atomically supersedes the file's previous current one; a candidate supersedes nothing."""
-
-    def set_version(self, output_path: str, version: int, **fields: Any) -> None:
-        """Change ``status``, ``publishing``, ``stored_path``, ``sha256`` or ``edited_at`` of one version. Setting
-        ``status`` to current supersedes the file's other current version in the same transaction."""
-
-    def publishing_versions(self) -> list[TranslationVersion]:
-        """Versions whose publish was announced and not confirmed (checked again at start-up, FR-16.5)."""
-
-    def current_versions(self) -> list[TranslationVersion]:
-        """The current version of every file that has one."""
-
-    def cached_versions(self, source_sha256: str, target_lang: str, context_hash: str) -> list[TranslationVersion]:
-        """Auto and retranslate versions made from the same input and context, newest first."""
-
-
-@runtime_checkable
-class MemoryRepo(Protocol):
-    """Story memory (FR-5): facts per unit, the cache of compressed arcs, and the snapshots of context bundles."""
-
-    def get_facts(
-        self, unit_id: int, source_sha256: str, prompt_version: str, *, touch: bool = False
-    ) -> StoredFacts | None:
-        """Facts for exactly this source and prompt version. ``touch`` marks them as the newest in use."""
-
-    def save_facts(
-        self,
-        unit_id: int,
-        source_sha256: str,
-        prompt_version: str,
-        *,
-        model: str,
-        facts: Facts,
-        tokens_in: int = 0,
-        tokens_out: int = 0,
-    ) -> None:
-        """Store facts, replacing any for the same unit, source and prompt version; they become the newest."""
-
-    def latest_facts(self, unit_ids: Iterable[int], prompt_version: str) -> dict[int, StoredFacts]:
-        """For each unit with any, the facts most recently saved or used under ``prompt_version``."""
-
-    def get_summary(self, input_hash: str) -> str | None:
-        """A compressed arc by the hash of the entries it summarizes."""
-
-    def put_summary(self, series_id: int, up_to_unit: int, input_hash: str, text: str) -> None:
-        """Cache a compressed arc."""
-
-    def put_snapshot(self, memory_hash: str, sections: Iterable[tuple[str, str]]) -> None:
-        """Keep the (title, body) sections of the context a fingerprint stands for."""
-
-    def get_snapshot(self, memory_hash: str) -> list[tuple[str, str]] | None:
-        """The sections kept for a fingerprint, or None."""
-
-
-@runtime_checkable
-class CatalogRepo(Protocol):
-    """The library: series, units (episodes and movies), their target files and episode corrections."""
-
-    def upsert_series(self, key: str, *, title: str = "", bazarr_id: str = "") -> int:
-        """Id of the series with this key, created if new. A non-blank ``title``/``bazarr_id`` refreshes it."""
-
-    def get_series(self, series_id: int) -> Series | None:
-        """One series by id."""
-
-    def list_series(self) -> list[Series]:
-        """All series by title (case-insensitive), then id."""
-
-    def set_series_memory(self, series_id: int, *, memory: str | None = None, specials_after: str | None = None) -> None:
-        """Set the story-memory policy and/or the season-0 anchor; a field left as None stays as it is."""
-
-    def upsert_unit(
-        self,
-        *,
-        series_id: int | None = None,
-        movie_key: str | None = None,
-        season: int | None = None,
-        episode: int | None = None,
-        title: str = "",
-        media_type: str = "",
-        bazarr_id: str = "",
-        video_path: str = "",
-        source_path: str = "",
-        source_code: str = "",
-        source_language: str = "",
-    ) -> int:
-        """Id of the unit, created if new. Identity is (series, season, episode) or the movie key (exactly one
-        of ``series_id`` and ``movie_key``). A blank field never erases a known value."""
-
-    def get_unit(self, unit_id: int) -> Unit | None:
-        """One unit by id."""
-
-    def find_unit(self, series_id: int, season: int, episode: int) -> Unit | None:
-        """The episode of a series, if known."""
-
-    def list_units(self, series_id: int | None = None, *, movies: bool = False) -> list[Unit]:
-        """Episodes of a series by season and episode, or (``movies``) all movies by title."""
-
-    def set_output(self, unit_id: int, target_lang: str, output_path: str, target_language: str = "") -> None:
-        """Record a unit's target file for a language; a blank ``target_language`` keeps the known one."""
-
-    def outputs(self, unit_id: int) -> list[Output]:
-        """The target files of a unit, by language."""
-
-    def add_correction(self, unit_id: int, target_lang: str, kind: str, payload: dict[str, Any]) -> int:
-        """Store an active correction; returns its id."""
-
-    def get_correction(self, correction_id: int) -> Correction | None:
-        """One correction by id, active or not."""
-
-    def corrections(self, unit_id: int, target_lang: str, *, active_only: bool = True) -> list[Correction]:
-        """Corrections of a unit in a language, oldest first."""
-
-    def deactivate_correction(self, correction_id: int) -> bool:
-        """Turn an active correction off; False when it was not active (or does not exist)."""
 
 
 class ProviderFactory(Protocol):

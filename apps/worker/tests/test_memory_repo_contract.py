@@ -1,4 +1,4 @@
-"""Contract of the MemoryRepo port (SPEC criterion 10b): the same checks on SQLite and on an in-memory fake."""
+"""Contract of the story-memory storage (facts, summaries, snapshots) on the real SQLite store (ADR-12)."""
 
 import itertools
 import tempfile
@@ -8,52 +8,10 @@ from pathlib import Path
 
 from subcore.memory import Character, Facts
 
-from gst_worker.ports import MemoryRepo, StoredFacts
+from gst_worker.ports import StoredFacts
 from gst_worker.store import Store
 
 PV = "x3"
-
-
-class InMemoryMemoryRepo:
-    """Fake MemoryRepo for tests that do not need a database."""
-
-    def __init__(self) -> None:
-        self._facts: dict[tuple[int, str, str], StoredFacts] = {}
-        self._tick = itertools.count(1)
-        self._order: dict[tuple[int, str, str], int] = {}
-        self._summaries: dict[str, str] = {}
-        self._snapshots: dict[str, list[tuple[str, str]]] = {}
-
-    def get_facts(self, unit_id, source_sha256, prompt_version, *, touch=False):
-        key = (unit_id, source_sha256, prompt_version)
-        found = self._facts.get(key)
-        if found is not None and touch:
-            self._order[key] = next(self._tick)
-        return found
-
-    def save_facts(self, unit_id, source_sha256, prompt_version, *, model, facts, tokens_in=0, tokens_out=0):
-        key = (unit_id, source_sha256, prompt_version)
-        self._facts[key] = StoredFacts(
-            unit_id, source_sha256, prompt_version, model, facts, facts.hash, tokens_in, tokens_out, time.time()
-        )
-        self._order[key] = next(self._tick)
-
-    def latest_facts(self, unit_ids, prompt_version):
-        wanted = set(unit_ids)
-        keys = sorted((k for k in self._facts if k[0] in wanted and k[2] == prompt_version), key=self._order.get)
-        return {k[0]: self._facts[k] for k in keys}
-
-    def get_summary(self, input_hash):
-        return self._summaries.get(input_hash)
-
-    def put_summary(self, series_id, up_to_unit, input_hash, text):
-        self._summaries[input_hash] = text
-
-    def put_snapshot(self, memory_hash, sections):
-        self._snapshots[memory_hash] = [(str(a), str(b)) for a, b in sections]
-
-    def get_snapshot(self, memory_hash):
-        return self._snapshots.get(memory_hash)
 
 
 def facts(name="Ted", summary="") -> Facts:
@@ -63,16 +21,13 @@ def facts(name="Ted", summary="") -> Facts:
 class MemoryRepoContract:
     """Mixed into a TestCase that provides ``self.repo``. Facts need a unit row, made by ``self.unit()``."""
 
-    repo: MemoryRepo
+    repo: Store
 
     def unit(self) -> int:
         return len(getattr(self, "_units", [])) + 1
 
     def series(self) -> int:
         return 1
-
-    def test_satisfies_the_port(self):
-        self.assertIsInstance(self.repo, MemoryRepo)
 
     def test_empty_repo(self):
         self.assertIsNone(self.repo.get_facts(self.unit(), "sha", PV))
@@ -164,16 +119,6 @@ class SqliteMemoryRepoTests(MemoryRepoContract, unittest.TestCase):
         )
         self._units.append(unit_id)
         return unit_id
-
-
-class InMemoryMemoryRepoTests(MemoryRepoContract, unittest.TestCase):
-    def setUp(self):
-        self.repo = InMemoryMemoryRepo()
-        self._units = []
-
-    def unit(self) -> int:
-        self._units.append(len(self._units) + 1)
-        return self._units[-1]
 
 
 if __name__ == "__main__":

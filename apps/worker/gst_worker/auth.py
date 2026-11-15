@@ -23,7 +23,7 @@ from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import urlsplit
 
-from .ports import AuthRepo
+from .store import Store
 
 REALM = "LLM Subtitle Translator"
 
@@ -87,10 +87,10 @@ class ConsoleAuth:
     # repr=False keeps the secrets out of any accidental log/traceback of this object.
     user: str = field(default="", repr=False)
     password: str = field(default="", repr=False)
-    accounts: AuthRepo | None = field(default=None, repr=False, compare=False)
+    accounts: Store | None = field(default=None, repr=False, compare=False)
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str], store: AuthRepo | None = None) -> "ConsoleAuth":
+    def from_env(cls, env: Mapping[str, str], store: Store | None = None) -> "ConsoleAuth":
         if (env.get("CONSOLE_AUTH") or "").strip().lower() == "off":
             return cls(enabled=False)
         user = env.get("CONSOLE_USER") or ""

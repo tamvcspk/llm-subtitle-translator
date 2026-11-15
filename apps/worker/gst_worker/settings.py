@@ -40,7 +40,8 @@ from .config import (
     enabled_target_languages,
     normalize_app_config,
 )
-from .ports import KEY_EXHAUSTED, KEY_INVALID, KEY_OK, KEY_STATUSES, ApiKey, SettingsRepo, Telemetry
+from .ports import KEY_EXHAUSTED, KEY_INVALID, KEY_OK, KEY_STATUSES, ApiKey, Telemetry
+from .store import Store
 from .redaction import DEFAULT as DEFAULT_REDACTOR
 
 # Markers the worker leaves in the settings table (keys that start with "_" are never shown or edited).
@@ -82,7 +83,7 @@ class SettingsService:
 
     def __init__(
         self,
-        repo: SettingsRepo,
+        repo: Store,
         *,
         config_path: str = "",
         postprocess_targets_path: str = "",
