@@ -166,6 +166,16 @@ class Criterion13a(CatalogCase):
         self.assertEqual({env.label(b)["content"] for b in ("7101", "7102", "7103", "7104")},
                          {"missing", "translated", "external", "edited"})
 
+    def test_13a_a_file_the_worker_just_wrote_is_Translated_before_bazarr_is_read_again(self):
+        env = self.env()
+        env.episode(1)  # the cache still says vi is missing
+        env.sync.run()
+        self.assertEqual(env.label("7101")["text"], "Missing")
+        env.translated("7101")
+        self.assertEqual(env.label("7101")["text"], "Translated")
+        env.actions.request({"items": env.ids("7101")})  # and asking again is refused, not queued behind the stale cache
+        self.assertEqual(env.jobs_open(), [])
+
     def test_13a_a_translation_the_glossary_has_outgrown_is_Translated_and_Stale(self):
         env = self.env()
         env.episode(1, vi=True)

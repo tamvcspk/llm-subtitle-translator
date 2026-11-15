@@ -11,6 +11,7 @@ worked out for one series (or the movies) at a time.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .catalog import pick_source
@@ -82,9 +83,11 @@ class CatalogView:
         derived = target_output_path(picked[0].path, lang, str(picked[1]["code"])) if picked else ""
         listed = next((s for s in entry.subtitles if s.code == lang and not s.forced), None)
         stale = removed = False
-        if listed is not None:
+        # A file the worker just wrote is there before the next read of Bazarr says so: the cache may be minutes old.
+        written = listed is None and bool(derived) and Path(derived).is_file()
+        if listed is not None or written:
             content = "external"
-            path = listed.path or derived
+            path = (listed.path if listed is not None else "") or derived
             if unit is not None and path:
                 info = self.library.target_info(unit, Output(unit.id, lang, path))
                 if info["status"] != "untranslated" and not info["modified_outside"]:
