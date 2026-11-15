@@ -678,7 +678,10 @@ class JobQueue:
                 )
             except Exception:
                 settled_from = float("-inf")  # unreadable: let the run fail it visibly
-            if current_time - settled_from >= settle_seconds and (best is None or priority > best[0]):
+            # No settle window means start at once: a file stamped a few ms "in the future" (Windows rounds its
+            # modification time up) must not wait for the clock to catch up.
+            settled = settle_seconds == 0 or current_time - settled_from >= settle_seconds
+            if settled and (best is None or priority > best[0]):
                 best = (priority, job_path)
         return best[1] if best else None
 

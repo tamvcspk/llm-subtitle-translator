@@ -284,6 +284,29 @@ class TestWorkerQueueTests(unittest.TestCase):
             self.assertTrue((queue_dir / "done" / "settle-race.json").exists())
             self.assertEqual(output.read_text(encoding="utf-8"), "embedded zh subtitle")
 
+    def test_no_settle_window_means_a_subtitle_stamped_slightly_ahead_of_the_clock_still_starts(self):
+        """Windows rounds a modification time up, so a file just written can be a few ms "in the future"."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            queue_dir = root / "queue"
+            for state in ("pending", "processing", "done", "failed"):
+                (queue_dir / state).mkdir(parents=True)
+            subtitle = root / "Movie.en.srt"
+            output = root / "Movie.zh.srt"
+            subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+            output.write_text("embedded zh subtitle", encoding="utf-8")
+            os.utime(subtitle, (1_000.005, 1_000.005))
+            job = {
+                "job_id": "ahead", "created_at": 1_000, "subtitle_path": str(subtitle), "output_path": str(output),
+                "source_code": "en", "target_code": "zh", "provider": "embeddedsubtitles",
+            }
+            (queue_dir / "pending" / "ahead.json").write_text(json.dumps(job), encoding="utf-8")
+            queue_worker = worker.QueueWorker(
+                str(queue_dir), {"job_settle_seconds": 0}, gst_http.MemoryCache(), FakeHTTP({}),
+            )
+
+            self.assertTrue(queue_worker.process_once(now=1_000.0))  # the clock is 5 ms behind the file
+            self.assertTrue((queue_dir / "done" / "ahead.json").exists())
 
     def test_queue_worker_processes_old_subtitle_without_waiting_for_new_queue_event(self):
         with tempfile.TemporaryDirectory() as tmp:
