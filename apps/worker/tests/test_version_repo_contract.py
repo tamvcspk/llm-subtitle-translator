@@ -69,6 +69,14 @@ class VersionRepoContract:
         self.assertEqual(self.repo.current_version(OUT).version, 1)
         self.assertEqual(self.repo.get_version(OUT, 2).status, SUPERSEDED)
 
+    def test_the_newest_status_is_read_without_the_history(self):
+        self.assertEqual(self.repo.latest_version_status(OUT), "")
+        add(self.repo, 1)
+        self.assertEqual(self.repo.latest_version_status(OUT), CURRENT)
+        add(self.repo, 2, trigger="remove", status=REMOVED)
+        self.assertEqual(self.repo.latest_version_status(OUT), REMOVED)
+        self.assertEqual(self.repo.latest_version_status("/media/Other.vi.srt"), "")
+
     def test_files_have_separate_histories(self):
         add(self.repo, 1)
         add(self.repo, 1, output="/media/Other.vi.srt")

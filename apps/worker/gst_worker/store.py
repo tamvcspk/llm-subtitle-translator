@@ -736,6 +736,14 @@ class Store:
             ).fetchone()
         return _version_from_row(row) if row else None
 
+    def latest_version_status(self, output_path: str) -> str:
+        """Status of the file's newest version, '' when it has none (one indexed row, not the whole history)."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT status FROM translations WHERE output_path = ? ORDER BY version DESC LIMIT 1", (output_path,)
+            ).fetchone()
+        return str(row["status"]) if row else ""
+
     def next_version(self, output_path: str) -> int:
         with self._lock:
             row = self._db.execute(

@@ -112,8 +112,7 @@ class TranslationVersions:
 
     def latest_status(self, output_path: str) -> str:
         """Status of the newest version of a file ('' when there is none): a removed one stays removed (FR-16.6)."""
-        rows = self.repo.versions(output_path)
-        return rows[-1].status if rows else ""
+        return self.repo.latest_version_status(output_path)
 
     def _note_external(self, output_path: str) -> TranslationVersion | None:
         """Keep a file that is not the stored current version as an ``external`` version, once per content.
