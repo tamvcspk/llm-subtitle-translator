@@ -22,7 +22,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P6** | Cài đặt và khoá API trong DB (FR-20, NFR-5, ADR-13): `settings`, `api_keys`, hiệu lực ngay, Thử khoá | Tiêu chí 19: đổi cài đặt và khoá không cần khởi động lại; khoá gieo từ env lần đầu; chỉ trả 4 ký tự cuối; backup không gồm khoá | `[~]` Code, test (tiêu chí 19 a, b, c, e, f) và docs xong; CI GitHub xanh (4e6fffc); còn thử giao diện trên trình duyệt thật. 19d chờ P8 |
 | **P7** | Provider thứ hai `openai_compat` (FR-9.1–9.3) | Tiêu chí 22: cùng fixture qua `fake` và `openai_compat` (server giả cục bộ) cho cùng kết quả validate; 401/429/5xx/đầu ra sai thành exception có kiểu; model chọn theo tác vụ; khoá lấy từ `api_keys`, không lộ | `[~]` Code, test (tiêu chí 22 a–e, server giả cục bộ), docs xong; CI GitHub xanh (270f9b2); còn thử tay Ollama/OpenRouter thật và giao diện |
 | **P8** | Lõi job và phiên bản trong SQLite (FR-15, FR-16, FR-17, ADR-11, ADR-12): `jobs`, scheduler, lease, breaker, chờ thay vì fail, phiên bản có `candidate`/`removed`, importer từ queue file, bỏ port nội bộ | Tiêu chí 14 a–l và 15 a–i; test cũ chuyển sang SQLite `:memory:` vẫn pass; `gst_enqueue.sh` vẫn chạy được qua importer | `[~]` Job, scheduler, lease, breaker, chờ, importer, gap, phiên bản FR-16 (candidate, removed, publish an toàn, Dùng bản này) và `refresh` nền xong với test (14a–l, 15a–i, 13i); ADR-12 xong (bỏ Protocol cho kho SQLite, test trên `Store(":memory:")`); CI GitHub xanh (187d305); còn thử giao diện trên trình duyệt thật và mốc reset Gemini chưa đối chiếu với provider thật (xem "Việc treo của P8") |
-| **P9** | Dọn file (FR-13): dòng `jobs` đã xong, bản sao phiên bản, lịch sử glossary, file tạm; `retention_*`, xem trước và **Dọn ngay** | Tiêu chí 12 a–f: dọn đúng nhóm, không đụng media, job chưa xong, phiên bản `current` | `[~]` Code, test (tiêu chí 12 a–f, `test_cleanup.py`) và docs xong; còn CI GitHub xanh và thử giao diện (Settings → Clean-up, Backups → Clean up files) trên trình duyệt thật |
+| **P9** | Dọn file (FR-13): dòng `jobs` đã xong, bản sao phiên bản, lịch sử glossary, file tạm; `retention_*`, xem trước và **Dọn ngay** | Tiêu chí 12 a–f: dọn đúng nhóm, không đụng media, job chưa xong, phiên bản `current` | `[x]` Code, test (tiêu chí 12 a–f, `test_cleanup.py`) và docs xong; CI GitHub xanh (a574e10). Giao diện chưa thử trên trình duyệt thật, để session Brainstorming UI |
 | **P10** | Bazarr kéo và Library/Missing (FR-14, FR-15.4–15.6, ADR-10): `catalog_items`, đồng bộ, nhãn dẫn xuất, yêu cầu hàng loạt có ước lượng, Ignored, policy tự yêu cầu; gỡ script, `held`/`rejected`, tab Held | Tiêu chí 13 a–i; chạy thật trên Bazarr thật (Malcolm): yêu cầu tay, rồi bật `auto_request` cho một series | `[ ]` |
 | **P11** | Bundle và CLI khai báo (FR-21, ADR-16): `subcore.bundle`, `gather`, `render-prompt`/`validate`/`compare`, xuất job spec | Tiêu chí 18: cùng bundle cho cùng prompt ở CLI và worker; `subcore` không import `gst_worker`/`sqlite3`; bundle không chứa khoá | `[ ]` |
 | **P12** | Style profile và glossary vào DB (FR-18, ADR-14): form style, thẻ nhân vật, preset thể loại, few-shot từ cue đã sửa, xem thử, `variant` + A/B | Tiêu chí 16 a–g | `[ ]` |
@@ -248,7 +248,7 @@ FR-15, FR-16, FR-17, FR-13.7; ADR-11, ADR-12; NFR-10 (sửa); tiêu chí 14, 15.
 - [x] Workflow **CI** trên GitHub xanh cho commit P8 (187d305: CI run 43709586822 và "Docker image" run 43709586746 đều thành công; commit P8 là eeb4e04, ADR-12 là 2b990f3).
 - [ ] **Việc treo của P8 (để wrap-up, không chặn P9):** (1) thử giao diện trên trình duyệt thật (tab Lịch sử: "Use this version", "Delete subtitle", trạng thái candidate/removed; nút Stop và "Request earlier episodes" ở tab hàng đợi); (2) đối chiếu mốc reset quota Gemini (giờ Thái Bình Dương) với provider thật, SPEC §8 câu hỏi mở 1; (3) nhãn "Removed" ở Library trên console (API đã có cờ `removed`); (4) `JobStore` còn trả `dict` cho payload job, đổi sang kiểu có tên nếu muốn 10c chặt hơn; (5) trạng thái `pruned` (xong ở P9).
 
-## P9 — Dọn file (FR-13) `[~]`
+## P9 — Dọn file (FR-13) `[x]`
 
 FR-13, tiêu chí 12, quyết định #11. Làm ngay sau P8: nhóm "file job `done/`, `failed/`" đã thành dòng `jobs` (FR-13.7), nên dọn file nhắm vào bảng `jobs` chứ không còn nhắm vào thư mục queue.
 
@@ -260,7 +260,8 @@ FR-13, tiêu chí 12, quyết định #11. Làm ngay sau P8: nhóm "file job `do
 - [x] HTTP API (`dry_run`) + `docs/API.md`. **Làm:** `POST /api/cleanup`, mặc định chỉ xem trước.
 - [x] Test tiêu chí 12 (a–f), gồm cây thư mục media giả có phụ đề và `.tmp` mồ côi để chắc không file nào bị đụng. **Làm:** `tests/test_cleanup.py` (30+ test; cây media giả, `.tmp` mồ côi, dòng phiên bản trỏ vào media, nhóm hỏng không chặn nhóm khác).
 - [x] Docs: `docs/CONFIGURATION.md` (`retention_*`), `docs/API.md`, `CONTEXT.md` nếu có thuật ngữ mới, `AGENTS.md` (dọn file không bao giờ đụng media), `CHANGELOG.md`; chuyển phần thiết kế FR-13 vào ARCHITECTURE. **Làm:** CONFIGURATION (mục File Clean-up), API, CONTEXT, AGENTS, CHANGELOG, `docs/ARCHITECTURE.md`, design/ARCHITECTURE ("Đã làm ở P9").
-- [ ] Workflow **CI** trên GitHub xanh cho commit P9.
+- [x] Workflow **CI** trên GitHub xanh cho commit P9 (a574e10: CI run 43711864942 và "Docker image" run 43711864718 đều thành công).
+- [ ] **Việc treo của P9 (không chặn P10):** thử giao diện Settings → Clean-up và Backups → Clean up files trên trình duyệt thật; giao diện sẽ được cải thiện trong session Brainstorming riêng.
 
 ## P10 — Bazarr kéo, Library/Missing, policy `[ ]`
 
