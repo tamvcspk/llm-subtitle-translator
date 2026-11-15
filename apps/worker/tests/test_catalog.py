@@ -555,6 +555,21 @@ class Criterion13g(CatalogCase):
         env.clock.advance(86_400)  # tomorrow: a new day's cap
         self.assertEqual(env.auto.run().created, 2)
 
+    def test_13g_the_cap_is_said_once_not_at_every_sync(self):
+        events = []
+
+        class Sink:
+            def event(self, kind, **data):
+                events.append(kind)
+
+        env = self.two_series(auto_request=True, auto_request_daily_cap=2)
+        env.auto.telemetry = Sink()
+        env.auto.run()
+        env.auto.run()
+        env.auto.run()
+        self.assertEqual(events.count("policy.capped"), 1)
+        self.assertEqual(events.count("policy.requested"), 1)
+
     def test_13g_the_policy_is_off_by_default_and_a_movie_needs_the_global_switch(self):
         env = self.env()
         movie_dir = env.media_dir / "Heat"

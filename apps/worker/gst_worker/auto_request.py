@@ -56,6 +56,7 @@ class AutoRequest:
         self._config = config_source
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
         self._clock = clock
+        self._last_capped = 0
 
     def in_scope(self) -> list[CatalogEntry]:
         """The items the policy may request: episodes of series it is on for, and movies when it is on globally."""
@@ -90,10 +91,12 @@ class AutoRequest:
                 "policy.requested", reason=f"auto_request asked for {result.created} translation(s) of items Bazarr lists as missing",
                 jobs=result.created, considered=result.considered,
             )
-        if result.capped:
+        # The same "N stay Missing" every few minutes is noise; say it again only when the number changes.
+        if result.capped and result.capped != self._last_capped:
             self.telemetry.event(
                 "policy.capped", level="WARNING",
                 reason=f"auto_request_daily_cap={cap} is spent; {result.capped} item(s) stay Missing until tomorrow",
                 capped=result.capped,
             )
+        self._last_capped = result.capped
         return result
