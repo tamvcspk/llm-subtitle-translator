@@ -25,7 +25,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P8** | Lõi job và phiên bản trong SQLite (FR-15, FR-16, FR-17, ADR-11, ADR-12): `jobs`, scheduler, lease, breaker, chờ thay vì fail, phiên bản có `candidate`/`removed`, importer từ queue file, bỏ port nội bộ | Tiêu chí 14 a–l và 15 a–i; test cũ chuyển sang SQLite `:memory:` vẫn pass; `gst_enqueue.sh` vẫn chạy được qua importer | `[~]` Job, scheduler, lease, breaker, chờ, importer, gap, phiên bản FR-16 (candidate, removed, publish an toàn, Dùng bản này) và `refresh` nền xong với test (14a–l, 15a–i, 13i); ADR-12 xong (bỏ Protocol cho kho SQLite, test trên `Store(":memory:")`); CI GitHub xanh (187d305); còn thử giao diện trên trình duyệt thật và mốc reset Gemini chưa đối chiếu với provider thật (xem "Việc treo của P8") |
 | **P9** | Dọn file (FR-13): dòng `jobs` đã xong, bản sao phiên bản, lịch sử glossary, file tạm; `retention_*`, xem trước và **Dọn ngay** | Tiêu chí 12 a–f: dọn đúng nhóm, không đụng media, job chưa xong, phiên bản `current` | `[x]` Code, test (tiêu chí 12 a–f, `test_cleanup.py`) và docs xong; CI GitHub xanh (a574e10). Giao diện chưa thử trên trình duyệt thật, để session Brainstorming UI |
 | **P10** | Bazarr kéo và Library/Missing (FR-14, FR-15.4–15.6, ADR-10): `catalog_items`, đồng bộ, nhãn dẫn xuất, yêu cầu hàng loạt có ước lượng, Ignored, policy tự yêu cầu; gỡ script, `held`/`rejected`, tab Held | Tiêu chí 13 a–i; chạy thật trên Bazarr thật (Malcolm): yêu cầu tay, rồi bật `auto_request` cho một series | `[x]` Code, test (tiêu chí 13 a–i, `test_catalog.py`, `test_job_intake.py`) và docs xong; CI GitHub xanh (d6c5832); thăm dò Bazarr thật và thử Malcolm xong (2026-11-15); giao diện chưa thử trên trình duyệt thật, để session Brainstorming UI |
-| **P11** | Bundle và CLI khai báo (FR-21, ADR-16): `subcore.bundle`, `gather`, `render-prompt`/`validate`/`compare`, xuất job spec | Tiêu chí 18: cùng bundle cho cùng prompt ở CLI và worker; `subcore` không import `subserver`/`sqlite3`; bundle không chứa khoá | `[~]` code và test xong; chờ CI GitHub xanh |
+| **P11** | Bundle và CLI khai báo (FR-21, ADR-16): `subcore.bundle`, `gather`, `render-prompt`/`validate`/`compare`, xuất job spec | Tiêu chí 18: cùng bundle cho cùng prompt ở CLI và worker; `subcore` không import `subserver`/`sqlite3`; bundle không chứa khoá | `[x]` CI GitHub xanh (9eb399d, PR #1) |
 | **P12** | Style profile và glossary vào DB (FR-18, ADR-14): form style, thẻ nhân vật, preset thể loại, few-shot từ cue đã sửa, xem thử, `variant` + A/B | Tiêu chí 16 a–g | `[ ]` |
 | **P13** | `suggestions` + Review inbox lõi (FR-4.4, FR-11.1, FR-11.1.5) | Tiêu chí 21 c–h: chấp nhận/sửa/từ chối/hàng loạt ghi vào glossary trong DB, hiện số bản dịch stale, từ chối không bị sinh lại, `auto_accept` theo loại, badge nav; mọi `source` qua cùng use case | `[ ]` |
 | **P14** | Bộ sinh đề xuất từ facts và thẻ nhân vật (FR-6, FR-18.3) | Tiêu chí 21 a–b: đề xuất `address_rule` và `term` `pending` kèm bằng chứng cue và timecode, chưa áp dụng vào bản dịch nào | `[ ]` |
@@ -288,7 +288,7 @@ FR-14, FR-15.4–15.6, FR-15.12; ADR-10; tiêu chí 13.
 - [x] Workflow **CI** trên GitHub xanh cho commit P10 (d6c5832: CI run 43721863186 và "Docker image" run 43721863146 đều thành công; trước đó 5d7afcc và 8218786 cũng xanh).
 - [ ] **Việc treo của P10 (không chặn P11):** (1) thử giao diện Library, Settings và Queue trên trình duyệt thật; (2) bỏ `targets.json` khỏi settings và backup (còn ghi cho tương thích), bỏ trang Bazarr wanted và Media scan khi Library đủ dùng; (3) phát hiện file đích biến mất ngoài console lúc đồng bộ (FR-16.6); (4) đồng bộ tăng dần chỉ khi thư viện lớn hơn nhiều (thăm dò: 5 s cho 2073 tập, chưa cần); (5) cập nhật `.claude/skills` còn nhắc script Bazarr (`upstream-sync`, `implement-phase`).
 
-## P11 — Bundle và CLI khai báo `[~]`
+## P11 — Bundle và CLI khai báo `[x]`
 
 FR-21, NFR-12; ADR-16; tiêu chí 18.
 
@@ -298,7 +298,7 @@ FR-21, NFR-12; ADR-16; tiêu chí 18.
 - [x] `GET /api/jobs/{id}/spec` và nút **Xuất job spec** trên console.
 - [x] Test tiêu chí 18 a–h, gồm test import (`subcore`/CLI không import `subserver`, `sqlite3`); docs: `packages/subcore/README.md`, `docs/API.md`, `AGENTS.md` ("Development Commands" và ranh giới), `CHANGELOG.md`.
 - [x] Bundle thuần (FR-21.6): chỉ chứa thứ đi vào `render(bundle)`, few-shot nhúng giá trị đã chọn; hàm đọc thuần trong `subcore` (bundle, dải cue) → các mục glossary khớp, cho trang tập, không lưu và không vào hash. Test: đổi hàm này không đổi `bundle_hash`; hash chỉ đổi khi prompt hoặc tham số đổi.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P11.
+- [x] Workflow **CI** trên GitHub xanh cho commit P11 (9eb399d, PR #1).
 
 ## P12 — Style profile, glossary vào DB, xem thử, variant `[ ]`
 
