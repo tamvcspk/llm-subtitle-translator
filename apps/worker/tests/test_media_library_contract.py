@@ -1,9 +1,10 @@
 """Contract of the MediaLibrary port (SPEC criterion 10b): the same checks on the Bazarr adapter and on a fake."""
 
 import unittest
+from unittest.mock import patch
 
 from gst_worker.bazarr import BazarrMedia
-from gst_worker.ports import EpisodeListing, MediaDetails, MediaLibrary
+from gst_worker.ports import CatalogEntry, CatalogSubtitle, EpisodeListing, MediaDetails, MediaLibrary, MediaLibraryError
 
 
 class InMemoryMediaLibrary:
@@ -12,6 +13,18 @@ class InMemoryMediaLibrary:
 
     def __init__(self):
         self.refreshed = []
+
+    def catalog(self):
+        yield CatalogEntry(kind="series", bazarr_id="7", title="Show", tvdb_id="70")
+        yield CatalogEntry(
+            kind="episode", bazarr_id="11", parent_bazarr_id="7", tvdb_id="70", season=1, episode=1, title="One",
+            video_path="/m/S01E01.mkv", subtitles=(CatalogSubtitle("en", "/m/S01E01.en.srt"),),
+        )
+        yield CatalogEntry(
+            kind="episode", bazarr_id="12", parent_bazarr_id="7", tvdb_id="70", season=1, episode=2, title="Two",
+            video_path="/m/S01E02.mkv", missing=("vi",),
+        )
+        yield CatalogEntry(kind="movie", bazarr_id="5", title="Heat", video_path="/m/Heat.mkv", missing=("vi",))
 
     def describe(self, media_type, series_id, media_id):
         if media_type == "series" and series_id == "7" and media_id == "9":
@@ -43,19 +56,24 @@ class FakeBazarrHttp:
     def __init__(self):
         self.sent = []
         self.timeouts = []
+        self.requests = []
 
     def get_json(self, url, params=None, headers=None):
+        self.requests.append((url, dict(params or {})))
         if url.endswith("/api/series"):
-            return {"data": [{"title": "Show", "tvdbId": 70}]}
+            return {"data": [{"title": "Show", "tvdbId": 70, "sonarrSeriesId": 7}], "total": 1}
         if url.endswith("/api/movies"):
-            return {"data": [{"title": "Heat"}]}
+            return {"data": [{"title": "Heat", "radarrId": 5, "path": "/m/Heat.mkv",
+                              "missing_subtitles": [{"code2": "vi"}, {"code2": "fr", "forced": True}]}], "total": 1}
         if params and "episodeid[]" in params:
             return {"data": [{"season": 1, "episode": 2, "title": "Two",
                               "missing_subtitles": [{"code2": "vi"}]}]}
         return {"data": [
             {"season": 1, "episode": 1, "title": "One", "sonarrEpisodeId": 11, "path": "/m/S01E01.mkv",
-             "subtitles": [{"code2": "en", "path": "/m/S01E01.en.srt"}]},
-            {"season": 1, "episode": 2, "title": "Two", "sonarrEpisodeId": 12, "path": "/m/S01E02.mkv", "subtitles": []},
+             "subtitles": [{"code2": "en", "path": "/m/S01E01.en.srt"}, {"code2": "fr", "path": None}]},
+            {"season": 1, "episode": 2, "title": "Two", "sonarrEpisodeId": 12, "path": "/m/S01E02.mkv", "subtitles": [],
+             "missing_subtitles": [{"code2": "vi"}]},
+            {"season": None, "episode": None, "title": "Not an episode", "sonarrEpisodeId": 13},
         ]}
 
     def request_json(self, method, url, params=None, headers=None, timeout=None):
@@ -69,6 +87,18 @@ class MediaLibraryContract:
 
     def test_satisfies_the_port(self):
         self.assertIsInstance(self.repo, MediaLibrary)
+
+    def test_the_catalog_lists_series_episodes_and_movies_with_their_subtitles_and_missing_languages(self):
+        entries = list(self.repo.catalog())
+        self.assertTrue(all(isinstance(entry, CatalogEntry) for entry in entries))
+        self.assertEqual([(e.kind, e.bazarr_id) for e in entries],
+                         [("series", "7"), ("episode", "11"), ("episode", "12"), ("movie", "5")])
+        series, one, two, movie = entries
+        self.assertEqual((series.title, series.tvdb_id), ("Show", "70"))
+        self.assertEqual((one.parent_bazarr_id, one.season, one.episode, one.video_path), ("7", 1, 1, "/m/S01E01.mkv"))
+        self.assertEqual((one.subtitles[0].code, one.subtitles[0].path), ("en", "/m/S01E01.en.srt"))
+        self.assertEqual(two.missing, ("vi",))
+        self.assertEqual((movie.title, movie.missing), ("Heat", ("vi",)))  # a forced-only language is not "missing"
 
     def test_an_episode_is_described_by_its_series_and_numbers(self):
         got = self.repo.describe("series", "7", "9")
@@ -143,6 +173,54 @@ class BazarrMediaTests(MediaLibraryContract, unittest.TestCase):
     def test_a_refresh_of_a_series_episode_scans_that_series_on_disk(self):
         self.repo.refresh({"media_type": "series", "series_id": "7", "media_id": "9"})
         self.assertEqual(self.http.sent, [("PATCH", "http://bazarr/api/series", {"seriesid": "7", "action": "scan-disk"})])
+
+    def test_the_catalog_is_read_in_pages_of_series_then_each_series_episodes_then_movies(self):
+        list(self.repo.catalog())
+        asked = [(url.rsplit("/api/", 1)[1], params) for url, params in self.http.requests]
+        self.assertEqual(asked, [
+            ("series", {"start": 0, "length": 100}), ("episodes", {"seriesid[]": "7"}), ("movies", {"start": 0, "length": 100}),
+        ])
+
+    def test_a_page_that_is_full_asks_for_the_next_one_and_stops_at_the_total(self):
+        class Paged(FakeBazarrHttp):
+            def get_json(self, url, params=None, headers=None):
+                if url.endswith("/api/series") and params and "start" in params:
+                    start = params["start"]
+                    items = [{"title": f"S{n}", "sonarrSeriesId": n} for n in range(start + 1, min(start + 2, 3) + 1)]
+                    return {"data": items, "total": 3}
+                if url.endswith("/api/episodes"):
+                    return {"data": []}
+                return {"data": [], "total": 0}
+
+        with patch("gst_worker.bazarr.CATALOG_PAGE_SIZE", 2):
+            media = BazarrMedia(Paged(), lambda: {"bazarr_url": "http://bazarr", "bazarr_api_key": "key"})
+            titles = [e.title for e in media.catalog() if e.kind == "series"]
+        self.assertEqual(titles, ["S1", "S2", "S3"])
+
+    def test_a_catalog_that_cannot_be_read_raises_a_sentence_that_has_no_address_and_no_key(self):
+        class Down:
+            def get_json(self, *args, **kwargs):
+                raise OSError("connection refused to http://bazarr:6767/api/series?apikey=SECRET")
+
+        media = BazarrMedia(Down(), lambda: {"bazarr_url": "http://bazarr:6767", "bazarr_api_key": "SECRET"})
+        with self.assertRaises(MediaLibraryError) as caught:
+            list(media.catalog())
+        self.assertNotIn("SECRET", str(caught.exception))
+        self.assertNotIn("6767", str(caught.exception))
+
+    def test_an_answer_that_is_not_a_list_is_a_failure_not_an_empty_library(self):
+        class Odd(FakeBazarrHttp):
+            def get_json(self, url, params=None, headers=None):
+                return {"data": "nothing"}
+
+        media = BazarrMedia(Odd(), lambda: {"bazarr_url": "http://bazarr", "bazarr_api_key": "key"})
+        with self.assertRaises(MediaLibraryError):
+            list(media.catalog())
+
+    def test_without_an_address_or_a_key_the_catalog_says_so(self):
+        media = BazarrMedia(FakeBazarrHttp(), lambda: {"bazarr_url": "http://bazarr", "bazarr_api_key": ""})
+        with self.assertRaises(MediaLibraryError):
+            list(media.catalog())
 
     def test_a_rescan_waits_longer_than_the_default_timeout(self):
         # Bazarr answers scan-disk only after scanning the whole series (31 s for 150 episodes on the first trial).

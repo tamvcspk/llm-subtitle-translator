@@ -5,8 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gst_worker.jobs import FAILED, HELD, REJECTED, job_key
-from gst_worker.ports import HeldJob
+from gst_worker.jobs import FAILED
 from gst_worker.queue import JobQueue
 from gst_worker.store import Store
 
@@ -33,14 +32,6 @@ class JobQueueContractTests(unittest.TestCase):
 
     def fail_job(self, job_id):
         self.repo.jobs.transition(job_id, FAILED, error="boom")
-
-    def hold(self, name):
-        """What the worker does to a script job in `hold` mode."""
-        self.repo.jobs.add(
-            {"subtitle_path": str(self.subtitle), "source_code": "en", "target_code": "vi", "held_at": 1},
-            key=job_key(name, name, "vi"), state=HELD, job_id=name,
-        )
-        return name
 
     def test_enqueue_makes_one_job_per_enabled_target(self):
         made = self.repo.enqueue({"subtitle_path": str(self.subtitle), "source_code": "en"}, TARGETS)
@@ -96,30 +87,19 @@ class JobQueueContractTests(unittest.TestCase):
         self.assertEqual(self.state(job_id), "cancelled")
         self.assertFalse(self.repo.delete("pending", job_id))
 
-    def test_a_held_job_is_decided_not_deleted(self):
-        job_id = self.hold("a")
-        self.assertEqual([job.job_id for job in self.repo.held()], [job_id])
-        self.assertIsInstance(self.repo.held()[0], HeldJob)
-        self.assertFalse(self.repo.delete("held", job_id))
-        self.assertEqual(self.state(job_id), HELD)
+    def test_the_same_request_under_another_file_name_is_still_the_same_request(self):
+        """Sonarr renamed the files after the first job was made: the paths, so the key, differ, the unit does not
+        (FR-14.3, FR-15.3)."""
+        base = {"subtitle_path": str(self.subtitle), "source_code": "en", "unit_id": 7}
+        (first,) = self.repo.enqueue(base, TARGETS[:1])
+        renamed = self.root / "Show.Renamed.en.srt"
+        renamed.write_text(self.subtitle.read_text(encoding="utf-8"), encoding="utf-8")
+        self.assertEqual(self.repo.enqueue({**base, "subtitle_path": str(renamed)}, TARGETS[:1]), [])
+        self.assertEqual(self.repo.jobs.counts()["pending"], 1)
+        self.assertEqual(self.state(first), "queued")
 
-    def test_approve_moves_only_held_jobs_to_the_queue(self):
-        job_id = self.hold("a")
-        self.assertEqual(self.repo.approve([job_id, "unknown", job_id]), [job_id])
-        self.assertEqual(self.state(job_id), "queued")
-        self.assertEqual(self.repo.jobs.get(job_id)["admission"], "approved")
-        self.assertEqual(self.repo.held(), [])
-        self.assertEqual(self.repo.approve([job_id]), [])  # no longer held
-
-    def test_reject_remembers_the_job_and_restore_returns_it_to_held(self):
-        job_id = self.hold("a")
-        self.assertEqual(self.repo.reject([job_id]), [job_id])
-        self.assertEqual(self.state(job_id), REJECTED)
-        self.assertEqual([job.job_id for job in self.repo.rejected()], [job_id])
-        self.assertEqual(self.repo.approve([job_id]), [])  # a rejected job needs restoring first
-        self.assertEqual(self.repo.restore([job_id]), [job_id])
-        self.assertEqual(self.state(job_id), HELD)
-        self.assertEqual(self.repo.restore([job_id]), [])
+    def test_the_gate_of_the_old_script_is_gone(self):
+        self.assertFalse(hasattr(self.repo, "approve") or hasattr(self.repo, "held") or hasattr(self.repo, "is_full"))
 
 
 if __name__ == "__main__":

@@ -21,19 +21,22 @@ from .ports import Reclaimed
 from .queue_policy import Candidate, Health
 from .store import Store
 
-QUEUED, RUNNING, WAITING, HELD, REJECTED = "queued", "running", "waiting", "held", "rejected"
+QUEUED, RUNNING, WAITING = "queued", "running", "waiting"
 DONE, FAILED, CANCELLED, SKIPPED = "done", "failed", "cancelled", "skipped"
-OPEN_STATES = (QUEUED, RUNNING, WAITING, HELD)
-ENDED_STATES = (DONE, FAILED, CANCELLED, SKIPPED)  # what cleanup may delete; `rejected` is a standing decision (FR-12.5)
-STATES = (QUEUED, RUNNING, WAITING, HELD, REJECTED, DONE, FAILED, CANCELLED, SKIPPED)
+OPEN_STATES = (QUEUED, RUNNING, WAITING)
+ENDED_STATES = (DONE, FAILED, CANCELLED, SKIPPED)  # what cleanup may delete
+STATES = (QUEUED, RUNNING, WAITING, DONE, FAILED, CANCELLED, SKIPPED)
+# The two states of the script's admission gate (FR-12), gone since P10: the rows an older worker left are turned
+# into decisions once, at start-up (``take_gate_rows``), and never written again.
+GATE_HELD, GATE_REJECTED = "held", "rejected"
 
 # What the console has always called the states (the queue was a folder tree), kept for the HTTP API and the
 # pages built on it. `skipped` shows with `done`: both ended without anything left to do.
 LEGACY_NAMES = {QUEUED: "pending", RUNNING: "processing", WAITING: "deferred", DONE: "done", SKIPPED: "done",
-                FAILED: "failed", HELD: "held", REJECTED: "rejected"}
-LEGACY_STATES = ("pending", "processing", "deferred", "done", "failed", HELD, REJECTED)
+                FAILED: "failed"}
+LEGACY_STATES = ("pending", "processing", "deferred", "done", "failed")
 FROM_LEGACY = {"pending": (QUEUED,), "processing": (RUNNING,), "deferred": (WAITING,), "done": (DONE, SKIPPED),
-                "failed": (FAILED,), "held": (HELD,), "rejected": (REJECTED,)}
+                "failed": (FAILED,)}
 
 PUBLISH, VARIANT = "publish", "variant"
 FILL, REPLACE = "fill", "replace"
@@ -131,7 +134,16 @@ class JobStore:
 
     def open_for(self, key: str, kind: str = PUBLISH) -> dict[str, Any] | None:
         rows = self.store.query(
-            "SELECT * FROM jobs WHERE key = ? AND kind = ? AND state IN (?, ?, ?, ?)", (key, kind, *OPEN_STATES)
+            "SELECT * FROM jobs WHERE key = ? AND kind = ? AND state IN (?, ?, ?)", (key, kind, *OPEN_STATES)
+        )
+        return view(rows[0]) if rows else None
+
+    def open_for_unit(self, unit_id: int, target_lang: str, kind: str = PUBLISH) -> dict[str, Any] | None:
+        """The open job for this unit and language, whatever paths it was made with: a file Sonarr renamed gives the
+        same request a new key, but it is still the same request (FR-15.3, FR-14.3)."""
+        rows = self.store.query(
+            "SELECT * FROM jobs WHERE unit_id = ? AND target_lang = ? AND kind = ? AND state IN (?, ?, ?)"
+            " ORDER BY id DESC LIMIT 1", (unit_id, target_lang, kind, *OPEN_STATES),
         )
         return view(rows[0]) if rows else None
 
@@ -161,14 +173,14 @@ class JobStore:
         now = self.clock()
         payload = {k: v for k, v in payload.items() if k not in ("_state", "state")}
         with self.store.transaction() as db:
-            held = db.execute(
-                "SELECT job_id, state, prio FROM jobs WHERE key = ? AND kind = ? AND state IN (?, ?, ?, ?)",
+            open_job = db.execute(
+                "SELECT job_id, state, prio FROM jobs WHERE key = ? AND kind = ? AND state IN (?, ?, ?)",
                 (key, kind, *OPEN_STATES),
             ).fetchone()
-            if held is not None:
-                if state != HELD and held["state"] in (QUEUED, WAITING) and prio > held["prio"]:
-                    db.execute("UPDATE jobs SET prio = ?, updated_at = ? WHERE job_id = ?", (prio, now, held["job_id"]))
-                return Added(None, held["job_id"])
+            if open_job is not None:
+                if open_job["state"] in (QUEUED, WAITING) and prio > open_job["prio"]:
+                    db.execute("UPDATE jobs SET prio = ?, updated_at = ? WHERE job_id = ?", (prio, now, open_job["job_id"]))
+                return Added(None, open_job["job_id"])
             chosen = job_id or key
             if db.execute("SELECT 1 FROM jobs WHERE job_id = ?", (chosen,)).fetchone():
                 chosen = f"{key}-{time.time_ns()}"
@@ -372,7 +384,7 @@ class JobStore:
             row = db.execute("SELECT * FROM jobs WHERE job_id = ? AND state = ?", (job_id, FAILED)).fetchone()
             if row is None:
                 return None
-            if db.execute("SELECT 1 FROM jobs WHERE key = ? AND kind = ? AND state IN (?, ?, ?, ?)",
+            if db.execute("SELECT 1 FROM jobs WHERE key = ? AND kind = ? AND state IN (?, ?, ?)",
                           (row["key"], row["kind"], *OPEN_STATES)).fetchone():
                 return None
             payload = _loads(row["payload_json"])
@@ -400,7 +412,7 @@ class JobStore:
             row = db.execute("SELECT state FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
             if row is None:
                 return None
-            if row["state"] in (QUEUED, WAITING, HELD):
+            if row["state"] in (QUEUED, WAITING):
                 db.execute("UPDATE jobs SET state = ?, wait_reason = '', updated_at = ?, finished_at = ? WHERE job_id = ?",
                            (CANCELLED, now, now, job_id))
                 return "cancelled"
@@ -409,26 +421,20 @@ class JobStore:
                 return "stopping"
         return None
 
-    def move(self, job_ids: Iterable[str], source: str, destination: str, **stamp: Any) -> list[str]:
-        """Move jobs from one state to another (held → queued, held → rejected, ...) and report which moved."""
-        now = self.clock()
-        moved: list[str] = []
+    def take_gate_rows(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """The rows the script's admission gate left (FR-12), taken out of the table: ``(held, rejected)`` payloads.
+
+        P10 removes the gate. A held job was "wanted, not decided yet", which is what Missing says; a rejected one
+        was a "no", which is an Ignored decision. The caller turns them into that; running this again finds nothing.
+        """
         with self.store.transaction() as db:
-            for job_id in dict.fromkeys(job_ids):
-                row = db.execute("SELECT * FROM jobs WHERE job_id = ? AND state = ?", (job_id, source)).fetchone()
-                if row is None:
-                    continue
-                if destination in OPEN_STATES and db.execute(
-                    "SELECT 1 FROM jobs WHERE key = ? AND kind = ? AND state IN (?, ?, ?, ?) AND id <> ?",
-                    (row["key"], row["kind"], *OPEN_STATES, row["id"]),
-                ).fetchone():
-                    db.execute("DELETE FROM jobs WHERE id = ?", (row["id"],))  # open under another id: this is a leftover
-                    continue
-                payload = {**_loads(row["payload_json"]), **stamp, "decided_at": now}
-                db.execute("UPDATE jobs SET state = ?, payload_json = ?, updated_at = ? WHERE id = ?",
-                           (destination, json.dumps(payload, ensure_ascii=False), now, row["id"]))
-                moved.append(job_id)
-        return moved
+            rows = db.execute("SELECT id, state, payload_json FROM jobs WHERE state IN (?, ?) ORDER BY id",
+                              (GATE_HELD, GATE_REJECTED)).fetchall()
+            for row in rows:
+                db.execute("DELETE FROM jobs WHERE id = ?", (row["id"],))
+        held = [_loads(r["payload_json"]) for r in rows if r["state"] == GATE_HELD]
+        rejected = [_loads(r["payload_json"]) for r in rows if r["state"] == GATE_REJECTED]
+        return held, rejected
 
     def expired(self, states: tuple[str, ...], finished_before: float) -> Reclaimed:
         """Finished jobs in ``states`` that ended before ``finished_before``: how many rows and how much text they
@@ -456,22 +462,11 @@ class JobStore:
             raise ValueError(f"only finished jobs can be cleaned up, not {sorted(set(states) - set(ENDED_STATES))}")
         return ",".join("?" * len(states))
 
-    def has_decided(self, key: str, *states: str) -> bool:
-        marks = ",".join("?" * len(states))
-        return bool(self.store.query(f"SELECT 1 FROM jobs WHERE key = ? AND state IN ({marks}) LIMIT 1", (key, *states)))
-
-    def stamp_open_jobs(self, admission: str) -> int:
-        """At the moment `hold` is switched on: what already waits counts as admitted (FR-12.8)."""
-        stamped = 0
+    def lift(self, job_id: str, prio: int) -> bool:
+        """A second request for what a job already does lifts it to the higher class, never lowers it (FR-15.3)."""
         with self.store.transaction() as db:
-            for row in db.execute("SELECT id, payload_json FROM jobs WHERE state IN (?, ?)", (QUEUED, WAITING)).fetchall():
-                payload = _loads(row["payload_json"])
-                if "admission" in payload:
-                    continue
-                payload["admission"] = admission
-                db.execute("UPDATE jobs SET payload_json = ? WHERE id = ?", (json.dumps(payload, ensure_ascii=False), row["id"]))
-                stamped += 1
-        return stamped
+            return db.execute("UPDATE jobs SET prio = MAX(prio, ?), updated_at = ? WHERE job_id = ? AND state IN (?, ?)",
+                              (prio, self.clock(), job_id, QUEUED, WAITING)).rowcount > 0
 
     def set_prio(self, job_id: str, prio: int) -> bool:
         with self.store.transaction() as db:

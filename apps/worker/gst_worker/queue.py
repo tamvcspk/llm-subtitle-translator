@@ -16,12 +16,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import queue_policy as policy
-from .config import ADMISSION_AUTO, QUOTA_RESET_TZ, enabled_target_languages
+from .config import QUOTA_RESET_TZ, enabled_target_languages
 from .jobs import (
-    CANCELLED, DONE, FAILED, HELD, LEGACY_STATES, OPEN_STATES, QUEUED, REJECTED, REPLACE, RUNNING, SKIPPED, WAITING,
+    CANCELLED, DONE, FAILED, LEGACY_STATES, OPEN_STATES, QUEUED, REPLACE, RUNNING, SKIPPED, WAITING,
     JobStore, FROM_LEGACY, job_key, retranslation_key,
 )
-from .ports import HeldJob, Telemetry
+from .ports import Telemetry
 from .queue_policy import Health
 from .store import Store
 from .subtitles import existing_target_subtitle, target_output_path
@@ -31,10 +31,6 @@ from .translation import (
     ProviderAuthError, ProviderUnavailableError, redact,
 )
 
-# A job that already went through admission carries an `admission` field: "admin" (made by the console),
-# "auto" (running or open when `hold` was switched on), "approved" (released from held). The script's own
-# jobs have none, which is how the worker tells "new from Bazarr" from "already admitted" (FR-12.2, 12.3).
-ADMISSION_FIELD = "admission"
 RETRANSLATE_PRIORITY = policy.RETRANSLATE
 SETTINGS_SNAPSHOT_KEYS = (
     "llm_provider", "llm_base_url", "gst_model", "gst_fallback_model", "gst_temperature", "gst_thinking_budget",
@@ -60,14 +56,6 @@ def outside_allowed_paths(subtitle_path: str) -> bool:
         return False
     normalized = str(subtitle_path).replace("\\", "/")
     return not any(normalized == prefix or normalized.startswith(prefix + "/") for prefix in prefixes)
-
-
-def max_open_jobs() -> int:
-    """Most jobs allowed to wait or run at once (`GST_MAX_PENDING`); 0 means no cap."""
-    try:
-        return max(0, int(os.getenv("GST_MAX_PENDING", "0") or 0))
-    except ValueError:
-        return 0
 
 
 def skip_reason(job: dict[str, Any]) -> str | None:
@@ -109,8 +97,6 @@ def job_id_for(subtitle_path: str, output_path: str, target_code: str) -> str:
 def _claim_reason(job: dict[str, Any]) -> str:
     if job.get("trigger") == "retranslate":
         return "an explicit retranslation runs ahead of automatic work"
-    if job.get(ADMISSION_FIELD) == "approved":
-        return "approved by the admin"
     if job.get("tier") == "strong" or job.get("escalated_from"):
         return "second attempt on the strong model"
     return f"the best ready job ({policy.priority_class(int(job.get('prio') or 0))} class)"
@@ -132,38 +118,6 @@ def _reset_retry(job: dict[str, Any]) -> None:
     for key in ("provider_retry_count", "retry_at", "deferred_reason", "last_error", "use_fallback_model", "gap_since",
                 "missing_units", "missing_unit_ids"):
         job.pop(key, None)
-
-
-def _held_job(job: dict[str, Any]) -> HeldJob:
-    subtitle_path = str(job.get("subtitle_path") or "")
-    return HeldJob(
-        job_id=str(job.get("job_id") or ""), subtitle_path=subtitle_path, video_path=str(job.get("video_path") or ""),
-        source_code=str(job.get("source_code") or ""), target_code=str(job.get("target_code") or ""),
-        source_language=str(job.get("source_language") or ""), target_language=str(job.get("target_language") or ""),
-        series_id=str(job.get("series_id") or ""), media_type=str(job.get("media_type") or ""),
-        created_at=float(job.get("created_at") or 0), held_at=float(job.get("held_at") or 0),
-        cue_count=_cue_count(subtitle_path) if subtitle_path else 0,
-    )
-
-
-_CUE_COUNTS: dict[tuple[str, float], int] = {}
-
-
-def _cue_count(subtitle_path: str) -> int:
-    """How many cues a source subtitle has (timecode lines); 0 when it cannot be read. Cached by file time."""
-    try:
-        key = (subtitle_path, Path(subtitle_path).stat().st_mtime)
-    except OSError:
-        return 0
-    if key not in _CUE_COUNTS:
-        try:
-            text = Path(subtitle_path).read_text(encoding="utf-8-sig", errors="replace")
-        except OSError:
-            return 0
-        if len(_CUE_COUNTS) > 4096:
-            _CUE_COUNTS.clear()
-        _CUE_COUNTS[key] = sum(1 for line in text.splitlines() if "-->" in line)
-    return _CUE_COUNTS[key]
 
 
 class _Heartbeat(threading.Thread):
@@ -283,19 +237,16 @@ class JobQueue:
             if sibling:
                 skipped(f"a {target_code} subtitle is already present: {Path(sibling).name}", target_code, key)
                 continue
-            # Waiting for approval, or refused: not queued again (FR-12.5), even by a scan.
-            if self.jobs.has_decided(key, HELD, REJECTED):
-                skipped("the same job is held for approval or was rejected", target_code, key)
-                continue
             if self.jobs.open_for(key) is not None:
                 self.jobs.add({}, key=key, prio=prio)  # a higher class lifts the job already in line
                 skipped("the same job is already waiting or running", target_code, key)
                 continue
-            if self.is_full():
-                logging.warning("Not queueing %s (%s): GST_MAX_PENDING=%s jobs are already waiting",
-                                subtitle_path, target_code, max_open_jobs())
-                skipped(f"GST_MAX_PENDING={max_open_jobs()} jobs are already waiting", target_code, key, level="WARNING")
-                break
+            # The same request under another name: the files were renamed after the first job was made (FR-14.3).
+            same = self.jobs.open_for_unit(int(base_job["unit_id"]), target_code) if base_job.get("unit_id") else None
+            if same is not None:
+                self.jobs.lift(same["job_id"], prio)
+                skipped("the same request is already waiting or running", target_code, same["job_id"])
+                continue
             failed = self.jobs.latest_for(key, FAILED)
             if failed is not None and self.retry(failed["job_id"]):
                 created.append(failed["job_id"])
@@ -303,14 +254,15 @@ class JobQueue:
             job = {
                 **base_job, "created_at": int(time.time()), "source_code": source_code, "source_language": source_language,
                 "target_code": target_code, "target_language": str(target["language"]), "output_path": output_path,
-                ADMISSION_FIELD: "admin",
             }
             added = self.jobs.add(job, key=key, origin=origin, prio=prio)
             if added.job_id:
                 created.append(added.job_id)
                 self._emit(
                     "job.created", job_id=added.job_id, unit_id=base_job.get("unit_id") or None, subtitle=name,
-                    reason="queued from the console: the target language is missing", target=target_code, origin="console",
+                    reason=("the auto_request policy asked for it: the target language is missing" if origin == "policy"
+                            else "queued from the console: the target language is missing"),
+                    target=target_code, origin=origin,
                 )
         return created
 
@@ -320,8 +272,7 @@ class JobQueue:
         subtitle_path, output_path = str(job.get("subtitle_path", "")), str(job.get("output_path", ""))
         target_code = str(job.get("target_code", ""))
         key = job_key(subtitle_path, output_path, target_code)
-        payload = {**job, "trigger": "retranslate", "priority": RETRANSLATE_PRIORITY, "created_at": int(time.time()),
-                   ADMISSION_FIELD: "admin"}
+        payload = {**job, "trigger": "retranslate", "priority": RETRANSLATE_PRIORITY, "created_at": int(time.time())}
         window = (job.get("retranslate") or {}).get("range") if isinstance(job.get("retranslate"), dict) else None
         open_job = self.jobs.open_for(key)
         if open_job is not None:
@@ -345,10 +296,6 @@ class JobQueue:
         )
         return job_id
 
-    def is_full(self) -> bool:
-        limit = max_open_jobs()
-        return limit > 0 and self.jobs.open_count() >= limit
-
     def retry(self, job_id: str) -> bool:
         """Put a failed job back in line with a fresh retry cycle (an admin's request)."""
         job = self.jobs.retry(job_id)
@@ -362,10 +309,9 @@ class JobQueue:
         return self.jobs.delete((FAILED,), job_id)
 
     def delete(self, state: str, job_id: str) -> bool:
-        """Remove a job from the list it is in. A held job leaves through approve or reject (so the refusal is
-        remembered); a running one is stopped, not deleted."""
+        """Remove a job from the list it is in. A running one is stopped, not deleted."""
         states = FROM_LEGACY.get(state)
-        if not states or state in (HELD, "processing") or not job_id:
+        if not states or state == "processing" or not job_id:
             return False
         if state in ("pending", "deferred"):  # waiting to run: cancelling keeps a record, it does not erase one
             return self.jobs.state_of(job_id) in states and self.jobs.request_stop(job_id) == "cancelled"
@@ -377,32 +323,6 @@ class JobQueue:
         if outcome:
             self._event("job.stop_requested", self.jobs.get(job_id), f"the admin stopped the job ({outcome})")
         return outcome
-
-    # -- held jobs (FR-12) -------------------------------------------------------------------------------------------
-    def held(self) -> list[HeldJob]:
-        return [_held_job(job) for job in self.jobs.by_state(HELD)]
-
-    def rejected(self) -> list[HeldJob]:
-        return [_held_job(job) for job in self.jobs.by_state(REJECTED)]
-
-    def _decided(self, kind: str, ids: list[str], reason: str) -> list[str]:
-        for job_id in ids:
-            self._emit(kind, job_id=job_id, reason=reason)
-        return ids
-
-    def approve(self, job_ids: list[str]) -> list[str]:
-        """Release held jobs into the queue. Approval is only an admission: the job still meets `skip_reason`
-        and the missing-language check when it runs (FR-12.6), and `GST_MAX_PENDING` does not apply (FR-12.7)."""
-        moved = self.jobs.move(job_ids, HELD, QUEUED, **{ADMISSION_FIELD: "approved", "approved_at": time.time()})
-        return self._decided("job.approved", moved, "the admin approved the held job")
-
-    def reject(self, job_ids: list[str]) -> list[str]:
-        moved = self.jobs.move(job_ids, HELD, REJECTED)
-        return self._decided("job.rejected", moved, "the admin rejected the held job; it is not queued again")
-
-    def restore(self, job_ids: list[str]) -> list[str]:
-        moved = self.jobs.move(job_ids, REJECTED, HELD)
-        return self._decided("job.restored", moved, "the admin took the rejected job back to the held inbox")
 
     # -- looking at the queue ------------------------------------------------------------------------------------------
     def snapshot(self, limit: int = 100) -> dict[str, Any]:
@@ -427,7 +347,7 @@ class JobQueue:
         by_model: dict[str, dict[str, int]] = {}
         escalated = {"total": 0, "done": 0, "failed": 0, "waiting": 0}
         for state, job in self.jobs.all_payloads():
-            if state in (CANCELLED, REJECTED):
+            if state == CANCELLED:
                 continue
             if job.get("escalated_from"):
                 escalated["total"] += 1
@@ -610,7 +530,6 @@ class JobQueue:
                 tried = policy.begin_trial(current, now)  # an open breaker whose rest is over lets exactly one call through
                 if tried != current:
                     changes[(self.provider, model)] = tried
-            stamp[ADMISSION_FIELD] = payload.get(ADMISSION_FIELD) or ADMISSION_AUTO  # once run, admitted for good
             return stamp, changes
         return decide
 
@@ -659,7 +578,7 @@ class JobQueue:
         self._event(
             "job.claimed", job, f"the job is the next ready one ({_claim_reason(job)})",
             priority=int(job.get("prio") or 0), trigger=str(job.get("trigger") or "auto"),
-            admission=str(job.get(ADMISSION_FIELD) or ""), klass=policy.priority_class(int(job.get("prio") or 0)),
+            origin=str(job.get("origin") or ""), klass=policy.priority_class(int(job.get("prio") or 0)),
         )
         self._event(
             "model.selected", job, _model_reason(model, models, paused, job), model=model or None,

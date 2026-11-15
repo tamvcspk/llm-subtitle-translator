@@ -79,11 +79,17 @@ MEMORY_INT_CONFIG_KEYS = {
     "memory_budget_tokens": (8000, 500),
     "memory_recent_episodes": (3, 0),
 }
-# How the worker receives the jobs Bazarr's script queues (FR-12): `auto` runs them, `hold` sets them aside
-# until the admin approves. Jobs the admin makes in the console are never held.
-ADMISSION_AUTO = "auto"
-ADMISSION_HOLD = "hold"
-ADMISSION_MODES = (ADMISSION_AUTO, ADMISSION_HOLD)
+# The library read from Bazarr and the policy that requests translations by itself (P10, FR-14, FR-15.4).
+# `auto_request` is off until the admin turns it on, for everything or per series; the daily cap and the
+# read interval are in key -> (default, minimum). `catalog_sync_interval` is seconds (0 = only on the button);
+# `catalog_shrink_guard` is the percentage a read may shrink by before it is set aside (0 = no guard);
+# `auto_request_daily_cap` is jobs the policy may create per day (0 = no cap).
+CATALOG_BOOL_CONFIG_KEYS = ("auto_request",)
+CATALOG_INT_CONFIG_KEYS = {
+    "catalog_sync_interval": (300, 0),
+    "catalog_shrink_guard": (20, 0),
+    "auto_request_daily_cap": (0, 0),
+}
 # Logging and measurement (P5, FR-19). `log_prompt_bodies` is what is kept of the prompts and answers of model
 # calls: `off`, `errors` (failed calls only), `sample` (failed calls and one call in ten) or `all`.
 LOG_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -137,7 +143,8 @@ DEFAULT_APP_CONFIG = {
     "research_model": "",
     **{key: default for key, (default, _) in LLM_INT_CONFIG_KEYS.items()},
     "job_settle_seconds": 600,
-    "admission_mode": ADMISSION_AUTO,
+    "auto_request": False,
+    **{key: default for key, (default, _) in CATALOG_INT_CONFIG_KEYS.items()},
     "memory_enabled": False,
     "memory_model": "",
     "summarize_model": "",
@@ -241,9 +248,14 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
         normalized["job_settle_seconds"] = max(0, int(normalized.get("job_settle_seconds", 600)))
     except (TypeError, ValueError):
         normalized["job_settle_seconds"] = 600
-    normalized["admission_mode"] = str(normalized.get("admission_mode") or "").strip().lower()
-    if normalized["admission_mode"] not in ADMISSION_MODES:
-        normalized["admission_mode"] = ADMISSION_AUTO
+    for key in CATALOG_BOOL_CONFIG_KEYS:
+        normalized[key] = normalized.get(key) is True or str(normalized.get(key)).strip().lower() in ("1", "true", "on")
+    for key, (default, minimum) in CATALOG_INT_CONFIG_KEYS.items():
+        try:
+            normalized[key] = max(minimum, int(normalized.get(key, default)))
+        except (TypeError, ValueError):
+            normalized[key] = default
+    normalized["catalog_shrink_guard"] = min(100, normalized["catalog_shrink_guard"])
     for key in MEMORY_BOOL_CONFIG_KEYS:
         normalized[key] = bool(normalized.get(key))
     for key in MEMORY_STRING_CONFIG_KEYS:

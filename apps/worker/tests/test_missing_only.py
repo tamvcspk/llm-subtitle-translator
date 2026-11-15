@@ -1,9 +1,6 @@
 """Translate only what is missing, never the whole library, and only escalate the jobs that need it."""
 
-import json
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -82,7 +79,7 @@ class ExistingTargetTests(Workdir):
         self.assertIsNone(queue.skip_reason({**job, "trigger": "retranslate"}))
 
 
-class AdmissionGuardTests(Workdir):
+class OnlyPathsGuardTests(Workdir):
     def test_only_paths_keeps_the_worker_inside_the_named_folder(self):
         inside = self.source("Test.S01E01", self.media / "Test Show")
         outside = self.source("Other.S01E01", self.media / "Other Show")
@@ -97,42 +94,6 @@ class AdmissionGuardTests(Workdir):
         self.env(GST_ONLY_PATHS="/media/Show")
         self.assertFalse(queue.outside_allowed_paths("/media/Show/S01/a.en.srt"))
         self.assertTrue(queue.outside_allowed_paths("/media/Show 2/a.en.srt"))
-
-    def test_max_pending_stops_a_flood_of_wanted_items(self):
-        self.env(GST_MAX_PENDING="2")
-        created = [self.enqueue(self.source(f"Show.S01E0{n}")) for n in range(1, 6)]
-        self.assertEqual(sum(len(batch) for batch in created), 2)
-        self.assertEqual(self.jobs.jobs.open_count(), 2)
-
-    def test_the_bazarr_script_obeys_the_same_guards_and_variants(self):
-        script = (Path(__file__).resolve().parents[3] / "bazarr-postprocess" / "gst_enqueue.sh").read_text(encoding="utf-8")
-        payload = script.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-        for folder in ("pending", "processing", "done", "failed"):  # the shell wrapper creates these before the payload runs
-            (Path(self.queue_dir) / folder).mkdir(parents=True)
-        (self.root / "targets.json").write_text(json.dumps({
-            "source_languages": [{"code": "en", "language": "English"}], "target_languages": TARGETS,
-        }), encoding="utf-8")
-
-        def run(source, **extra):
-            environment = {
-                **os.environ, "QUEUE_DIR": self.queue_dir, "TARGETS_FILE": str(self.root / "targets.json"),
-                "SUBTITLE_PATH": str(source), "VIDEO_PATH": str(source.with_suffix(".mkv")), "LANGUAGE": "en",
-                "PROVIDER": "embeddedsubtitles", "SERIES_ID": "", "MEDIA_ID": "", "MEDIA_TYPE": "movie",
-                "GST_ONLY_PATHS": "", "GST_MAX_PENDING": "0", **extra,
-            }
-            return subprocess.run([sys.executable, "-"], input=payload, env=environment, text=True,
-                                  capture_output=True, check=True).stdout
-
-        present = self.source("Has.Target")
-        (self.media / "Has.Target.vi.hi.srt").write_text("x", encoding="utf-8")
-        self.assertIn("no target jobs", run(present))
-
-        outside = self.source("Outside", self.media / "Other")
-        self.assertIn("outside GST_ONLY_PATHS", run(outside, GST_ONLY_PATHS=str(self.media / "Test")))
-
-        for n in range(1, 4):
-            run(self.source(f"Many.S01E0{n}"), GST_MAX_PENDING="2")
-        self.assertEqual(len(list((Path(self.queue_dir) / "pending").glob("*.json"))), 2)  # the script counts its own gate
 
 
 class FakeMedia:

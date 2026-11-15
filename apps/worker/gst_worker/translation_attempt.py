@@ -175,7 +175,9 @@ class TranslationAttempt:
                 reason="a target subtitle already exists; an automatic job never overwrites it",
             )
             return SKIPPED_EXISTING
-        manual = trigger != AUTO or job.get("admission") == "admin"
+        # What the admin asked for by hand brings a removed subtitle back; the policy and a leftover of Bazarr's
+        # script do not. (`admission` is the mark jobs of an older worker still carry.)
+        manual = trigger != AUTO or str(job.get("origin") or "") == "manual" or job.get("admission") == "admin"
         if self.versions is not None and not manual and self.versions.latest_status(output) == "removed":
             self.telemetry.event(
                 "translation.skipped", job_id=job_id, unit_id=unit_id, target=target_code,

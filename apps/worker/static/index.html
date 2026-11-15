@@ -34,7 +34,6 @@
       <a class="nav-item" href="#queue" data-view="queue" data-icon="queue">
         <span>Queue</span>
         <span class="nav-badges">
-          <span class="badge badge-warn" id="nav-held-count" title="Jobs waiting for your approval" hidden></span>
           <span class="badge" id="nav-active-count" hidden></span>
           <span class="badge badge-danger" id="nav-failed-count" hidden></span>
         </span>
@@ -154,16 +153,10 @@
             <a class="tab" href="#queue/deferred" data-state="deferred">Waiting <span class="tab-count" data-count="deferred">0</span></a>
             <a class="tab" href="#queue/done" data-state="done">Done <span class="tab-count" data-count="done">0</span></a>
             <a class="tab" href="#queue/failed" data-state="failed">Failed <span class="tab-count" data-count="failed">0</span></a>
-            <a class="tab" href="#queue/held" data-state="held">Held <span class="tab-count tab-count-warn" data-count="held">0</span></a>
-            <a class="tab" href="#queue/rejected" data-state="rejected">Rejected <span class="tab-count" data-count="rejected">0</span></a>
           </nav>
           <div class="toolbar">
             <input id="queue-filter" class="input input-search" type="search" placeholder="Filter by path or language" aria-label="Filter jobs">
             <button id="queue-retry-all" type="button" class="btn" data-icon="retry" hidden>Retry all</button>
-            <button id="queue-approve-selected" type="button" class="btn btn-primary" hidden>Approve selected</button>
-            <button id="queue-reject-selected" type="button" class="btn btn-danger" hidden>Reject selected</button>
-            <button id="queue-approve-all" type="button" class="btn" hidden>Approve all</button>
-            <button id="queue-restore-all" type="button" class="btn" hidden>Restore all</button>
           </div>
         </header>
         <div id="queue-list" class="job-list"></div>
@@ -171,17 +164,28 @@
       </section>
     </section>
 
-    <!-- Library: series and movies; #library/<series id> lists a series' episodes -->
+    <!-- Library: what Bazarr lists; #library/<catalog id> lists a series' episodes, #library/movies the movies -->
     <section id="view-library" class="view" data-view="library" hidden>
       <nav id="library-crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
       <section class="panel">
         <header class="panel-head panel-head-wrap">
-          <nav id="library-tabs" class="tabs" aria-label="Filter by status"></nav>
+          <nav id="library-tabs" class="tabs" aria-label="Filter by state"></nav>
+          <div class="toolbar">
+            <input id="library-search" class="input input-search" type="search" placeholder="Search by title" aria-label="Search the library">
+            <span id="library-selection-tools" class="toolbar" hidden>
+              <span id="library-selected" class="muted"></span>
+              <button id="library-request" type="button" class="btn btn-primary" hidden>Request translation</button>
+              <button id="library-retranslate" type="button" class="btn" hidden>Retranslate</button>
+              <button id="library-ignore" type="button" class="btn" hidden>Ignore</button>
+              <button id="library-unignore" type="button" class="btn" hidden>Stop ignoring</button>
+            </span>
+          </div>
         </header>
         <div id="library-list" class="rows"></div>
         <p class="footnote">
-          Stale means the glossary or the episode's corrections changed after the translation was made. It is only flagged:
-          nothing is retranslated unless you ask for it on the episode page.
+          Nothing is translated until you ask, or until Auto-request is on for the series (Settings, or the series page).
+          A bulk request shows what it would cost and asks you to confirm. Stale means the glossary or the episode's
+          corrections changed after the translation was made; it is only flagged, never retranslated by itself.
         </p>
       </section>
     </section>
@@ -390,16 +394,36 @@
               <input id="f-job_settle_seconds" name="job_settle_seconds" class="input" type="number" min="0" max="3600" data-type="int" data-default="0">
               <p class="hint">How long a new job waits before the worker picks it up.</p>
             </div>
-            <div class="field field-wide">
-              <label for="f-admission_mode">Jobs from Bazarr</label>
-              <select id="f-admission_mode" name="admission_mode" class="input">
-                <option value="auto">Translate automatically</option>
-                <option value="hold">Hold for my approval</option>
-              </select>
-              <p class="hint">With <em>Hold</em>, jobs queued by the Bazarr script wait in Queue → Held until you approve them; nothing is sent to the model before that. Jobs you create here are never held. Changing this does not move jobs already waiting or held.</p>
-            </div>
             <div class="checks field-wide">
               <label class="check"><input type="checkbox" name="gst_paid_quota"><span>Paid quota</span></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-card">
+          <div class="settings-intro">
+            <h2>Library and auto-request</h2>
+            <p>The worker reads the library from Bazarr (series, movies, episodes, and the languages each still wants) and keeps it as a cache; nothing is pushed to it any more. It translates only what you request in the Library, or what Auto-request asks for.</p>
+          </div>
+          <div class="field-grid">
+            <div class="checks field-wide">
+              <label class="check"><input type="checkbox" name="auto_request"><span>Auto-request translations</span></label>
+              <p class="hint">Off by default. When on, every item Bazarr lists as missing a target language gets a translation job after each read, except what you ignored or removed. A series can override this on its Library page. <code>GST_ONLY_PATHS</code>, if set, still limits it to those folders. Turn it on for one series first.</p>
+            </div>
+            <div class="field">
+              <label for="f-auto_request_daily_cap">Auto-request daily cap</label>
+              <input id="f-auto_request_daily_cap" name="auto_request_daily_cap" class="input" type="number" min="0" max="100000" data-type="int" data-default="0">
+              <p class="hint">Most jobs Auto-request may create per day (UTC); what is over stays Missing until tomorrow. 0 means no cap.</p>
+            </div>
+            <div class="field">
+              <label for="f-catalog_sync_interval">Read Bazarr every (seconds)</label>
+              <input id="f-catalog_sync_interval" name="catalog_sync_interval" class="input" type="number" min="0" max="86400" data-type="int" data-default="300">
+              <p class="hint">How old the Library may get. 0 reads only when you press Sync now.</p>
+            </div>
+            <div class="field">
+              <label for="f-catalog_shrink_guard">Shrink guard (%)</label>
+              <input id="f-catalog_shrink_guard" name="catalog_shrink_guard" class="input" type="number" min="0" max="100" data-type="int" data-default="20">
+              <p class="hint">An answer from Bazarr with this much fewer items than the last one is set aside, so a half-started Bazarr cannot make everything look translated. 0 turns the guard off.</p>
             </div>
           </div>
         </section>

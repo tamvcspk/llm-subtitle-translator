@@ -1,4 +1,29 @@
 # Unreleased
+- **P10: Bazarr is read, not pushed (FR-14, FR-15.4-15.6, ADR-10).** **Upgrade note:** nothing is translated by
+  itself any more. The worker now *pulls* the library from Bazarr's API (series, episodes, movies, their subtitles
+  and the languages Bazarr lists as missing) every `catalog_sync_interval` seconds (300) and on **Sync now**, and
+  keeps it as a cache; a read never creates a job. A read that fails, times out, comes back empty or lists more than
+  `catalog_shrink_guard` percent (20) fewer items is set aside: the catalog stays as it was and Library says when it
+  was last read, with the warning. Library now browses everything Bazarr lists and shows, for each language of each
+  item, a state worked out on reading: Missing, Translated, Edited, External, Outside profile, with Removed, Stale,
+  Requested, Running, Waiting (reason), Failed and Ignored. You request a translation of an item, a selection, a
+  season or a series (`POST /api/jobs`, `mode` `fill` or `replace`); a request for more than one job shows an
+  estimate (jobs, cues, model calls, what is left of `max_calls_per_day`, the time at the recent pace) and asks you
+  to confirm, and asking again for the same item makes no second job, even after Sonarr renamed the files (an item
+  is identified by Bazarr's id; a waiting job follows its files). **Ignore** says "do not translate this language
+  of this item". **Auto-request** (`auto_request`, off by default; per series on/off on its Library page;
+  `auto_request_daily_cap`) makes jobs by itself, after an accepted read, for what Bazarr lists as missing, except
+  Ignored or Removed items, items with a job and anything outside `GST_ONLY_PATHS`; its jobs have origin `policy`
+  and never bring back a subtitle you removed. If you relied on the Bazarr script translating everything, turn
+  Auto-request on, for one series first. **Removed:** `gst_enqueue.sh` and Bazarr's post-processing command (see
+  docs/BAZARR.md for taking it out), the `/bazarr-postprocess` mount, `GST_MAX_PENDING`, `admission_mode`, the
+  `held` and `rejected` job states, the Queue → Held and Rejected tabs and `/api/queue/held|rejected|approve|
+  reject|restore`. At the first start the old queue settles once, idempotently: `pending`, `deferred` and
+  `processing` files become jobs, `done` and `failed` become history, **held** jobs are dropped (the item is Missing
+  again) and **rejected** ones become Ignored; the old folders move to `queue.migrated/`. New endpoints:
+  `GET /api/catalog`, `/api/catalog/status`, `/api/catalog/series/{id}`, `/api/catalog/movies`,
+  `POST /api/catalog/sync`, `PUT /api/catalog/series/{id}/policy`, `POST /api/catalog/ignore|unignore`,
+  `POST /api/jobs`. Schema 10 (`catalog_items`, `catalog_state`, `unit_decisions`, `series.auto_request`).
 - **P9: file clean-up (FR-13).** The worker now deletes what it made for itself and no longer needs, once a day
   (with the backup check) and on **Clean up now** on the Backups page, which shows a preview and asks first. Four
   new settings, live at once, `0` switching a group off: `retention_done_days` (30; done, skipped and cancelled job

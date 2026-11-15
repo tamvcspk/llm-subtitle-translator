@@ -20,9 +20,11 @@ from typing import Any, Iterable, Iterator
 
 from subcore.memory import Facts
 
+from dataclasses import asdict
+
 from .ports import (
-    Account, ApiKey, SettingRow, BodyRef, Correction, EventRecord, LlmCall, Output, QualitySignal, Series, StoredFacts, TokenTotals,
-    TranslationVersion, Unit,
+    Account, ApiKey, SettingRow, BodyRef, CatalogApplied, CatalogEntry, CatalogState, CatalogSubtitle, Correction,
+    EventRecord, LlmCall, Output, QualitySignal, Series, StoredFacts, TokenTotals, TranslationVersion, Unit,
 )
 
 _MIGRATIONS: tuple[str, ...] = (
@@ -297,6 +299,50 @@ _MIGRATIONS: tuple[str, ...] = (
         WHEN 'cue_edit' THEN 'edit' WHEN 'revert' THEN 'revert' WHEN 'external' THEN 'external' ELSE 'machine' END;
     CREATE UNIQUE INDEX translations_one_current ON translations (output_path) WHERE status = 'current';
     """,
+    # Schema 10 (P10, FR-14, FR-15.4, FR-15.6, ADR-10): the library as Bazarr lists it (``catalog_items``, a cache
+    # with an age), what the last attempts to read it did (``catalog_state``, one row), the admin's "do not
+    # translate this" (``unit_decisions``) and the per-series override of ``auto_request``. An item is identified by
+    # (kind, bazarr_id), never by a path; ``gone_at`` is set when a full, plausible read no longer lists it. The
+    # ``held`` state is gone from the queue: the index of open jobs forgets it.
+    """
+    CREATE TABLE catalog_items (
+        id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL,                  -- series | movie | episode
+        bazarr_id TEXT NOT NULL,
+        parent_id INTEGER,                   -- the series row an episode belongs to
+        series_key TEXT NOT NULL DEFAULT '',
+        season INTEGER,
+        episode INTEGER,
+        title TEXT NOT NULL DEFAULT '',
+        video_path TEXT NOT NULL DEFAULT '',
+        tvdb_id TEXT NOT NULL DEFAULT '',
+        subtitles_json TEXT NOT NULL DEFAULT '[]',
+        missing_json TEXT NOT NULL DEFAULT '[]',
+        synced_at REAL NOT NULL,
+        gone_at REAL,
+        UNIQUE (kind, bazarr_id)
+    );
+    CREATE INDEX catalog_parent ON catalog_items (parent_id);
+    CREATE TABLE catalog_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        synced_at REAL NOT NULL DEFAULT 0,
+        attempted_at REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT '',
+        warning TEXT NOT NULL DEFAULT '',
+        items INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE unit_decisions (
+        unit_id INTEGER NOT NULL REFERENCES units(id),
+        target_lang TEXT NOT NULL,
+        decision TEXT NOT NULL,              -- ignored
+        at REAL NOT NULL,
+        PRIMARY KEY (unit_id, target_lang)
+    );
+    ALTER TABLE series ADD COLUMN auto_request TEXT NOT NULL DEFAULT '';
+    DROP INDEX jobs_open;
+    CREATE UNIQUE INDEX jobs_open ON jobs (key, kind) WHERE state IN ('queued', 'running', 'waiting');
+    CREATE INDEX jobs_unit ON jobs (unit_id, target_lang);
+    """,
 )
 
 
@@ -329,7 +375,17 @@ def _series_from_row(row: sqlite3.Row) -> Series:
     return Series(
         id=row["id"], key=row["key"], title=row["title"], bazarr_id=row["bazarr_id"],
         stale_policy=row["stale_policy"], memory=row["memory"], specials_after=row["specials_after"],
-        created_at=row["created_at"],
+        created_at=row["created_at"], auto_request=row["auto_request"],
+    )
+
+
+def _catalog_from_row(row: sqlite3.Row) -> CatalogEntry:
+    return CatalogEntry(
+        kind=row["kind"], bazarr_id=row["bazarr_id"], series_key=row["series_key"], season=row["season"],
+        episode=row["episode"], title=row["title"], video_path=row["video_path"], tvdb_id=row["tvdb_id"],
+        subtitles=tuple(CatalogSubtitle(**item) for item in json.loads(row["subtitles_json"] or "[]")),
+        missing=tuple(json.loads(row["missing_json"] or "[]")), id=row["id"], parent_id=row["parent_id"],
+        synced_at=row["synced_at"], gone_at=row["gone_at"],
     )
 
 
@@ -568,6 +624,20 @@ class Store:
     def calls_since(self, at: float) -> int:
         """Model calls recorded since ``at`` (a Unix time): what `max_calls_per_day` counts (FR-17.6)."""
         return int(self.query("SELECT COUNT(*) AS n FROM llm_calls WHERE at >= ?", (at,))[0]["n"])
+
+    def average_call_seconds(self, sample: int = 200) -> float | None:
+        """How long a recent model call took, on average, in seconds; None before any call was recorded."""
+        row = self.query(
+            "SELECT AVG(latency_ms) AS ms, COUNT(*) AS n FROM (SELECT latency_ms FROM llm_calls"
+            " WHERE latency_ms > 0 ORDER BY id DESC LIMIT ?)", (int(sample),),
+        )[0]
+        return float(row["ms"]) / 1000.0 if row["n"] else None
+
+    def policy_jobs_since(self, at: float) -> int:
+        """Jobs the ``auto_request`` policy created since ``at``: what ``auto_request_daily_cap`` counts (FR-15.4)."""
+        return int(self.query(
+            "SELECT COUNT(*) AS n FROM jobs WHERE origin = 'policy' AND created_at >= ?", (at,)
+        )[0]["n"])
 
     def llm_calls(self, job_id: str | None = None) -> list[LlmCall]:
         with self._lock:
@@ -1018,6 +1088,135 @@ class Store:
                 self._db.execute("UPDATE series SET memory = ? WHERE id = ?", (memory, series_id))
             if specials_after is not None:
                 self._db.execute("UPDATE series SET specials_after = ? WHERE id = ?", (specials_after, series_id))
+
+    def set_series_auto_request(self, series_id: int, value: str) -> None:
+        """'' follows the global ``auto_request`` setting; 'on' and 'off' override it for this series (FR-15.4)."""
+        with self._lock:
+            self._db.execute("UPDATE series SET auto_request = ? WHERE id = ?", (value, series_id))
+
+    def series_by_key(self, key: str) -> Series | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM series WHERE key = ?", (key,)).fetchone()
+        return _series_from_row(row) if row else None
+
+    def unit_by_movie_key(self, movie_key: str) -> Unit | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM units WHERE movie_key = ?", (movie_key,)).fetchone()
+        return _unit_from_row(row) if row else None
+
+    # -- the library as Bazarr lists it (P10, FR-14, ADR-10) --------------------------------
+    def catalog_apply(self, entries: Iterable[CatalogEntry], at: float) -> CatalogApplied:
+        """Make the cache say what one full, accepted read said: every entry is written (new or refreshed, no longer
+        gone) and every row the read did not list is marked gone (FR-14.2). One transaction: a reader sees the
+        old catalog or the new one, never half."""
+        added = updated = 0
+        with self.transaction() as db:
+            parents: dict[str, int] = {}
+            for entry in sorted(entries, key=lambda e: e.kind != "series"):  # a series row before its episodes
+                parent_id = parents.get(entry.parent_bazarr_id) if entry.parent_bazarr_id else None
+                if entry.parent_bazarr_id and parent_id is None:
+                    found = db.execute(
+                        "SELECT id FROM catalog_items WHERE kind = 'series' AND bazarr_id = ?", (entry.parent_bazarr_id,)
+                    ).fetchone()
+                    parent_id = int(found["id"]) if found else None
+                fields = (
+                    parent_id, entry.series_key, entry.season, entry.episode, entry.title, entry.video_path,
+                    entry.tvdb_id, json.dumps([asdict(s) for s in entry.subtitles], ensure_ascii=False),
+                    json.dumps(list(entry.missing)), at,
+                )
+                row = db.execute(
+                    "SELECT id FROM catalog_items WHERE kind = ? AND bazarr_id = ?", (entry.kind, entry.bazarr_id)
+                ).fetchone()
+                if row is None:
+                    cursor = db.execute(
+                        "INSERT INTO catalog_items (kind, bazarr_id, parent_id, series_key, season, episode, title,"
+                        " video_path, tvdb_id, subtitles_json, missing_json, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (entry.kind, entry.bazarr_id, *fields),
+                    )
+                    item_id, added = int(cursor.lastrowid), added + 1
+                else:
+                    item_id, updated = int(row["id"]), updated + 1
+                    db.execute(
+                        "UPDATE catalog_items SET parent_id = ?, series_key = ?, season = ?, episode = ?, title = ?,"
+                        " video_path = ?, tvdb_id = ?, subtitles_json = ?, missing_json = ?, synced_at = ?, gone_at = NULL"
+                        " WHERE id = ?", (*fields, item_id),
+                    )
+                if entry.kind == "series":
+                    parents[entry.bazarr_id] = item_id
+            gone = db.execute(
+                "UPDATE catalog_items SET gone_at = ? WHERE synced_at < ? AND gone_at IS NULL", (at, at)
+            ).rowcount
+        return CatalogApplied(added=added, updated=updated, gone=gone)
+
+    def catalog_entry(self, item_id: int) -> CatalogEntry | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM catalog_items WHERE id = ?", (item_id,)).fetchone()
+        return _catalog_from_row(row) if row else None
+
+    def catalog_lookup(self, kind: str, bazarr_id: str) -> CatalogEntry | None:
+        """The item with the library's own id; the way a job finds its files again after a rename (FR-14.3)."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM catalog_items WHERE kind = ? AND bazarr_id = ?", (kind, str(bazarr_id))
+            ).fetchone()
+        return _catalog_from_row(row) if row else None
+
+    def catalog_entries(self, kind: str | None = None, *, parent_id: int | None = None, include_gone: bool = False) -> list[CatalogEntry]:
+        sql, args = "SELECT * FROM catalog_items WHERE 1 = 1", []
+        if kind is not None:
+            sql += " AND kind = ?"
+            args.append(kind)
+        if parent_id is not None:
+            sql += " AND parent_id = ?"
+            args.append(parent_id)
+        if not include_gone:
+            sql += " AND gone_at IS NULL"
+        with self._lock:
+            rows = self._db.execute(sql + " ORDER BY title COLLATE NOCASE, season, episode, id", args).fetchall()
+        return [_catalog_from_row(row) for row in rows]
+
+    def catalog_count(self) -> int:
+        """Items that are still listed (not gone)."""
+        with self._lock:
+            return int(self._db.execute("SELECT COUNT(*) FROM catalog_items WHERE gone_at IS NULL").fetchone()[0])
+
+    def catalog_state(self) -> CatalogState:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM catalog_state WHERE id = 1").fetchone()
+        if row is None:
+            return CatalogState()
+        return CatalogState(synced_at=row["synced_at"], attempted_at=row["attempted_at"], status=row["status"],
+                            warning=row["warning"], items=row["items"])
+
+    def save_catalog_state(self, state: CatalogState) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO catalog_state (id, synced_at, attempted_at, status, warning, items) VALUES (1, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (id) DO UPDATE SET synced_at = excluded.synced_at, attempted_at = excluded.attempted_at,"
+                " status = excluded.status, warning = excluded.warning, items = excluded.items",
+                (state.synced_at, state.attempted_at, state.status, state.warning, state.items),
+            )
+
+    # -- the admin's decisions (FR-15.6) -------------------------------------------------------
+    def set_decision(self, unit_id: int, target_lang: str, decision: str | None, at: float | None = None) -> None:
+        """Record "ignored" for (unit, language), or forget the decision when ``decision`` is None."""
+        with self._lock:
+            if decision is None:
+                self._db.execute("DELETE FROM unit_decisions WHERE unit_id = ? AND target_lang = ?", (unit_id, target_lang))
+            else:
+                self._db.execute(
+                    "INSERT INTO unit_decisions (unit_id, target_lang, decision, at) VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT (unit_id, target_lang) DO UPDATE SET decision = excluded.decision, at = excluded.at",
+                    (unit_id, target_lang, decision, at if at is not None else time.time()),
+                )
+
+    def decisions(self, decision: str = "ignored") -> set[tuple[int, str]]:
+        """Every (unit id, language) the admin decided about in this way."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT unit_id, target_lang FROM unit_decisions WHERE decision = ?", (decision,)
+            ).fetchall()
+        return {(int(row["unit_id"]), str(row["target_lang"])) for row in rows}
 
     def get_facts(
         self, unit_id: int, source_sha256: str, prompt_version: str, *, touch: bool = False

@@ -9,13 +9,12 @@ import json
 import logging
 import mimetypes
 import urllib.parse
-from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 from . import auth as console_auth
-from . import keys_api, library_api
+from . import catalog_api, keys_api, library_api
 from .auth import ConsoleAuth
 from .backups import backup_file_path, create_backup, list_backups, restore_backup_archive
 from .bazarr import list_wanted_items
@@ -271,6 +270,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_json(result[1], status=result[0])
         return True
 
+    def catalog_route(self, method: str, parsed: urllib.parse.ParseResult, body: dict[str, Any] | None = None) -> bool:
+        """Serve the Library page's catalog routes and ``POST /api/jobs``; False when the path is not one of them."""
+        actions = self.ctx.get("catalog")
+        if actions is None or not catalog_api.handles(parsed.path):
+            return False
+        result = catalog_api.handle(actions, method, parsed.path, body)
+        if result is None:
+            return False
+        self.send_json(result[1], status=result[0])
+        return True
+
     @property
     def settings_service(self) -> Any:
         return self.ctx["settings_service"]
@@ -295,7 +305,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         try:
-            if self.library_api("GET", parsed) or self.keys_route("GET", parsed):
+            if self.library_api("GET", parsed) or self.keys_route("GET", parsed) or self.catalog_route("GET", parsed):
                 return
             if parsed.path == "/login":
                 self.serve_static("/login.html", no_store=True)
@@ -307,9 +317,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self.send_json(self.api_status())
             elif parsed.path == "/api/queue":
                 self.send_json(self.ctx["console"].snapshot())
-            elif parsed.path in {"/api/queue/held", "/api/queue/rejected"}:
-                jobs = self.ctx["console"].held() if parsed.path.endswith("held") else self.ctx["console"].rejected()
-                self.send_json({"count": len(jobs), "items": [asdict(job) for job in jobs]})
             elif parsed.path == "/api/settings":
                 self.send_json(self.settings_service.public(self.live_settings()))
             elif parsed.path == "/api/languages":
@@ -389,7 +396,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 return
 
             body = read_json_body(self)
-            if self.library_api("POST", parsed, body) or self.keys_route("POST", parsed, body):
+            if (self.library_api("POST", parsed, body) or self.keys_route("POST", parsed, body)
+                    or self.catalog_route("POST", parsed, body)):
                 return
             if parsed.path == "/api/auth/login":
                 self.api_login(body)
@@ -433,19 +441,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                         "ok": self.ctx["console"].delete(str(body.get("state", "")), str(body.get("job_id", "")))
                     }
                 )
-            elif parsed.path in {"/api/queue/approve", "/api/queue/reject", "/api/queue/restore"}:
-                action = parsed.path.rsplit("/", 1)[1]
-                ids = body.get("job_ids")
-                if ids is not None and (not isinstance(ids, list) or not all(isinstance(item, str) for item in ids)):
-                    raise ValueError("job_ids must be a list of job ids")
-                everything = body.get("all") is True
-                if action == "restore":
-                    moved = self.ctx["console"].restore(job_ids=ids, everything=everything)
-                else:
-                    moved = getattr(self.ctx["console"], action)(
-                        job_ids=ids, series_id=str(body.get("series_id") or "") or None, everything=everything,
-                    )
-                self.send_json({"ok": True, "count": len(moved), "jobs": moved})
             elif parsed.path == "/api/backups":
                 self.send_json(
                     {
@@ -493,7 +488,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         try:
             body = read_json_body(self)
-            if not (self.library_api("PUT", parsed, body) or self.keys_route("PUT", parsed, body)):
+            if not (self.library_api("PUT", parsed, body) or self.keys_route("PUT", parsed, body)
+                    or self.catalog_route("PUT", parsed, body)):
                 self.send_error_json("not found", status=404)
         except ValueError as exc:
             self.send_error_json(str(exc), status=400)

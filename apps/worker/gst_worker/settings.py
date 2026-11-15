@@ -17,7 +17,8 @@ from typing import Any
 
 from .bazarr import read_bazarr_api_key
 from .config import (
-    ADMISSION_AUTO,
+    CATALOG_BOOL_CONFIG_KEYS,
+    CATALOG_INT_CONFIG_KEYS,
     DEFAULT_APP_CONFIG,
     DEFAULT_MODEL,
     GST_BOOL_CONFIG_KEYS,
@@ -213,7 +214,10 @@ class SettingsService:
         for key in LLM_INT_CONFIG_KEYS:
             settings[key] = int(app[key])
         settings["job_settle_seconds"] = int(app.get("job_settle_seconds") or 0)
-        settings["admission_mode"] = str(app.get("admission_mode") or ADMISSION_AUTO)
+        for key in CATALOG_BOOL_CONFIG_KEYS:
+            settings[key] = bool(app.get(key))
+        for key in CATALOG_INT_CONFIG_KEYS:
+            settings[key] = int(app[key])
         for key in MEMORY_BOOL_CONFIG_KEYS:
             settings[key] = bool(app.get(key))
         for key in MEMORY_STRING_CONFIG_KEYS:

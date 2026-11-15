@@ -21,8 +21,8 @@ that still has quota lifts it.
 
 **Job**:
 One translation of one source subtitle into one target language, stored as a row of the
-`jobs` table. It has a state (`queued`, `running`, `waiting`, `held`, `rejected`, `done`,
-`skipped`, `failed`, `cancelled`), a class (interactive, retranslate, auto) and, while
+`jobs` table. It has a state (`queued`, `running`, `waiting`, `done`,
+`skipped`, `failed`, `cancelled`), an origin (`manual`, `policy`, `retranslate`, ...), a class (interactive, retranslate, auto) and, while
 waiting, a reason. A job is only ever failed for its own faults: its source, its glossary,
 an invalid output after the strong model, a refused content filter, or too many crashes.
 
@@ -47,7 +47,7 @@ back in line with one more attempt.
 The daily and on-demand deletion of what the worker made for itself: finished job rows,
 stored copies of older subtitle versions, glossary backups and leftover temporary files.
 It always starts as a preview (`dry_run`), and never touches a media folder, an unfinished
-or held job, a rejection, a current version or the story memory. `0` switches a group off.
+job, an Ignored decision, the catalog, a current version or the story memory. `0` switches a group off.
 
 **Pruned** (version status):
 A subtitle version whose stored copy clean-up deleted. Its line stays in History, but it
@@ -71,20 +71,37 @@ default model. It moves to the strong model once; if that fails too the job fail
 A target language Bazarr still lists in an item's `missing_subtitles` and that no
 sibling subtitle already provides. Only wanted languages are translated.
 
-**Admission mode** (setting `admission_mode`):
-How the worker receives the translation jobs the Bazarr script queues: `auto`
-runs them, `hold` sets them aside until the admin decides. Jobs the admin makes in
-the console are never held. Changing the mode does not touch jobs already waiting.
+**Catalog** (table `catalog_items`):
+The library as Bazarr lists it (series, movies, episodes, their subtitles and the languages Bazarr
+still wants), kept as a cache with an age. The worker pulls it every `catalog_sync_interval` seconds
+and on **Sync now**; a read never creates a job. An item is identified by Bazarr's own id, not by a
+path, so a rename does not break a waiting job. A read that fails, comes back empty or shrank by more
+than `catalog_shrink_guard` is set aside and the cache stays as it was.
 
-**Held job**:
-A job the script queued while the admission mode was `hold`: received and stored,
-not run, no model call, no quota. The admin approves it (it becomes pending and then
-meets every normal check, including a target that appeared meanwhile) or rejects it.
-A held job survives a restart and a switch back to `auto`.
+**Derived state** (the label of an item and language):
+What Library shows, worked out when it is read from three independent things, never stored: the
+content (Missing, Translated, Edited, External, Outside profile, with Removed and Stale), the job
+(Requested, Running, Waiting with a reason, Failed) and the decision (Ignored). "Missing · Requested"
+is a missing language with an open job.
 
-**Rejected job**:
-A held job the admin refused. It is remembered by job id so neither the script nor a
-scan queues it again; restoring it returns it to held.
+**Request**:
+Not a thing of its own: asking for a translation is making a job. The admin asks in Library (one
+item, a selection, a season, a series); a request for more than one job shows an estimate and asks
+for confirmation. A second request for the same item and language makes no second job.
+
+**Auto-request** (setting `auto_request`, per series override):
+The policy that makes jobs by itself, after each accepted read of the catalog, for what Bazarr lists
+as missing: only where it is on (everywhere, or for a series), never for an Ignored or Removed item or
+one that has a job, within `GST_ONLY_PATHS` and `auto_request_daily_cap`. Off by default. Its jobs have
+origin `policy` and are the automatic class, so they never bring back what the admin removed.
+
+**Ignored** (table `unit_decisions`):
+The admin's "do not translate this language of this item". Neither a read nor the policy makes a job for
+it; the admin's own request refuses it too until it is taken back.
+
+**Removed** (version status):
+The admin deleted the target subtitle from the console. The item is Missing again but is not requested
+by the policy, only by the admin.
 
 **Queue lifecycle**:
 The rules that move a translation job through the job queue, including settling,

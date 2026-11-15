@@ -14,7 +14,6 @@ on:
       - "uv.lock"
       - "apps/worker/**"
       - "packages/*/pyproject.toml"
-      - "bazarr-postprocess/**"
   workflow_dispatch:
 
 permissions:

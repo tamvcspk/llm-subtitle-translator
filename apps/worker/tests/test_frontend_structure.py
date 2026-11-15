@@ -78,8 +78,9 @@ class FrontendStructureTests(unittest.TestCase):
         # Only settings the in-process engine reads are offered (P3 dropped the old `gst` CLI options).
         self.assertEqual(names, {
             "bazarr_url", "bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key",
-            "gst_model", "gst_fallback_model", "job_settle_seconds", "admission_mode", "gst_paid_quota",
+            "gst_model", "gst_fallback_model", "job_settle_seconds", "gst_paid_quota",
             "gst_temperature", "gst_thinking_budget", "gst_no_thinking",
+            "auto_request", "auto_request_daily_cap", "catalog_sync_interval", "catalog_shrink_guard",
             "media_roots", "scan_limit",
             "memory_enabled", "memory_model", "memory_gap_wait_seconds", "memory_budget_tokens",
             "memory_recent_episodes",
@@ -103,7 +104,7 @@ class FrontendStructureTests(unittest.TestCase):
         scripts = read_scripts()
 
         for endpoint in (
-            "/api/library/series", "/api/library/movies", "/cues?", "/corrections", "/retranslate", "/versions",
+            "/api/library/series", "/cues?", "/corrections", "/retranslate", "/versions",
             "/diff", "/revert", "/api/series/", "/glossary", "/context", "/context/extract", "/memory",
         ):
             self.assertIn(endpoint, scripts)
@@ -113,6 +114,28 @@ class FrontendStructureTests(unittest.TestCase):
             self.assertIn(element, html)
         self.assertIn("Stale", scripts)
         self.assertIn("is only flagged", html)
+
+    def test_the_library_browses_the_catalog_and_a_bulk_request_shows_its_cost_before_it_asks(self):
+        html = read_html()
+        scripts = read_scripts()
+        library = view_section(html, "library")
+
+        for endpoint in ("/api/catalog", "/api/catalog/movies", "/api/catalog/sync", "/api/catalog/ignore",
+                         "/api/catalog/unignore", "/policy", '"/api/jobs"'):
+            self.assertIn(endpoint, scripts)
+        for element in ('id="library-request"', 'id="library-retranslate"', 'id="library-ignore"', 'id="library-search"'):
+            self.assertIn(element, library)
+        # The estimate is asked first, then the admin confirms, then the request is made (FR-15.5).
+        self.assertLess(scripts.index("estimate_only: true"), scripts.index("planned_total > 1"))
+        self.assertIn("estimateText(preview)", scripts)
+        self.assertIn("Sync now", scripts)
+
+    def test_the_hold_inbox_and_its_endpoints_are_gone_from_the_console(self):
+        html = read_html()
+        scripts = read_scripts()
+
+        for gone in ("queue/held", "queue/rejected", "nav-held-count", "queue-approve", "admission_mode"):
+            self.assertNotIn(gone, html + scripts)
 
     def test_secret_fields_have_masks_and_test_buttons(self):
         settings = view_section(read_html(), "settings")

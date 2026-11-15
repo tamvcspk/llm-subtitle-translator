@@ -61,8 +61,8 @@ uv run python apps/worker/worker.py --no-worker --host 127.0.0.1 --port 6789
 
 ## Coding Notes
 
-- Keep Bazarr integration in the post-processing script fast and side-effect
-  small.
+- Keep the Bazarr integration read-only (the catalog read) and behind the
+  `MediaLibrary` port; a read never creates a job.
 - Keep Gemini calls in the worker app (`gst_worker/translation.py`); do not
   install dependencies into the Bazarr image. (`apps/worker/gst_worker/translation.py`
   until P2 replaces it with `subcore`.)

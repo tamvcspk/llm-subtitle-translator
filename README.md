@@ -5,8 +5,9 @@ LLM translation jobs.
 
 The worker is designed for media servers where Bazarr can already extract or
 index source subtitles, but the final translated subtitles still need to be
-created automatically. It listens for Bazarr post-processing events, exposes a
-small web console, queues translation work, translates in-process with the
+created automatically. It reads the library from Bazarr's API, exposes a
+small web console where you request translations (or switch on auto-request),
+queues the work, translates in-process with the
 `subcore` engine (Gemini, with rate limiting, retries, cue validation and
 repair), writes target-language `.srt` files next to the media, then asks Bazarr
 to scan the matching item again. Every published file is versioned with a
@@ -14,10 +15,13 @@ backup, so a retranslation can be reverted.
 
 ## Features
 
-- Bazarr post-processing integration for embedded subtitles in configured source
-  languages.
-- Web console for status, wanted items, local scans, queue management, settings,
-  system backups, and logs.
+- The worker pulls the library from Bazarr (series, movies, episodes and the
+  languages each still wants) and shows what each language is doing, as Missing,
+  Translated, Edited, External, Requested, Ignored, and so on. Nothing is
+  translated until you ask in the Library, or switch on auto-request for a
+  series (or everything).
+- Web console for the library, status, wanted items, local scans, queue
+  management, settings, system backups, and logs.
 - Settings page shows configured secrets as `**********` and provides API-key
   test buttons for Bazarr, Gemini, and TMDB.
 - Translation options are configurable in the web console, including model
@@ -43,13 +47,14 @@ backup, so a retranslation can be reverted.
 ## How It Works
 
 ```text
-Bazarr Embedded Subtitles provider
+Bazarr (library, Embedded Subtitles provider)
+        ^
+        | the worker reads series, episodes, movies, missing languages
+        | (every few minutes and on "Sync now"); nothing is pushed
         |
-        | extracts *.en.srt, *.ja.srt, ...
-        v
-Bazarr custom post-processing
+Library: you request, or auto-request asks
         |
-        | writes queue JSON
+        | jobs in the worker's database
         v
 Gemini SRT Translator for Bazarr
         |
@@ -102,15 +107,16 @@ docker run -d \
   -e CONSOLE_PASSWORD='choose-a-password' \
   -v /mnt/data:/media \
   -v /opt/docker/bazarr/config:/bazarr-config:ro \
-  -v /opt/docker/bazarr/postprocess:/bazarr-postprocess \
   -v /opt/docker/gemini-srt-translator-bazarr:/state \
-  -v /opt/docker/bazarr/postprocess/queue:/queue \
   ghcr.io/tamvcspk/llm-subtitle-translator:latest
 ```
 
-The container already defaults to `/state`, `/queue`,
-`/bazarr-postprocess/targets.json`, and web port `6789`, so the direct
-`docker run` form only needs the host paths and public settings.
+The container already defaults to `/state` and web port `6789`, so the direct
+`docker run` form only needs the host paths and public settings. (When upgrading
+from a version that used Bazarr's post-processing script, also mount the old
+queue folder, `-v /opt/docker/bazarr/postprocess/queue:/queue`, for the first
+start only: the worker settles it into its database once. See
+[docs/BAZARR.md](docs/BAZARR.md).)
 The console requires a login (a form for browsers, HTTP Basic Auth for scripts).
 `CONSOLE_USER` / `CONSOLE_PASSWORD` create the account on the first run; change
 the password in Settings afterwards. Without them (and no stored account) it
@@ -168,14 +174,6 @@ every setting (model, paid quota mode, languages, ...) live in the worker's data
 restart. The API returns only the last four characters of a key. An older
 `/state/config.json` is imported once on the first start and is not read again.
 
-Create the shared post-processing directory and install the enqueue script:
-
-```bash
-sudo mkdir -p /opt/docker/bazarr/postprocess
-sudo cp bazarr-postprocess/gst_enqueue.sh /opt/docker/bazarr/postprocess/gst_enqueue.sh
-sudo chmod +x /opt/docker/bazarr/postprocess/gst_enqueue.sh
-```
-
 Start the worker:
 
 ```bash
@@ -212,14 +210,14 @@ They include:
 
 - the saved settings (`config/config.json` in the zip), **without any API key**
   (tick "Include the API keys" on the Backups page to add them; scheduled backups never do)
-- `/bazarr-postprocess/targets.json`
+- the language list file the old Bazarr script read (`postprocess/targets.json`; a leftover, no longer used)
 - `backup.json` metadata
 
 The login is not encrypted, so keep the console on a trusted network or behind
 a TLS reverse proxy. Backup archives can be downloaded from the UI and imported back through
-the System page. Import restores the settings (and the keys, when the backup has them) and
-`/bazarr-postprocess/targets.json`, never the console account, creates a `pre-import`
-backup first, and does not restore queue files, logs, or caches.
+the System page. Import restores the settings (and the keys, when the backup has them),
+never the console account, creates a `pre-import` backup first, and does not restore
+logs or caches.
 
 Because a backup holds no key, back up `.env` and the database separately; `.env` is
 Docker deployment configuration and is not mounted inside the worker container:
@@ -227,28 +225,19 @@ Docker deployment configuration and is not mounted inside the worker container:
 ```bash
 tar -czf gemini-srt-translator-bazarr-backup.tgz \
   /opt/docker/gemini-srt-translator-bazarr/.env \
-  /opt/docker/gemini-srt-translator-bazarr/app.db \
-  /opt/docker/bazarr/postprocess/targets.json
+  /opt/docker/gemini-srt-translator-bazarr/app.db
 ```
 
-Queue files and logs are runtime state rather than required configuration.
+Jobs are rows of the database; logs are runtime state rather than required configuration.
 
 ## Bazarr Setup
 
-In Bazarr, enable `Settings -> Subtitles -> Use Custom Post-Processing` and use
-this command:
-
-```bash
-/config/postprocess/gst_enqueue.sh "{{episode}}" "{{subtitles}}" "{{subtitles_language_code2}}" "{{provider}}" "{{series_id}}" "{{episode_id}}" 2>&1
-```
-
-The enqueue script intentionally accepts only:
-
-- provider: `embeddedsubtitles`
-- source subtitle language: one of the configured source languages
-- missing target output files, for example no existing `.zh.srt`
-
-See [docs/BAZARR.md](docs/BAZARR.md) for detailed setup notes.
+Enter Bazarr's address and API key in Settings. That is all: Bazarr needs no
+post-processing command and no shared script folder. Open **Library**, press
+**Sync now**, and request translations, or switch on **Auto-request** for a
+series. See [docs/BAZARR.md](docs/BAZARR.md) for how the worker reads the
+library, what a request costs, and how to remove the old post-processing
+command when upgrading.
 
 ## Languages
 

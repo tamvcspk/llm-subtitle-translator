@@ -22,6 +22,11 @@ class MissingApiKey(RuntimeError):
     """No provider API key is configured."""
 
 
+class MediaLibraryError(RuntimeError):
+    """The media library could not be read or answered something unusable. The message is a sentence for the admin:
+    it never holds a URL or a key."""
+
+
 @dataclass(frozen=True)
 class Account:
     """The one console account. The hash stays out of ``repr`` so a traceback or log line cannot leak it."""
@@ -209,7 +214,8 @@ class StoredFacts:
 @dataclass(frozen=True)
 class Series:
     """A TV series the worker has met. ``memory`` is '' (follow the global setting), 'on' or 'off';
-    ``specials_after`` is an ``S02E05`` anchor for season 0; ``stale_policy`` is flag | ignore."""
+    ``specials_after`` is an ``S02E05`` anchor for season 0; ``stale_policy`` is flag | ignore;
+    ``auto_request`` is '' (follow the global ``auto_request`` setting), 'on' or 'off' (FR-15.4)."""
 
     id: int
     key: str
@@ -219,6 +225,7 @@ class Series:
     memory: str = ""
     specials_after: str = ""
     created_at: float = 0.0
+    auto_request: str = ""
 
 
 @dataclass(frozen=True)
@@ -328,9 +335,76 @@ class EpisodeListing:
     source_path: str = ""
 
 
+KIND_SERIES, KIND_MOVIE, KIND_EPISODE = "series", "movie", "episode"
+
+
+@dataclass(frozen=True)
+class CatalogSubtitle:
+    """One subtitle the library lists for an item. ``path`` is empty for an embedded track, which the worker
+    cannot read; ``code`` is the two-letter language code the library uses."""
+
+    code: str
+    path: str = ""
+    forced: bool = False
+    hi: bool = False
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    """One series, movie or episode of the library as the media manager lists it (FR-14.1, ADR-10).
+
+    Identity is the library's own id (``kind`` + ``bazarr_id``), never a path (FR-14.3). ``series_key`` is the key
+    the worker's series (or movie) carries, so a catalog item and a unit meet. An episode names its series by
+    ``parent_bazarr_id``. ``missing`` lists the language codes the library says it still wants. The fields from
+    ``id`` on are filled when the entry was read back from the table."""
+
+    kind: str
+    bazarr_id: str
+    series_key: str = ""
+    parent_bazarr_id: str = ""
+    season: int | None = None
+    episode: int | None = None
+    title: str = ""
+    video_path: str = ""
+    tvdb_id: str = ""
+    subtitles: tuple[CatalogSubtitle, ...] = ()
+    missing: tuple[str, ...] = ()
+    id: int = 0
+    parent_id: int | None = None
+    synced_at: float = 0.0
+    gone_at: float | None = None
+
+
+@dataclass(frozen=True)
+class CatalogState:
+    """How the last attempts to read the library went (FR-14.2). ``synced_at`` is the last time a full, plausible
+    answer was applied (0 = never); ``status`` is ``ok`` or ``kept`` (the last answer was set aside and the cache
+    stayed as it was, ``warning`` says why); ``items`` is what the last applied answer held."""
+
+    synced_at: float = 0.0
+    attempted_at: float = 0.0
+    status: str = ""
+    warning: str = ""
+    items: int = 0
+
+
+@dataclass(frozen=True)
+class CatalogApplied:
+    """What applying one answer changed: new items, items seen again, items no longer listed."""
+
+    added: int = 0
+    updated: int = 0
+    gone: int = 0
+
+
 @runtime_checkable
 class MediaLibrary(Protocol):
     """The media manager (Bazarr): what an item is and which episodes a series has."""
+
+    def catalog(self) -> Iterable[CatalogEntry]:
+        """Every series, movie and episode the library lists, with their subtitles and missing languages (FR-14.1).
+        Read in pages by the adapter; raises when the library cannot be reached or answers badly, so the caller
+        can keep what it already has (FR-14.2)."""
 
     def describe(self, media_type: str, series_id: str, media_id: str) -> MediaDetails | None:
         """Details of an episode or movie; None when the library cannot say (no access, unknown type or ids).
@@ -354,23 +428,3 @@ class Metadata(Protocol):
 
     def description(self, job: dict[str, Any]) -> str:
         """The description for the job's item; ``""`` when there is no key, no match, or the lookup failed."""
-
-
-@dataclass(frozen=True)
-class HeldJob:
-    """A job waiting for the admin's decision (FR-12.4), or one that was refused. ``created_at`` is when the
-    script queued it, ``held_at`` when the worker received and set it aside; ``cue_count`` is the cues in the
-    source subtitle (0 when it cannot be read). ``series_id`` is Bazarr's, empty for a movie."""
-
-    job_id: str
-    subtitle_path: str
-    source_code: str
-    target_code: str
-    video_path: str = ""
-    source_language: str = ""
-    target_language: str = ""
-    series_id: str = ""
-    media_type: str = ""
-    created_at: float = 0.0
-    held_at: float = 0.0
-    cue_count: int = 0

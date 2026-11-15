@@ -12,11 +12,16 @@ from typing import Any, Callable
 from gst_worker.backups import BackupMaintenance, create_scheduled_backup_if_due, purge_old_backups
 from gst_worker.auth import ConsoleAuth
 from gst_worker.cleanup import Cleanup
+from gst_worker.auto_request import AutoRequest, sync_and_request
 from gst_worker.bazarr import BazarrIntegration, BazarrMedia
+from gst_worker.catalog import CatalogPaths, CatalogSync
+from gst_worker.catalog_actions import CatalogActions
+from gst_worker.catalog_view import CatalogView
 from gst_worker.logs import configure_logging
 from gst_worker.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
-from gst_worker.config import ADMISSION_AUTO, ADMISSION_HOLD, provider_name
-from gst_worker.intake import import_queue_tree, receive_script_jobs
+from gst_worker.config import provider_name
+from gst_worker.intake import import_queue_tree
+from gst_worker.job_requests import JobRequests
 from gst_worker.queue import JobQueue, skip_reason
 from gst_worker.console import ConsoleActions
 from gst_worker.glossaries import GlossaryFiles
@@ -115,6 +120,7 @@ class QueueWorker:
         telemetry: Telemetry | None = None,
         store: Store | None = None,
         key_ok: Callable[[], bool] | None = None,
+        library: Library | None = None,
     ) -> None:
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
         self.queue_dir = queue_dir
@@ -127,9 +133,12 @@ class QueueWorker:
         self.media = media
         self.metadata = metadata
         self.console = ConsoleActions(self.queue)
+        # A waiting job finds its files again after Sonarr renamed them (FR-14.3).
+        self.paths = CatalogPaths(self.store)
         self.queue.configure(settings, self.models(), provider_name(settings))
-        # Start-up, explicitly: the old queue folders move into the table once, then jobs a stopped worker held go back in line.
-        import_queue_tree(self.queue, queue_dir)
+        # Start-up, explicitly: an older queue (folders, the script's gate) settles into the table once, then jobs a
+        # stopped worker held go back in line (ADR-10).
+        import_queue_tree(self.queue, queue_dir, library)
         self.queue.recover()
 
     def models(self) -> tuple[str, ...]:
@@ -139,12 +148,6 @@ class QueueWorker:
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
         """Adopt new settings; a newly configured model with quota left is usable at once."""
-        was = self.admission_mode()
-        if was != ADMISSION_HOLD and str(settings.get("admission_mode") or "") == ADMISSION_HOLD:
-            # Switching to `hold` leaves the line as it is (FR-12.8): what the script dropped and what was queued
-            # before now counts as admitted.
-            receive_script_jobs(self.queue, self.queue_dir, ADMISSION_AUTO)
-            self.queue.jobs.stamp_open_jobs(ADMISSION_AUTO)
         old = self.settings
         self.settings = settings
         changed = sorted(key for key in {*old, *settings} if old.get(key) != settings.get(key))
@@ -159,16 +162,16 @@ class QueueWorker:
         if apply is not None:
             apply(settings)
 
-    def admission_mode(self) -> str:
-        return ADMISSION_HOLD if str(self.settings.get("admission_mode") or "") == ADMISSION_HOLD else ADMISSION_AUTO
+    def run_job(self, job: dict[str, Any], update_status: Callable[..., None]) -> str:
+        self.paths.refresh(job)  # the library's own id says where the files are now, not the paths the job was made with
+        return process_job(
+            job, self.settings, self.cache, self.http, update_status, self.attempt,
+            media=self.media, metadata=self.metadata, telemetry=self.telemetry,
+        )
 
     def process_once(self, now: float | None = None) -> bool:
-        receive_script_jobs(self.queue, self.queue_dir, self.admission_mode())
         return self.queue.process_once(
-            lambda job, update_status: process_job(
-                job, self.settings, self.cache, self.http, update_status, self.attempt,
-                media=self.media, metadata=self.metadata, telemetry=self.telemetry,
-            ),
+            self.run_job,
             settle_seconds=max(0, int(self.settings.get("job_settle_seconds") or 0)),
             now=now,
             models=self.models(),
@@ -184,6 +187,21 @@ class QueueWorker:
                 worked = False
             if not worked:
                 time.sleep(sleep_seconds)
+
+
+CATALOG_CHECK_SECONDS = 15
+
+
+def run_catalog_sync(sync: CatalogSync, auto: AutoRequest, check_seconds: float = CATALOG_CHECK_SECONDS) -> None:
+    """Keep the catalog as young as ``catalog_sync_interval`` says, and let the policy act after each read (ADR-10).
+    One failing cycle never stops the loop."""
+    while True:
+        try:
+            if sync.due():
+                sync_and_request(sync, auto)
+        except Exception:  # noqa: BLE001
+            logging.exception("Catalog sync cycle failed")
+        time.sleep(check_seconds)
 
 
 def backup_maintenance_once(
@@ -226,7 +244,9 @@ def main() -> int:
     queue_dir = os.getenv("QUEUE_DIR", "/queue")
     log_dir = os.getenv("LOG_DIR", f"{state_dir}/logs")
     config_path = os.getenv("APP_CONFIG_PATH", f"{state_dir}/config.json")
-    postprocess_targets_path = os.getenv("POSTPROCESS_TARGETS_PATH", "/bazarr-postprocess/targets.json")
+    # Bazarr's post-processing script is gone (P10); the language list it read is still written, and kept in backups,
+    # until that leftover is cleaned out of settings and backups.
+    postprocess_targets_path = os.getenv("POSTPROCESS_TARGETS_PATH", f"{state_dir}/postprocess/targets.json")
     static_dir = os.getenv("STATIC_DIR", "/app/static")
     backup_check_seconds = int(os.getenv("BACKUP_CHECK_SECONDS", "21600"))
     configure_logging(log_dir)
@@ -276,6 +296,7 @@ def main() -> int:
         queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt,
         media=media, metadata=metadata, telemetry=telemetry, store=store,
         key_ok=lambda: any(key.status == "ok" for key in store.api_keys(provider_name(live_settings()))),
+        library=library,
     )
     # A saved setting, a pasted key or a key the provider refused reaches the running worker at once (FR-20.1).
     settings_service.subscribe(lambda: worker.apply_settings(settings_service.settings()))
@@ -284,6 +305,16 @@ def main() -> int:
         library, glossaries, versions, worker.queue, refresh_bazarr=media.refresh,
         memory=memory, settings_source=live_settings, usage=store, provider_factory=provider_factory,
         telemetry=telemetry,
+    )
+    # The library as Bazarr lists it, what the admin asks for from it, and the policy that asks by itself (P10, ADR-10).
+    job_requests = JobRequests(
+        store, library, worker.queue, versions, config_source=settings_service.app_config,
+        settings_source=live_settings, telemetry=telemetry,
+    )
+    catalog_sync = CatalogSync(store, media, live_settings, telemetry)
+    auto_request = AutoRequest(store, job_requests, live_settings, settings_service.app_config, telemetry)
+    catalog_view = CatalogView(
+        store, library, worker.queue, versions, config_source=settings_service.app_config, settings_source=live_settings,
     )
     backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path, settings=settings_service)
     cleanup = Cleanup(
@@ -294,7 +325,7 @@ def main() -> int:
     )
     telemetry.event(
         "worker.started", reason="the worker process started", model=settings.get("gst_model"),
-        fallback_model=settings.get("gst_fallback_model") or None, admission_mode=settings.get("admission_mode"),
+        fallback_model=settings.get("gst_fallback_model") or None, auto_request=settings.get("auto_request"),
         log_level=settings.get("log_level"), log_prompt_bodies=settings.get("log_prompt_bodies"),
     )
 
@@ -308,6 +339,11 @@ def main() -> int:
             args=(state_dir, config_path, postprocess_targets_path, backup_check_seconds, settings_service, cleanup),
             daemon=True,
         ).start()
+
+        if not args.no_worker:
+            threading.Thread(
+                target=run_catalog_sync, args=(catalog_sync, auto_request), name="catalog-sync", daemon=True,
+            ).start()
 
         if args.worker_only:
             worker.run_forever(args.sleep)
@@ -331,6 +367,7 @@ def main() -> int:
             telemetry=telemetry,
             settings_service=settings_service,
             cleanup=cleanup,
+            catalog=CatalogActions(store, library, catalog_sync, auto_request, job_requests, catalog_view),
         ).as_handler_context()
         if not args.no_worker:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()

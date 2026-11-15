@@ -18,7 +18,7 @@ import worker
 from gst_worker.auth import ConsoleAuth
 from gst_worker.cleanup import GLOSSARY, JOBS_DONE, JOBS_FAILED, TEMP, VERSIONS, Cleanup, orphan_temp_files
 from gst_worker.glossaries import GlossaryFiles
-from gst_worker.jobs import CANCELLED, DONE, FAILED, HELD, QUEUED, REJECTED, RUNNING, SKIPPED, WAITING, JobStore
+from gst_worker.jobs import CANCELLED, DONE, FAILED, QUEUED, RUNNING, SKIPPED, WAITING, JobStore
 from gst_worker.ports import CURRENT, PRUNED, SUPERSEDED
 from gst_worker.store import Store
 from gst_worker.versions import AUTO, RETRANSLATE, TranslationVersions
@@ -125,21 +125,18 @@ class Criterion12a(unittest.TestCase):
         self.assertEqual(report.group(JOBS_DONE).reclaimed.rows, 3)
         self.assertEqual(report.group(JOBS_FAILED).reclaimed.rows, 1)
 
-    def test_12a_a_job_that_is_not_finished_and_a_refusal_are_never_deleted_however_old(self):
+    def test_12a_a_job_that_is_not_finished_is_never_deleted_however_old(self):
         env = Env(self)
-        survivors = {
-            env.job("queued", QUEUED, 400), env.job("running", RUNNING, 400), env.job("waiting", WAITING, 400),
-            env.job("held", HELD, 400), env.job("rejected", REJECTED, 400),
-        }
+        survivors = {env.job("queued", QUEUED, 400), env.job("running", RUNNING, 400), env.job("waiting", WAITING, 400)}
         # An old finished_at on a row that is still open must not make it look finished either.
         with env.store.transaction() as db:
-            db.execute("UPDATE jobs SET finished_at = ? WHERE state IN ('queued', 'running', 'waiting', 'held', 'rejected')", (0.0,))
+            db.execute("UPDATE jobs SET finished_at = ? WHERE state IN ('queued', 'running', 'waiting')", (0.0,))
         env.cleanup.run(dry_run=False)
         self.assertEqual(env.job_ids(), survivors)
 
     def test_12a_the_store_refuses_to_be_asked_about_a_job_that_is_still_open(self):
         env = Env(self)
-        for states in [(QUEUED,), (HELD,), (REJECTED,), (DONE, HELD), ()]:
+        for states in [(QUEUED,), (RUNNING,), (WAITING,), (DONE, WAITING), ()]:
             with self.subTest(states=states):
                 with self.assertRaises(ValueError):
                     env.jobs.expired(states, NOW)

@@ -23,11 +23,10 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `GST_BAZARR_IMAGE` | No | `ghcr.io/tamvcspk/llm-subtitle-translator:latest` | Image used by `docker compose pull` and `docker compose up`. |
 | `MEDIA_ROOT` | Yes | `/mnt/data` | Host media directory mounted as `/media`. |
 | `BAZARR_CONFIG_DIR` | Yes | `/opt/docker/bazarr/config` | Host Bazarr config directory. |
-| `BAZARR_POSTPROCESS_DIR` | Yes | `/opt/docker/bazarr/postprocess` | Shared post-processing and queue directory. |
+| `BAZARR_POSTPROCESS_DIR` | Upgrade only | `/opt/docker/bazarr/postprocess` | Host folder whose `queue/` subfolder an older worker used. Mounted as `/queue` only so the first start after the upgrade can settle that queue into the database once; Bazarr's post-processing script is gone. |
 | `WORKER_STATE_DIR` | Yes | `/opt/docker/gemini-srt-translator-bazarr` | Worker state, config, logs, and cache. |
 | `GST_MODEL` | No | `gemini-3.1-flash-lite` | Default Gemini model, used until a model is saved in Settings (a saved value wins). |
-| `GST_ONLY_PATHS` | No | empty | Comma-separated folders. When set, nothing outside them is queued or translated. A guard for trying the worker against a real Bazarr; set it for the Bazarr container too (the enqueue script reads it). |
-| `GST_MAX_PENDING` | No | `0` | Most jobs allowed to wait, run or be deferred at once; further items are not queued. `0` is no cap. Same guard, same two containers. |
+| `GST_ONLY_PATHS` | No | empty | Comma-separated folders. When set, nothing outside them is requested, queued or translated: it limits your own requests and the `auto_request` policy alike. A guard for trying the worker against a real Bazarr. |
 | `GST_BATCH_SIZE` | No | `500` | Ignored since the worker translates with `subcore`, which plans parts itself. |
 | `GST_RETRY_BATCH_SIZE` | No | `300` | Ignored, see `GST_BATCH_SIZE`. |
 | `LLM_RPM` | No | `10` (`0` with `gst_paid_quota`, and `0` with `openai_compat`) | Requests per minute per API key; `0` means unlimited. Only Gemini's free tier has a default limit. |
@@ -70,9 +69,8 @@ Every request needs one of them, except `GET /login` and `POST /api/auth/login`.
   the secret and ends every session. Signing out also blocks that cookie until
   the worker restarts. Writes made with a cookie must carry a matching `Origin`.
 
-Credentials are compared in constant time and are never logged. The Bazarr
-post-processing script only writes queue files and does not call the HTTP API,
-so it needs no credentials. Neither the form nor Basic Auth is encrypted; keep
+Credentials are compared in constant time and are never logged. Bazarr does not call the worker
+(the worker pulls from Bazarr), so Bazarr needs no credentials. Neither the form nor Basic Auth is encrypted; keep
 the port on the LAN or place a TLS reverse proxy in front.
 
 The Docker web port is fixed as `6789:6789` in `docker-compose.yml` so the
@@ -80,7 +78,7 @@ container listen port and host port stay aligned.
 
 `MEDIA_ROOT`, `BAZARR_CONFIG_DIR`, `BAZARR_POSTPROCESS_DIR`, and
 `WORKER_STATE_DIR` are host paths. The container sees them as `/media`,
-`/bazarr-config`, `/bazarr-postprocess`, and `/state`.
+`/bazarr-config`, and `/state`.
 
 ## Container Runtime Variables
 
@@ -91,11 +89,11 @@ change the container paths or web bind address.
 | Variable | Default in container | Description |
 | --- | --- | --- |
 | `BAZARR_CONFIG_PATH` | `/bazarr-config/config.yaml` | Bazarr config file used as a fallback source for the Bazarr API key. |
-| `QUEUE_DIR` | `/queue` | Queue directory shared with the Bazarr post-processing script. |
+| `QUEUE_DIR` | `/queue` | Where an older worker kept its queue as folders. Read **once** at start-up: what it holds settles into the database and the folders move to `queue.migrated/`. Nothing else uses it. |
 | `STATE_DIR` | `/state` | Base state directory for config, logs, cache, and backups. |
 | `LOG_DIR` | `/state/logs` | Worker log directory. |
 | `APP_CONFIG_PATH` | `/state/config.json` | The settings file of versions before P6. Read **once**, on the first start with the database, to import its values and keys; never written afterwards. |
-| `POSTPROCESS_TARGETS_PATH` | `/bazarr-postprocess/targets.json` | Source/target language rules read by the Bazarr enqueue script. |
+| `POSTPROCESS_TARGETS_PATH` | `/state/postprocess/targets.json` | A leftover: the language list the old Bazarr script read. Still written and kept in backups; nothing reads it. |
 | `TMDB_CACHE_PATH` | `/state/cache/tmdb_cache.json` | TMDB metadata cache file. |
 | `WEB_HOST` | `0.0.0.0` | Web console bind address inside the container. |
 | `WEB_PORT` | `6789` | Web console port inside the container. |
@@ -111,9 +109,7 @@ docker run -d \
   -e CONSOLE_PASSWORD='choose-a-password' \
   -v /mnt/data:/media \
   -v /opt/docker/bazarr/config:/bazarr-config:ro \
-  -v /opt/docker/bazarr/postprocess:/bazarr-postprocess \
   -v /opt/docker/gemini-srt-translator-bazarr:/state \
-  -v /opt/docker/bazarr/postprocess/queue:/queue \
   ghcr.io/tamvcspk/llm-subtitle-translator:latest
 ```
 
@@ -238,14 +234,7 @@ Saved settings with their defaults (the Settings page shows the same fields; key
 }
 ```
 
-When settings are saved, enabled source and target languages are also written to:
-
-```text
-/bazarr-postprocess/targets.json
-```
-
-That file is read by Bazarr's post-processing script, so automatic Bazarr events
-and manual console jobs use the same translation language rules.
+The enabled source and target languages decide which subtitle a request translates from and into.
 
 The public settings API returns each key field as `**********` plus `*_configured`,
 `*_last4` and `*_status`, never the stored value. Saving `**********` (or an empty
@@ -324,15 +313,31 @@ The Settings page saves these options:
 - `quota_reset_tz` (default `America/Los_Angeles`): the zone whose midnight resets a
   daily quota. Gemini counts days in Pacific time; check it against the provider's
   documentation before relying on it (SPEC section 8).
-- `admission_mode`: what the worker does with jobs the Bazarr script queues.
-  `auto` (default) translates them. `hold` receives and stores them as *held*
-  jobs without calling the model; you approve or reject them in Queue → Held.
-  Jobs you create in the console (Enqueue, Scan, retranslate, cue edit, revert)
-  are never held. Changing the mode does not move jobs already waiting or held:
-  switching to `auto` does not release held jobs, and switching to `hold` does
-  not hold what is already pending. `GST_ONLY_PATHS` still applies; held jobs
-  are not counted by `GST_MAX_PENDING`, and approving is not limited by it.
-  `gst_enqueue.sh` is the same in both modes.
+- `auto_request` (default off), `auto_request_daily_cap` (default `0`, no cap), `catalog_sync_interval` (default
+  `300` seconds, `0` = only on **Sync now**), `catalog_shrink_guard` (default `20` percent, `0` = no guard): see
+  [The library and auto-request](#the-library-and-auto-request).
+
+## The library and auto-request
+
+The worker **pulls** the library from Bazarr (series, movies, episodes, their subtitles and the languages Bazarr
+still lists as missing) and keeps it as a cache; Bazarr needs no post-processing command and no shared folder.
+Library browses that cache. Reading it never creates a job. These settings are live without a restart:
+
+- `catalog_sync_interval`: seconds between reads (default `300`). `0` turns the periodic read off; **Sync now** in
+  Library always works. Nothing is read while there is no Bazarr API key.
+- `catalog_shrink_guard`: percent. A read that lists this much fewer items than the last accepted one, comes back
+  empty, fails or times out is **set aside**: the catalog stays as it was, Library shows when it was last read and
+  the warning, and the policy does not act on it. A half-started Bazarr therefore cannot make everything look
+  translated. `0` turns the percentage check off (failures and empty answers are still set aside).
+- `auto_request` (default **off**): when on, after each accepted read every item Bazarr lists as missing a target
+  language gets a `fill` job with origin `policy`, unless it is Ignored, was removed by you, already has a job, or
+  lies outside `GST_ONLY_PATHS`. A series can override it on its Library page (`on`, `off`, or follow this setting).
+  Turn it on for one series first: a whole library at once spends a lot of quota.
+- `auto_request_daily_cap` (default `0`, no cap): most jobs the policy may create per UTC day. What is over stays
+  Missing and is tried again after the next read.
+
+A request you make in Library is not limited by the cap. A request for more than one job shows an estimate first
+(jobs, cues, model calls, what is left of `max_calls_per_day`, the time at the recent pace) and asks you to confirm.
 
 ## Logging and Measurement
 
@@ -420,19 +425,16 @@ An explicit retranslation, cue edit or revert is never dropped by these rules.
 
 ### Trying the worker against a real Bazarr
 
-Bazarr may report hundreds of items as wanted (a 929-episode backlog is normal)
-and runs the post-processing script for every subtitle it downloads, and the
-console's "enqueue the scan" button queues up to `scan_limit` files. Before the
-first real run, limit the blast radius in **both** containers (the script reads
-them in Bazarr's container, the worker re-checks them when it starts a job):
+Bazarr may report hundreds of items as missing (a 929-episode backlog is normal), and the worker reads all of
+them into its catalog. Nothing is translated until you request it or turn on `auto_request`. For a first real run,
+confine the worker to one folder, request one episode by hand in Library, and only then turn `auto_request` on for
+that one series:
 
 ```bash
-GST_ONLY_PATHS=/media/Series/One Test Show   # only this folder is ever translated
-GST_MAX_PENDING=3                            # at most 3 jobs waiting or running
+GST_ONLY_PATHS=/media/Series/One Test Show   # only this folder is ever requested or translated
 ```
 
-Raise or remove them once the first results look right. Check
-`GET /api/queue` (or the Queue page) before leaving it unattended.
+Raise or remove it once the first results look right. Check the Queue page before leaving it unattended.
 
 ## Glossaries and Data Directory
 
@@ -490,8 +492,8 @@ compared, and the page says so. The current version and the first one always kee
 
 What it never touches: any file in a media folder (a `.tmp` left beside a subtitle is listed on the Backups page and in
 the answer of `POST /api/cleanup`, not deleted: the folders in `media_roots` and the folder of every target subtitle are
-protected even when they lie inside the data or queue folder), a job that is not finished (queued, running, waiting,
-held), the refusals of rejected jobs, the current version of any subtitle, the story memory and the glossary files
+protected even when they lie inside the data or queue folder), a job that is not finished (queued, running, waiting),
+the Ignored decisions, the catalog, the current version of any subtitle, the story memory and the glossary files
 themselves, the database, backup zips and log files (those keep their own limits).
 
 Finished jobs are also what the dashboard's model statistics (`model_layers`) count, so they reach back only as far as
@@ -515,7 +517,7 @@ Each zip contains:
 backup.json
 config/config.json            the saved settings, without any API key
 config/api_keys.json          only when the backup was made with "Include the API keys"
-postprocess/targets.json
+postprocess/targets.json      a leftover of Bazarr's old script; nothing reads it
 ```
 
 A backup **holds no API key** unless you tick *Include the API keys in this backup* on the Backups page (or send
@@ -535,12 +537,10 @@ need to move the worker to a new host:
 ```bash
 /opt/docker/gemini-srt-translator-bazarr/.env
 /opt/docker/gemini-srt-translator-bazarr/app.db
-/opt/docker/bazarr/postprocess/targets.json
 /opt/docker/gemini-srt-translator-bazarr/backups
 ```
 
-`/state/logs` and `/queue` are useful for troubleshooting but are runtime state,
-not required configuration.
+`/state/logs` is useful for troubleshooting but is runtime state, not required configuration.
 
 ## Languages
 

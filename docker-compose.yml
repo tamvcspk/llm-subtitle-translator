@@ -29,7 +29,6 @@ services:
       BAZARR_API_KEY: ${BAZARR_API_KEY:-}
       GST_MODEL: ${GST_MODEL:-gemini-3.1-flash-lite}
       GST_ONLY_PATHS: ${GST_ONLY_PATHS:-}
-      GST_MAX_PENDING: ${GST_MAX_PENDING:-0}
       LLM_RPM: ${LLM_RPM:-}
       LLM_TPM: ${LLM_TPM:-}
       LLM_RPD: ${LLM_RPD:-}
@@ -42,7 +41,6 @@ services:
       STATE_DIR: /state
       LOG_DIR: /state/logs
       APP_CONFIG_PATH: /state/config.json
-      POSTPROCESS_TARGETS_PATH: /bazarr-postprocess/targets.json
       TMDB_CACHE_PATH: /state/cache/tmdb_cache.json
       WEB_HOST: 0.0.0.0
       WEB_PORT: 6789
@@ -51,6 +49,7 @@ services:
     volumes:
       - ${MEDIA_ROOT:-/mnt/data}:/media
       - ${BAZARR_CONFIG_DIR:-/opt/docker/bazarr/config}:/bazarr-config:ro
-      - ${BAZARR_POSTPROCESS_DIR:-/opt/docker/bazarr/postprocess}:/bazarr-postprocess
       - ${WORKER_STATE_DIR:-/opt/docker/gemini-srt-translator-bazarr}:/state
+      # Only to settle an older queue into the database once, at the first start after the upgrade (docs/BAZARR.md).
+      # Bazarr's post-processing script is gone: once the folders have moved to queue.migrated/, this line can go too.
       - ${BAZARR_POSTPROCESS_DIR:-/opt/docker/bazarr/postprocess}/queue:/queue

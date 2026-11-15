@@ -21,7 +21,7 @@ from subcore import glossary as g
 from subcore import srt
 
 from .glossaries import MOVIES, SERIES, GlossaryFiles
-from .ports import MediaLibrary, Output, Unit
+from .ports import KIND_EPISODE, KIND_MOVIE, CatalogEntry, MediaLibrary, Output, Unit
 from .store import Store
 from .rules import UnitRules, build_rules
 from .versions import TranslationVersions
@@ -57,6 +57,25 @@ def _stem(path: str) -> str:
     return name.rsplit(".", 1)[0] if "." in name else name
 
 
+def series_key_of(tvdb_id: Any, series_id: Any, title: str = "") -> str:
+    """The key of a series: its TVDB id, else Bazarr's id, else the title (the last resort of a file name)."""
+    if tvdb_id:
+        return f"tvdb-{tvdb_id}"
+    if series_id:
+        return f"bazarr-{series_id}"
+    return f"title-{_slug(title) or 'unknown'}"
+
+
+def movie_key_of(video_path: str, media_id: Any, subtitle_path: str = "") -> str:
+    """The key of a movie: its TMDB id when the folder carries one, else Bazarr's id, else a hash of the path."""
+    tmdb = re.search(r"\{tmdb-(\d+)\}", video_path)
+    if tmdb:
+        return f"tmdb-{tmdb.group(1)}"
+    if media_id:
+        return f"bazarr-movie-{media_id}"
+    return "path-" + hashlib.sha1((video_path or subtitle_path).encode("utf-8")).hexdigest()[:12]
+
+
 def identify_job(job: dict[str, Any]) -> Identity:
     """Work out which series/episode (or movie) a job is, from Bazarr ids, then from the file name."""
     video = str(job.get("video_path") or "")
@@ -80,23 +99,12 @@ def identify_job(job: dict[str, Any]) -> Identity:
         match = _EPISODE.search(stem) or _X_EPISODE.search(stem)
         prefix = _clean_title(stem[: match.start()]) if match else ""
         title = str(job.get("series_title") or "").strip() or (prefix if len(prefix) >= 2 else _clean_title(folder))
-        if job.get("tvdb_id"):
-            key = f"tvdb-{job['tvdb_id']}"
-        elif job.get("series_id"):
-            key = f"bazarr-{job['series_id']}"
-        else:
-            key = f"title-{_slug(title) or 'unknown'}"
+        key = series_key_of(job.get("tvdb_id"), job.get("series_id"), title)
         return Identity(series_key=key, series_title=title or key, season=season, episode=episode,
                         title=str(job.get("episode_title") or "").strip())
 
     title = str(job.get("movie_title") or "").strip() or _clean_title(stem)
-    tmdb = re.search(r"\{tmdb-(\d+)\}", video)
-    if tmdb:
-        key = f"tmdb-{tmdb.group(1)}"
-    elif media_type == "movie" and job.get("media_id"):
-        key = f"bazarr-movie-{job['media_id']}"
-    else:
-        key = "path-" + hashlib.sha1((video or subtitle).encode("utf-8")).hexdigest()[:12]
+    key = movie_key_of(video, job.get("media_id") if media_type == "movie" else "", subtitle)
     return Identity(movie_key=key, title=title or key)
 
 
@@ -163,6 +171,36 @@ class Library:
         if output and job.get("target_code"):
             self.catalog.set_output(unit_id, str(job["target_code"]), output, str(job.get("target_language") or ""))
         return unit_id
+
+    def unit_of(self, entry: CatalogEntry) -> Unit | None:
+        """The unit the worker keeps for a catalog item, once one exists (it is made when the admin first acts on
+        the item or a job runs); None before that."""
+        if entry.kind == KIND_EPISODE:
+            series = self.catalog.series_by_key(entry.series_key)
+            if series is None or entry.season is None or entry.episode is None:
+                return None
+            return self.catalog.find_unit(series.id, entry.season, entry.episode)
+        if entry.kind == KIND_MOVIE:
+            return self.catalog.unit_by_movie_key(entry.series_key)
+        return None
+
+    def register_entry(
+        self, entry: CatalogEntry, series: CatalogEntry | None, *, source_path: str = "", source_code: str = "",
+        source_language: str = "",
+    ) -> int:
+        """Make sure the unit of a catalog item exists and knows where its files are; returns the unit id."""
+        common = dict(
+            title=entry.title, bazarr_id=entry.bazarr_id, video_path=entry.video_path, source_path=source_path,
+            source_code=source_code, source_language=source_language,
+        )
+        if entry.kind == KIND_EPISODE:
+            series_id = self.catalog.upsert_series(
+                entry.series_key, title=series.title if series else "", bazarr_id=series.bazarr_id if series else "",
+            )
+            return self.catalog.upsert_unit(
+                series_id=series_id, season=entry.season, episode=entry.episode, media_type="series", **common
+            )
+        return self.catalog.upsert_unit(movie_key=entry.series_key, media_type="movie", **common)
 
     # -- rules ---------------------------------------------------------------
     def owner(self, unit: Unit) -> tuple[str, str]:

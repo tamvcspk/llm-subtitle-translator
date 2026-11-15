@@ -3,11 +3,14 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .config import enabled_source_languages, enabled_target_languages
-from .http import HTTPClient, first_data
-from .ports import EpisodeListing, MediaDetails
+from .http import HTTPClient, describe_http_error, first_data
+from .ports import (
+    KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, CatalogSubtitle, EpisodeListing, MediaDetails,
+    MediaLibraryError,
+)
 
 
 # Bazarr answers a scan-disk call only when it has scanned the whole series: 31 s for a series of 150 episodes,
@@ -159,6 +162,90 @@ def list_series_episodes(
     return episodes
 
 
+CATALOG_PAGE_SIZE = 100
+
+
+def _subtitles_of(item: dict[str, Any]) -> tuple[CatalogSubtitle, ...]:
+    found = item.get("subtitles")
+    out: list[CatalogSubtitle] = []
+    for subtitle in found if isinstance(found, list) else []:
+        if not isinstance(subtitle, dict):
+            continue
+        code = str(subtitle.get("code2") or subtitle.get("code") or "").strip().lower()
+        if code:
+            out.append(CatalogSubtitle(code=code, path=str(subtitle.get("path") or ""),
+                                       forced=bool(subtitle.get("forced")), hi=bool(subtitle.get("hi"))))
+    return tuple(out)
+
+
+def _missing_of(item: dict[str, Any]) -> tuple[str, ...]:
+    """Languages Bazarr still wants for an item. A forced-only track is a different thing and is left out."""
+    missing = item.get("missing_subtitles")
+    codes: list[str] = []
+    for entry in missing if isinstance(missing, list) else []:
+        if isinstance(entry, dict) and not entry.get("forced"):
+            code = str(entry.get("code2") or entry.get("code") or "").strip().lower()
+            if code and code not in codes:
+                codes.append(code)
+    return tuple(codes)
+
+
+def _pages(http: HTTPClient, url: str, headers: dict[str, str], page_size: int) -> Iterator[dict[str, Any]]:
+    """Every item of a paged Bazarr list (``start`` and ``length``), page after page."""
+    start = 0
+    while True:
+        response = http.get_json(url, params={"start": start, "length": page_size}, headers=headers)
+        data = response.get("data") if isinstance(response, dict) else None
+        if not isinstance(data, list):
+            raise MediaLibraryError("Bazarr answered something that is not a list of items.")
+        for item in data:
+            if isinstance(item, dict):
+                yield item
+        total = response.get("total") if isinstance(response, dict) else None
+        start += len(data)
+        if len(data) < page_size or (isinstance(total, int) and start >= total):
+            return
+
+
+def list_catalog(http: HTTPClient, bazarr_url: str, api_key: str, page_size: int | None = None) -> Iterator[CatalogEntry]:
+    """The whole library as Bazarr lists it (FR-14.1): series (paged), each series' episodes, then movies (paged).
+
+    It raises when Bazarr cannot be reached, answers an error, or answers something that is not a list: a half read
+    must never look like a smaller library (FR-14.2). The caller decides what to do with the failure.
+    """
+    if not api_key or not bazarr_url:
+        raise MediaLibraryError("Bazarr's address or API key is not set in Settings.")
+    page_size = page_size or CATALOG_PAGE_SIZE
+    headers = {"X-API-KEY": api_key}
+    for series in _pages(http, f"{bazarr_url}/api/series", headers, page_size):
+        series_id = str(series.get("sonarrSeriesId") or "")
+        if not series_id:
+            continue
+        tvdb = str(series.get("tvdbId") or "")
+        yield CatalogEntry(kind=KIND_SERIES, bazarr_id=series_id, title=str(series.get("title") or ""), tvdb_id=tvdb)
+        response = http.get_json(f"{bazarr_url}/api/episodes", params={"seriesid[]": series_id}, headers=headers)
+        data = response.get("data") if isinstance(response, dict) else None
+        if not isinstance(data, list):
+            raise MediaLibraryError("Bazarr answered something that is not a list of episodes.")
+        for item in data:
+            if not isinstance(item, dict) or item.get("season") is None or item.get("episode") is None:
+                continue
+            episode_id = str(item.get("sonarrEpisodeId") or "")
+            if episode_id:
+                yield CatalogEntry(
+                    kind=KIND_EPISODE, bazarr_id=episode_id, parent_bazarr_id=series_id, tvdb_id=tvdb,
+                    season=int(item["season"]), episode=int(item["episode"]), title=str(item.get("title") or ""),
+                    video_path=str(item.get("path") or ""), subtitles=_subtitles_of(item), missing=_missing_of(item),
+                )
+    for movie in _pages(http, f"{bazarr_url}/api/movies", headers, page_size):
+        movie_id = str(movie.get("radarrId") or movie.get("radarrid") or "")
+        if movie_id:
+            yield CatalogEntry(
+                kind=KIND_MOVIE, bazarr_id=movie_id, title=str(movie.get("title") or ""),
+                video_path=str(movie.get("path") or ""), subtitles=_subtitles_of(movie), missing=_missing_of(movie),
+            )
+
+
 def list_wanted_items(
     http: HTTPClient,
     bazarr_url: str,
@@ -262,6 +349,15 @@ class BazarrMedia:
     def _access(self) -> tuple[str, str]:
         settings = self._settings()
         return str(settings.get("bazarr_url") or "").rstrip("/"), str(settings.get("bazarr_api_key") or "")
+
+    def catalog(self) -> Iterator[CatalogEntry]:
+        url, key = self._access()
+        try:
+            yield from list_catalog(self.http, url, key)
+        except MediaLibraryError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - said in words that carry neither the address nor the key
+            raise MediaLibraryError(describe_http_error(exc, "Bazarr")) from exc
 
     def describe(self, media_type: str, series_id: str, media_id: str) -> MediaDetails | None:
         url, key = self._access()

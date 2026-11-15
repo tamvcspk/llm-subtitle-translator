@@ -137,7 +137,9 @@ class TranslateAndPublishTests(unittest.TestCase):
         self.assertEqual(env.run(), "skipped-existing-output")  # automatic: the admin's removal stands (FR-16.6)
         self.assertEqual(len(env.fake.calls), 1)  # no model call for the skipped job
         self.assertFalse(env.output.exists())
-        self.assertEqual(env.run(admission="admin"), "translated")  # a request the admin made by hand
+        self.assertEqual(env.run(origin="policy"), "skipped-existing-output")  # the policy is not the admin (FR-15.4)
+        self.assertFalse(env.output.exists())
+        self.assertEqual(env.run(origin="manual"), "translated")  # a request the admin made by hand
         self.assertTrue(env.output.exists())
 
     def test_a_replace_started_before_an_admin_edit_publishes_a_candidate_and_keeps_the_edit(self):

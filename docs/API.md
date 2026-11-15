@@ -115,9 +115,8 @@ second layer is not paying for itself.
 ## GET /api/queue
 
 Returns all queue states and counts. The states are `pending` (queued), `processing`
-(running), `deferred` (waiting, see `wait_reason`), `done` (includes `skipped`), `failed`,
-`held` (waiting for approval) and `rejected`; each list is the latest 100 jobs of its
-state, `counts` has the real numbers. Use `/api/queue/held` for the whole inbox.
+(running), `deferred` (waiting, see `wait_reason`), `done` (includes `skipped`) and `failed`;
+each list is the latest 100 jobs of its state, `counts` has the real numbers.
 
 Each waiting job carries `wait_reason` and `retry_at` (Unix seconds, when it may run
 again). The reasons are `quota` (daily quota spent), `provider` (key refused, model
@@ -134,47 +133,6 @@ or `half_open`), `reason`, `until` (when it may be tried again, or null), `failu
 (consecutive failures) and `usable`.
 
 The same `providers` list is in `/api/status`.
-
-## GET /api/queue/held
-
-Jobs the Bazarr script queued while `admission_mode` is `hold`, oldest first and
-without a limit. A held job is stored but never run: no model call, no quota.
-
-```json
-{"count": 1, "items": [{
-  "job_id": "7fefefb6fdb4f200bbb5fcac70e917492cea4d8f",
-  "subtitle_path": "/media/Show/S01/Show.S01E01.en.srt", "video_path": "/media/Show/S01/Show.S01E01.mkv",
-  "source_code": "en", "source_language": "English", "target_code": "vi", "target_language": "Vietnamese",
-  "series_id": "144", "media_type": "series", "cue_count": 612,
-  "created_at": 1790355000, "held_at": 1790355020.4
-}]}
-```
-
-`GET /api/queue/rejected` returns the same shape for jobs that were rejected.
-
-## POST /api/queue/approve
-
-Releases held jobs: each moves to `pending` and then runs like any job, so it is
-still skipped (no model call) when its target subtitle appeared in the meantime.
-`GST_MAX_PENDING` does not apply. Name the jobs in exactly one way:
-
-```json
-{"job_ids": ["7fefefb6fdb4f200bbb5fcac70e917492cea4d8f"]}
-{"series_id": "144"}
-{"all": true}
-```
-
-Returns `{"ok": true, "count": 1, "jobs": ["..."]}`. Ids that are not held are
-ignored. Fails with `400` while the daily quota pause is active.
-
-## POST /api/queue/reject
-
-Same body as approve. Rejected jobs never run, and the script or a scan cannot
-queue them again.
-
-## POST /api/queue/restore
-
-`{"job_ids": [...]}` or `{"all": true}`: takes rejected jobs back to held.
 
 ## POST /api/queue/stop
 
@@ -250,8 +208,7 @@ key, if any), or an empty list when the address is unset or the server cannot be
 
 ## POST /api/settings
 
-Saves app settings to the database and writes enabled source/target languages for the Bazarr
-post-processing script. The change is live at once, with no restart: the running worker adopts it and the answer
+Saves app settings to the database. The change is live at once, with no restart: the running worker adopts it and the answer
 is the new `GET /api/settings`. Leave a key field blank or submit `**********` to keep the stored key; a new
 value replaces the key in that field and sets its status back to `ok`. Keys that are not in the body, and
 process-level settings (paths, port, console account), are ignored. Use `/api/keys` to add, rename or remove
@@ -277,7 +234,10 @@ keys beyond these four fields.
   "research_model": "",
   "openai_compat_api_key": "",
   "job_settle_seconds": 600,
-  "admission_mode": "auto",
+  "auto_request": false,
+  "auto_request_daily_cap": 0,
+  "catalog_sync_interval": 300,
+  "catalog_shrink_guard": 20,
   "memory_enabled": false,
   "memory_model": "",
   "summarize_model": "",
@@ -354,8 +314,7 @@ open job.
 
 ## POST /api/queue/delete
 
-Deletes one job from a queue state. A `held` job cannot be deleted this way
-(approve or reject it); deleting a `rejected` job forgets the refusal. Deleting a
+Deletes one job from a queue state. Deleting a
 `pending` or `deferred` job is a cancel: the record is kept as `cancelled`. A `processing`
 job cannot be deleted; use `/api/queue/stop`.
 
@@ -420,7 +379,7 @@ Lists server-side backup zip files under `/state/backups`.
 
 ## POST /api/backups
 
-Creates a manual backup zip containing the saved settings, post-processing targets, and
+Creates a manual backup zip containing the saved settings and
 metadata. **No API key is in the zip** unless the body is `{"include_keys": true}`, which adds
 `config/api_keys.json` (provider, label, value, status of every key) and sets `includes_api_keys` in
 `backup.json`. The console account is never included.
@@ -437,7 +396,7 @@ Imports a backup zip sent as the raw request body with
 
 - `config/config.json` into the saved settings (the running worker adopts them at once);
 - `config/api_keys.json`, when the backup has it: its keys are added (a key already stored is not duplicated);
-- `postprocess/targets.json` to `/bazarr-postprocess/targets.json`.
+- `postprocess/targets.json` (a leftover of Bazarr's old script) to the worker's own copy of it.
 
 The console account is never restored. The worker creates a `pre-import` backup (without keys) before
 replacing anything. Queue state, logs, and caches are not restored. A backup member that is not valid JSON
@@ -514,6 +473,54 @@ A key is `{"id", "provider", "label", "status", "last4", "last_used_at", "update
 The worker runs on the first two usable (`ok`) Gemini keys, oldest first, or, with `llm_provider` `openai_compat`,
 on every usable key of that provider in the order they were added (none is needed for a server that wants no
 key). Every change reaches the running worker at once.
+
+## The catalog: what Bazarr lists, and requests
+
+The worker pulls the library from Bazarr and keeps it as a cache (`catalog_items`); the Library page browses it.
+An item is a *series*, an *episode* or a *movie*, addressed by its catalog `id` (Bazarr's own id is in
+`bazarr_id`). Errors are `{"error": "..."}` with `400` or `404`.
+
+The state of each (item, language) is **derived when read**, from the catalog, the version history, the jobs
+and the decisions. A target comes as
+`{"lang", "content", "removed", "stale", "job", "wait", "ignored", "text"}`: `content` is `missing`,
+`translated`, `edited`, `external` (a subtitle the worker did not make) or `outside` (the language is not in
+Bazarr's profile for the item; it can still be requested); `job` is `requested`, `running`, `waiting` (with
+`wait`: `quota`, `provider`, `context`, `settle`, `rate`), `failed` or `""`; `text` is the label as the console
+shows it, such as `Missing · Requested`, `Translated · Stale` or `Missing · Removed · Ignored`.
+
+| Method and path | Answer |
+|---|---|
+| `GET /api/catalog` | `{"status", "languages", "series": [{"id", "title", "key", "episodes", "missing": {"vi": 3}, "open_jobs": {"requested": 1}, "auto_request", "series_id"}], "movies": {"count", "missing"}}`. Counts come from the catalog and the open jobs only (no per-item work). |
+| `GET /api/catalog/status` | `{"synced_at", "attempted_at", "status": "ok" \| "kept" \| "", "warning", "items", "listed", "auto_request", "auto_request_daily_cap"}`. `synced_at` is the last accepted read; `status: "kept"` means the last read was set aside and `warning` says why (Bazarr unreachable, empty, or shrunk by more than `catalog_shrink_guard`). |
+| `GET /api/catalog/series/{id}` | `{"status", "languages", "series": {"id", "title", "key", "auto_request", "series_id", "gone"}, "items": [{"id", "kind", "bazarr_id", "title", "season", "episode", "unit_id", "source", "has_source", "gone", "targets": [<target>]}]}`. `unit_id` is set once the worker keeps a unit for the item (it opens the Episode page). |
+| `GET /api/catalog/movies` | The same `items` for movies. |
+| `POST /api/catalog/sync` | **Sync now**: reads Bazarr, and if the answer was accepted lets the `auto_request` policy act. Returns the status plus `"auto_requested": {"created", "capped", "considered"}` (null when the read was set aside). A read never creates a job by itself. |
+| `PUT /api/catalog/series/{id}/policy` | `{"auto_request": "" \| "on" \| "off"}`: follow the global `auto_request` setting, force it on, or off for this series. |
+| `POST /api/catalog/ignore` · `POST /api/catalog/unignore` | Select as for `POST /api/jobs` (`items`, `series`/`season`, or `all`), optional `languages`. Records or removes the decision "do not translate this language of this item": neither a sync nor the policy creates a job for it. Returns `{"ok", "changed", "ignored"}`. |
+| `POST /api/jobs` | Request translations (below). |
+
+### POST /api/jobs
+
+Name what the request is about in **exactly one way**: `{"items": [catalog ids]}` (a series id expands to its
+episodes), `{"series": id}` (optionally with `"season": 1`), or `{"all": true}`. Optional: `"languages": ["vi"]`
+(default: every enabled target language), `"mode": "fill"` (default: only a language that is missing; never
+overwrites) or `"replace"` (retranslate: the current subtitle becomes a version first), `"estimate_only": true`.
+
+With `estimate_only` nothing is made. The answer (and the real answer too) is
+`{"estimate_only", "mode", "estimate": {"jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at"},
+"planned_total", "planned": [...first 200 rows], "skipped_total", "skipped_by_reason": {"already requested": 2, ...},
+"skipped": [...first 200 rows]}`; a real request adds `"created": [job ids]`, `"count"` and `"merged"` (a replace
+request that turned an open `fill` job into the replacement). A row is `{"item_id", "title", "lang", "cues", "calls",
+"skip", "reason"}`. `calls` is the planner's count of model calls to translate; story-memory extraction, repairs and
+splits add some. `calls_left_today` is what `max_calls_per_day` still allows (null: no cap); `minutes` and `finish_at`
+use the average of recent calls (null until a call was timed) and a spent quota (`paused_until`).
+
+A request for something that already has an open job makes no second job (it lifts the first to the interactive
+class). The reasons an item is left out: `ignored by the admin`, `the source and the target language are the same`,
+`no source subtitle in a configured source language`, `the source subtitle is not on disk`, `the source subtitle
+cannot be read`, `the item already has a subtitle in this language`, `already requested`, `outside GST_ONLY_PATHS`.
+Jobs made here have `origin: manual` and the interactive priority class, so they also bring back a subtitle
+the admin removed; the policy's have `origin: policy` and the automatic class.
 
 ## Library, episodes, corrections, versions and glossaries
 

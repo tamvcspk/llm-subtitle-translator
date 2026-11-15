@@ -8,17 +8,15 @@
 
 ## Components
 
-### Bazarr Post-Processing Script
+### Bazarr: the worker pulls
 
-`bazarr-postprocess/gst_enqueue.sh` runs inside the Bazarr container after Bazarr
-downloads or extracts a subtitle. The script is intentionally small:
-
-- validate provider and source language;
-- load source and target languages from `targets.json`;
-- skip targets that already have output files;
-- write one JSON job per missing target into the shared queue.
-
-It does not call Gemini and should return quickly.
+Since P10 Bazarr pushes nothing (the post-processing script and the folder shared with it are gone). The
+worker reads the library through the `MediaLibrary` port (`BazarrMedia.catalog()`): series (paged), each
+series' episodes, movies (paged), with their subtitles and the languages Bazarr lists as missing. `CatalogSync`
+(`catalog.py`) writes the answer to `catalog_items`, and decides first whether it may (an error, a timeout, an
+empty answer or one that shrank more than `catalog_shrink_guard` is set aside and the cache stays). A read
+never creates a job. Jobs come from the admin's requests (`job_requests.py`, behind `POST /api/jobs`) and from
+the `auto_request` policy (`auto_request.py`), which runs after an accepted read.
 
 ### Worker
 
@@ -41,6 +39,13 @@ Domain code is split under `gst_worker/`:
   persistence. Console retry and delete operations share its transition helpers;
 - `queue_policy.py`: pure retry and daily quota lifecycle decisions. This is the
   policy seam; filesystem moves remain in `queue.py`.
+- `catalog.py`: `CatalogSync` (the guarded read of Bazarr into `catalog_items`) and `CatalogPaths` (a job
+  finds its files again by Bazarr's id after a rename, FR-14.3);
+- `catalog_view.py`: `CatalogView`, the Library read model. The label of each (item, language) is derived on
+  reading from the catalog, the version history, the jobs and the decisions (FR-14.5); there is no state column;
+- `job_requests.py`: `JobRequests`, the planning, estimate and creation of requests (`POST /api/jobs`);
+  `auto_request.py`: `AutoRequest`, the policy; `catalog_actions.py` / `catalog_api.py`: the Library page's
+  use cases and their pure router;
 - `console.py`: `ConsoleActions`, the queue use cases used by the HTTP adapter
   (retry, cancel, delete, and enqueueing a picked subtitle or a scan result: it
   builds the job and chooses the targets). It keeps request routing separate from
@@ -207,7 +212,7 @@ The worker leaves three kinds of trace, all in `app.db`, plus the prompt bodies 
 `worker.py` builds the real one over the `Store` and a `BodyLog`.
 
 - **Events** (`events`): a decision with its reason: `enqueue.skipped`, `job.created`,
-  `job.held`, `job.claimed`, `model.selected`, `job.escalated`, `job.deferred`,
+  `catalog.synced`, `catalog.kept`, `request.created`, `policy.requested`, `policy.capped`, `job.claimed`, `model.selected`, `job.escalated`, `job.deferred`,
   `job.requeued`, `job.skipped`, `job.failed`, `job.done`, `quota.paused`,
   `translation.cached`, `translation.finished`, `version.published`, `version.reverted`,
   `version.cue_edit`, `settings.changed`, `worker.started`. `GET /api/events` reads them
@@ -241,9 +246,9 @@ console actions, and `tests/test_translation_attempt.py` runs the translation
 attempt against fake providers, independently of the HTTP server and the
 complete queue lifecycle tests.
 
-Bazarr remains a separate, dependency-free file producer. Its embedded Python
-payload is tested against the worker's admission and retry protocol; it does not
-need network access to enqueue work.
+Bazarr is only read: `tests/test_catalog.py` runs the catalog, the labels, the requests and the policy against a
+fake `MediaLibrary`, and `tests/test_media_library_contract.py` checks `BazarrMedia.catalog()` (paging, failures)
+against a fake Bazarr HTTP.
 
 ### Web Console
 
@@ -268,17 +273,16 @@ so the worker serves `.js` as `text/javascript` with `Cache-Control: no-cache`.
 
 Since P8 jobs are rows of the `jobs` table in `app.db` (ADR-11), claimed by `JobQueue`
 (`queue.py`) through `JobStore` (`jobs.py`). States: `queued`, `running`, `waiting`
-(with `wait_reason`: `quota`, `provider`, `context`, `settle`, `rate`), `held`, `rejected`,
+(with `wait_reason`: `quota`, `provider`, `context`, `settle`, `rate`),
 `done`, `skipped`, `failed`, `cancelled`. Provider health lives in `provider_health`
 (one row per provider and model, `*` for a refused key), decided by the pure
 `queue_policy.py`.
 
-The old folders `pending/ processing/ deferred/ done/ failed/ held/ rejected/` remain
-only as the Bazarr script's gate: `gst_enqueue.sh` still writes one JSON file per missing
-target into `pending/`, and `intake.receive_script_jobs` turns each file into a row on
-every tick and deletes it (`hold` is applied there). Folders left from before P8 are
-imported once (`intake.import_queue_tree`) and moved to `queue.migrated/`. P10 removes the
-script and the gate.
+The old folders `pending/ processing/ deferred/ done/ failed/ held/ rejected/` are only read once, at
+start-up (`intake.import_queue_tree`), and moved to `queue.migrated/`: `pending`/`processing`/`deferred` become
+jobs, `done`/`failed` the history, a `held` job is dropped (the item is Missing again) and a `rejected` one
+becomes an Ignored decision (`unit_decisions`). The `held`/`rejected` rows P8 may have left in the table are
+settled the same way. Running it again changes nothing.
 
 ## Job Shape
 
@@ -311,13 +315,14 @@ retranslation overwrite an existing target after backing it up.
 ## Translation Flow
 
 1. The worker picks the oldest pending job.
-2. The job is dropped, with no model call, unless its language is still missing
+2. A job is made by an admin's request or by the `auto_request` policy, never by a read of Bazarr. It is
+   dropped, with no model call, unless its language is still missing
    (automatic jobs only; see the version rules above): the exact target file or
    any sibling subtitle in that language exists, the folder is outside
    `GST_ONLY_PATHS`, or Bazarr no longer lists the language in the item's
    `missing_subtitles` (`skipped-not-wanted`; if Bazarr cannot answer, the files
-   decide). The same checks run when the job is queued, so most never enter the
-   queue; `GST_MAX_PENDING` caps how many can.
+   decide). The same checks run when the job is requested, so most never enter the
+   queue.
 3. TMDB context is built when `TMDB_API_KEY` is available.
 4. If the store already holds a result for the same source sha256, target
    language, and context hash (model, temperature, prompt version, TMDB
@@ -359,7 +364,7 @@ retranslation overwrite an existing target after backing it up.
 
 ## Path Model
 
-Bazarr, the post-processing script, and the worker must agree on media paths.
+Bazarr and the worker must agree on media paths.
 The recommended Docker model is:
 
 ```yaml

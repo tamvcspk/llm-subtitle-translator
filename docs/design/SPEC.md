@@ -449,7 +449,7 @@ Quyết định #21; ADR-16.
 Cả bốn câu cần số liệu thật nên chưa chốt được trên giấy.
 
 1. **Mốc reset quota ngày của Gemini.** Có vẻ theo giờ Pacific, chưa kiểm chứng. Cần xác nhận trước khi cài FR-17.4; nếu không xác nhận được thì dùng mốc ước lượng và thử lại theo breaker.
-2. **Endpoint Bazarr nào dựng được danh mục.** Series, phim, tập và `wanted`: cái nào phân trang được, nặng đến đâu với thư viện hàng nghìn tập, có trả `missing_subtitles` cho cả thư viện không; ngưỡng `catalog_shrink_guard` (20%) có hợp lý không. Thăm dò chỉ đọc ở đầu P10.
+2. **Endpoint Bazarr nào dựng được danh mục.** *(Đã trả lời ở P10, 2026-11-15: `/api/series`, `/api/movies` phân trang và có `total`; `/api/episodes?seriesid[]=` trả sẵn `subtitles` và `missing_subtitles` cho cả series, nên không cần `wanted`; 2073 tập đọc trong ≈ 5 s; ngưỡng 20% giữ nguyên. Xem ARCHITECTURE "Đã làm ở P10".)* Series, phim, tập và `wanted`: cái nào phân trang được, nặng đến đâu với thư viện hàng nghìn tập, có trả `missing_subtitles` cho cả thư viện không; ngưỡng `catalog_shrink_guard` (20%) có hợp lý không. Thăm dò chỉ đọc ở đầu P10.
 3. **Hai lượt dịch (làm mượt) có đáng quota không** (FR-18.9). Quyết bằng số liệu `variant` và A/B ở P12 và P15.
 4. **Giá trị mặc định** của `breaker_threshold`, `max_calls_per_job`, `log_max_mb`, `log_retention_days`: chốt khi có số liệu từ P5.
 

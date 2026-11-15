@@ -2,92 +2,73 @@
 
 ## Goal
 
-Bazarr should keep doing what it is good at: tracking wanted subtitles,
-extracting embedded source subtitles, and indexing local subtitles. This worker
-only adds the translation step.
+Bazarr keeps doing what it is good at: tracking wanted subtitles, extracting embedded source
+subtitles and indexing local subtitles. The worker adds the translation step. Since P10 the
+worker **pulls**: it reads the library from Bazarr's API and keeps it as a cache, and Bazarr
+needs no configuration on its side (no post-processing command, no shared script folder).
 
-## Required Bazarr Settings
+## What the worker needs
 
-Enable the Embedded Subtitles provider so Bazarr can extract `.srt` files from
-video containers for the source languages you configure in the worker console.
+- Bazarr's address and API key (Settings, or `BAZARR_URL` / `BAZARR_API_KEY` for the first run).
+- The same media paths as Bazarr (`/media/...` in both containers), because the worker writes
+  the translated `.srt` beside the media and Bazarr must find it.
+- Enable Bazarr's Embedded Subtitles provider if you want it to extract `.srt` files from video
+  containers for the source languages configured in the worker console.
 
-Then enable:
+## How the worker sees the library
 
-```text
-Settings -> Subtitles -> Use Custom Post-Processing
-```
+Every `catalog_sync_interval` seconds (default 300) and when you press **Sync now** in Library,
+the worker reads series (paged), each series' episodes, and movies (paged), with the subtitles
+each has and the languages Bazarr still lists as missing. That is the **catalog**.
 
-Use this command:
+- A read never creates a job.
+- A read that fails, times out, answers empty, or lists more than `catalog_shrink_guard`
+  percent fewer items than the last accepted read is set aside. The catalog stays as it was,
+  Library says when it was last read, and shows the warning. Nothing becomes "not missing"
+  because Bazarr was down.
+- An item is identified by Bazarr's own id, not its path. If Sonarr renames the files, a job
+  that was already waiting follows them (the next read brings the new paths).
 
-```bash
-/config/postprocess/gst_enqueue.sh "{{episode}}" "{{subtitles}}" "{{subtitles_language_code2}}" "{{provider}}" "{{series_id}}" "{{episode_id}}" 2>&1
-```
+## Translating
 
-Bazarr's post-processing command field requires careful quoting. Keep each
-placeholder in double quotes, and keep `2>&1` at the end so output is captured
-in Bazarr logs.
+Nothing is translated until you ask, or until the policy asks:
 
-## Docker Mounts
+- **Library → Request translation** for an item, a selection, a season or a series. A request
+  for more than one job shows an estimate first (jobs, cues, calls, what is left of the day's
+  `max_calls_per_day`, the time at the recent pace) and asks you to confirm.
+- **Auto-request** (Settings → Library and auto-request, `auto_request`; per series on its
+  Library page: follow the global setting, on, off). When on, after each read every item
+  Bazarr lists as missing a target language, and that has no job, is not Ignored and was not
+  removed by you, gets a job with origin `policy`. `auto_request_daily_cap` limits how many
+  per day (UTC); what is over stays Missing. It is **off by default**: turn it on for one
+  series first. `GST_ONLY_PATHS`, if set, still confines it to those folders.
+- **Ignore** an item and a language to say "do not translate this": neither the policy nor a
+  read creates a job for it. **Stop ignoring** takes it back.
 
-The Bazarr container needs the enqueue script inside its `/config` tree:
+A job only translates a language that is still missing: if the target subtitle appeared in the
+meantime (Bazarr downloaded one), the job ends without a model call, and an existing subtitle is
+never overwritten by an automatic job.
 
-```yaml
-volumes:
-  - /opt/docker/bazarr/config:/config
-  - /opt/docker/bazarr/postprocess:/config/postprocess
-```
+## Upgrading from the post-processing script (before P10)
 
-The worker needs the same post-processing directory and queue:
+1. Update and start the worker. At its first start it settles the old queue once: files left in
+   `pending/`, `deferred/` become jobs, `done/` and `failed/` become history, **held** jobs are
+   dropped (the item is simply Missing again), **rejected** jobs become Ignored. The old folders
+   move to `queue.migrated/`; nothing is deleted. Running it again changes nothing.
+2. In Bazarr: Settings → Subtitles → **Use Custom Post-Processing**: switch it off and clear the
+   command (`/config/postprocess/gst_enqueue.sh ...`).
+3. In Bazarr's compose, drop the `.../postprocess:/config/postprocess` mount. The worker no
+   longer mounts `/bazarr-postprocess`; its `/queue` mount is only for step 1 and can go once
+   the folders have moved to `queue.migrated/`.
+4. Open Library, press **Sync now**, and look at what Bazarr lists as missing. If you relied on
+   the script translating everything automatically, turn **Auto-request** on, for one series
+   first (a whole library at once spends a lot of quota). The old `admission_mode` setting and
+   `GST_MAX_PENDING` no longer exist; the old Queue → Held tab is replaced by Missing in Library.
 
-```yaml
-volumes:
-  - /opt/docker/bazarr/postprocess:/bazarr-postprocess
-  - /opt/docker/bazarr/postprocess/queue:/queue
-```
+If Bazarr's post-processing command is left in place it only errors (the script file is gone) and
+changes nothing in the worker.
 
-## What Gets Queued
-
-The script queues jobs only when all checks pass:
-
-- `provider` is `embeddedsubtitles`;
-- subtitle language is one of the configured source languages;
-- at least one enabled target output does not exist;
-- the same job is not already pending or processing.
-
-This means normal downloaded subtitles from other providers are ignored by the
-automatic post-processing hook. Only configured source languages extracted by
-Bazarr are used as translation sources.
-
-## Manual Wanted Workflow
-
-When you click Search All in Bazarr, Bazarr may extract a source subtitle from
-the video. If that extraction triggers post-processing, the script writes a job
-immediately.
-
-For already-existing source subtitle files, use the worker console:
-
-```text
-Wanted -> Load Wanted -> Enqueue
-Scan -> Load Scan -> Enqueue All
-```
-
-This avoids running a timer that constantly walks the whole media library.
-
-### Choosing what gets translated: hold mode
-
-If Bazarr reports hundreds of missing subtitles and runs the script for each, set
-**Jobs from Bazarr** to *Hold for my approval* in Settings (`admission_mode`: `hold`).
-The script still writes its jobs, but the worker sets them aside as *held*: nothing
-is sent to the model. Open Queue → Held (the sidebar badge shows how many wait), where
-jobs are grouped by series, and approve one job, the selected ones, a series, or all.
-A rejected job is remembered, so Bazarr running the script again for the same item does
-not bring it back; restore it from the Rejected tab to reconsider.
-
-Approving does not skip the usual checks: a job whose target language already exists
-(or that Bazarr no longer lists as missing) ends as skipped without a model call.
-The script is unchanged, so switching modes needs no Bazarr change.
-
-## Refresh Behavior
+## Refresh behavior
 
 After translation, the worker asks Bazarr to rescan the item:
 
@@ -96,11 +77,12 @@ PATCH /api/series?seriesid=<series_id>&action=scan-disk
 PATCH /api/movies?radarrid=<radarr_id>&action=scan-disk
 ```
 
-If an item ID is missing, it falls back to Bazarr's full subtitle scan task for
-series or movies.
+If an item id is missing, it falls back to Bazarr's full subtitle scan task for series or
+movies. A slow or failing Bazarr never changes the result of a finished job.
 
-### Daily quota and cancellation
+## Daily quota and cancellation
 
-Pending and deferred jobs have a Cancel button in the queue view. Cancellation removes the queued request without deleting subtitle files.
-
-When Gemini reports daily quota exhaustion, the worker fails the current job and all pending/deferred jobs with an explanatory error. During the existing 24-hour quota pause, API enqueue and retry requests are rejected and the Bazarr post-processing script skips new jobs. Once the pause expires, new submissions are accepted; failed jobs require resubmission or manual retry.
+Queued and waiting jobs have a Cancel button in the queue view. Cancellation removes the request
+without deleting subtitle files. When the provider reports that the daily quota is spent, jobs
+wait (they are not failed) until the reset and then run; requests made meanwhile are accepted
+and wait too.
