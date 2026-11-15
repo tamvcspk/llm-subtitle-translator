@@ -211,6 +211,19 @@ earlier episodes (the latest few in full, older ones condensed). Never includes 
 later episode. Season 0 (specials) sits outside the chain and sees the state after a
 configured episode.
 
+**Bundle** (`subcore.bundle`):
+Everything one translation reads, as plain data: the cues with their timing, the episode's glossary
+(already narrowed to the episode), its address rules placed on cues, the corrections and story sections,
+few-shot examples by value, the cues asked for and the model parameters. The worker gathers it from the
+database (`subserver/gather.py`); the engine renders and runs it; the CLI runs the same file. It holds no key
+and no machine path. `bundle_version` says how to read it, and `bundle_hash` changes only when the prompt or a
+parameter changes.
+
+**Job spec**:
+The bundle a job's latest attempt translated from, kept with the job (table `job_bundles`) and downloaded from the console
+(Export job spec). `subcore translate --bundle` runs it again, so a translation can be reproduced outside
+the worker.
+
 **Context bundle**:
 The story state @N, the unit's own facts and the metadata, as prompt sections placed
 after the glossary and the corrections. Its fingerprint (a hash of the facts it was

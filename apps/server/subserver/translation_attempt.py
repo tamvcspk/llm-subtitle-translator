@@ -24,9 +24,13 @@ from subcore.providers import (
     RateLimited,
     Unavailable,
 )
-from subcore.translate import PromptContext, TranslateOptions, TranslationError, translate
+from subcore.translate import TranslationError, run
+from subcore.translate.engine import TranslationResult
+from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
+from subcore.translate.review import Finding, review
 
 from .config import DEFAULT_MODEL, model_for_task
+from .gather import gather
 from .library import Library
 from .memory import StoryMemory
 from .ports import MissingApiKey, ProviderFactory, Telemetry, Unit
@@ -42,7 +46,7 @@ from .translation import (
 from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, TranslationVersions, sha256_bytes
 
 # Bump when the prompt or engine behaviour changes enough that old results should not be reused (NFR-3).
-PROMPT_VERSION = "p3-1"
+PROMPT_VERSION = SUBCORE_PROMPT_VERSION
 DEFAULT_JOB_TIMEOUT_SECONDS = 1800  # NFR-2 watchdog
 
 
@@ -199,9 +203,13 @@ class TranslationAttempt:
         model = str(settings.get("gst_model") or os.getenv("GST_MODEL", DEFAULT_MODEL))
         temperature = _temperature(settings)
 
+        # The bundle of this attempt, once gathered: calls made for the translation carry its hash (NFR-12).
+        current: dict[str, str] = {"bundle_hash": ""}
+
         def record(log: CallLog) -> None:
             self.telemetry.llm_call(
                 job_id, log, prompt_version=prompt_version_of(log.task), glossary_hash=rules.hash,
+                bundle_hash=current["bundle_hash"] if log.task == "translate" else "",
             )
 
         deadline = time.monotonic() + job_timeout_seconds()
@@ -252,19 +260,23 @@ class TranslationAttempt:
         only, keep = self._plan(retranslate, rules, cues, output)
 
         try:
-            result = self._translate(
+            result, bundle = self._translate(
                 provider_for, cues, job, description, settings, rules, plan, unit, only, keep, temperature, on_progress,
+                current,
             )
         except HardJobError as exc:
             self._record_issues(getattr(exc, "issues", None), job_id, unit_id, model)
             raise
 
         self._record_issues(result.issues, job_id, unit_id, model)
+        findings = self._review(bundle, result, settings)
         self.telemetry.event(
             "translation.finished", job_id=job_id, unit_id=unit_id, target=target_code, model=model,
             reason=f"{len(result.calls)} model call(s), {sum(1 for c in result.calls if c.kind != 'translate')} repair or split",
             calls=len(result.calls), tokens_in=result.tokens_in, tokens_out=result.tokens_out,
             issues=len(result.issues), trigger=trigger,
+            review_errors=sum(1 for f in findings if f.severity == "error"),
+            review_warnings=sum(1 for f in findings if f.severity == "warning"),
         )
 
         for warning in result.warnings:
@@ -293,28 +305,76 @@ class TranslationAttempt:
 
     def _translate(
         self, provider_for, cues, job, description, settings, rules, plan, unit, only, keep, temperature, on_progress,
-    ):
-        """The model work of one attempt: build the prompt context, run ``subcore.translate``."""
+        current: dict[str, str],
+    ) -> tuple[TranslationResult, Any]:
+        """The model work of one attempt: gather the bundle, keep it, run it through ``subcore``."""
         target_code = str(job.get("target_code") or "zh")
         with self._mapped(settings):
             provider = provider_for("translate")
-            context = PromptContext(
-                target_lang=target_code,
-                target_name=str(job.get("target_language") or "") or None,
-                source_lang=str(job.get("source_code") or "") or None,
-                overview=description,
-                glossary=rules.glossary if not rules.glossary.is_empty() else None,
-                active_rules=rules.active_rules,
-                # Corrections come before the machine's story so they win; both follow the glossary.
-                extra_sections=[*rules.extra_sections, *(plan.sections if plan else [])],
-                season=unit.season if unit else None,
-                episode=unit.episode if unit else None,
+            bundle = gather(
+                cues=cues,
+                rules=rules,
+                unit=unit,
                 title=self._title(unit),  # the series, or the movie
+                overview=description,
+                target_code=target_code,
+                target_name=str(job.get("target_language") or ""),
+                source_code=str(job.get("source_code") or ""),
+                extra_sections=plan.sections if plan else [],
+                model=str(getattr(provider, "model", "") or ""),
+                max_output_tokens=provider.caps.max_output_tokens,
+                temperature=temperature,
+                only=only,
+                keep=keep,
             )
-            return translate(
-                provider, cues, context, TranslateOptions(temperature=temperature),
-                on_progress=on_progress, only=only, keep=keep,
-            )
+            bundle = self._clean(bundle, settings)
+            current["bundle_hash"] = bundle.bundle_hash()
+            self._keep_bundle(job, bundle, settings)
+            result = run(bundle, provider, on_progress=on_progress)
+        return result, bundle
+
+    @staticmethod
+    def _review(bundle, result: TranslationResult, settings: dict[str, Any]) -> list[Finding]:
+        """The same review ``subcore validate`` makes, against the glossary the engine used (the bundle's, narrowed to
+        the episode). The translation is already paid for: a failure here is logged and costs nothing else."""
+        try:
+            return review(list(bundle.cues), result.cues, bundle.glossary)
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Review of the translation failed: %s", redact(str(exc), settings))
+            return []
+
+    @staticmethod
+    def _clean(bundle, settings: dict[str, Any]):
+        """Mask a key that reached the text (a pasted overview, a correction) before anything else sees the bundle.
+
+        The model never receives it, and the hash, the call records and the exported spec all describe the same text,
+        so a spec reproduces the run (NFR-12). When masking leaves nothing readable the bundle is kept as it was.
+        """
+        text = bundle.to_json()
+        masked = redact(text, settings)
+        if masked == text:
+            return bundle
+        try:
+            return type(bundle).from_json(masked)
+        except Exception:  # noqa: BLE001 - a bundle that cannot be read back is not worth changing
+            return bundle
+
+    def _keep_bundle(self, job: dict[str, Any], bundle, settings: dict[str, Any]) -> None:
+        """Keep the bundle for "Xuất job spec" and put its hash in the job's snapshot (FR-15.10, FR-21.2).
+
+        Best effort: a failure here is logged and the translation goes on; the bundle is never a reason to fail a job.
+        """
+        bundle_hash = bundle.bundle_hash()
+        snapshot = job.get("snapshot")
+        if isinstance(snapshot, dict):
+            snapshot["bundle_hash"] = bundle_hash
+        job_id = str(job.get("job_id") or "")
+        if self.usage is None or not job_id:
+            return
+        try:
+            self.usage.save_job_bundle(job_id, bundle_hash, bundle.to_json())
+        except Exception as exc:  # noqa: BLE001 - a bundle that cannot be kept must not fail the job
+            logging.warning("Could not keep the bundle of job %s: %s", job_id, redact(str(exc), settings))
 
     MAX_ISSUE_SIGNALS = 500  # per attempt: a source that fails everywhere must not flood the table
 

@@ -1,4 +1,4 @@
-import { post } from "../api.js";
+import { get, post } from "../api.js";
 import { plural } from "../format.js";
 import { jobCard, QUEUE_STATES } from "../jobs.js";
 import { refreshQueue, store, subscribe } from "../store.js";
@@ -66,24 +66,48 @@ async function stopJob(job) {
   await refreshQueue();
 }
 
+// "Export job spec" (FR-21.2): the bundle the job translated from, as a JSON file the CLI can run again.
+async function exportSpec(job) {
+  let spec;
+  try {
+    spec = await get(`/api/jobs/${encodeURIComponent(job.job_id)}/spec`);
+  } catch (error) {
+    throw new Error(error.message || "This job has no bundle yet: it has not translated.");
+  }
+  const url = URL.createObjectURL(new Blob([JSON.stringify(spec, null, 2)], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `job-spec-${job.job_id}.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast("Job spec downloaded", "success");
+}
+
+const SPEC_STATES = ["processing", "deferred", "done", "failed"];
+
 function actionsFor(job, state) {
-  if (state === "processing") return [actionButton("Stop", () => stopJob(job), { variant: "btn-danger" })];
+  const withSpec = (buttons) => (SPEC_STATES.includes(state)
+    ? [actionButton("Export job spec", () => exportSpec(job), { iconName: "download" }), ...buttons]
+    : buttons);
+  if (state === "processing") return withSpec([actionButton("Stop", () => stopJob(job), { variant: "btn-danger" })]);
   if (state === "deferred" && job.wait_reason === "context") {
-    return [
+    return withSpec([
       actionButton("Request earlier episodes", () => requestEarlier(job)),
       actionButton("Cancel", () => cancelJob(job, state), { variant: "btn-danger" }),
-    ];
+    ]);
   }
   if (state === "failed") {
-    return [
+    return withSpec([
       actionButton("Retry", () => retryJob(job), { iconName: "retry" }),
       actionButton("Cancel", () => cancelJob(job, state), { variant: "btn-danger" }),
-    ];
+    ]);
   }
   if (state === "pending" || state === "deferred") {
-    return [actionButton("Cancel", () => cancelJob(job, state), { variant: "btn-danger" })];
+    return withSpec([actionButton("Cancel", () => cancelJob(job, state), { variant: "btn-danger" })]);
   }
-  return [];
+  return withSpec([]);
 }
 
 function pickDefaultTab(snapshot) {

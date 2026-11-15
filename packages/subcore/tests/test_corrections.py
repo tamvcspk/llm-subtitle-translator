@@ -5,7 +5,7 @@ import unittest
 from subcore import glossary as g
 from subcore.providers import FakeProvider
 from subcore.translate import PromptContext, translate
-from subcore.translate.prompt import build_system
+from subcore.translate.engine import system_prompt
 
 from .helpers import numbered
 
@@ -23,7 +23,7 @@ class TermWindowTests(unittest.TestCase):
 
     def system_for(self, episode):
         ctx = PromptContext(target_lang="vi", glossary=g.loads(FORWARD), season=1, episode=episode)
-        return build_system(ctx)
+        return system_prompt(ctx)
 
     def test_term_from_episode_three_is_absent_from_episode_two_and_present_from_three(self):
         self.assertNotIn("Kyber crystal", self.system_for(2))

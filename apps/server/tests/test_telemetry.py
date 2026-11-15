@@ -329,7 +329,8 @@ class CallRecordTests(unittest.TestCase):
         self.assertEqual((first.http_status, first.retries, first.batch), (200, 0, 0))
         version = env.store.current_version(str(env.output()))
         self.assertEqual(first.glossary_hash, version.glossary_hash)
-        self.assertEqual((first.bundle_hash, first.style_hash), ("", ""))  # P11 and P12 fill these in
+        self.assertEqual(len(first.bundle_hash), 64)  # P11: a translation call names its bundle
+        self.assertEqual(first.style_hash, "")  # P12 fills this in
         self.assertAlmostEqual(first.cost_est, (first.tokens_in * 1.0 + first.tokens_out * 2.0) / 1_000_000)
 
     def test_a_failed_call_keeps_its_http_code_and_attempt_number(self):

@@ -62,6 +62,15 @@ class SettingRow:
 
 
 @dataclass(frozen=True)
+class JobBundle:
+    """The bundle a job's latest translation attempt used (P11, FR-21.2): what "Xuất job spec" hands out."""
+
+    job_id: str
+    bundle_hash: str
+    bundle_json: str
+
+
+@dataclass(frozen=True)
 class LlmCall:
     """One recorded provider call (NFR-7, FR-19.1). ``at`` is epoch seconds. The fields after ``at`` describe
     how the call was made: ``kind`` is translate | repair | split, ``batch`` the part of the episode, ``retries``

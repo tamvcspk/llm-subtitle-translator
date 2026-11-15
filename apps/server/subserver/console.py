@@ -3,6 +3,7 @@
 The handler parses a request and calls one of these; building the job and choosing its targets happens here,
 so a second front end (CLI, scheduler) would behave the same.
 """
+import json
 from typing import Any
 
 from .queue import JobQueue
@@ -21,6 +22,10 @@ class ConsoleActions:
     def stop(self, job_id: str) -> str | None: return self.jobs.stop(job_id)
 
     def snapshot(self, limit: int = 100) -> dict[str, Any]: return self.jobs.snapshot(limit)
+    def job_spec(self, job_id: str) -> dict[str, Any] | None:
+        """The bundle a job translated from, as the JSON document `subcore translate --bundle` reads (FR-21.2)."""
+        found = self.jobs.job_bundle(job_id)
+        return None if found is None else json.loads(found.bundle_json)
     def layer_report(self) -> dict[str, Any]: return self.jobs.layer_report()
 
     def enqueue_subtitle(self, request: dict[str, Any], configured_targets: list[dict[str, Any]]) -> list[str]:

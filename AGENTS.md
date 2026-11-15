@@ -40,7 +40,7 @@ The Docker image installs only `llm-subtitle-server` (which depends on `subcore`
 
 Local console preview on Windows: `scripts/start-local.ps1 [-Demo] [-NoWorker]` runs against an isolated `local-state/` directory instead of the Docker `/state` and `/queue` mounts. `-NoWorker` keeps the process from consuming queue jobs.
 
-`subcore` has a manual CLI for judging translation quality without the worker: `uv run subcore translate file.srt --glossary g.yaml` (key from `GEMINI_API_KEY`; `--provider fake` for a dry run).
+`subcore` has a declarative CLI for judging translation quality without the worker (it knows no DB, queue or HTTP): `uv run subcore translate file.srt --glossary g.yaml` (key from `GEMINI_API_KEY`, or `--api-key-file`; `--provider fake` for a dry run), plus `bundle` (write the bundle of a translation), `render-prompt` (print the requests, no call), `validate` (review a translation against its source) and `compare` (two bundles, or one against a golden set). Every translating command works from a bundle (`--bundle`); flags win over it.
 
 ## Architecture
 

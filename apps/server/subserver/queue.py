@@ -325,6 +325,10 @@ class JobQueue:
         return outcome
 
     # -- looking at the queue ------------------------------------------------------------------------------------------
+    def job_bundle(self, job_id: str):
+        """The bundle of a job's latest attempt (FR-21.2), for "Xuất job spec"."""
+        return self.jobs.bundle(job_id)
+
     def snapshot(self, limit: int = 100) -> dict[str, Any]:
         counts = self.jobs.counts()
         pause = self.quota_pause_until()

@@ -13,11 +13,25 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..glossary import ActiveRule, Glossary
 
-__all__ = ["PromptContext", "RESPONSE_SCHEMA", "build_system", "build_user", "format_targets", "language_name"]
+if TYPE_CHECKING:  # the bundle reads nothing from here at run time; the prompt renders a bundle
+    from ..bundle import TranslationBundle
+
+__all__ = [
+    "PROMPT_VERSION",
+    "PromptContext",
+    "RESPONSE_SCHEMA",
+    "render_system",
+    "build_user",
+    "format_targets",
+    "language_name",
+]
+
+# Bump when the prompt text or the way it is assembled changes (it is part of every bundle hash, NFR-3).
+PROMPT_VERSION = "p3-1"
 
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "array",
@@ -94,6 +108,8 @@ class PromptContext:
     extra_sections: list[tuple[str, str]] = field(default_factory=list)
     # Address rules already resolved for this episode (None = compute from the glossary).
     active_rules: list[ActiveRule] | None = None
+    # Accepted (source, translation) pairs, rendered last (FR-18.5, P12).
+    few_shot: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _glossary_section(glossary: Glossary, active: list[ActiveRule]) -> str:
@@ -136,37 +152,42 @@ def _glossary_section(glossary: Glossary, active: list[ActiveRule]) -> str:
     return "\n".join(lines)
 
 
-def build_system(ctx: PromptContext, cues: list[Any] | None = None) -> str:
-    """Assemble the system prompt. ``cues`` is only used to place timed address rules."""
+def render_system(bundle: "TranslationBundle") -> str:
+    """The system prompt of a bundle: the only place it is assembled (ADR-16). The glossary in the bundle is
+    already the one for this episode, with its address rules placed on cues."""
     sections: list[tuple[str, str]] = [
-        ("Core rules", _CORE_RULES.format(language=ctx.target_name or language_name(ctx.target_lang))),
+        ("Core rules", _CORE_RULES.format(language=bundle.target_name or language_name(bundle.target_lang))),
     ]
-    lang_rules = _TARGET_RULES.get(ctx.target_lang.lower().split("-")[0])
+    lang_rules = _TARGET_RULES.get(bundle.target_lang.lower().split("-")[0])
     if lang_rules:
         sections.append(("Target-language rules", lang_rules))
-    if ctx.glossary:
-        # Terms carry a story-order window (FR-11.2.3): only those in effect for this episode.
-        glossary = ctx.glossary.for_episode(ctx.season, ctx.episode)
-        if not glossary.is_empty():
-            active = ctx.active_rules
-            if active is None:
-                active = glossary.active_address_rules(ctx.season, ctx.episode, cues)
-            sections.append(("Glossary", _glossary_section(glossary, active)))
-    sections.extend(ctx.extra_sections)
+    if not bundle.glossary.is_empty():
+        sections.append(("Glossary", _glossary_section(bundle.glossary, list(bundle.active_rules))))
+    sections.extend(bundle.sections)
 
     meta = []
-    if ctx.title:
-        meta.append(f"Title: {ctx.title}")
-    if ctx.season is not None and ctx.episode is not None:
-        meta.append(f"Episode: season {ctx.season}, episode {ctx.episode}")
-    if ctx.source_lang:
-        meta.append(f"Source language: {language_name(ctx.source_lang)}")
-    if ctx.overview:
-        meta.append(f"Overview: {ctx.overview}")
+    if bundle.title:
+        meta.append(f"Title: {bundle.title}")
+    if bundle.season is not None and bundle.episode is not None:
+        meta.append(f"Episode: season {bundle.season}, episode {bundle.episode}")
+    if bundle.source_lang:
+        meta.append(f"Source language: {language_name(bundle.source_lang)}")
+    if bundle.overview:
+        meta.append(f"Overview: {bundle.overview}")
     if meta:
         sections.append(("Metadata", "\n".join(meta)))
+    if bundle.few_shot:
+        examples = "\n".join(f"- {_quote(src)} → {_quote(dst)}" for src, dst in bundle.few_shot)
+        sections.append((
+            "Examples",
+            "Accepted translations of other lines in this series. Follow their wording and tone:\n" + examples,
+        ))
 
     return "\n\n".join(f"## {n}. {title}\n{body}" for n, (title, body) in enumerate(sections, start=1))
+
+
+def _quote(text: str) -> str:
+    return json.dumps(text, ensure_ascii=False)
 
 
 def format_targets(ids: list[int]) -> str:

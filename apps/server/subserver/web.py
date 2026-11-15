@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import re
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -302,6 +303,18 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_json(result[1], status=result[0])
         return True
 
+    def job_spec_route(self, job_id: str) -> None:
+        """GET /api/jobs/{id}/spec: the bundle of the job's latest translation attempt (FR-21.2)."""
+        job_id = urllib.parse.unquote(job_id)
+        if not re.fullmatch(r"[^/\\\x00-\x1f]{1,256}", job_id):
+            self.send_json({"error": "unknown job"}, status=404)
+            return
+        spec = self.ctx["console"].job_spec(job_id)
+        if spec is None:
+            self.send_json({"error": "this job has no bundle yet: it has not translated"}, status=404)
+            return
+        self.send_json(spec)
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         try:
@@ -317,6 +330,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self.send_json(self.api_status())
             elif parsed.path == "/api/queue":
                 self.send_json(self.ctx["console"].snapshot())
+            elif parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/spec"):
+                self.job_spec_route(parsed.path[len("/api/jobs/"):-len("/spec")])
             elif parsed.path == "/api/settings":
                 self.send_json(self.settings_service.public(self.live_settings()))
             elif parsed.path == "/api/languages":

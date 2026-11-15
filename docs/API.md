@@ -155,6 +155,13 @@ The console shows the expiry in the browser's local time and explains that
 cancelling failed jobs does not lift the pause. Provider error details are not
 included in this field.
 
+## GET /api/jobs/{id}/spec
+
+The bundle (see CONTEXT.md, *Bundle*) that the job's latest translation attempt used, as the JSON document
+`subcore translate --bundle` reads. It holds the cues, the episode's glossary, the sections, the parameters and
+no key or machine path (a key that reached the text is masked before translation, so the spec reproduces the run). `404` when the job has not translated
+yet (`{"error": "..."}`) or the id is malformed. Requires the same login as every `/api` route.
+
 ## GET /api/settings
 
 Returns the current settings, read from the database (a change saved a moment ago is already in it).

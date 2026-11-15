@@ -304,6 +304,10 @@ class JobStore:
             db.execute("UPDATE jobs SET lease_until = ? WHERE job_id = ? AND state = ?",
                        (self.monotonic() + lease_seconds, job_id, RUNNING))
 
+    def bundle(self, job_id: str):
+        """The bundle a job's latest attempt used (P11), or None when no attempt has gathered one yet."""
+        return self.store.job_bundle(job_id)
+
     def cancel_requested(self, job_id: str) -> bool:
         rows = self.store.query("SELECT cancel_requested FROM jobs WHERE job_id = ?", (job_id,))
         return bool(rows and rows[0]["cancel_requested"])
@@ -400,9 +404,16 @@ class JobStore:
 
     def delete(self, states: tuple[str, ...], job_id: str) -> bool:
         with self.store.transaction() as db:
-            return db.execute(
+            deleted = db.execute(
                 f"DELETE FROM jobs WHERE job_id = ? AND state IN ({','.join('?' * len(states))})", (job_id, *states)
             ).rowcount > 0
+            self._sweep_bundles(db)
+            return deleted
+
+    @staticmethod
+    def _sweep_bundles(db) -> None:
+        """A bundle lives and dies with its job: whatever job left, its bundle goes (P11, FR-13)."""
+        db.execute("DELETE FROM job_bundles WHERE job_id NOT IN (SELECT job_id FROM jobs)")
 
     def request_stop(self, job_id: str) -> str | None:
         """Stop a job: a waiting one at once, a running one at the next batch boundary (FR-15.11). Returns what
@@ -432,6 +443,7 @@ class JobStore:
                               (GATE_HELD, GATE_REJECTED)).fetchall()
             for row in rows:
                 db.execute("DELETE FROM jobs WHERE id = ?", (row["id"],))
+            self._sweep_bundles(db)
         held = [_loads(r["payload_json"]) for r in rows if r["state"] == GATE_HELD]
         rejected = [_loads(r["payload_json"]) for r in rows if r["state"] == GATE_REJECTED]
         return held, rejected
@@ -442,7 +454,8 @@ class JobStore:
         running, waiting, held) and no refusal (``rejected``) can ever be counted or deleted (FR-13.2)."""
         marks = self._ended(states)
         row = self.store.query(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(payload_json) + LENGTH(snapshot_json) + LENGTH(error)), 0) AS size"
+            "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(payload_json) + LENGTH(snapshot_json) + LENGTH(error)"
+            " + COALESCE((SELECT LENGTH(bundle_json) FROM job_bundles b WHERE b.job_id = jobs.job_id), 0)), 0) AS size"
             f" FROM jobs WHERE state IN ({marks}) AND COALESCE(finished_at, updated_at) < ?",
             (*states, finished_before),
         )[0]
@@ -451,10 +464,12 @@ class JobStore:
     def delete_expired(self, states: tuple[str, ...], finished_before: float) -> int:
         marks = self._ended(states)
         with self.store.transaction() as db:
-            return db.execute(
+            deleted = db.execute(
                 f"DELETE FROM jobs WHERE state IN ({marks}) AND COALESCE(finished_at, updated_at) < ?",
                 (*states, finished_before),
             ).rowcount
+            self._sweep_bundles(db)
+            return deleted
 
     @staticmethod
     def _ended(states: tuple[str, ...]) -> str:

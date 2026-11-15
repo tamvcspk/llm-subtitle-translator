@@ -23,6 +23,7 @@ from subcore.memory import Facts
 from dataclasses import asdict
 
 from .ports import (
+    JobBundle,
     Account, ApiKey, SettingRow, BodyRef, CatalogApplied, CatalogEntry, CatalogState, CatalogSubtitle, Correction,
     EventRecord, LlmCall, Output, QualitySignal, Series, StoredFacts, TokenTotals, TranslationVersion, Unit,
 )
@@ -343,6 +344,15 @@ _MIGRATIONS: tuple[str, ...] = (
     CREATE UNIQUE INDEX jobs_open ON jobs (key, kind) WHERE state IN ('queued', 'running', 'waiting');
     CREATE INDEX jobs_unit ON jobs (unit_id, target_lang);
     """,
+    # Migration 11 (P11, FR-21.2): the bundle of a job's latest attempt. A table of its own, because a bundle is
+    # hundreds of KB and many queue queries read whole `jobs` rows. The job's deletes sweep it (see JobStore).
+    """
+    CREATE TABLE job_bundles (
+        job_id TEXT PRIMARY KEY,
+        bundle_hash TEXT NOT NULL,
+        bundle_json TEXT NOT NULL
+    );
+    """,
 )
 
 
@@ -496,6 +506,24 @@ class Store:
         with self._lock:
             row = self._db.execute("SELECT user, password_hash FROM auth WHERE id = 1").fetchone()
         return Account(user=row["user"], password_hash=row["password_hash"]) if row else None
+
+    # -- job bundles (P11, FR-21.2) ------------------------------------------------
+    def save_job_bundle(self, job_id: str, bundle_hash: str, bundle_json: str) -> None:
+        """Keep the bundle an attempt of this job translated from. One short write; the caller decides what a failure
+        means (the translation itself does not depend on it)."""
+        with self.transaction() as db:
+            # Only for a job that has a row: a bundle without a job would never be swept.
+            db.execute(
+                "INSERT OR REPLACE INTO job_bundles (job_id, bundle_hash, bundle_json)"
+                " SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ?)",
+                (job_id, bundle_hash, bundle_json, job_id),
+            )
+
+    def job_bundle(self, job_id: str) -> JobBundle | None:
+        rows = self.query("SELECT bundle_hash, bundle_json FROM job_bundles WHERE job_id = ?", (job_id,))
+        if not rows:
+            return None
+        return JobBundle(job_id=job_id, bundle_hash=rows[0]["bundle_hash"], bundle_json=rows[0]["bundle_json"])
 
     def save_auth_account(self, user: str, password_hash: str) -> None:
         """Create or overwrite the account. A fresh session secret goes with it, so every session ends."""

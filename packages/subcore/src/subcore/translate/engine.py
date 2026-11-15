@@ -1,22 +1,41 @@
-"""Translate a cue list: plan → call → validate → repair → split (FR-2, FR-3).
+"""Translate a bundle: plan → call → validate → repair → split (FR-2, FR-3, ADR-16).
 
-Output cues are built from the *source* cues with only ``text`` replaced, so
-timecodes, indexes and cue count are preserved by construction (FR-3.1); the
-LLM only ever sees ``{i, text}``.
+The engine works only from a :class:`~subcore.bundle.TranslationBundle`. ``make_bundle`` resolves a caller's
+context into one, ``run`` translates it, ``render_requests`` shows the first request of every part without
+calling a provider (``subcore render-prompt``). ``translate`` is the compatibility entry point: it makes the
+bundle and runs it, so every path shares one prompt builder.
+
+Output cues are built from the *source* cues with only ``text`` replaced, so timecodes, indexes and cue count
+are preserved by construction (FR-3.1); the LLM only ever sees ``{i, text}``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Sequence
 
 from .. import srt
+from ..bundle import Params, TranslationBundle
+from ..glossary import Glossary
 from ..providers.base import BadOutput, Blocked, LLMRequest, Provider
 from . import alignment, planner
-from .prompt import RESPONSE_SCHEMA, PromptContext, build_system, build_user
+from .prompt import PROMPT_VERSION, RESPONSE_SCHEMA, PromptContext, build_user, render_system
 from .validate import check_cue, parse_reply
 
-__all__ = ["TranslateOptions", "CallRecord", "TranslationResult", "TranslationError", "ValidationIssue", "translate"]
+__all__ = [
+    "TranslateOptions",
+    "CallRecord",
+    "TranslationResult",
+    "TranslationError",
+    "ValidationIssue",
+    "RenderedRequest",
+    "make_bundle",
+    "options_of",
+    "render_requests",
+    "run",
+    "system_prompt",
+    "translate",
+]
 
 
 @dataclass
@@ -72,13 +91,23 @@ class TranslationResult:
         return sum(c.tokens_out for c in self.calls)
 
 
+@dataclass(frozen=True)
+class RenderedRequest:
+    """The first request of one part, as it would be sent (no repairs, no provider)."""
+
+    part: int
+    targets: tuple[int, ...]
+    system: str
+    user: str
+
+
 class TranslationError(Exception):
     """Some cues could not be translated validly even after repair and splitting."""
 
     def __init__(self, failed: dict[int, str]):
         self.failed = failed
-        self.issues: list[ValidationIssue] = []  # what the validator found on the way; filled in by ``translate``
-        self.blocked = 0  # how many calls the provider refused for their content; filled in by ``translate``
+        self.issues: list[ValidationIssue] = []  # what the validator found on the way; filled in by ``run``
+        self.blocked = 0  # how many calls the provider refused for their content; filled in by ``run``
         shown = "; ".join(f"cue {i}: {why}" for i, why in sorted(failed.items())[:5])
         more = f" (+{len(failed) - 5} more)" if len(failed) > 5 else ""
         super().__init__(f"{len(failed)} cue(s) failed validation after repair: {shown}{more}")
@@ -91,27 +120,98 @@ def _reason(verdict_errors: list[str], terms: list) -> str:
     return "; ".join(bits)
 
 
+# ---------------------------------------------------------------- bundles
+
+
+def options_of(bundle: TranslationBundle) -> TranslateOptions:
+    """The planning and repair settings a bundle carries."""
+    p = bundle.params
+    return TranslateOptions(
+        output_factor=p.output_factor, min_part_cues=p.min_part_cues, repair_rounds=p.repair_rounds,
+        context_window=p.context_window, max_split_depth=p.max_split_depth, temperature=p.temperature,
+    )
+
+
+def make_bundle(
+    cues: Sequence[srt.Cue],
+    ctx: PromptContext | None = None,
+    options: TranslateOptions | None = None,
+    *,
+    only: Iterable[int] | None = None,
+    keep: dict[int, str] | None = None,
+    model: str = "",
+    max_output_tokens: int | None = None,
+) -> TranslationBundle:
+    """Resolve a caller's context into a bundle. Pure: nothing is read or called here.
+
+    The glossary is narrowed to the episode and the episode's address rules are placed on cues; the result is what
+    the prompt and the planner will see, and nothing else.
+    """
+    ctx = ctx or PromptContext()
+    options = options or TranslateOptions()
+    glossary = ctx.glossary.for_episode(ctx.season, ctx.episode) if ctx.glossary else Glossary()
+    if glossary.is_empty():
+        glossary, active = Glossary(), ()
+    elif ctx.active_rules is not None:
+        active = tuple(ctx.active_rules)
+    else:
+        active = tuple(glossary.active_address_rules(ctx.season, ctx.episode, list(cues)))
+    if max_output_tokens is None:
+        from ..providers.base import Capabilities
+
+        max_output_tokens = Capabilities().max_output_tokens
+    total = len(cues)
+    return TranslationBundle(
+        cues=tuple(cues),
+        target_lang=ctx.target_lang,
+        target_name=ctx.target_name or "",
+        source_lang=ctx.source_lang or "",
+        title=ctx.title or "",
+        overview=ctx.overview or "",
+        season=ctx.season,
+        episode=ctx.episode,
+        glossary=glossary,
+        active_rules=active,
+        sections=tuple((str(t), str(b)) for t, b in ctx.extra_sections),
+        few_shot=tuple((str(s), str(t)) for s, t in ctx.few_shot),
+        requested=None if only is None else tuple(sorted({int(n) for n in only})),
+        keep={n: text for n, text in (keep or {}).items() if 1 <= n <= total},
+        params=Params(
+            model=model,
+            prompt_version=PROMPT_VERSION,
+            temperature=options.temperature,
+            max_output_tokens=int(max_output_tokens),
+            output_factor=options.output_factor,
+            min_part_cues=options.min_part_cues,
+            repair_rounds=options.repair_rounds,
+            context_window=options.context_window,
+            max_split_depth=options.max_split_depth,
+        ),
+    )
+
+
+def system_prompt(ctx: PromptContext | None = None, cues: Sequence[srt.Cue] | None = None) -> str:
+    """The system prompt a context would get (for callers that only need the text)."""
+    return render_system(make_bundle(list(cues or ()), ctx))
+
+
 class _Run:
     def __init__(
         self,
         provider: Provider,
-        cues: list[srt.Cue],
-        ctx: PromptContext,
-        options: TranslateOptions,
+        bundle: TranslationBundle,
         on_progress: Callable[[int, int], None] | None,
-        only: Iterable[int] | None = None,
-        keep: dict[int, str] | None = None,
     ) -> None:
         self.provider = provider
-        self.cues = cues
-        self.ctx = ctx
-        self.options = options
+        self.bundle = bundle
+        self.cues = list(bundle.cues)
+        self.options = options_of(bundle)
         self.on_progress = on_progress
-        self.system = build_system(ctx, cues)
-        self.glossary = ctx.glossary.for_episode(ctx.season, ctx.episode) if ctx.glossary else None
-        self.source = {n: c.text for n, c in enumerate(cues, start=1) if c.text.strip()}
-        self.keep = {n: text for n, text in (keep or {}).items() if 1 <= n <= len(cues)}
-        wanted = None if only is None else set(only)
+        self.system = render_system(bundle)
+        self.glossary = bundle.glossary if not bundle.glossary.is_empty() else None
+        self.source = {n: c.text for n, c in enumerate(self.cues, start=1) if c.text.strip()}
+        self.keep = dict(bundle.keep)
+        wanted = None if bundle.requested is None else set(bundle.requested)
         self.targets = [
             n for n in sorted(self.source) if n not in self.keep and (wanted is None or n in wanted)
         ]
@@ -130,7 +230,7 @@ class _Run:
             system=self.system,
             user=build_user(context, targets, notes, reference),
             response_schema=RESPONSE_SCHEMA if self.provider.caps.structured_output else None,
-            temperature=self.options.temperature,
+            temperature=self.bundle.params.temperature,
             task="translate",
             json_output=True,
             meta={
@@ -225,12 +325,70 @@ class _Run:
         if depth < self.options.max_split_depth and len(hard) > 1:
             force = min(len(hard), max(2, parts_used * 2))
             subparts = planner.plan_parts(
-                self.cues, hard, self.provider.caps.max_output_tokens, force_parts=force
+                self.cues, hard, self.bundle.params.max_output_tokens,
+                output_factor=self.options.output_factor, min_part_cues=self.options.min_part_cues,
+                force_parts=force,
             )
             for sub in subparts:
                 self.run_part(sub, kind="split", parts_used=len(subparts), depth=depth + 1)
             return
         raise TranslationError({n: failing[n] for n in hard})
+
+
+def _parts(bundle: TranslationBundle, targets: list[int], options: TranslateOptions) -> list[list[int]]:
+    if not targets:
+        return []
+    return planner.plan_parts(
+        list(bundle.cues),
+        targets,
+        bundle.params.max_output_tokens,
+        output_factor=options.output_factor,
+        min_part_cues=options.min_part_cues,
+    )
+
+
+def render_requests(bundle: TranslationBundle) -> list[RenderedRequest]:
+    """The first request of each part, rendered exactly as ``run`` would send it. Calls no provider (FR-21.3)."""
+    options = options_of(bundle)
+    source = {n: c.text for n, c in enumerate(bundle.cues, start=1) if c.text.strip()}
+    keep = dict(bundle.keep)
+    wanted = None if bundle.requested is None else set(bundle.requested)
+    targets = [n for n in sorted(source) if n not in keep and (wanted is None or n in wanted)]
+    system = render_system(bundle)
+    out = []
+    for number, part in enumerate(_parts(bundle, targets, options)):
+        reference = {n: text for n, text in keep.items() if n in source}
+        out.append(RenderedRequest(number, tuple(part), system, build_user(source, part, {}, reference)))
+    return out
+
+
+def run(
+    bundle: TranslationBundle,
+    provider: Provider,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> TranslationResult:
+    """Translate a bundle. Returns the bundle's cues with new text (FR-3.1).
+
+    Raises :class:`TranslationError` if cues stay invalid after two repair rounds and one split; provider errors
+    (``RateLimited`` etc.) propagate to the caller.
+    """
+    engine = _Run(provider, bundle, on_progress)
+    if engine.targets:
+        parts = _parts(bundle, engine.targets, engine.options)
+        try:
+            for number, part in enumerate(parts):
+                engine.part_no = number
+                engine.run_part(part, kind="translate", parts_used=len(parts), depth=0)
+        except TranslationError as exc:
+            exc.issues = engine.issues
+            exc.blocked = engine.blocked
+            raise
+
+    translated = [
+        cue.with_text(engine.out.get(n, engine.keep.get(n, cue.text)))
+        for n, cue in enumerate(engine.cues, start=1)
+    ]
+    return TranslationResult(cues=translated, calls=engine.calls, warnings=engine.warnings, issues=engine.issues)
 
 
 def translate(
@@ -249,30 +407,11 @@ def translate(
     output verbatim, never requested, and shown to the model as reference translations (locked
     cue edits, cues outside a retranslated range). Any other cue keeps its source text.
 
-    Raises :class:`TranslationError` if cues stay invalid after two repair rounds and
-    one split; provider errors (``RateLimited`` etc.) propagate to the caller.
+    A thin wrapper: it makes the bundle and runs it (:func:`make_bundle`, :func:`run`).
     """
-    ctx = ctx or PromptContext()
-    options = options or TranslateOptions()
-    run = _Run(provider, cues, ctx, options, on_progress, only, keep)
-    if run.targets:
-        parts = planner.plan_parts(
-            cues,
-            run.targets,
-            provider.caps.max_output_tokens,
-            output_factor=options.output_factor,
-            min_part_cues=options.min_part_cues,
-        )
-        try:
-            for number, part in enumerate(parts):
-                run.part_no = number
-                run.run_part(part, kind="translate", parts_used=len(parts), depth=0)
-        except TranslationError as exc:
-            exc.issues = run.issues
-            exc.blocked = run.blocked
-            raise
-
-    translated = [
-        cue.with_text(run.out.get(n, run.keep.get(n, cue.text))) for n, cue in enumerate(cues, start=1)
-    ]
-    return TranslationResult(cues=translated, calls=run.calls, warnings=run.warnings, issues=run.issues)
+    bundle = make_bundle(
+        cues, ctx, options, only=only, keep=keep,
+        model=str(getattr(provider, "model", "") or ""),
+        max_output_tokens=provider.caps.max_output_tokens,
+    )
+    return run(bundle, provider, on_progress)
