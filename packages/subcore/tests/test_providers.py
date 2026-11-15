@@ -7,6 +7,7 @@ from subcore.providers.base import (
     AuthError,
     BadOutput,
     LLMRequest,
+    ModelNotFound,
     ProviderError,
     QuotaExhausted,
     RateLimited,
@@ -63,6 +64,20 @@ class ErrorMappingTests(unittest.TestCase):
     def test_auth_errors(self):
         self.assertIsInstance(map_api_error(403, "PERMISSION_DENIED", "x", None), AuthError)
         self.assertIsInstance(map_api_error(401, None, "x", None), AuthError)
+
+    def test_a_key_google_does_not_know_is_an_auth_error_by_its_reason_not_its_text(self):
+        info = [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_INVALID"}]
+        exc = map_api_error(400, "INVALID_ARGUMENT", "anything at all", {"error": {"details": info}})
+        self.assertIsInstance(exc, AuthError)
+        self.assertEqual(exc.http_status, 400)
+        # Without the reason a 400 is not about the key, whatever the words say.
+        self.assertIs(type(map_api_error(400, "INVALID_ARGUMENT", "API key not valid", None)), ProviderError)
+
+    def test_unknown_model_is_model_not_found_and_is_not_an_auth_error(self):
+        for exc in (map_api_error(404, "NOT_FOUND", "models/x is not found", None), map_api_error(404, None, "x", None)):
+            self.assertIsInstance(exc, ModelNotFound)
+            self.assertNotIsInstance(exc, AuthError)
+            self.assertEqual(exc.http_status, 404)
 
     def test_other_client_errors_are_plain_provider_errors(self):
         exc = map_api_error(400, "INVALID_ARGUMENT", "x", None)

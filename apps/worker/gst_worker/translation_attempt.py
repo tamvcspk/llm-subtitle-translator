@@ -17,6 +17,7 @@ from subcore.providers import (
     AuthError,
     CallLog,
     DeadlineExceeded,
+    ModelNotFound,
     Provider,
     ProviderError,
     QuotaExhausted,
@@ -254,6 +255,10 @@ class TranslationAttempt:
             ) from None
         except AuthError as exc:
             raise RuntimeError(self._message("The provider rejected the API key", exc, settings)) from None
+        except ModelNotFound as exc:
+            raise RuntimeError(
+                self._message("The provider does not know the model (check the model in Settings)", exc, settings)
+            ) from None
         except MissingApiKey as exc:
             raise RuntimeError(str(exc)) from None
         except TranslationError as exc:

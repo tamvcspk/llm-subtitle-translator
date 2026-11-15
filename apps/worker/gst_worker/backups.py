@@ -68,13 +68,24 @@ def newest_backup_mtime(state_dir: str, reason: str | None = None) -> float | No
     return max(mtimes) if mtimes else None
 
 
+CONFIG_MEMBER = "config/config.json"
+KEYS_MEMBER = "config/api_keys.json"
+TARGETS_MEMBER = "postprocess/targets.json"
+
+
 def create_backup(
     state_dir: str,
     config_path: str,
     postprocess_targets_path: str,
     reason: str = "manual",
     now: float | None = None,
+    *,
+    settings: Any = None,
+    include_keys: bool = False,
 ) -> dict[str, Any]:
+    """Write a backup zip. With ``settings`` (a ``SettingsService``) the configuration comes from the database and
+    holds no API key unless ``include_keys`` asks for them (FR-20.3); the console account is never included.
+    Without it the file at ``config_path`` is copied as it is (the layout before P6)."""
     purge_old_backups(state_dir, now=now)
     backup_dir = Path(state_dir) / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -86,19 +97,26 @@ def create_backup(
         backup_path = backup_dir / f"gemini-srt-translator-bazarr-{reason}-{stamp}-{counter}.zip"
         counter += 1
 
+    with_keys = settings is not None and include_keys
     metadata = {
         "app": "gemini-srt-translator-bazarr",
         "reason": reason,
         "created_at": created_at,
-        "contents": ["config/config.json", "postprocess/targets.json"],
+        "contents": [CONFIG_MEMBER, *([KEYS_MEMBER] if with_keys else []), TARGETS_MEMBER],
+        "includes_api_keys": with_keys,
     }
     with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        config = Path(config_path)
-        if config.exists():
-            archive.write(config, "config/config.json")
+        if settings is not None:
+            archive.writestr(CONFIG_MEMBER, json.dumps(settings.export_config(), ensure_ascii=False, indent=2))
+            if with_keys:
+                archive.writestr(KEYS_MEMBER, json.dumps(settings.export_keys(), ensure_ascii=False, indent=2))
+        else:
+            config = Path(config_path)
+            if config.exists():
+                archive.write(config, CONFIG_MEMBER)
         targets = Path(postprocess_targets_path)
         if targets.exists():
-            archive.write(targets, "postprocess/targets.json")
+            archive.write(targets, TARGETS_MEMBER)
         archive.writestr("backup.json", json.dumps(metadata, ensure_ascii=False, indent=2))
     os_time = (created_at, created_at)
     try:
@@ -132,17 +150,28 @@ def restore_backup_archive(
     config_path: str,
     postprocess_targets_path: str,
     now: float | None = None,
+    *,
+    settings: Any = None,
 ) -> dict[str, Any]:
+    """Restore a backup zip. With ``settings`` the configuration (and the keys, when the backup holds them) go
+    into the database; the console account is never restored (ADR-7). Without it ``config_path`` is rewritten."""
+    keys: list[Any] | None = None
     try:
         with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
             metadata = _read_json_member(archive, "backup.json")
             app_name = str(metadata.get("app") or "")
             if app_name and app_name not in SUPPORTED_BACKUP_APPS:
                 raise ValueError("backup was created by a different app")
-            config = _read_json_member(archive, "config/config.json")
-            targets = _read_json_member(archive, "postprocess/targets.json")
+            config = _read_json_member(archive, CONFIG_MEMBER)
+            targets = _read_json_member(archive, TARGETS_MEMBER)
+            if KEYS_MEMBER in archive.namelist():
+                keys = json.loads(archive.read(KEYS_MEMBER).decode("utf-8"))
+                if not isinstance(keys, list):
+                    raise ValueError(f"backup member {KEYS_MEMBER} is not a list of keys")
     except zipfile.BadZipFile as exc:
         raise ValueError("backup is not a valid zip file") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"backup member {KEYS_MEMBER} is not valid JSON") from exc
 
     pre_import_backup = create_backup(
         state_dir,
@@ -150,11 +179,18 @@ def restore_backup_archive(
         postprocess_targets_path,
         reason="pre-import",
         now=now,
+        settings=settings,
     )
-    _atomic_write_json(Path(config_path), config)
+    imported = [CONFIG_MEMBER, TARGETS_MEMBER]
+    if settings is not None:
+        settings.import_config(config, keys)
+        if keys is not None:
+            imported.insert(1, KEYS_MEMBER)
+    else:
+        _atomic_write_json(Path(config_path), config)
     _atomic_write_json(Path(postprocess_targets_path), targets)
     return {
-        "imported": ["config/config.json", "postprocess/targets.json"],
+        "imported": imported,
         "pre_import_backup": pre_import_backup,
         "metadata": metadata,
     }
@@ -167,20 +203,29 @@ def create_scheduled_backup_if_due(
     interval_days: int = SCHEDULED_BACKUP_INTERVAL_DAYS,
     retention_days: int = BACKUP_RETENTION_DAYS,
     now: float | None = None,
+    *,
+    settings: Any = None,
 ) -> dict[str, Any] | None:
     current_time = time.time() if now is None else now
     purge_old_backups(state_dir, retention_days=retention_days, now=current_time)
     newest = newest_backup_mtime(state_dir, reason="scheduled")
     if newest is not None and current_time - newest < interval_days * SECONDS_PER_DAY:
         return None
-    return create_backup(state_dir, config_path, postprocess_targets_path, reason="scheduled", now=current_time)
+    return create_backup(
+        state_dir, config_path, postprocess_targets_path, reason="scheduled", now=current_time, settings=settings,
+    )
 
 
 class BackupMaintenance:
-    """Narrow interface for backup retention and scheduled creation."""
-    def __init__(self, state_dir: str, config_path: str, postprocess_targets_path: str) -> None:
+    """Narrow interface for backup retention and scheduled creation. A scheduled backup never holds API keys."""
+    def __init__(self, state_dir: str, config_path: str, postprocess_targets_path: str, settings: Any = None) -> None:
         self.state_dir, self.config_path, self.postprocess_targets_path = state_dir, config_path, postprocess_targets_path
+        self.settings = settings
     def run_if_due(self) -> dict[str, Any] | None:
-        return create_scheduled_backup_if_due(self.state_dir, self.config_path, self.postprocess_targets_path)
+        return create_scheduled_backup_if_due(
+            self.state_dir, self.config_path, self.postprocess_targets_path, settings=self.settings
+        )
     def create(self, reason: str = "manual") -> dict[str, Any]:
-        return create_backup(self.state_dir, self.config_path, self.postprocess_targets_path, reason=reason)
+        return create_backup(
+            self.state_dir, self.config_path, self.postprocess_targets_path, reason=reason, settings=self.settings
+        )

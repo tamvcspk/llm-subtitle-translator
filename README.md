@@ -162,12 +162,11 @@ Or open the web console and fill these fields in Settings:
 - Gemini API key 2
 - TMDB API key
 
-Secret values are stored in `/state/config.json` and are not returned by the
-public settings API.
-
-gemini-srt-translator settings such as model, batch size, paid quota mode,
-progress/thought logs, token reports, and model tuning options are also stored in
-`/state/config.json`.
+The keys in `.env` only seed the worker on its first run. After that the keys and
+every setting (model, paid quota mode, languages, ...) live in the worker's database
+(`/state/app.db`), you change them in Settings, and a change is live at once with no
+restart. The API returns only the last four characters of a key. An older
+`/state/config.json` is imported once on the first start and is not read again.
 
 Create the shared post-processing directory and install the enqueue script:
 
@@ -198,9 +197,8 @@ http://<docker-host>:6789/
 
 The worker has two configuration layers:
 
-- `.env`: deployment defaults and Docker path mapping.
-- `/state/config.json`: web-console settings, including Bazarr/Gemini/TMDB
-  secrets if configured through the UI.
+- `.env`: deployment defaults, Docker path mapping, and the first-run seed of the API keys.
+- `/state/app.db`: web-console settings and the Bazarr/Gemini/TMDB API keys.
 
 The web console can create manual backups similar to the *arr `System ->
 Backups` flow. It also creates a scheduled backup every 7 days and removes
@@ -212,23 +210,24 @@ backup archives older than 30 days. Backup archives are written to:
 
 They include:
 
-- `/state/config.json`
+- the saved settings (`config/config.json` in the zip), **without any API key**
+  (tick "Include the API keys" on the Backups page to add them; scheduled backups never do)
 - `/bazarr-postprocess/targets.json`
 - `backup.json` metadata
 
 The login is not encrypted, so keep the console on a trusted network or behind
 a TLS reverse proxy. Backup archives can be downloaded from the UI and imported back through
-the System page. Import restores `/state/config.json` and
-`/bazarr-postprocess/targets.json`, creates a `pre-import` backup first, and
-does not restore queue files, logs, or caches.
+the System page. Import restores the settings (and the keys, when the backup has them) and
+`/bazarr-postprocess/targets.json`, never the console account, creates a `pre-import`
+backup first, and does not restore queue files, logs, or caches.
 
-Also back up `.env` separately because it is Docker deployment configuration and
-is not mounted inside the worker container:
+Because a backup holds no key, back up `.env` and the database separately; `.env` is
+Docker deployment configuration and is not mounted inside the worker container:
 
 ```bash
 tar -czf gemini-srt-translator-bazarr-backup.tgz \
   /opt/docker/gemini-srt-translator-bazarr/.env \
-  /opt/docker/gemini-srt-translator-bazarr/config.json \
+  /opt/docker/gemini-srt-translator-bazarr/app.db \
   /opt/docker/bazarr/postprocess/targets.json
 ```
 

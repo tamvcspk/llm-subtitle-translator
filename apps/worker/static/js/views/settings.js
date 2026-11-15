@@ -41,10 +41,16 @@ function fillForm(settings) {
     else input.value = value ?? "";
   }
   form.querySelectorAll("[data-secret-status]").forEach((note) => {
-    const configured = settings[`${note.dataset.secretStatus}_configured`];
-    note.className = `hint ${configured ? "hint-ok" : ""}`;
-    note.textContent = configured ? "Configured. Type a new key to replace it." : "Not configured.";
+    const name = note.dataset.secretStatus;
+    const configured = settings[`${name}_configured`];
+    const tail = settings[`${name}_last4`];
+    const refused = settings[`${name}_status`] === "invalid";
+    note.className = `hint ${refused ? "hint-warn" : configured ? "hint-ok" : ""}`;
+    if (!configured) note.textContent = "Not configured.";
+    else if (refused) note.textContent = `${tail ? `Ends in ${tail}. ` : ""}Refused by the provider: type a new key, or test this one again.`;
+    else note.textContent = `Configured${tail ? ` (ends in ${tail})` : ""}. Type a new key to replace it.`;
   });
+  renderWarnings(settings.key_warnings || []);
   for (const kind of ["source", "target"]) {
     selected[kind] = (settings[`${kind}_languages`] || []).map((item) => ({
       code: item.code,
@@ -54,6 +60,13 @@ function fillForm(settings) {
     renderLanguages(kind);
   }
   setDirty(false);
+}
+
+// What the worker learned from the provider: a key it refused, a model it does not know (FR-17.5).
+function renderWarnings(warnings) {
+  const box = document.getElementById("settings-warnings");
+  box.hidden = !warnings.length;
+  box.replaceChildren(...warnings.map((item) => h("p", { class: "hint hint-warn", text: item.message })));
 }
 
 function renderModelOptions(current, currentFallback) {
@@ -141,6 +154,8 @@ async function testConnection(button) {
     const data = await post("/api/test-connection", { ...readForm(), kind });
     note.className = `hint ${data.ok ? "hint-ok" : "hint-warn"}`;
     note.textContent = data.message || (data.ok ? "Connection OK" : "Connection failed");
+    // Testing a stored key also settles its status, so the warnings above may have changed.
+    get("/api/settings").then((saved) => renderWarnings(saved.key_warnings || [])).catch(() => {});
   } catch (error) {
     note.className = "hint hint-warn";
     note.textContent = error.message;

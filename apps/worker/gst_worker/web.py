@@ -15,17 +15,16 @@ from pathlib import Path
 from typing import Any
 
 from . import auth as console_auth
-from . import library_api
+from . import keys_api, library_api
 from .auth import ConsoleAuth
 from .backups import backup_file_path, create_backup, list_backups, restore_backup_archive
 from .bazarr import list_wanted_items
-from .config import load_app_config, save_app_config, supported_languages
+from .config import KEY_SLOTS, SECRET_MASK, supported_languages
 from .connection_tests import test_connection
 from .gemini import gemini_models
 from .http import describe_http_error
 from .logs import clear_logs, read_log_snapshot
 from .queue import layer_report, queue_snapshot
-from .settings import load_settings, public_app_config, settings_from_payload
 from .subtitles import scan_source_subtitles
 from .telemetry import events_page
 
@@ -273,10 +272,31 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_json(result[1], status=result[0])
         return True
 
+    @property
+    def settings_service(self) -> Any:
+        return self.ctx["settings_service"]
+
+    def live_settings(self) -> dict[str, Any]:
+        """The settings as saved right now (a change needs no restart), remembered for the handlers that read it."""
+        settings = self.settings_service.settings()
+        self.ctx["settings"] = settings
+        return settings
+
+    def keys_route(self, method: str, parsed: urllib.parse.ParseResult, body: dict[str, Any] | None = None) -> bool:
+        """Serve ``/api/keys``; False when the path is not one of those routes."""
+        service = self.ctx.get("settings_service")
+        if service is None or not keys_api.handles(parsed.path):
+            return False
+        result = keys_api.handle(service, self.ctx["http"], method, parsed.path, body)
+        if result is None:
+            return False
+        self.send_json(result[1], status=result[0])
+        return True
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         try:
-            if self.library_api("GET", parsed):
+            if self.library_api("GET", parsed) or self.keys_route("GET", parsed):
                 return
             if parsed.path == "/login":
                 self.serve_static("/login.html", no_store=True)
@@ -292,13 +312,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 jobs = self.ctx["console"].held() if parsed.path.endswith("held") else self.ctx["console"].rejected()
                 self.send_json({"count": len(jobs), "items": [asdict(job) for job in jobs]})
             elif parsed.path == "/api/settings":
-                self.send_json(public_app_config(self.ctx["config_path"], self.ctx["settings"]))
+                self.send_json(self.settings_service.public(self.live_settings()))
             elif parsed.path == "/api/languages":
-                settings = load_settings(self.ctx["config_path"])
-                self.ctx["settings"] = settings
+                settings = self.live_settings()
                 self.send_json({"items": supported_languages(self.ctx["http"], settings["bazarr_url"], settings["bazarr_api_key"])})
             elif parsed.path == "/api/scan":
-                config = load_app_config(self.ctx["config_path"])
+                config = self.settings_service.app_config()
                 params = urllib.parse.parse_qs(parsed.query)
                 limit = int(params.get("limit", [config["scan_limit"]])[0])
                 self.send_json(
@@ -312,9 +331,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     }
                 )
             elif parsed.path == "/api/wanted":
-                config = load_app_config(self.ctx["config_path"])
-                settings = load_settings(self.ctx["config_path"])
-                self.ctx["settings"] = settings
+                config = self.settings_service.app_config()
+                settings = self.live_settings()
                 self.send_json(
                     {
                         "items": list_wanted_items(
@@ -336,9 +354,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 else:
                     self.send_json(events_page(telemetry, urllib.parse.parse_qs(parsed.query)))
             elif parsed.path == "/api/gemini-models":
-                settings = load_settings(self.ctx["config_path"])
-                self.ctx["settings"] = settings
-                self.send_json({"items": gemini_models(self.ctx["http"], settings)})
+                self.send_json({"items": gemini_models(self.ctx["http"], self.live_settings())})
             elif parsed.path == "/api/backups":
                 self.send_json({"items": list_backups(self.ctx["state_dir"])})
             elif parsed.path == "/api/backups/download":
@@ -362,16 +378,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     self.ctx["state_dir"],
                     self.ctx["config_path"],
                     self.ctx["postprocess_targets_path"],
+                    settings=self.settings_service,  # the settings subscribers (the worker) hear of the change
                 )
-                settings = load_settings(self.ctx["config_path"])
-                self.ctx["settings"] = settings
-                if self.ctx.get("worker") is not None:
-                    self.ctx["worker"].apply_settings(settings)
+                self.live_settings()
                 self.send_json({"ok": True, **result})
                 return
 
             body = read_json_body(self)
-            if self.library_api("POST", parsed, body):
+            if self.library_api("POST", parsed, body) or self.keys_route("POST", parsed, body):
                 return
             if parsed.path == "/api/auth/login":
                 self.api_login(body)
@@ -384,18 +398,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self.refreshed_token = None
                 self.send_json({"ok": True}, headers={"Set-Cookie": console_auth.session_cookie("", secure=self.is_https(), max_age=0)})
             elif parsed.path == "/api/settings":
-                saved = save_app_config(self.ctx["config_path"], body, self.ctx["postprocess_targets_path"])
-                settings = load_settings(self.ctx["config_path"])
-                self.ctx["settings"] = settings
-                if self.ctx.get("worker") is not None:
-                    self.ctx["worker"].apply_settings(settings)
-                self.send_json(public_app_config(self.ctx["config_path"], settings))
+                self.settings_service.save(body)  # live at once: the worker is a subscriber (FR-20.1)
+                self.send_json(self.settings_service.public(self.live_settings()))
             elif parsed.path == "/api/enqueue":
-                config = load_app_config(self.ctx["config_path"])
+                config = self.settings_service.app_config()
                 created = self.ctx["console"].enqueue_subtitle(body, config["target_languages"])
                 self.send_json({"created": created, "count": len(created)})
             elif parsed.path == "/api/enqueue-scan":
-                config = load_app_config(self.ctx["config_path"])
+                config = self.settings_service.app_config()
                 items = scan_source_subtitles(
                     config["media_roots"],
                     config["source_languages"],
@@ -435,12 +445,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                             self.ctx["config_path"],
                             self.ctx["postprocess_targets_path"],
                             reason="manual",
+                            settings=self.settings_service,
+                            include_keys=body.get("include_keys") is True,
                         )
                     }
                 )
             elif parsed.path == "/api/test-connection":
-                settings = settings_from_payload(self.ctx["config_path"], body)
-                self.send_json(test_connection(str(body.get("kind", "")), settings, self.ctx["http"]))
+                self.send_json(self.test_connection_payload(body))
             elif parsed.path == "/api/logs/clear":
                 self.send_json({"ok": clear_logs(self.ctx["log_dir"])})
             else:
@@ -451,10 +462,22 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             logging.exception("POST %s failed", self.path)
             self.send_error_json(str(exc), status=500)
 
+    def test_connection_payload(self, body: dict[str, Any]) -> dict[str, Any]:
+        """POST /api/test-connection: try the key typed in the form, or the stored one when the field is left
+        alone. The stored key's status follows the answer (FR-20.4)."""
+        kind = str(body.get("kind", ""))
+        field = "bazarr_api_key" if kind == "bazarr" else kind
+        typed = str(body.get(field) or "").strip()
+        result = test_connection(kind, self.settings_service.with_payload(body), self.ctx["http"])
+        if field in KEY_SLOTS and typed in {"", SECRET_MASK}:
+            self.settings_service.record_slot_test(field, result)
+        return result
+
     def do_PUT(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         try:
-            if not self.library_api("PUT", parsed, read_json_body(self)):
+            body = read_json_body(self)
+            if not (self.library_api("PUT", parsed, body) or self.keys_route("PUT", parsed, body)):
                 self.send_error_json("not found", status=404)
         except ValueError as exc:
             self.send_error_json(str(exc), status=400)
@@ -463,13 +486,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self.send_error_json(str(exc), status=500)
 
     def api_status(self) -> dict[str, Any]:
-        settings = load_settings(self.ctx["config_path"])
-        self.ctx["settings"] = settings
+        settings = self.live_settings()
         snapshot = queue_snapshot(self.ctx["queue_dir"])
         status = {
             "queue": snapshot["counts"],
             "daily_quota_pause": snapshot["daily_quota_pause"],
-            "settings": public_app_config(self.ctx["config_path"], settings),
+            "settings": self.settings_service.public(settings),
             "bazarr_url": settings["bazarr_url"],
             "model_layers": layer_report(self.ctx["queue_dir"]),
         }

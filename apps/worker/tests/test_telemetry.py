@@ -23,14 +23,14 @@ from subcore.providers.fake import echo_items
 import worker
 from gst_worker import queue as gst_queue
 from gst_worker.bodies import BodyLog, encode_record
-from gst_worker.config import normalize_app_config, save_app_config
+from gst_worker.config import normalize_app_config
 from gst_worker.glossaries import GlossaryFiles
 from gst_worker.library import Library
 from gst_worker.logs import RedactingFormatter, set_log_level
 from gst_worker.ports import BodyRef, Telemetry as TelemetryPort, TelemetryRepo
 from gst_worker.queue import FileJobQueue
 from gst_worker.redaction import REDACTED, Redactor
-from gst_worker.settings import load_settings
+from gst_worker.settings import SettingsService
 from gst_worker.store import Store
 from gst_worker.telemetry import NULL, Telemetry, events_page
 from gst_worker.translation_attempt import TranslationAttempt
@@ -530,10 +530,13 @@ class LogLevelTests(unittest.TestCase):
         self.assertEqual((config["log_max_mb"], config["log_body_max_bytes"], config["log_retention_days"]), (0, 1024, 30))
         junk = normalize_app_config({"log_level": "loud", "log_prompt_bodies": "everything"})
         self.assertEqual((junk["log_level"], junk["log_prompt_bodies"]), ("INFO", "all"))
-        with tempfile.TemporaryDirectory() as tmp:
-            path = str(Path(tmp) / "config.json")
-            save_app_config(path, {"log_level": "ERROR", "log_max_mb": 7, "llm_cost_in_per_mtok": "0.5"})
-            settings = load_settings(path)
+        store = Store(":memory:")
+        try:
+            service = SettingsService(store, env={"BAZARR_CONFIG_PATH": ""})
+            service.save({"log_level": "ERROR", "log_max_mb": 7, "llm_cost_in_per_mtok": "0.5"})
+            settings = service.settings()
+        finally:
+            store.close()
         self.assertEqual((settings["log_level"], settings["log_max_mb"], settings["llm_cost_in_per_mtok"]), ("ERROR", 7, 0.5))
 
 

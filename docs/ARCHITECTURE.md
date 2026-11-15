@@ -32,8 +32,9 @@ SQLite or HTTP-server module itself (`tests/test_core_boundary.py`). In normal m
 
 Domain code is split under `gst_worker/`:
 
-- `config.py`: app settings, language normalization, and Bazarr language list
-  loading;
+- `config.py`: the settings schema (defaults, validation, the system keys the console
+  cannot write, the four key fields), language normalization, and Bazarr language
+  list loading;
 - `subtitles.py`: subtitle path mapping and local source subtitle scanning;
 - `queue.py`: queue admission, lifecycle, skip checks, and snapshots. `JobQueue`
   owns recovery, settling, claiming, deferred retries, quota pauses, and status
@@ -47,8 +48,14 @@ Domain code is split under `gst_worker/`:
 - `web.py`: the console's HTTP handler (`ConsoleHandler`, `start_web_server`):
   authentication before any route, request parsing, calls into the use cases,
   response formatting. An adapter; `worker.py` re-exports `ConsoleHandler`;
-- `settings.py`: `load_settings` and friends, the app config layered over
-  environment variables and Bazarr's own config (an adapter);
+- `settings.py`: `SettingsService` (an adapter), the console settings and the API
+  keys in SQLite (P6, FR-20): one-time import of `config.json`, one-time seeding of
+  the keys from the environment, precedence stored value > environment > default,
+  the runtime settings mapping (`settings()`), the masked public view, key
+  management and tests, subscribers told of every change, and the warnings Settings
+  shows (a refused key, a model the provider does not know);
+- `keys_api.py`: the pure router of `/api/keys` over `SettingsService` (like
+  `library_api` for the library pages);
 - `translation_attempt.py`: `TranslationAttempt`, the execution seam for one
   translation job: it reads the source, calls `subcore` in-process, maps typed
   provider errors to the queue's exceptions, and publishes the result;
@@ -62,18 +69,26 @@ Domain code is split under `gst_worker/`:
   `events_page` answers `GET /api/events`;
 - `bodies.py`: `BodyLog`, the rotating JSONL files that keep the prompt and answer
   of each model call;
-- `llm.py`: builds the provider for an attempt from settings: one rate-limited
-  Gemini provider per API key, with failover to the next key;
-- `store.py`: SQLite (`app.db`, versioned migrations) with the `translations`,
-  `llm_calls`, library, `facts`, `summaries_cache`, `context_snapshots`, `events`,
-  `quality_signals` and `llm_bodies` tables;
+- `llm.py`: builds the provider for an attempt: one rate-limited Gemini provider per
+  API key, with failover to the next key. `LiveProviderFactory` (the factory of the
+  running worker) takes the usable keys from `SettingsService` at every build, so a
+  new key is used by the next call, and wraps each key in `KeyedProvider`, which
+  reports a refused key (`AuthError`: the key becomes `invalid`), a use, and an
+  unknown model (`ModelNotFound`: a Settings warning) back to the service;
+  `build_provider` is the plain function over a settings mapping;
+- `store.py`: SQLite (`app.db`, versioned migrations, file mode `0600`) with the
+  `translations`, `llm_calls`, library, `facts`, `summaries_cache`,
+  `context_snapshots`, `events`, `quality_signals`, `llm_bodies`, `settings` and
+  `api_keys` tables;
 - `memory.py`: `StoryMemory`, the worker side of story memory: story order,
   prerequisite fact extraction, gap waiting, the context bundle and its staleness;
 - `versions.py`: `TranslationVersions`, publishing with version history, backup
   before overwrite, and revert;
 - `tmdb.py`: TMDB lookup and translation description generation;
 - `bazarr.py`: Bazarr API refresh, wanted-item lookup, and API-key parsing;
-- `backups.py`: server-side backup listing and creation;
+- `backups.py`: server-side backup listing, creation and restore. The configuration
+  comes from `SettingsService` and holds no API key unless a manual backup asks for
+  them; a restore never touches the console account;
 - `logs.py`: logging setup, UTC formatting with secrets removed from every line
   (`RedactingFormatter`), a log level that can change while running, 5 MiB rotation
   (three backups), bounded snapshots, and clearing the current log;
@@ -320,7 +335,11 @@ retranslation overwrite an existing target after backing it up.
    starts, so a queue of jobs does not spend daily quota on the same errors.
    After four delayed retries the job moves to the fallback model once; without
    a fallback, or when the fallback is also unavailable, it moves to `failed`.
-   A rejected API key or an exceeded watchdog fails the job immediately. Output
+   A rejected API key (`AuthError`; the key is marked `invalid` and passed over, and
+   the next call uses another key if there is one) or an exceeded watchdog fails the
+   job immediately; until P8 moves such a job to `waiting`, the admin retries it
+   after pasting a new key. An unknown model (`ModelNotFound`) also fails the job and
+   raises a warning on Settings. Output
    that stays invalid after repair and splitting (`HardJobError`) is a hard job:
    the default model is a light one, so the job moves once to the strong model
    (`gst_fallback_model`), recording `escalated_from`; if that also fails, or

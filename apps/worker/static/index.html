@@ -323,6 +323,7 @@
     <!-- Settings -->
     <section id="view-settings" class="view" data-view="settings" hidden>
       <form id="settings-form" class="settings" autocomplete="off" novalidate>
+        <div id="settings-warnings" class="settings-card" role="alert" hidden></div>
         <section class="settings-card">
           <div class="settings-intro">
             <h2>Connections</h2>
@@ -602,10 +603,17 @@
         <header class="panel-head panel-head-wrap">
           <div>
             <h2>Backups</h2>
-            <p class="panel-sub">App settings and post-processing targets, stored under /state/backups. Backup files may contain API keys.</p>
+            <p class="panel-sub">App settings and post-processing targets, stored under /state/backups. A backup holds no API key and never the console password, unless you tick the box below.</p>
           </div>
           <button id="create-backup" type="button" class="btn btn-primary" data-icon="archive">Back up now</button>
         </header>
+        <div class="import-box">
+          <label class="check">
+            <input id="backup-include-keys" type="checkbox">
+            <span>Include the API keys in this backup</span>
+          </label>
+          <p class="hint hint-warn">A backup with keys is a plain file: anyone who can read it can use your keys. Scheduled backups never include them.</p>
+        </div>
         <div class="import-box">
           <label class="file-pick">
             <input id="backup-file-input" type="file" accept=".zip,application/zip">

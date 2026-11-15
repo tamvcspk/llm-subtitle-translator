@@ -31,6 +31,61 @@ class Account:
     password_hash: str = field(repr=False)
 
 
+KEY_OK, KEY_INVALID, KEY_EXHAUSTED = "ok", "invalid", "exhausted"
+KEY_STATUSES = (KEY_OK, KEY_INVALID, KEY_EXHAUSTED)
+
+
+@dataclass(frozen=True)
+class ApiKey:
+    """One stored API key (FR-20.2). The value stays out of ``repr`` so a traceback or log line cannot leak it."""
+
+    id: int
+    provider: str  # gemini | bazarr | tmdb (and the providers P7 adds)
+    label: str
+    value: str = field(repr=False)
+    status: str = KEY_OK
+    last_used_at: float | None = None
+    updated_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class SettingRow:
+    """One stored setting: ``value`` is already decoded from the JSON the table keeps."""
+
+    key: str
+    value: Any
+    updated_at: float = 0.0
+
+
+@runtime_checkable
+class SettingsRepo(Protocol):
+    """Where the console settings and the API keys live (FR-20, ADR-13). ``setting_*`` and ``api_key_*``."""
+
+    def settings_rows(self) -> list[SettingRow]:
+        """Every stored setting, including the importer's own markers (keys that start with ``_``)."""
+
+    def setting_save(self, values: dict[str, Any]) -> None:
+        """Insert or replace these settings in one transaction."""
+
+    def api_keys(self, provider: str | None = None) -> list[ApiKey]:
+        """Stored keys oldest first (the order they were added), for one provider or all."""
+
+    def api_key_add(self, provider: str, label: str, value: str, status: str = KEY_OK) -> ApiKey:
+        """Add a key and return it."""
+
+    def api_key_update(
+        self, key_id: int, *, label: str | None = None, value: str | None = None, status: str | None = None,
+    ) -> ApiKey | None:
+        """Change a key; a new ``value`` also sets the status to ``ok`` unless ``status`` says otherwise.
+        None when there is no such key."""
+
+    def api_key_delete(self, key_id: int) -> bool:
+        """Remove a key; False when there was none."""
+
+    def api_key_touch(self, key_id: int, at: float | None = None) -> None:
+        """Record that the key was just used."""
+
+
 @dataclass(frozen=True)
 class LlmCall:
     """One recorded provider call (NFR-7, FR-19.1). ``at`` is epoch seconds. The fields after ``at`` describe

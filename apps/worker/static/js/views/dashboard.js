@@ -43,13 +43,17 @@ function renderServices() {
   }
   const settings = status.settings || {};
   const bazarrError = status.bazarr?.error;
-  const geminiKeys = [settings.gemini_api_key_configured, settings.gemini_api_key2_configured].filter(Boolean).length;
+  const geminiSlots = ["gemini_api_key", "gemini_api_key2"].filter((name) => settings[`${name}_configured`]);
+  const geminiRefused = geminiSlots.filter((name) => settings[`${name}_status`] === "invalid").length;
+  const geminiKeys = geminiSlots.length - geminiRefused; // the keys the worker can still use
+  const modelWarning = (settings.key_warnings || []).find((item) => item.kind === "model-not-found");
   const pause = store.queue?.daily_quota_pause ?? status.daily_quota_pause;
   const paused = pause?.retry_at && pause.retry_at > nowSeconds();
   list.replaceChildren(
     ...serviceRow("Bazarr", bazarrError ? "danger" : "ok", bazarrError ? "Unreachable" : "Connected", bazarrError || status.bazarr_url),
-    ...serviceRow("Gemini", geminiKeys ? "ok" : "danger",
-      geminiKeys ? `${geminiKeys} API key${geminiKeys > 1 ? "s" : ""}` : "No API key", settings.gst_model),
+    ...serviceRow("Gemini", geminiKeys && !geminiRefused && !modelWarning ? "ok" : "danger",
+      geminiKeys ? `${geminiKeys} API key${geminiKeys > 1 ? "s" : ""}` : (geminiRefused ? "API key refused" : "No API key"),
+      geminiRefused ? "A key was refused by Gemini: replace it or test it again in Settings." : (modelWarning?.message || settings.gst_model)),
     ...serviceRow("Daily quota", paused ? "warn" : "ok", paused ? "Paused" : "Available",
       paused ? `Until ${formatDateTime(pause.retry_at)}` : ""),
     ...serviceRow("TMDB", settings.tmdb_api_key_configured ? "ok" : "muted",

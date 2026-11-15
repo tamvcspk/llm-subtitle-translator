@@ -68,12 +68,21 @@ Returns queue counts, current settings, Bazarr URL, and Bazarr ping status.
     "bazarr_url": "http://bazarr:6767",
     "bazarr_api_key": "**********",
     "bazarr_api_key_configured": true,
+    "bazarr_api_key_last4": "",
+    "bazarr_api_key_status": "ok",
     "gemini_api_key": "**********",
     "gemini_api_key_configured": true,
+    "gemini_api_key_last4": "Lq3k",
+    "gemini_api_key_status": "ok",
     "gemini_api_key2": "",
     "gemini_api_key2_configured": false,
+    "gemini_api_key2_last4": "",
+    "gemini_api_key2_status": "",
     "tmdb_api_key": "**********",
-    "tmdb_api_key_configured": true
+    "tmdb_api_key_configured": true,
+    "tmdb_api_key_last4": "",
+    "tmdb_api_key_status": "ok",
+    "key_warnings": []
   },
   "bazarr_url": "http://bazarr:6767",
   "bazarr": {"status": "OK"},
@@ -150,9 +159,18 @@ included in this field.
 
 ## GET /api/settings
 
-Returns current app settings. Configured secret fields are returned as
-`**********`; use the matching `*_configured` booleans to know whether a key is
-available.
+Returns the current settings, read from the database (a change saved a moment ago is already in it).
+Each of the four key fields (`bazarr_api_key`, `tmdb_api_key`, `gemini_api_key`, `gemini_api_key2`) is
+returned as `**********` when a key is stored, with:
+
+- `<field>_configured`: whether a key is available;
+- `<field>_last4`: the last four characters of the stored key, `""` when there is none or it is shorter than 12
+  characters (a value is never returned);
+- `<field>_status`: `ok`, `invalid` (the provider refused it) or `exhausted`; `""` when no key is stored.
+
+`key_warnings` lists what Settings must warn about, each `{"kind", "message", ...}`: `key-invalid` (with
+`provider`, `key_id`, `label`) for a refused key, `model-not-found` (with `model`) for a model the provider
+does not know. Empty when all is well.
 
 ## GET /api/languages
 
@@ -188,9 +206,12 @@ be reached or no key is configured, the worker returns a bundled fallback list.
 
 ## POST /api/settings
 
-Saves app settings and writes enabled source/target languages for the Bazarr
-post-processing script. Leave a secret blank or submit `**********` to keep the
-current stored key.
+Saves app settings to the database and writes enabled source/target languages for the Bazarr
+post-processing script. The change is live at once, with no restart: the running worker adopts it and the answer
+is the new `GET /api/settings`. Leave a key field blank or submit `**********` to keep the stored key; a new
+value replaces the key in that field and sets its status back to `ok`. Keys that are not in the body, and
+process-level settings (paths, port, console account), are ignored. Use `/api/keys` to add, rename or remove
+keys beyond these four fields.
 
 ```json
 {
@@ -344,8 +365,10 @@ Lists server-side backup zip files under `/state/backups`.
 
 ## POST /api/backups
 
-Creates a manual backup zip containing app config, post-processing targets, and
-metadata. Secret values may be present inside the zip.
+Creates a manual backup zip containing the saved settings, post-processing targets, and
+metadata. **No API key is in the zip** unless the body is `{"include_keys": true}`, which adds
+`config/api_keys.json` (provider, label, value, status of every key) and sets `includes_api_keys` in
+`backup.json`. The console account is never included.
 
 ## GET /api/backups/download?name=<backup.zip>
 
@@ -357,16 +380,20 @@ Downloads a backup zip by file name. The `name` value must be a file listed by
 Imports a backup zip sent as the raw request body with
 `Content-Type: application/zip`. The import restores:
 
-- `config/config.json` to `/state/config.json`;
+- `config/config.json` into the saved settings (the running worker adopts them at once);
+- `config/api_keys.json`, when the backup has it: its keys are added (a key already stored is not duplicated);
 - `postprocess/targets.json` to `/bazarr-postprocess/targets.json`.
 
-The worker creates a `pre-import` backup before replacing either file. Queue
-state, logs, and caches are not restored.
+The console account is never restored. The worker creates a `pre-import` backup (without keys) before
+replacing anything. Queue state, logs, and caches are not restored. A backup member that is not valid JSON
+refuses the whole import with `400` before anything changes.
 
 ## POST /api/test-connection
 
 Tests a configured or form-entered API key without saving it. `kind` can be
-`bazarr`, `gemini_api_key`, `gemini_api_key2`, or `tmdb_api_key`.
+`bazarr`, `gemini_api_key`, `gemini_api_key2`, or `tmdb_api_key`. When the key field is blank or `**********`
+the **stored** key is tested (even one marked `invalid`) and its status follows the answer: `ok` when it works,
+`invalid` when the service refuses it; an unreachable service changes nothing. A typed key is only tried.
 
 ```json
 {
@@ -381,6 +408,27 @@ Returns:
 ```json
 {"ok": true, "kind": "gemini_api_key", "message": "Gemini API key is valid"}
 ```
+
+A failure carries `"ok": false`, a `message`, and `"auth_failed": true` when the service refused the key.
+
+## API keys: /api/keys
+
+Every stored key (FR-20.2). The answer never holds a value, only its last four characters.
+
+A key is `{"id", "provider", "label", "status", "last4", "last_used_at", "updated_at"}` with `provider` one of
+`gemini`, `bazarr`, `tmdb`; `status` is `ok`, `invalid` or `exhausted`; `last4` is `""` for a key shorter than
+12 characters; `last_used_at` is Unix seconds or `null`.
+
+| Route | Body | Answer |
+| --- | --- | --- |
+| `GET /api/keys` | | `{"items": [key, ...], "warnings": [...]}` (same warnings as `key_warnings` of `/api/settings`) |
+| `POST /api/keys` | `{"provider", "value", "label"?}` | the new key; `400` for an unknown provider or an empty value |
+| `PUT /api/keys/{id}` (or `POST`) | any of `{"label", "value", "status"}` | the key; a new `value` sets the status back to `ok` unless `status` is also sent; `404` for an unknown id, `400` for a bad status |
+| `POST /api/keys/{id}/test` | | `{"ok", "message", "auth_failed"?, "key": key}`; a key that works becomes `ok`, one the service refuses becomes `invalid` |
+| `POST /api/keys/{id}/remove` | | `{"ok": true}` or `404` |
+
+The worker runs on the first two usable (`ok`) Gemini keys, oldest first. Every change reaches the running
+worker at once.
 
 ## Library, episodes, corrections, versions and glossaries
 

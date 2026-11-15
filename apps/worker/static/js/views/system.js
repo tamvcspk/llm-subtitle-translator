@@ -33,8 +33,10 @@ async function loadBackups() {
 }
 
 async function createBackup() {
-  const data = await post("/api/backups");
-  toast(`Backup created: ${data.backup.name}`, "success");
+  const includeKeys = document.getElementById("backup-include-keys").checked;
+  const data = await post("/api/backups", { include_keys: includeKeys });
+  document.getElementById("backup-include-keys").checked = false;
+  toast(`Backup created: ${data.backup.name}${includeKeys ? " (with API keys)" : ""}`, "success");
   await loadBackups();
 }
 

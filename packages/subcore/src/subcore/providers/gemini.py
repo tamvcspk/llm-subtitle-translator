@@ -15,6 +15,7 @@ from .base import (
     Capabilities,
     LLMRequest,
     LLMResponse,
+    ModelNotFound,
     ProviderError,
     QuotaExhausted,
     RateLimited,
@@ -31,6 +32,7 @@ DEFAULT_TIMEOUT_S = 300.0  # NFR-2: >= 300 s per call
 
 _RETRY_DELAY_RE = re.compile(r"^\s*([\d.]+)\s*s\s*$")
 _DAILY_QUOTA_MARKERS = ("perday", "per_day", "daily")
+_INVALID_KEY_REASONS = ("API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_NOT_FOUND")
 
 
 def _retry_after(details: list[Any]) -> float | None:
@@ -77,6 +79,11 @@ def _map_api_error(code: int | None, status: str | None, message: str | None, de
         return RateLimited(message, retry_after)
     if code in (401, 403) or status in ("UNAUTHENTICATED", "PERMISSION_DENIED"):
         return AuthError(message)
+    # A key Google does not know comes back as 400 INVALID_ARGUMENT; its ErrorInfo names the reason.
+    if any(isinstance(item, dict) and item.get("reason") in _INVALID_KEY_REASONS for item in inner):
+        return AuthError(message)
+    if code == 404 or status == "NOT_FOUND":
+        return ModelNotFound(message)
     if code in (500, 502, 503, 504) or status in ("UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED"):
         return Unavailable(message, retry_after)
     return ProviderError(message)

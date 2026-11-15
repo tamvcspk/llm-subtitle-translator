@@ -182,3 +182,20 @@ too many lines, a broken locked term), even when a repair fixed it.
 Events, call records, quality signals and prompt bodies together. Written best effort on
 one background thread: when it cannot keep up or a write fails the record is dropped and
 counted, and the job is never delayed or failed by it.
+
+**Setting**:
+A value the admin edits in the console, stored in the `settings` table and live as soon as
+it is saved. It beats the environment variable of the same meaning, which beats the default.
+Settings that describe the process itself (paths, port, the console account) are *system
+settings*: they come from the environment at start-up and the console cannot write them.
+
+**API key**:
+A credential for a provider or for Bazarr or TMDB, stored in the `api_keys` table with a
+provider, a label, a *status* (`ok`, `invalid`, `exhausted`) and the time it was last used.
+The environment seeds the keys on the first run only; afterwards the database wins. The API
+returns only the last four characters.
+
+**Invalid key**:
+A key the provider refused (`AuthError`). It is passed over, the next key takes over, and
+Settings and the dashboard warn. Pasting a new key, or **Test key** on one that works, makes
+it `ok` again and the next call uses it.

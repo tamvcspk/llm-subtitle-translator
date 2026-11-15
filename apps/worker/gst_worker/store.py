@@ -9,6 +9,7 @@ Queue job files stay on disk for now, so there is no ``jobs`` table yet.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sqlite3
 import threading
@@ -19,7 +20,7 @@ from typing import Any, Iterable
 from subcore.memory import Facts
 
 from .ports import (
-    Account, BodyRef, Correction, EventRecord, LlmCall, Output, QualitySignal, Series, StoredFacts, TokenTotals,
+    Account, ApiKey, SettingRow, BodyRef, Correction, EventRecord, LlmCall, Output, QualitySignal, Series, StoredFacts, TokenTotals,
     TranslationVersion, Unit,
 )
 
@@ -209,6 +210,26 @@ _MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX quality_signals_kind ON quality_signals (kind, id);
     CREATE INDEX quality_signals_unit ON quality_signals (unit_id, id);
     """,
+    # Schema 7 (P6, ADR-13): console settings and API keys. Keys of `settings` that start with "_" belong to the
+    # worker (the one-time config.json import and the env key seeding leave their marker there).
+    # api_keys.value is stored as typed: the worker has to read it back to call the provider (FR-20.3).
+    """
+    CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    CREATE TABLE api_keys (
+        id INTEGER PRIMARY KEY,
+        provider TEXT NOT NULL,
+        label TEXT NOT NULL DEFAULT '',
+        value TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ok',     -- ok | invalid | exhausted
+        last_used_at REAL,
+        updated_at REAL NOT NULL
+    );
+    CREATE INDEX api_keys_provider ON api_keys (provider, id);
+    """,
 )
 
 
@@ -221,6 +242,13 @@ def _version_from_row(row: sqlite3.Row) -> TranslationVersion:
         tokens_in=row["tokens_in"], tokens_out=row["tokens_out"], unit_id=row["unit_id"],
         glossary_hash=row["glossary_hash"], context_complete=bool(row["context_complete"]),
         memory_hash=row["memory_hash"], missing_units=tuple(json.loads(row["missing_units_json"] or "[]")),
+    )
+
+
+def _key_from_row(row: sqlite3.Row) -> ApiKey:
+    return ApiKey(
+        id=row["id"], provider=row["provider"], label=row["label"], value=row["value"], status=row["status"],
+        last_used_at=row["last_used_at"], updated_at=row["updated_at"],
     )
 
 
@@ -276,10 +304,22 @@ class Store:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA foreign_keys=ON")
         self._migrate()
+        self._restrict_files()
 
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+    def _restrict_files(self) -> None:
+        """The database holds API keys: only the worker's own user may read it (FR-20.3). Best effort, as the
+        mode means little on some file systems (a Windows host, a mounted share)."""
+        if self.path == ":memory:":
+            return
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.chmod(self.path + suffix, 0o600)
+            except OSError:
+                pass
 
     def _migrate(self) -> None:
         with self._lock:
@@ -328,6 +368,71 @@ class Store:
                 self._db.execute("UPDATE auth SET session_secret = ? WHERE id = 1", (secrets.token_hex(32),))
                 row = self._db.execute("SELECT session_secret FROM auth WHERE id = 1").fetchone()
             return row["session_secret"]
+
+    # -- settings and API keys (P6) -----------------------------------------
+    def settings_rows(self) -> list[SettingRow]:
+        with self._lock:
+            rows = self._db.execute("SELECT key, value_json, updated_at FROM settings ORDER BY key").fetchall()
+        return [SettingRow(key=r["key"], value=json.loads(r["value_json"]), updated_at=r["updated_at"]) for r in rows]
+
+    def setting_save(self, values: dict[str, Any]) -> None:
+        now = time.time()
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                for key, value in values.items():
+                    self._db.execute(
+                        "INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)"
+                        " ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json,"
+                        " updated_at = excluded.updated_at",
+                        (key, json.dumps(value, ensure_ascii=False), now),
+                    )
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def api_keys(self, provider: str | None = None) -> list[ApiKey]:
+        with self._lock:
+            if provider is None:
+                rows = self._db.execute("SELECT * FROM api_keys ORDER BY id").fetchall()
+            else:
+                rows = self._db.execute("SELECT * FROM api_keys WHERE provider = ? ORDER BY id", (provider,)).fetchall()
+        return [_key_from_row(row) for row in rows]
+
+    def api_key_add(self, provider: str, label: str, value: str, status: str = "ok") -> ApiKey:
+        with self._lock:
+            cursor = self._db.execute(
+                "INSERT INTO api_keys (provider, label, value, status, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (provider, label, value, status, time.time()),
+            )
+            row = self._db.execute("SELECT * FROM api_keys WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return _key_from_row(row)
+
+    def api_key_update(
+        self, key_id: int, *, label: str | None = None, value: str | None = None, status: str | None = None,
+    ) -> ApiKey | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM api_keys WHERE id = ?", (key_id,)).fetchone()
+            if row is None:
+                return None
+            if value is not None and value != row["value"] and status is None:
+                status = "ok"  # a new key has not been refused yet
+            self._db.execute(
+                "UPDATE api_keys SET label = ?, value = ?, status = ?, updated_at = ? WHERE id = ?",
+                (row["label"] if label is None else label, row["value"] if value is None else value,
+                 row["status"] if status is None else status, time.time(), key_id),
+            )
+            row = self._db.execute("SELECT * FROM api_keys WHERE id = ?", (key_id,)).fetchone()
+        return _key_from_row(row)
+
+    def api_key_delete(self, key_id: int) -> bool:
+        with self._lock:
+            return self._db.execute("DELETE FROM api_keys WHERE id = ?", (key_id,)).rowcount > 0
+
+    def api_key_touch(self, key_id: int, at: float | None = None) -> None:
+        with self._lock:
+            self._db.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", (at or time.time(), key_id))
 
     # -- llm_calls ---------------------------------------------------------
     def record_llm_call(

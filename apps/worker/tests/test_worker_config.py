@@ -1,3 +1,4 @@
+import contextlib
 import json
 import io
 import os
@@ -9,6 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import worker
+from gst_worker.settings import SettingsService
+from gst_worker.store import Store
 from gst_worker import (
     backups as gst_backups,
     bazarr as gst_bazarr,
@@ -38,6 +41,25 @@ class FakeHTTP:
         return {"ok": True}
 
 
+
+
+@contextlib.contextmanager
+def service_in_tempdir(legacy_config=None, env=None):
+    """A started SettingsService over a throwaway database; ``legacy_config`` is written as the old config.json."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        if legacy_config is not None:
+            (root / "config.json").write_text(json.dumps(legacy_config), encoding="utf-8")
+        store = Store(root / "app.db")
+        try:
+            service = SettingsService(
+                store, config_path=str(root / "config.json"), postprocess_targets_path=str(root / "targets.json"),
+                env={"BAZARR_CONFIG_PATH": str(root / "none.yaml"), **(env or {})},
+            )
+            service.start()
+            yield service, root, store
+        finally:
+            store.close()
 
 
 class TestWorkerConfigTests(unittest.TestCase):
@@ -158,13 +180,9 @@ class TestWorkerConfigTests(unittest.TestCase):
         )
 
 
-    def test_save_app_config_writes_worker_and_postprocess_targets(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.json"
-            targets_path = Path(tmp) / "targets.json"
-
-            saved = gst_config.save_app_config(
-                str(config_path),
+    def test_save_writes_settings_keys_and_postprocess_targets(self):
+        with service_in_tempdir() as (service, root, store):
+            saved = service.save(
                 {
                     "source_languages": [
                         {"code": "en", "language": "English", "enabled": True},
@@ -174,39 +192,36 @@ class TestWorkerConfigTests(unittest.TestCase):
                         {"code": "zh", "language": "Simplified Chinese", "enabled": True},
                         {"code": "ja", "language": "Japanese", "enabled": False},
                     ],
-                    "media_roots": [str(Path(tmp) / "media")],
+                    "media_roots": [str(root / "media")],
                     "bazarr_url": "http://bazarr.local:6767",
-                    "bazarr_api_key": "secret",
+                    "bazarr_api_key": "secret-bazarr",
                     "gemini_api_key": "gemini-1",
                     "gemini_api_key2": "gemini-2",
                     "tmdb_api_key": "tmdb",
-                },
-                postprocess_targets_path=str(targets_path),
+                }
             )
+            settings = service.settings()
 
             self.assertEqual(saved["source_languages"][0]["code"], "en")
             self.assertEqual(saved["target_languages"][0]["code"], "zh")
-            self.assertEqual(saved["bazarr_url"], "http://bazarr.local:6767")
-            self.assertEqual(saved["bazarr_api_key"], "secret")
-            self.assertEqual(saved["gemini_api_key"], "gemini-1")
-            self.assertEqual(saved["gemini_api_key2"], "gemini-2")
-            self.assertEqual(saved["tmdb_api_key"], "tmdb")
-            self.assertTrue(config_path.exists())
+            self.assertEqual(settings["bazarr_url"], "http://bazarr.local:6767")
+            self.assertEqual(settings["bazarr_api_key"], "secret-bazarr")
+            self.assertEqual(settings["gemini_api_key"], "gemini-1")
+            self.assertEqual(settings["gemini_api_key2"], "gemini-2")
+            self.assertEqual(settings["tmdb_api_key"], "tmdb")
             self.assertEqual(
-                json.loads(targets_path.read_text(encoding="utf-8")),
+                json.loads((root / "targets.json").read_text(encoding="utf-8")),
                 {
                     "source_languages": [{"code": "en", "language": "English", "enabled": True}],
                     "target_languages": [{"code": "zh", "language": "Simplified Chinese", "enabled": True}],
                 },
             )
+            self.assertFalse((root / "config.json").exists())  # nothing is written to the old file any more
 
 
-    def test_save_app_config_persists_gst_settings(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.json"
-
-            saved = gst_config.save_app_config(
-                str(config_path),
+    def test_save_persists_gst_settings(self):
+        with service_in_tempdir() as (service, root, store):
+            saved = service.save(
                 {
                     "gst_model": "gemini-2.5-flash",
                     "gst_fallback_model": " gemini-3.5-flash-lite ",
@@ -226,7 +241,7 @@ class TestWorkerConfigTests(unittest.TestCase):
             self.assertTrue(saved["gst_no_thinking"])
             self.assertEqual(saved["job_settle_seconds"], 600)
 
-    def test_settings_of_the_old_gst_cli_are_dropped_from_saved_config(self):
+    def test_settings_of_the_old_gst_cli_are_dropped_when_config_json_is_imported(self):
         """P3: these changed nothing since the worker stopped calling `gst`; an old config.json loses them."""
         dead = {
             "gst_batch_size": 500, "gst_retry_batch_size": 250, "gst_resume_fallback_batch_size": 50,
@@ -234,17 +249,13 @@ class TestWorkerConfigTests(unittest.TestCase):
             "gst_token_report": True, "gst_token_stats": True, "gst_top_p": "0.95", "gst_top_k": "40",
             "gst_thinking_level": "medium", "gst_no_streaming": True, "gst_context_size": 80,
         }
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.json"
-            config_path.write_text(json.dumps({"gst_model": "gemini-2.5-flash", **dead}), encoding="utf-8")
-
-            loaded = gst_config.load_app_config(str(config_path))
-            saved = gst_config.save_app_config(str(config_path), {**loaded, **dead})
+        with service_in_tempdir({"gst_model": "gemini-2.5-flash", **dead}) as (service, root, store):
+            stored = {row.key for row in store.settings_rows()}
+            saved = service.save(dead)
 
             for key in dead:
-                self.assertNotIn(key, loaded)
+                self.assertNotIn(key, stored)
                 self.assertNotIn(key, saved)
-                self.assertNotIn(key, json.loads(config_path.read_text(encoding="utf-8")))
             self.assertEqual(saved["gst_model"], "gemini-2.5-flash")
 
     def test_fallback_model_equal_to_primary_is_disabled(self):
@@ -265,138 +276,58 @@ class TestWorkerConfigTests(unittest.TestCase):
         self.assertNotIn("gst_no_context", config)
 
 
-    def test_save_app_config_preserves_blank_secret_fields(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.json"
-            gst_config.save_app_config(
-                str(config_path),
-                {
-                    "bazarr_api_key": "bazarr-secret",
-                    "gemini_api_key": "gemini-secret",
-                    "gemini_api_key2": "gemini-secret-2",
-                    "tmdb_api_key": "tmdb-secret",
-                },
-            )
+    def test_save_keeps_stored_keys_when_secret_fields_are_blank_or_masked(self):
+        with service_in_tempdir() as (service, root, store):
+            service.save({
+                "bazarr_api_key": "bazarr-secret", "gemini_api_key": "gemini-secret",
+                "gemini_api_key2": "gemini-secret-2", "tmdb_api_key": "tmdb-secret",
+            })
+            for blank in ("", "**********"):
+                service.save({
+                    "bazarr_url": "http://new-bazarr:6767", "bazarr_api_key": blank, "gemini_api_key": blank,
+                    "gemini_api_key2": blank, "tmdb_api_key": blank,
+                })
+                settings = service.settings()
 
-            saved = gst_config.save_app_config(
-                str(config_path),
-                {
-                    "bazarr_url": "http://new-bazarr:6767",
-                    "bazarr_api_key": "",
-                    "gemini_api_key": "",
-                    "gemini_api_key2": "",
-                    "tmdb_api_key": "",
-                },
-            )
-
-            self.assertEqual(saved["bazarr_api_key"], "bazarr-secret")
-            self.assertEqual(saved["gemini_api_key"], "gemini-secret")
-            self.assertEqual(saved["gemini_api_key2"], "gemini-secret-2")
-            self.assertEqual(saved["tmdb_api_key"], "tmdb-secret")
+                self.assertEqual(settings["bazarr_url"], "http://new-bazarr:6767")
+                self.assertEqual(settings["bazarr_api_key"], "bazarr-secret")
+                self.assertEqual(settings["gemini_api_key"], "gemini-secret")
+                self.assertEqual(settings["gemini_api_key2"], "gemini-secret-2")
+                self.assertEqual(settings["tmdb_api_key"], "tmdb-secret")
+            self.assertEqual(len(store.api_keys()), 4)  # saving never adds a row for an unchanged key
 
 
-    def test_save_app_config_preserves_masked_secret_fields(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.json"
-            gst_config.save_app_config(
-                str(config_path),
-                {
-                    "bazarr_api_key": "bazarr-secret",
-                    "gemini_api_key": "gemini-secret",
-                    "gemini_api_key2": "gemini-secret-2",
-                    "tmdb_api_key": "tmdb-secret",
-                },
-            )
+    def test_public_config_hides_secret_values(self):
+        with service_in_tempdir() as (service, root, store):
+            service.save({
+                "bazarr_url": "http://bazarr:6767", "bazarr_api_key": "bazarr-secret-0001",
+                "gemini_api_key": "gemini-secret-0002", "gemini_api_key2": "gemini-secret-0003",
+                "tmdb_api_key": "tmdb-secret-00004",
+            })
 
-            saved = gst_config.save_app_config(
-                str(config_path),
-                {
-                    "bazarr_api_key": "**********",
-                    "gemini_api_key": "**********",
-                    "gemini_api_key2": "**********",
-                    "tmdb_api_key": "**********",
-                },
-            )
+            public = service.public()
 
-            self.assertEqual(saved["bazarr_api_key"], "bazarr-secret")
-            self.assertEqual(saved["gemini_api_key"], "gemini-secret")
-            self.assertEqual(saved["gemini_api_key2"], "gemini-secret-2")
-            self.assertEqual(saved["tmdb_api_key"], "tmdb-secret")
+            for field in ("bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key"):
+                self.assertEqual(public[field], "**********")
+                self.assertTrue(public[f"{field}_configured"])
+            self.assertEqual(public["gemini_api_key_last4"], "0002")
+            self.assertNotIn("secret", json.dumps(public))
 
 
-    def test_public_app_config_hides_secret_values(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.json"
-            gst_config.save_app_config(
-                str(config_path),
-                {
-                    "bazarr_url": "http://bazarr:6767",
-                    "bazarr_api_key": "bazarr-secret",
-                    "gemini_api_key": "gemini-secret",
-                    "gemini_api_key2": "gemini-secret-2",
-                    "tmdb_api_key": "tmdb-secret",
-                },
-            )
+    def test_settings_hold_the_stored_keys_and_address(self):
+        with service_in_tempdir() as (service, root, store):
+            service.save({
+                "bazarr_url": "http://bazarr.local:6767", "bazarr_api_key": "bazarr-secret",
+                "gemini_api_key": "gemini-secret", "gemini_api_key2": "gemini-secret-2", "tmdb_api_key": "tmdb-secret",
+            })
 
-            public = worker.public_app_config(str(config_path))
-
-            self.assertEqual(public["bazarr_api_key"], "**********")
-            self.assertEqual(public["gemini_api_key"], "**********")
-            self.assertEqual(public["gemini_api_key2"], "**********")
-            self.assertEqual(public["tmdb_api_key"], "**********")
-            self.assertTrue(public["bazarr_api_key_configured"])
-            self.assertTrue(public["gemini_api_key_configured"])
-            self.assertTrue(public["gemini_api_key2_configured"])
-            self.assertTrue(public["tmdb_api_key_configured"])
-
-
-    def test_load_settings_reads_app_secret_values(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.json"
-            gst_config.save_app_config(
-                str(config_path),
-                {
-                    "bazarr_url": "http://bazarr.local:6767",
-                    "bazarr_api_key": "bazarr-secret",
-                    "gemini_api_key": "gemini-secret",
-                    "gemini_api_key2": "gemini-secret-2",
-                    "tmdb_api_key": "tmdb-secret",
-                },
-            )
-
-            settings = worker.load_settings(str(config_path))
+            settings = service.settings()
 
             self.assertEqual(settings["bazarr_url"], "http://bazarr.local:6767")
             self.assertEqual(settings["bazarr_api_key"], "bazarr-secret")
             self.assertEqual(settings["gemini_api_key"], "gemini-secret")
             self.assertEqual(settings["gemini_api_key2"], "gemini-secret-2")
             self.assertEqual(settings["tmdb_api_key"], "tmdb-secret")
-
-
-    def test_seed_app_config_from_settings_writes_missing_runtime_defaults(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.json"
-            targets_path = Path(tmp) / "targets.json"
-            gst_config.save_app_config(str(config_path), {"bazarr_url": "http://old:6767"})
-
-            seeded = worker.seed_app_config_from_settings(
-                str(config_path),
-                {
-                    "bazarr_url": "http://old:6767",
-                    "bazarr_api_key": "bazarr-secret",
-                    "gemini_api_key": "gemini-secret",
-                    "gemini_api_key2": "gemini-secret-2",
-                    "tmdb_api_key": "tmdb-secret",
-                },
-                str(targets_path),
-            )
-
-            self.assertTrue(seeded)
-            saved = json.loads(config_path.read_text(encoding="utf-8"))
-            self.assertEqual(saved["bazarr_api_key"], "bazarr-secret")
-            self.assertEqual(saved["gemini_api_key"], "gemini-secret")
-            self.assertEqual(saved["gemini_api_key2"], "gemini-secret-2")
-            self.assertEqual(saved["tmdb_api_key"], "tmdb-secret")
 
 
     def test_create_backup_writes_config_and_targets_zip(self):
@@ -454,36 +385,24 @@ class TestWorkerConfigTests(unittest.TestCase):
             self.assertEqual(json.loads(targets_path.read_text(encoding="utf-8"))["target_languages"][0]["code"], "en")
 
 
-    def test_settings_from_payload_uses_mask_as_existing_secret(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "config.json"
-            gst_config.save_app_config(
-                str(config_path),
-                {
-                    "bazarr_url": "http://old:6767",
-                    "bazarr_api_key": "bazarr-secret",
-                    "gemini_api_key": "gemini-secret",
-                    "gemini_api_key2": "gemini-secret-2",
-                    "tmdb_api_key": "tmdb-secret",
-                },
-            )
+    def test_with_payload_uses_mask_as_existing_secret_and_saves_nothing(self):
+        with service_in_tempdir() as (service, root, store):
+            service.save({
+                "bazarr_url": "http://old:6767", "bazarr_api_key": "bazarr-secret", "gemini_api_key": "gemini-secret",
+                "gemini_api_key2": "gemini-secret-2", "tmdb_api_key": "tmdb-secret",
+            })
 
-            settings = worker.settings_from_payload(
-                str(config_path),
-                {
-                    "bazarr_url": "http://new:6767",
-                    "bazarr_api_key": "**********",
-                    "gemini_api_key": "new-gemini",
-                    "gemini_api_key2": "**********",
-                    "tmdb_api_key": "",
-                },
-            )
+            settings = service.with_payload({
+                "bazarr_url": "http://new:6767", "bazarr_api_key": "**********", "gemini_api_key": "new-gemini",
+                "gemini_api_key2": "**********", "tmdb_api_key": "",
+            })
 
             self.assertEqual(settings["bazarr_url"], "http://new:6767")
             self.assertEqual(settings["bazarr_api_key"], "bazarr-secret")
             self.assertEqual(settings["gemini_api_key"], "new-gemini")
             self.assertEqual(settings["gemini_api_key2"], "gemini-secret-2")
             self.assertEqual(settings["tmdb_api_key"], "tmdb-secret")
+            self.assertEqual(service.settings()["gemini_api_key"], "gemini-secret")  # only a try-out
 
 
     def test_job_should_skip_non_embedded_same_language_and_existing_output(self):

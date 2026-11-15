@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
 from typing import Any
 
 
@@ -28,6 +26,20 @@ DEFAULT_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_STRONG_MODEL = "gemini-3.5-flash"
 SECRET_MASK = "**********"
 SECRET_CONFIG_KEYS = ("bazarr_api_key", "gemini_api_key", "gemini_api_key2", "tmdb_api_key")
+# The form field of each secret -> (provider, position among that provider's stored keys). The console edits the
+# keys through these four fields; /api/keys works on every stored key (FR-20.2).
+KEY_SLOTS = {
+    "bazarr_api_key": ("bazarr", 0),
+    "tmdb_api_key": ("tmdb", 0),
+    "gemini_api_key": ("gemini", 0),
+    "gemini_api_key2": ("gemini", 1),
+}
+# Configuration of the process itself (paths, ports, the console account): read from the environment when the
+# worker starts and never stored in, or overwritten from, the settings table (FR-20.1).
+SYSTEM_SETTING_KEYS = frozenset({
+    "state_dir", "queue_dir", "data_dir", "db_path", "log_dir", "static_dir", "config_path",
+    "postprocess_targets_path", "web_host", "web_port", "console_user", "console_password", "console_auth",
+})
 # Settings the in-process engine reads. Options of the old `gst` CLI (batch sizes, top_p/top_k, thinking
 # level, streaming, context size, logging switches) were dropped in P3: they changed nothing.
 GST_BOOL_CONFIG_KEYS = (
@@ -189,59 +201,6 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def load_app_config(config_path: str) -> dict[str, Any]:
-    path = Path(config_path)
-    if not path.exists():
-        return normalize_app_config({})
-    try:
-        return normalize_app_config(json.loads(path.read_text(encoding="utf-8")))
-    except Exception:
-        logging.warning("Ignoring unreadable app config: %s", path)
-        return normalize_app_config({})
-
-
-def save_app_config(
-    config_path: str,
-    config: dict[str, Any],
-    postprocess_targets_path: str | None = None,
-) -> dict[str, Any]:
-    path = Path(config_path)
-    existing: dict[str, Any] = {}
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            existing = {}
-    merged = dict(config)
-    for key in SECRET_CONFIG_KEYS:
-        value = str(merged.get(key) or "").strip()
-        if (not value or value == SECRET_MASK) and existing.get(key):
-            merged[key] = existing[key]
-    normalized = normalize_app_config(merged)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(f"{path.suffix}.tmp")
-    tmp.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
-
-    if postprocess_targets_path:
-        targets_path = Path(postprocess_targets_path)
-        targets_path.parent.mkdir(parents=True, exist_ok=True)
-        targets_tmp = targets_path.with_suffix(f"{targets_path.suffix}.tmp")
-        targets_tmp.write_text(
-            json.dumps(
-                {
-                    "source_languages": enabled_source_languages(normalized),
-                    "target_languages": enabled_target_languages(normalized),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        targets_tmp.replace(targets_path)
-    return normalized
-
-
 def normalize_bazarr_language(item: dict[str, Any]) -> dict[str, Any] | None:
     code = str(item.get("code2") or item.get("code") or "").strip()
     name = str(item.get("name") or item.get("language") or "").strip()
@@ -280,17 +239,3 @@ def supported_languages(http: Any, bazarr_url: str, api_key: str) -> list[dict[s
         seen.add(code)
         languages.append(normalized)
     return languages
-
-
-class ConfigurationStore:
-    """Deep interface for normalized configuration persistence."""
-
-    def __init__(self, path: str, postprocess_targets_path: str | None = None) -> None:
-        self.path = path
-        self.postprocess_targets_path = postprocess_targets_path
-
-    def load(self) -> dict[str, Any]:
-        return load_app_config(self.path)
-
-    def save(self, config: dict[str, Any]) -> dict[str, Any]:
-        return save_app_config(self.path, config, self.postprocess_targets_path)

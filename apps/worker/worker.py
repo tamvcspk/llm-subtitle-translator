@@ -12,7 +12,6 @@ from typing import Any, Callable
 from gst_worker.backups import BackupMaintenance, create_scheduled_backup_if_due, purge_old_backups
 from gst_worker.auth import ConsoleAuth
 from gst_worker.bazarr import BazarrIntegration, BazarrMedia
-from gst_worker.config import normalize_app_config, save_app_config
 from gst_worker.logs import configure_logging
 from gst_worker.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
 from gst_worker.config import ADMISSION_AUTO, ADMISSION_HOLD
@@ -23,7 +22,7 @@ from gst_worker.library import Library, enrich_job_identity
 from gst_worker.memory import StoryMemory
 from gst_worker.queue_policy import configured_models
 from gst_worker.store import Store
-from gst_worker.llm import build_provider
+from gst_worker.llm import LiveProviderFactory, build_provider
 from gst_worker.translation_attempt import TranslationAttempt
 from gst_worker.units import UnitService
 from gst_worker.versions import TranslationVersions
@@ -33,8 +32,8 @@ from gst_worker.bodies import BodyLog
 from gst_worker.redaction import DEFAULT as DEFAULT_REDACTOR, SECRET_SETTING_KEYS
 from gst_worker.telemetry import NULL as NULL_TELEMETRY, Telemetry as TelemetrySink
 from gst_worker.tmdb import TmdbMetadata
-# The settings functions and the HTTP adapter live in their own modules; they stay importable from here.
-from gst_worker.settings import load_settings, public_app_config, seed_app_config_from_settings, settings_from_payload  # noqa: F401
+# The settings service and the HTTP adapter live in their own modules; they stay importable from here.
+from gst_worker.settings import SettingsService
 from gst_worker.web import ConsoleHandler, start_web_server  # noqa: F401
 
 # Used when `process_job` is called without an explicit attempt (no history, no library): the legacy entry point.
@@ -170,14 +169,18 @@ class QueueWorker:
                 time.sleep(sleep_seconds)
 
 
-def backup_maintenance_once(state_dir: str, config_path: str, postprocess_targets_path: str) -> dict[str, Any] | None:
-    return create_scheduled_backup_if_due(state_dir, config_path, postprocess_targets_path)
+def backup_maintenance_once(
+    state_dir: str, config_path: str, postprocess_targets_path: str, settings: Any = None
+) -> dict[str, Any] | None:
+    return create_scheduled_backup_if_due(state_dir, config_path, postprocess_targets_path, settings=settings)
 
 
-def run_backup_scheduler(state_dir: str, config_path: str, postprocess_targets_path: str, sleep_seconds: int) -> None:
+def run_backup_scheduler(
+    state_dir: str, config_path: str, postprocess_targets_path: str, sleep_seconds: int, settings: Any = None
+) -> None:
     while True:
         try:
-            backup = backup_maintenance_once(state_dir, config_path, postprocess_targets_path)
+            backup = backup_maintenance_once(state_dir, config_path, postprocess_targets_path, settings)
             if backup:
                 logging.info("Scheduled backup created: %s", backup["path"])
         except Exception:
@@ -203,17 +206,19 @@ def main() -> int:
     static_dir = os.getenv("STATIC_DIR", "/app/static")
     backup_check_seconds = int(os.getenv("BACKUP_CHECK_SECONDS", "21600"))
     configure_logging(log_dir)
-    if not Path(config_path).exists():
-        save_app_config(config_path, normalize_app_config({}), postprocess_targets_path)
-    settings = load_settings(config_path)
-    if seed_app_config_from_settings(config_path, settings, postprocess_targets_path):
-        settings = load_settings(config_path)
     purge_old_backups(state_dir)
 
     cache = JsonFileCache(os.getenv("TMDB_CACHE_PATH", f"{state_dir}/cache/tmdb_cache.json"))
     http = HTTPClient(timeout=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")))
     data_dir = os.getenv("DATA_DIR", state_dir)
     store = Store(os.getenv("DB_PATH", f"{data_dir}/app.db"))
+    # Settings and API keys live in the database (FR-20). The first run takes config.json and the environment in.
+    settings_service = SettingsService(
+        store, config_path=config_path, postprocess_targets_path=postprocess_targets_path
+    )
+    settings_service.start()
+    settings = settings_service.settings()
+    provider_factory = LiveProviderFactory(settings_service)  # keys are read at each call: a new key is live at once
 
     def live_settings() -> dict[str, Any]:
         try:
@@ -226,6 +231,7 @@ def main() -> int:
         store, usage=store, bodies=BodyLog(f"{data_dir}/logs/llm"), settings_source=live_settings,
     )
     telemetry.apply_settings(settings)  # log level now, and the secrets the log must hide
+    settings_service.telemetry = telemetry
     DEFAULT_REDACTOR.add_values([os.getenv("CONSOLE_PASSWORD", "")])
     versions = TranslationVersions(store, f"{data_dir}/backups/subtitles", telemetry=telemetry)
     glossaries = GlossaryFiles(data_dir)
@@ -235,20 +241,22 @@ def main() -> int:
     memory = StoryMemory(store, store, settings_source=live_settings, media=media)
     library = Library(store, glossaries, versions, memory=memory)
     attempt = TranslationAttempt(
-        versions=versions, usage=store, provider_factory=build_provider, library=library, memory=memory,
+        versions=versions, usage=store, provider_factory=provider_factory, library=library, memory=memory,
         telemetry=telemetry,
     )
     worker = QueueWorker(
         queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt,
         media=media, metadata=metadata, telemetry=telemetry,
     )
+    # A saved setting, a pasted key or a key the provider refused reaches the running worker at once (FR-20.1).
+    settings_service.subscribe(lambda: worker.apply_settings(settings_service.settings()))
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
     units = UnitService(
         library, glossaries, versions, worker.console.jobs, refresh_bazarr=media.refresh,
-        memory=memory, settings_source=live_settings, usage=store, provider_factory=build_provider,
+        memory=memory, settings_source=live_settings, usage=store, provider_factory=provider_factory,
         telemetry=telemetry,
     )
-    backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path)
+    backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path, settings=settings_service)
     telemetry.event(
         "worker.started", reason="the worker process started", model=settings.get("gst_model"),
         fallback_model=settings.get("gst_fallback_model") or None, admission_mode=settings.get("admission_mode"),
@@ -262,7 +270,7 @@ def main() -> int:
 
         threading.Thread(
             target=run_backup_scheduler,
-            args=(state_dir, config_path, postprocess_targets_path, backup_check_seconds),
+            args=(state_dir, config_path, postprocess_targets_path, backup_check_seconds, settings_service),
             daemon=True,
         ).start()
 
@@ -286,6 +294,7 @@ def main() -> int:
             transport=HTTPTransport(http),
             units=units,
             telemetry=telemetry,
+            settings_service=settings_service,
         ).as_handler_context()
         if not args.no_worker:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()

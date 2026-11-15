@@ -23,6 +23,7 @@ from .base import (
     DeadlineExceeded,
     LLMRequest,
     LLMResponse,
+    ModelNotFound,
     Provider,
     ProviderError,
     QuotaExhausted,
@@ -129,7 +130,7 @@ class CallLog:
     tokens_in: int
     tokens_out: int
     latency_ms: int
-    outcome: str  # ok | rate_limited | quota_exhausted | unavailable | bad_output | auth_error | error
+    outcome: str  # ok | rate_limited | quota_exhausted | unavailable | bad_output | auth_error | model_not_found | error
     # What the log of a call also keeps (FR-19.1, 19.2). All optional so older callers keep working.
     kind: str = ""  # translate | repair | split (set by the translator; "" for other tasks)
     batch: int = 0  # which part of the episode the call belongs to (0-based)
@@ -147,6 +148,7 @@ _OUTCOMES: tuple[tuple[type[ProviderError], str], ...] = (
     (Unavailable, "unavailable"),
     (BadOutput, "bad_output"),
     (AuthError, "auth_error"),
+    (ModelNotFound, "model_not_found"),
 )
 
 

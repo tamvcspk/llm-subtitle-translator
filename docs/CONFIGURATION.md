@@ -10,19 +10,19 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `CONSOLE_PASSWORD` | First run | empty | Initial password. Stored only as a scrypt hash in `app.db`; after that the password is changed in Settings and this variable is ignored. Never stored in `config.json`, never returned by the API. |
 | `CONSOLE_PASSWORD_RESET` | No | empty | Set to `1` together with `CONSOLE_USER` / `CONSOLE_PASSWORD` and restart to overwrite the stored account (forgotten password). Remove it afterwards: while it is set, every restart resets the account again. |
 | `CONSOLE_AUTH` | No | empty | Set to `off` to disable authentication. Any other value keeps it on. |
-| `GEMINI_API_KEY` | No | empty | Primary Gemini API key; can also be set in the web console. |
-| `GEMINI_API_KEY1` | No | empty | Alias for the primary Gemini key. |
-| `GEMINI_API_KEY2` | No | empty | Optional second key; used when the first key's quota is exhausted or rejected. |
-| `TMDB_API_KEY` | No | empty | Used to build movie/show/episode descriptions; can also be set in the web console. |
-| `BAZARR_URL` | Yes | `http://bazarr:6767` | Bazarr base URL from inside the worker container. |
-| `BAZARR_API_KEY` | No | empty | If empty, the worker tries app settings, then Bazarr `config.yaml`. |
+| `GEMINI_API_KEY` | First run | empty | Primary Gemini API key. **Seeds the stored key on the first run only**; afterwards keys are managed in the web console and this variable is ignored (see [Settings and API keys](#settings-and-api-keys)). |
+| `GEMINI_API_KEY1` | First run | empty | Alias for the primary Gemini key (seed). |
+| `GEMINI_API_KEY2` | First run | empty | Optional second key (seed); used when the first key's quota is exhausted or the first key is refused. |
+| `TMDB_API_KEY` | First run | empty | Seed for the TMDB key (movie/show/episode descriptions). |
+| `BAZARR_URL` | Yes | `http://bazarr:6767` | Bazarr base URL from inside the worker container. Used while no Bazarr URL is saved in the console. |
+| `BAZARR_API_KEY` | First run | empty | Seed for the Bazarr key. With no stored key and no seed, the worker reads Bazarr's own `config.yaml`. |
 | `INSTALL_FFMPEG` | No | `false` | Optional local image build flag. Leave false when Bazarr extracts subtitles. |
 | `GST_BAZARR_IMAGE` | No | `ghcr.io/tamvcspk/llm-subtitle-translator:latest` | Image used by `docker compose pull` and `docker compose up`. |
 | `MEDIA_ROOT` | Yes | `/mnt/data` | Host media directory mounted as `/media`. |
 | `BAZARR_CONFIG_DIR` | Yes | `/opt/docker/bazarr/config` | Host Bazarr config directory. |
 | `BAZARR_POSTPROCESS_DIR` | Yes | `/opt/docker/bazarr/postprocess` | Shared post-processing and queue directory. |
 | `WORKER_STATE_DIR` | Yes | `/opt/docker/gemini-srt-translator-bazarr` | Worker state, config, logs, and cache. |
-| `GST_MODEL` | No | `gemini-3.1-flash-lite` | Default Gemini model. |
+| `GST_MODEL` | No | `gemini-3.1-flash-lite` | Default Gemini model, used until a model is saved in Settings (a saved value wins). |
 | `GST_ONLY_PATHS` | No | empty | Comma-separated folders. When set, nothing outside them is queued or translated. A guard for trying the worker against a real Bazarr; set it for the Bazarr container too (the enqueue script reads it). |
 | `GST_MAX_PENDING` | No | `0` | Most jobs allowed to wait, run or be deferred at once; further items are not queued. `0` is no cap. Same guard, same two containers. |
 | `GST_BATCH_SIZE` | No | `500` | Ignored since the worker translates with `subcore`, which plans parts itself. |
@@ -91,7 +91,7 @@ change the container paths or web bind address.
 | `QUEUE_DIR` | `/queue` | Queue directory shared with the Bazarr post-processing script. |
 | `STATE_DIR` | `/state` | Base state directory for config, logs, cache, and backups. |
 | `LOG_DIR` | `/state/logs` | Worker log directory. |
-| `APP_CONFIG_PATH` | `/state/config.json` | Web-console app settings file. |
+| `APP_CONFIG_PATH` | `/state/config.json` | The settings file of versions before P6. Read **once**, on the first start with the database, to import its values and keys; never written afterwards. |
 | `POSTPROCESS_TARGETS_PATH` | `/bazarr-postprocess/targets.json` | Source/target language rules read by the Bazarr enqueue script. |
 | `TMDB_CACHE_PATH` | `/state/cache/tmdb_cache.json` | TMDB metadata cache file. |
 | `WEB_HOST` | `0.0.0.0` | Web console bind address inside the container. |
@@ -144,15 +144,50 @@ docker rm -f gemini-srt-translator-bazarr 2>/dev/null || true
 The workflow also publishes immutable `sha-<commit>` tags. Use one of those tags
 instead of `latest` when you want a pinned rollback target.
 
-## App Settings
+## Settings and API keys
 
-The web console writes app settings to:
+Settings and API keys live in the SQLite database (`app.db`, tables `settings` and `api_keys`), not in a file
+(FR-20). The web console edits them and a change is **live at once**: the running worker adopts it when it is
+saved, with no restart.
 
-```text
-/state/config.json
-```
+**Order of precedence** for a setting: the value saved in the console, then the environment variable, then the
+default. Only a few settings have an environment variable (`BAZARR_URL`, `GST_MODEL`, `LLM_RPM`, `LLM_TPM`,
+`LLM_RPD`); a setting you clear in the console falls back to it.
 
-Default:
+**The environment holds the configuration of the process itself**: paths (`STATE_DIR`, `QUEUE_DIR`, `DATA_DIR`,
+`DB_PATH`, `LOG_DIR`, ...), the web address and port, and the console account (`CONSOLE_USER`,
+`CONSOLE_PASSWORD`). These are read when the worker starts and are never stored in the settings table, and the
+console cannot change them.
+
+**First start with the database** (an upgrade from a version that kept `/state/config.json`):
+
+- The values in `config.json` are imported into `settings` once. A value already in the table is kept, and
+  importing is never repeated, so editing the old file later changes nothing. The file is left in place and is
+  no longer read; you can delete it. Options of the removed `gst` CLI are dropped.
+- The keys in `config.json` (and, for a field it leaves empty, the `GEMINI_API_KEY*`, `TMDB_API_KEY` and
+  `BAZARR_API_KEY` variables) become rows of `api_keys`, once. Afterwards the database wins: a changed or removed
+  variable does not overwrite or bring back a key. To change a key, use the console.
+
+**API keys.** Each key has a provider (`gemini`, `bazarr`, `tmdb`), a label, a status and the time it was last
+used. The Settings page edits them through four fields (Bazarr, TMDB, Gemini 1, Gemini 2); `/api/keys` works on
+every stored key. The status is `ok`, `invalid` or `exhausted`:
+
+- A Gemini key the provider refuses (HTTP 401/403, or 400 with the reason `API_KEY_INVALID`) becomes `invalid`:
+  it is passed over, the next key takes over, and Settings and the dashboard show a warning. With no usable key
+  left, jobs fail with a message that says the keys were refused (from P8 they wait instead).
+- Pasting a new key into the same field, or **Test** on a key that works, sets it back to `ok`; the next call
+  uses it.
+- A model the provider does not know (HTTP 404) is a warning about the model setting, not about a key.
+- Runtime uses the first two usable Gemini keys (oldest first).
+
+**Protection.** The API returns only the last four characters of a key (and nothing for a key shorter than 12
+characters). Keys are filtered from the log, events, prompt bodies and job error files. The database file is
+created with mode `0600`. Keys are not encrypted in the database: the worker has to read them back, and a key
+stored beside the database would add little. **Backups** hold no key unless asked to (see [Backup](#backup)).
+
+### Settings
+
+Saved settings with their defaults (the Settings page shows the same fields; keys are not part of this list):
 
 ```json
 {
@@ -165,10 +200,6 @@ Default:
   "media_roots": ["/media"],
   "scan_limit": 200,
   "bazarr_url": "",
-  "bazarr_api_key": "",
-  "gemini_api_key": "",
-  "gemini_api_key2": "",
-  "tmdb_api_key": "",
   "gst_model": "gemini-3.1-flash-lite",
   "gst_fallback_model": "gemini-3.5-flash",
   "gst_paid_quota": false,
@@ -201,14 +232,13 @@ When settings are saved, enabled source and target languages are also written to
 That file is read by Bazarr's post-processing script, so automatic Bazarr events
 and manual console jobs use the same translation language rules.
 
-Secrets are stored in `/state/config.json` if configured from the web console.
-The public settings API returns configured secrets as `**********` plus
-`*_configured` booleans, never the stored secret values. Saving `**********`
-keeps the existing secret.
+The public settings API returns each key field as `**********` plus `*_configured`,
+`*_last4` and `*_status`, never the stored value. Saving `**********` (or an empty
+field) keeps the stored key.
 
 ## Translation Options
 
-The Settings page writes these options into app config:
+The Settings page saves these options:
 
 - `gst_model`: the default model, a light one (`gemini-3.1-flash-lite`) that
   translates every job. Selected from `/api/gemini-models`.
@@ -306,7 +336,7 @@ The options of the old `gst` CLI (`gst_batch_size`, `gst_retry_batch_size`,
 `gst_token_report`, `gst_top_p`, `gst_top_k`, `gst_thinking_level`,
 `gst_no_streaming`, `gst_context_size`) are gone: they had no effect since the
 worker translates in-process. An old `config.json` that still contains them is
-accepted; the keys are dropped the next time settings are saved.
+accepted; the importer leaves them out.
 
 ## What Gets Translated
 
@@ -389,20 +419,28 @@ Each zip contains:
 
 ```text
 backup.json
-config/config.json
+config/config.json            the saved settings, without any API key
+config/api_keys.json          only when the backup was made with "Include the API keys"
 postprocess/targets.json
 ```
 
-`config/config.json` can contain Bazarr, Gemini, and TMDB secrets. The UI can
-download backup zip files and import a selected backup zip. Import restores only
-`config/config.json` and `postprocess/targets.json`; it creates a `pre-import`
-backup first and does not restore queue files, logs, or caches.
+A backup **holds no API key** unless you tick *Include the API keys in this backup* on the Backups page (or send
+`{"include_keys": true}` to `POST /api/backups`); a file made that way is plain text, so keep it as private as the
+keys. Scheduled backups never include keys. Neither the console account (user and password hash) nor any other part
+of the database is in a backup.
 
-For a full personal deployment backup, also back up:
+The UI can download backup zip files and import a selected backup zip. Import replaces the saved settings with the
+backup's, adds the keys of the backup when it has them (a key the worker already has is not duplicated), and
+writes `postprocess/targets.json`. It never restores the console account, creates a `pre-import` backup first
+(without keys), and does not restore queue files, logs, or caches. A backup made before P6 carries its keys inside
+`config/config.json`; import uses them only for a key field that is empty now.
+
+Because a backup holds no key, back up the database too (it holds the keys, the account and the history) when you
+need to move the worker to a new host:
 
 ```bash
 /opt/docker/gemini-srt-translator-bazarr/.env
-/opt/docker/gemini-srt-translator-bazarr/config.json
+/opt/docker/gemini-srt-translator-bazarr/app.db
 /opt/docker/bazarr/postprocess/targets.json
 /opt/docker/gemini-srt-translator-bazarr/backups
 ```

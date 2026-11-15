@@ -9,6 +9,7 @@ from subcore.providers import (
     FailoverProvider,
     FakeProvider,
     LLMRequest,
+    ModelNotFound,
     QuotaExhausted,
     RateLimited,
     RateLimiter,
@@ -103,6 +104,18 @@ class ResilientProviderTests(unittest.TestCase):
             self.assertTrue(7 <= delay <= 7.71, delay)  # retry-after honoured, small jitter on top
         self.assertEqual([log.outcome for log in logs], ["rate_limited", "rate_limited", "ok"])
 
+    def test_an_unknown_model_is_logged_as_such_and_never_retried(self):
+        def handler(req, n):
+            raise ModelNotFound("no such model")
+
+        logs = []
+        provider, fake, clock = self.make(handler, on_call=logs.append)
+        with self.assertRaises(ModelNotFound):
+            provider.generate(request())
+        self.assertEqual(len(fake.calls), 1)
+        self.assertEqual(clock.sleeps, [])
+        self.assertEqual([log.outcome for log in logs], ["model_not_found"])
+
     def test_backoff_grows_exponentially_with_jitter(self):
         def handler(req, n):
             raise Unavailable("503")
@@ -185,6 +198,15 @@ class FailoverProviderTests(unittest.TestCase):
         provider.generate(request())
         self.assertEqual(len(first.calls), 1)  # not retried once abandoned
         self.assertEqual(len(second.calls), 2)
+
+    def test_a_wrong_model_name_is_not_cured_by_another_key(self):
+        def unknown(req, n):
+            raise ModelNotFound("no such model")
+
+        first, second = FakeProvider(handler=unknown), FakeProvider(prefix="")
+        with self.assertRaises(ModelNotFound):
+            FailoverProvider([first, second]).generate(request())
+        self.assertEqual((len(first.calls), len(second.calls)), (1, 0))
 
     def test_raises_when_every_key_is_spent(self):
         def spent(req, n):

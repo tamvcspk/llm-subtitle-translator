@@ -1,4 +1,25 @@
 # Unreleased
+- **P6: settings and API keys in the database (FR-20, ADR-13).** Settings and the Bazarr, TMDB and
+  Gemini keys now live in `app.db` (schema 7: `settings`, `api_keys`) instead of `/state/config.json`, and a
+  change is live at once, with no restart: the running worker adopts it when it is saved. A saved value beats
+  the environment variable (`BAZARR_URL`, `GST_MODEL`), which beats the default; paths, the port and the
+  console account stay in the environment and the console cannot write them. **On the first start** the old
+  `config.json` is imported once (a value already stored is kept, the removed `gst` options are left out) and
+  the keys of that file, or else of `GEMINI_API_KEY*`, `TMDB_API_KEY` and `BAZARR_API_KEY`, become stored keys,
+  once: changing the variables later changes nothing, so the keys in `.env` are only a first-run seed. The
+  old file is left in place and no longer read. Keys have a label, a status (`ok`, `invalid`, `exhausted`) and
+  a last-used time; `GET/POST /api/keys`, `PUT /api/keys/{id}`, `POST /api/keys/{id}/test` and `/remove` manage
+  them, and the API returns only the last four characters of a key (nothing for a key under 12 characters).
+  A Gemini key the provider refuses (`AuthError`, now also recognised from Google's 400
+  `API_KEY_INVALID`) is marked `invalid`, passed over (the second key takes over), and Settings and the
+  dashboard warn; pasting a new key, or **Test** on one that works, reopens it and the next call uses it
+  (until P8, a job that met the refusal still fails and is retried by hand). A model the provider does not
+  know (`ModelNotFound`, HTTP 404) is a typed error and a warning on Settings, not a key problem. **Backups no
+  longer hold any API key** (nor the console account): the zip carries the saved settings; "Include the API
+  keys" on the Backups page (`{"include_keys": true}`) adds `config/api_keys.json` for a manual backup, with a
+  warning; scheduled backups never do; an import never restores the console account. The database file is
+  created with mode `0600`. New `subcore.providers.ModelNotFound`. `/api/settings` gains `*_last4`, `*_status`
+  and `key_warnings`. No change to the queue format or `gst_enqueue.sh`.
 - **P5: event log and measurement (FR-19, NFR-11).** The worker now leaves a trace of what it decides
   and what it asks the model, in the database (schema 6) and in files, so "why did this episode not
   run?" has an answer and later changes to prompts, models or styles can be measured. (1) **Events**:

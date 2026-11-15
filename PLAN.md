@@ -19,7 +19,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong, CI xanh (e5babb1); còn thử giao diện trên trình duyệt thật |
 | **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[~]` Code + test xong (tiêu chí 1, 2 bằng fake provider); đã đo chất lượng trên 3 series, CI GitHub xanh (263c048); còn thử giao diện trên trình duyệt thật |
 | **P5** | Nhật ký và đo lường (FR-19, NFR-11, ADR-15): `events`, `llm_calls` mở rộng, body prompt JSONL xoay vòng, mức log, `quality_signals`. Chưa đổi luồng job | Tiêu chí 17 a–g: mỗi quyết định có event kèm lý do; body xoay vòng đúng giới hạn và bật tắt được; khoá, mật khẩu, cookie không rò; lỗi ghi log không làm job fail | `[~]` |
-| **P6** | Cài đặt và khoá API trong DB (FR-20, NFR-5, ADR-13): `settings`, `api_keys`, hiệu lực ngay, Thử khoá | Tiêu chí 19: đổi cài đặt và khoá không cần khởi động lại; khoá gieo từ env lần đầu; chỉ trả 4 ký tự cuối; backup không gồm khoá | `[ ]` |
+| **P6** | Cài đặt và khoá API trong DB (FR-20, NFR-5, ADR-13): `settings`, `api_keys`, hiệu lực ngay, Thử khoá | Tiêu chí 19: đổi cài đặt và khoá không cần khởi động lại; khoá gieo từ env lần đầu; chỉ trả 4 ký tự cuối; backup không gồm khoá | `[~]` Code, test (tiêu chí 19 a, b, c, e, f) và docs xong; còn CI GitHub xanh và thử giao diện trên trình duyệt thật. 19d chờ P8 |
 | **P7** | Provider thứ hai `openai_compat` (FR-9.1–9.3) | Tiêu chí 22: cùng fixture qua `fake` và `openai_compat` (server giả cục bộ) cho cùng kết quả validate; 401/429/5xx/đầu ra sai thành exception có kiểu; model chọn theo tác vụ; khoá lấy từ `api_keys`, không lộ | `[ ]` |
 | **P8** | Lõi job và phiên bản trong SQLite (FR-15, FR-16, FR-17, ADR-11, ADR-12): `jobs`, scheduler, lease, breaker, chờ thay vì fail, phiên bản có `candidate`/`removed`, importer từ queue file, bỏ port nội bộ | Tiêu chí 14 a–l và 15 a–i; test cũ chuyển sang SQLite `:memory:` vẫn pass; `gst_enqueue.sh` vẫn chạy được qua importer | `[ ]` |
 | **P9** | Dọn file (FR-13): dòng `jobs` đã xong, bản sao phiên bản, lịch sử glossary, file tạm; `retention_*`, xem trước và **Dọn ngay** | Tiêu chí 12 a–f: dọn đúng nhóm, không đụng media, job chưa xong, phiên bản `current` | `[ ]` |
@@ -205,16 +205,16 @@ FR-19, NFR-11; ADR-15; tiêu chí 17 a–g. Làm đầu tiên vì dữ liệu kh
 - [ ] Câu hỏi mở 4 (mặc định `log_max_mb`, `log_retention_days`, `breaker_threshold`, `max_calls_per_job`): giữ 500 MB và 30 ngày như SPEC; chốt lại sau khi có số liệu thật từ các lần dịch (đọc `GET /api/events` và dung lượng `logs/llm/`).
 - [ ] Workflow **CI** trên GitHub xanh cho commit P5.
 
-## P6 — Cài đặt và khoá API trong DB `[ ]`
+## P6 — Cài đặt và khoá API trong DB `[~]`
 
 FR-20, NFR-5 (sửa); ADR-13; tiêu chí 19.
 
-- [ ] Bảng `settings` và `api_keys`; importer `config.json` một lần (không đè giá trị đã sửa); thứ tự ưu tiên DB > env/yml > mặc định; danh sách khoá hệ thống không ghi đè từ UI.
-- [ ] Gieo khoá từ env lần đầu, sau đó DB thắng; `ProviderFactory` lấy khoá từ nguồn sống nên đổi khoá có hiệu lực ngay.
-- [ ] Settings: quản lý khoá (nhãn, trạng thái, che, nút **Thử khoá**); trả 4 ký tự cuối qua API.
-- [ ] `AuthError` và `ModelNotFound` thành lỗi có kiểu trong `subcore.providers`; hiện cảnh báo khoá không hợp lệ. Việc chuyển job sang `waiting` thuộc P8 (hành vi hàng đợi cũ giữ đến lúc đó).
-- [ ] Backup (`backups.py`) mặc định loại `api_keys` và `auth`; restore không đè `auth`.
-- [ ] Test tiêu chí 19 a–c, e, f (d cần P8); docs: `docs/CONFIGURATION.md`, `docs/API.md`, `AGENTS.md` (invariant khoá), `.env.example`, `CHANGELOG.md`.
+- [x] Bảng `settings` và `api_keys` (schema 7, file DB quyền `0600`); importer `config.json` một lần (không đè giá trị đã có trong DB, bỏ tuỳ chọn `gst` cũ, đánh dấu `_config_json_imported` nên sửa file sau đó không có tác dụng); thứ tự ưu tiên DB > env > mặc định (`BAZARR_URL`, `GST_MODEL`, `LLM_*`); `SYSTEM_SETTING_KEYS` (đường dẫn, cổng, tài khoản console) không ghi được từ UI. `gst_worker/settings.py` (`SettingsService`) thay `load_settings`/`public_app_config`/`seed_app_config_from_settings`; `config.py` bỏ `load_app_config`/`save_app_config`/`ConfigurationStore`. `config.json` được để nguyên, không đọc lại, không ghi nữa.
+- [x] Gieo khoá từ `config.json` rồi env lần đầu (`_keys_seeded`), sau đó DB thắng (env đổi, khoá đã xoá không sống lại); `LiveProviderFactory` lấy khoá từ `SettingsService` ở mỗi lần dựng provider, và `SettingsService.subscribe` đẩy mọi thay đổi (lưu cài đặt, thêm/sửa/xoá khoá, khoá bị từ chối) vào `QueueWorker.apply_settings` nên có hiệu lực ngay, không khởi động lại.
+- [x] Settings: bốn ô khoá cũ (Bazarr, TMDB, Gemini 1, Gemini 2) nay là bốn "slot" của `api_keys`; hiện 4 ký tự cuối, trạng thái và cảnh báo; nút **Test** thử khoá đã lưu (để trống/mặt nạ) và cập nhật trạng thái; `GET/POST /api/keys`, `PUT /api/keys/{id}`, `POST /api/keys/{id}/test|remove` cho mọi khoá. API chỉ trả 4 ký tự cuối (khoá dưới 12 ký tự: không trả gì). **Lệch nhỏ:** chưa có bảng quản lý khoá tự do trên giao diện (thêm khoá thứ ba trở lên chỉ qua API); runtime dùng hai khoá Gemini `ok` đầu tiên.
+- [x] `AuthError` (đã có) nhận thêm 400 `API_KEY_INVALID` của Google; `ModelNotFound` (404) mới trong `subcore.providers`. `KeyedProvider` đánh dấu khoá `invalid`, khoá kia (nếu có) tiếp quản, Settings và Dashboard cảnh báo; Test khoá đạt hoặc dán khoá mới thì về `ok`. `ModelNotFound` là cảnh báo cấu hình model, không đụng khoá. Việc chuyển job sang `waiting` thuộc P8 (hiện job gặp lỗi khoá vẫn `failed`, thử lại bằng tay). `QuotaExhausted` chưa đặt khoá `exhausted` (quota ngày đã do hàng đợi xử lý; để P8 cùng breaker).
+- [x] Backup (`backups.py`): `config/config.json` là cài đặt xuất từ DB, không khoá; tuỳ chọn `include_keys` (chỉ backup thủ công, có cảnh báo) thêm `config/api_keys.json`; backup định kỳ và `pre-import` không bao giờ có khoá; restore nạp cài đặt (và khoá nếu có) vào DB, thông báo cho worker, không bao giờ đụng `auth`; backup cũ có khoá trong `config.json` chỉ lấp slot đang trống.
+- [x] Test tiêu chí 19 a, b, c, e, f (`apps/worker/tests/test_settings_db.py`; 19d cần P8); `subcore`: `test_providers.py`, `test_limiter.py` cho `AuthError`/`ModelNotFound`; docs: `docs/CONFIGURATION.md`, `docs/API.md`, `docs/ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `README.md`, `.env.example`, `CHANGELOG.md`.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P6.
 
 ## P7 — Provider `openai_compat` `[ ]`

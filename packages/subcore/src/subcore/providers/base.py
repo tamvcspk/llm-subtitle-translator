@@ -16,6 +16,7 @@ __all__ = [
     "Provider",
     "ProviderError",
     "AuthError",
+    "ModelNotFound",
     "RateLimited",
     "QuotaExhausted",
     "Unavailable",
@@ -32,6 +33,11 @@ class ProviderError(Exception):
 
 class AuthError(ProviderError):
     """Credentials missing, invalid or not permitted. Not retryable."""
+
+
+class ModelNotFound(ProviderError):
+    """The provider does not know the model (a wrong or retired name). A configuration error: retrying or
+    switching keys will not help, only a different model setting will."""
 
 
 class RateLimited(ProviderError):
@@ -107,7 +113,7 @@ class Provider(Protocol):
     model: str
 
     def generate(self, req: LLMRequest) -> LLMResponse:
-        """Raise RateLimited / QuotaExhausted / Unavailable / BadOutput / AuthError."""
+        """Raise RateLimited / QuotaExhausted / Unavailable / BadOutput / AuthError / ModelNotFound."""
         ...
 
     def count_tokens(self, req: LLMRequest) -> int: ...

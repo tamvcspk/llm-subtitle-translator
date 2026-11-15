@@ -9,7 +9,7 @@ arrives in P4. Roadmap: `PLAN.md`, design: `docs/design/ARCHITECTURE.md`.
 | Module | Role |
 |---|---|
 | `srt` | parse/serialize (BOM, CRLF, empty cues, odd indexes), tag validation, atomic write |
-| `providers` | `Provider` protocol, typed errors (`RateLimited`, `QuotaExhausted`, `Unavailable`, `BadOutput`, `AuthError`), `gemini` and `fake` adapters |
+| `providers` | `Provider` protocol, typed errors (`RateLimited`, `QuotaExhausted`, `Unavailable`, `BadOutput`, `AuthError`, `ModelNotFound`), `gemini` and `fake` adapters |
 | `translate` | planner (split at silences), prompt builder, validate → repair (2 rounds) → split |
 | `glossary` | YAML load/merge/dump/validate, locked terms, timed address rules |
 | `cli` | manual translation and debugging |
