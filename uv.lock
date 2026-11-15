@@ -9,7 +9,7 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "llm-subtitle-worker",
+    "llm-subtitle-server",
     "subcore",
 ]
 
@@ -320,9 +320,9 @@ wheels = [
 ]
 
 [[package]]
-name = "llm-subtitle-worker"
+name = "llm-subtitle-server"
 version = "0.0.0"
-source = { virtual = "apps/worker" }
+source = { virtual = "apps/server" }
 dependencies = [
     { name = "subcore" },
 ]

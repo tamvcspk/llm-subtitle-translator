@@ -24,7 +24,7 @@ The design docs are the contract. `docs/design/` wins over upstream docs; `docs/
 
 ## 3. Tests first, never the network
 
-- stdlib `unittest` only. New subcore tests go in `packages/subcore/tests/`, worker tests in `apps/worker/tests/`.
+- stdlib `unittest` only. New subcore tests go in `packages/subcore/tests/`, worker tests in `apps/server/tests/`.
 - LLM calls go through the `fake` provider (NFR-8). A test that would hit Gemini/TMDB/Bazarr is a bug.
 - Write the acceptance test for the phase (e.g. SPEC §6.4 "missing 3 cues → exactly one repair call with those 3 cues") before the implementation, and assert on prompts/call counts, not just outputs.
 - Mandatory invariants to keep covered: never overwrite a non-system subtitle; API keys/passwords never logged or returned; timecodes/indices never sent to the LLM; atomic writes.

@@ -12,7 +12,7 @@ on:
       - "Dockerfile"
       - "pyproject.toml"
       - "uv.lock"
-      - "apps/worker/**"
+      - "apps/server/**"
       - "packages/*/pyproject.toml"
   workflow_dispatch:
 

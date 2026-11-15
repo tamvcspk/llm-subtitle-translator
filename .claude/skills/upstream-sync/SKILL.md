@@ -19,13 +19,13 @@ Focus on files the fork still shares with upstream (upstream path → fork path)
 
 | Upstream | Fork |
 |---|---|
-| `gst_worker/bazarr.py`, `gst_worker/tmdb.py` | `apps/worker/gst_worker/…` |
-| `gst_worker/queue*.py` | `apps/worker/gst_worker/…` |
+| `subserver/bazarr.py`, `subserver/tmdb.py` | `apps/server/subserver/…` |
+| `subserver/queue*.py` | `apps/server/subserver/…` |
 | `bazarr-postprocess/gst_enqueue.sh` | same |
-| `worker.py`, `static/`, `tests/` | `apps/worker/…` |
+| `worker.py`, `static/`, `tests/` | `apps/server/…` |
 
 ```bash
-git log --oneline --no-merges main..upstream-sync -- gst_worker/bazarr.py gst_worker/tmdb.py 'gst_worker/queue*.py' bazarr-postprocess/
+git log --oneline --no-merges main..upstream-sync -- subserver/bazarr.py subserver/tmdb.py 'subserver/queue*.py' bazarr-postprocess/
 ```
 
 Skip: changes to the gst/Gemini translation path that P2 replaces (`translation.py`, gst CLI flags) unless they fix a live bug, Chinese-default UX tweaks, upstream deployment details (their host, image name, Dependabot assignee).
@@ -39,14 +39,14 @@ git switch -c sync/upstream-$(date +%Y-%m) main
 git cherry-pick -x <sha>
 ```
 
-Git's rename detection usually maps `gst_worker/x.py` → `apps/worker/gst_worker/x.py`. If it does not (conflict "deleted in HEAD"), apply with a path prefix instead:
+Git's rename detection usually maps `subserver/x.py` → `apps/server/subserver/x.py`. If it does not (conflict "deleted in HEAD"), apply with a path prefix instead:
 
 ```bash
-git format-patch -1 <sha> --stdout | git apply --3way --directory=apps/worker --include='gst_worker/*' --include='worker.py' --include='static/*' --include='tests/*'
+git format-patch -1 <sha> --stdout | git apply --3way --directory=apps/server --include='subserver/*' --include='worker.py' --include='static/*' --include='tests/*'
 git format-patch -1 <sha> --stdout | git apply --3way --include='bazarr-postprocess/*'
 ```
 
-then commit with `(cherry picked from commit <sha>)` in the message. Test files that read repo-level files use `REPO_ROOT`/`APP_ROOT` (see `apps/worker/tests/test_frontend_structure.py`); fix upstream `ROOT` paths accordingly.
+then commit with `(cherry picked from commit <sha>)` in the message. Test files that read repo-level files use `REPO_ROOT`/`APP_ROOT` (see `apps/server/tests/test_frontend_structure.py`); fix upstream `ROOT` paths accordingly.
 
 If a fix touches code the fork has already rewritten, port the idea by hand and say so in the commit message instead of forcing the patch.
 

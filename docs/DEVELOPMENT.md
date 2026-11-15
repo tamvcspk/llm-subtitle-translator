@@ -17,7 +17,7 @@ project of its own) and one `uv.lock`:
 
 | Member | Path | Notes |
 |---|---|---|
-| `llm-subtitle-worker` | `apps/worker/` | `worker.py`, `gst_worker/`, `static/`, `tests/`. Not packaged (`package = false`). |
+| `llm-subtitle-server` | `apps/server/` | `worker.py`, `subserver/`, `static/`, `tests/`. Not packaged (`package = false`). |
 | `subcore` | `packages/subcore/` | Translation engine library (`src/` layout), installed editable. |
 
 Add a dependency to one member with `uv add --package <member> <dep>`.
@@ -28,9 +28,9 @@ Each member's tests run in their own `unittest` process (both test folders are
 named `tests`):
 
 ```bash
-uv run --locked python -m unittest discover -s apps/worker/tests -t apps/worker -v
+uv run --locked python -m unittest discover -s apps/server/tests -t apps/server -v
 uv run --locked python -m unittest discover -s packages/subcore/tests -t packages/subcore -v
-uv run --locked python -m compileall -q -f apps/worker/worker.py apps/worker/gst_worker packages/subcore/src
+uv run --locked python -m compileall -q -f apps/server/worker.py apps/server/subserver packages/subcore/src
 ```
 
 ## Dependencies
@@ -47,24 +47,24 @@ image after the change reaches `main`.
 Create `.env`, then run:
 
 ```bash
-uv run python apps/worker/worker.py --host 127.0.0.1 --port 6789
+uv run python apps/server/worker.py --host 127.0.0.1 --port 6789
 ```
 
 The worker expects the media and Bazarr config paths from your environment to be
-valid; set `STATIC_DIR=apps/worker/static` when running outside the image. For
+valid; set `STATIC_DIR=apps/server/static` when running outside the image. For
 isolated UI work, use `--no-worker` so it does not consume queue jobs, or use
 `scripts/start-local.ps1 [-Demo] [-NoWorker]` on Windows:
 
 ```bash
-uv run python apps/worker/worker.py --no-worker --host 127.0.0.1 --port 6789
+uv run python apps/server/worker.py --no-worker --host 127.0.0.1 --port 6789
 ```
 
 ## Coding Notes
 
 - Keep the Bazarr integration read-only (the catalog read) and behind the
   `MediaLibrary` port; a read never creates a job.
-- Keep Gemini calls in the worker app (`gst_worker/translation.py`); do not
-  install dependencies into the Bazarr image. (`apps/worker/gst_worker/translation.py`
+- Keep Gemini calls in the worker app (`subserver/translation.py`); do not
+  install dependencies into the Bazarr image. (`apps/server/subserver/translation.py`
   until P2 replaces it with `subcore`.)
 - Never log Gemini, TMDB, or Bazarr API keys.
 - Preserve the no-overwrite rule for existing target subtitle files.

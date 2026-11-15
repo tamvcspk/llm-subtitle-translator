@@ -1,9 +1,9 @@
 # Architecture
 
 > Describes the current (inherited) worker. The repository is a uv workspace:
-> worker paths below (`worker.py`, `gst_worker/`, `static/`, `tests/`) live under
-> `apps/worker/`; the new engine package is `packages/subcore/`. The image keeps
-> the old runtime layout (`/app/worker.py`, `/app/gst_worker`, `/app/static`).
+> worker paths below (`worker.py`, `subserver/`, `static/`, `tests/`) live under
+> `apps/server/`; the new engine package is `packages/subcore/`. The image keeps
+> the old runtime layout (`/app/worker.py`, `/app/subserver`, `/app/static`).
 > Target design: [design/ARCHITECTURE.md](design/ARCHITECTURE.md).
 
 ## Components
@@ -26,9 +26,9 @@ down as ports, and holds `process_job` and `QueueWorker`. It imports no socket,
 SQLite or HTTP-server module itself (`tests/test_core_boundary.py`). In normal mode it starts:
 
 - a background worker loop that consumes one pending job at a time;
-- a small stdlib HTTP server for the console and JSON API (`gst_worker/web.py`).
+- a small stdlib HTTP server for the console and JSON API (`subserver/web.py`).
 
-Domain code is split under `gst_worker/`:
+Domain code is split under `subserver/`:
 
 - `config.py`: the settings schema (defaults, validation, the system keys the console
   cannot write, the four key fields), language normalization, and Bazarr language

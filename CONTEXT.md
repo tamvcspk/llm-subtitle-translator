@@ -108,7 +108,7 @@ The rules that move a translation job through the job queue, including settling,
 recovery, retries, quota pauses, and terminal outcomes.
 
 **Port**:
-A narrow interface (`Protocol`, in `gst_worker/ports.py`) for something the worker core
+A narrow interface (`Protocol`, in `subserver/ports.py`) for something the worker core
 needs from outside and does not own: Bazarr, TMDB, the model provider. It returns named
 immutable types, never a `dict` or a database row. The application's own SQLite
 (`Store`) is not behind a port: the core uses it directly, and tests run it on `:memory:`.

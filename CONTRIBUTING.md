@@ -19,7 +19,7 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). In short:
 
 ```bash
 uv sync --locked --all-packages
-uv run --locked python -m unittest discover -s apps/worker/tests -t apps/worker -v
+uv run --locked python -m unittest discover -s apps/server/tests -t apps/server -v
 uv run --locked python -m unittest discover -s packages/subcore/tests -t packages/subcore -v
 ```
 

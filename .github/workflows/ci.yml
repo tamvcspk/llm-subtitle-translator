@@ -29,13 +29,13 @@ jobs:
         run: uv sync --locked --no-dev --all-packages
 
       - name: Run worker tests
-        run: uv run --locked python -m unittest discover -s apps/worker/tests -t apps/worker -v
+        run: uv run --locked python -m unittest discover -s apps/server/tests -t apps/server -v
 
       - name: Run subcore tests
         run: uv run --locked python -m unittest discover -s packages/subcore/tests -t packages/subcore -v
 
       - name: Compile Python sources
-        run: uv run --locked python -m compileall -q -f apps/worker/worker.py apps/worker/gst_worker packages/subcore/src
+        run: uv run --locked python -m compileall -q -f apps/server/worker.py apps/server/subserver packages/subcore/src
 
       - name: Check subcore CLI
         run: uv run --locked subcore --help
