@@ -22,6 +22,7 @@ class RuntimeContext:
     backups: BackupMaintenance
     transport: HTTPTransport
     units: Any = None  # UnitService: library, corrections, retranslation, versions, glossaries
+    telemetry: Any = None  # Telemetry: the event log behind GET /api/events (P5)
 
     def as_handler_context(self) -> dict[str, Any]:
         return self.__dict__.copy()

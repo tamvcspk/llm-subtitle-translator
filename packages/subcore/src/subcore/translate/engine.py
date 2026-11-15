@@ -16,7 +16,7 @@ from . import alignment, planner
 from .prompt import RESPONSE_SCHEMA, PromptContext, build_system, build_user
 from .validate import check_cue, parse_reply
 
-__all__ = ["TranslateOptions", "CallRecord", "TranslationResult", "TranslationError", "translate"]
+__all__ = ["TranslateOptions", "CallRecord", "TranslationResult", "TranslationError", "ValidationIssue", "translate"]
 
 
 @dataclass
@@ -39,11 +39,29 @@ class CallRecord:
     outcome: str = "ok"  # ok | bad_output
 
 
+@dataclass(frozen=True)
+class ValidationIssue:
+    """One problem the validator found in a model reply, whether or not a repair later fixed it (FR-19.4).
+
+    ``kind`` is missing | empty | tags | lines | glossary; ``call`` is the kind of call that produced the reply
+    (translate | repair | split); ``error`` is False for a warning that never forces a repair.
+    """
+
+    cue: int
+    kind: str
+    call: str
+    error: bool
+    source: str = ""
+    candidate: str = ""
+    detail: str = ""
+
+
 @dataclass
 class TranslationResult:
     cues: list[srt.Cue]
     calls: list[CallRecord] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    issues: list[ValidationIssue] = field(default_factory=list)
 
     @property
     def tokens_in(self) -> int:
@@ -59,6 +77,7 @@ class TranslationError(Exception):
 
     def __init__(self, failed: dict[int, str]):
         self.failed = failed
+        self.issues: list[ValidationIssue] = []  # what the validator found on the way; filled in by ``translate``
         shown = "; ".join(f"cue {i}: {why}" for i, why in sorted(failed.items())[:5])
         more = f" (+{len(failed) - 5} more)" if len(failed) > 5 else ""
         super().__init__(f"{len(failed)} cue(s) failed validation after repair: {shown}{more}")
@@ -98,6 +117,8 @@ class _Run:
         self.out: dict[int, str] = {}
         self.calls: list[CallRecord] = []
         self.warnings: list[str] = []
+        self.issues: list[ValidationIssue] = []
+        self.part_no = 0  # which part of the episode is being worked on (0-based), for the call record
         self.total = len(self.targets)
 
     # -- one model call ---------------------------------------------------
@@ -109,7 +130,10 @@ class _Run:
             response_schema=RESPONSE_SCHEMA if self.provider.caps.structured_output else None,
             temperature=self.options.temperature,
             task="translate",
-            meta={"kind": kind, "targets": list(targets), "source": dict(context), "notes": dict(notes)},
+            meta={
+                "kind": kind, "targets": list(targets), "source": dict(context), "notes": dict(notes),
+                "batch": self.part_no,
+            },
         )
         try:
             response = self.provider.generate(req)
@@ -132,11 +156,16 @@ class _Run:
         return {n: self.source[n] for n in ordered if n in keep}
 
     # -- validate a reply -------------------------------------------------
-    def _apply(self, targets: list[int], reply, candidates: dict[int, str]) -> dict[int, str]:
+    def _apply(self, targets: list[int], reply, candidates: dict[int, str], kind: str = "translate") -> dict[int, str]:
         """Accept valid cues into ``self.out``; return ``{id: reason}`` for the rest."""
         failing: dict[int, str] = {}
         for n in targets:
             verdict = check_cue(self.source[n], reply.items.get(n), self.glossary)
+            for found in verdict.kinds:
+                self.issues.append(ValidationIssue(
+                    cue=n, kind=found, call=kind, error=found != "lines", source=self.source[n],
+                    candidate=reply.items.get(n, ""), detail=_reason(verdict.errors, verdict.terms) or "; ".join(verdict.warnings),
+                ))
             if verdict.ok:
                 self.out[n] = reply.items[n]
                 candidates.pop(n, None)
@@ -156,7 +185,7 @@ class _Run:
     def run_part(self, ids: list[int], *, kind: str, parts_used: int, depth: int) -> None:
         candidates: dict[int, str] = {}
         reply = self._call(kind, ids, self.source, {})
-        failing = self._apply(ids, reply, candidates)
+        failing = self._apply(ids, reply, candidates, kind)
 
         for _ in range(self.options.repair_rounds):
             for n, why in alignment.find_misaligned(ids, self.source, self.out).items():
@@ -164,7 +193,7 @@ class _Run:
             if not failing:
                 return
             reply = self._call("repair", sorted(failing), self._window(sorted(failing)), failing)
-            failing = self._apply(sorted(failing), reply, candidates)
+            failing = self._apply(sorted(failing), reply, candidates, "repair")
 
         # Drift is a heuristic, never a failure: cues that already hold a (possibly shifted)
         # translation stay, with a warning for the reviewer.
@@ -229,10 +258,15 @@ def translate(
             output_factor=options.output_factor,
             min_part_cues=options.min_part_cues,
         )
-        for part in parts:
-            run.run_part(part, kind="translate", parts_used=len(parts), depth=0)
+        try:
+            for number, part in enumerate(parts):
+                run.part_no = number
+                run.run_part(part, kind="translate", parts_used=len(parts), depth=0)
+        except TranslationError as exc:
+            exc.issues = run.issues
+            raise
 
     translated = [
         cue.with_text(run.out.get(n, run.keep.get(n, cue.text))) for n, cue in enumerate(cues, start=1)
     ]
-    return TranslationResult(cues=translated, calls=run.calls, warnings=run.warnings)
+    return TranslationResult(cues=translated, calls=run.calls, warnings=run.warnings, issues=run.issues)

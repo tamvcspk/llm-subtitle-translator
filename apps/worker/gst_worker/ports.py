@@ -33,7 +33,11 @@ class Account:
 
 @dataclass(frozen=True)
 class LlmCall:
-    """One recorded provider call (NFR-7). ``at`` is epoch seconds."""
+    """One recorded provider call (NFR-7, FR-19.1). ``at`` is epoch seconds. The fields after ``at`` describe
+    how the call was made: ``kind`` is translate | repair | split, ``batch`` the part of the episode, ``retries``
+    the attempt number inside one request, ``repairs`` the cues a repair call was asked for, ``cost_est`` the
+    estimated price in the currency of the configured per-million-token prices (0 when none are set).
+    The hashes are empty until the stage that computes them exists (bundle: P11, style: P12)."""
 
     id: int
     job_id: str
@@ -45,6 +49,60 @@ class LlmCall:
     latency_ms: int
     outcome: str
     at: float
+    kind: str = ""
+    prompt_version: str = ""
+    bundle_hash: str = ""
+    style_hash: str = ""
+    glossary_hash: str = ""
+    batch: int = 0
+    http_status: int | None = None
+    finish_reason: str = ""
+    retries: int = 0
+    repairs: int = 0
+    cost_est: float = 0.0
+
+
+@dataclass(frozen=True)
+class EventRecord:
+    """One decision of the system (FR-19.1). ``kind`` is a dotted name (``job.skipped``); ``reason`` says why in a
+    sentence an admin can read; ``data`` is the rest, already stripped of secrets. ``at`` is epoch seconds."""
+
+    id: int
+    at: float
+    level: str
+    kind: str
+    job_id: str = ""
+    unit_id: int | None = None
+    reason: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class QualitySignal:
+    """What an admin or the validator did to a cue (FR-19.4): ``kind`` is cue_edit | revert | retranslate |
+    validate | ab. ``before``/``after`` are the texts either side; ``meta`` carries the rest."""
+
+    id: int
+    at: float
+    kind: str
+    unit_id: int | None = None
+    version: int | None = None
+    cue: int | None = None
+    before: str = ""
+    after: str = ""
+    meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BodyRef:
+    """Where the prompt and answer of one call are kept (FR-19.2). ``file`` is the segment name without its
+    ``.jsonl``/``.jsonl.gz`` ending; ``rotated`` is True once cleanup removed the file (the index outlives it)."""
+
+    call_id: int
+    file: str
+    offset: int
+    length: int
+    rotated: bool = False
 
 
 @dataclass(frozen=True)
@@ -191,14 +249,89 @@ class UsageLog(Protocol):
         latency_ms: int,
         outcome: str,
         at: float | None = None,
-    ) -> None:
-        """Append one call; ``at`` defaults to now."""
+        kind: str = "",
+        prompt_version: str = "",
+        bundle_hash: str = "",
+        style_hash: str = "",
+        glossary_hash: str = "",
+        batch: int = 0,
+        http_status: int | None = None,
+        finish_reason: str = "",
+        retries: int = 0,
+        repairs: int = 0,
+        cost_est: float = 0.0,
+    ) -> int:
+        """Append one call and return its id; ``at`` defaults to now. Everything after ``at`` is optional."""
 
     def llm_calls(self, job_id: str | None = None) -> list[LlmCall]:
         """Calls in the order recorded, for one job or (without ``job_id``) all of them."""
 
     def token_totals(self, since: float = 0.0) -> TokenTotals:
         """Number of calls and token sums for calls at or after ``since`` (epoch seconds)."""
+
+
+@runtime_checkable
+class TelemetryRepo(Protocol):
+    """Where the event log, quality signals and the body index live (FR-19, ADR-15)."""
+
+    def add_event(
+        self, kind: str, *, level: str = "INFO", job_id: str = "", unit_id: int | None = None, reason: str = "",
+        data: dict[str, Any] | None = None, at: float | None = None,
+    ) -> int:
+        """Append one event and return its id."""
+
+    def events(
+        self, *, job_id: str | None = None, unit_id: int | None = None, kind: str | None = None,
+        since: float | None = None, before_id: int | None = None, limit: int = 100,
+    ) -> list[EventRecord]:
+        """Events newest first. ``kind`` matches exactly, or as a prefix when it ends with a dot (``job.``)."""
+
+    def prune_events(self, before: float) -> int:
+        """Delete events older than ``before`` (epoch seconds); returns how many."""
+
+    def add_signal(
+        self, kind: str, *, unit_id: int | None = None, version: int | None = None, cue: int | None = None,
+        before: str = "", after: str = "", meta: dict[str, Any] | None = None, at: float | None = None,
+    ) -> int:
+        """Append one quality signal and return its id."""
+
+    def signals(
+        self, *, kind: str | None = None, unit_id: int | None = None, limit: int = 100
+    ) -> list[QualitySignal]:
+        """Quality signals newest first."""
+
+    def add_body_ref(self, call_id: int, file: str, offset: int, length: int) -> None:
+        """Remember where the body of a call was written."""
+
+    def body_ref(self, call_id: int) -> BodyRef | None:
+        """Where the body of a call is, or None when none was kept."""
+
+    def mark_bodies_rotated(self, files: Iterable[str]) -> int:
+        """Mark every body index row of these segment names as rotated; returns how many rows."""
+
+
+@runtime_checkable
+class Telemetry(Protocol):
+    """What the core uses to leave a trace of its decisions. Best effort: it never raises and never blocks
+    the job (NFR-11). ``kind`` of an event is a dotted name; ``reason`` is a sentence for the admin."""
+
+    def event(
+        self, kind: str, *, level: str = "INFO", job_id: str = "", unit_id: int | None = None, reason: str = "",
+        **data: Any,
+    ) -> None:
+        """Record a decision."""
+
+    def signal(
+        self, kind: str, *, unit_id: int | None = None, version: int | None = None, cue: int | None = None,
+        before: str = "", after: str = "", **meta: Any,
+    ) -> None:
+        """Record a quality signal."""
+
+    def llm_call(
+        self, job_id: str, log: CallLog, *, prompt_version: str = "", glossary_hash: str = "",
+        bundle_hash: str = "", style_hash: str = "",
+    ) -> None:
+        """Record one provider call and, as the settings allow, its prompt and answer."""
 
 
 @runtime_checkable

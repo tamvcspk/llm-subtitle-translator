@@ -60,6 +60,12 @@ def _is_daily_quota(details: list[Any], message: str) -> bool:
 
 def map_api_error(code: int | None, status: str | None, message: str | None, details: Any) -> ProviderError:
     """Map a Gemini HTTP error (code/status/message/``error.details``) to a typed exception."""
+    error = _map_api_error(code, status, message, details)
+    error.http_status = code
+    return error
+
+
+def _map_api_error(code: int | None, status: str | None, message: str | None, details: Any) -> ProviderError:
     message = message or status or f"HTTP {code}"
     body = details.get("error", details) if isinstance(details, dict) else {}
     inner = body.get("details") if isinstance(body, dict) else None

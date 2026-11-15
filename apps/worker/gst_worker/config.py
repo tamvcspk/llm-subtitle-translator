@@ -55,6 +55,19 @@ MEMORY_INT_CONFIG_KEYS = {
 ADMISSION_AUTO = "auto"
 ADMISSION_HOLD = "hold"
 ADMISSION_MODES = (ADMISSION_AUTO, ADMISSION_HOLD)
+# Logging and measurement (P5, FR-19). `log_prompt_bodies` is what is kept of the prompts and answers of model
+# calls: `off`, `errors` (failed calls only), `sample` (failed calls and one call in ten) or `all`.
+LOG_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR")
+LOG_BODY_MODES = ("off", "errors", "sample", "all")
+# key -> (default, minimum); 0 turns a limit off where the key is a limit
+LOG_INT_CONFIG_KEYS = {
+    "log_body_max_bytes": (262_144, 1_024),
+    "log_max_mb": (500, 0),
+    "log_retention_days": (30, 0),
+    "events_retention_days": (90, 0),
+}
+# Price of a million tokens in the admin's own currency; 0 = no cost estimate on the call records.
+LOG_FLOAT_CONFIG_KEYS = ("llm_cost_in_per_mtok", "llm_cost_out_per_mtok")
 DEFAULT_APP_CONFIG = {
     "source_languages": DEFAULT_SOURCE_LANGUAGES,
     "target_languages": DEFAULT_TARGET_LANGUAGES,
@@ -76,6 +89,10 @@ DEFAULT_APP_CONFIG = {
     "memory_enabled": False,
     "memory_model": "",
     **{key: default for key, (default, _) in MEMORY_INT_CONFIG_KEYS.items()},
+    "log_level": "INFO",
+    "log_prompt_bodies": "all",
+    **{key: default for key, (default, _) in LOG_INT_CONFIG_KEYS.items()},
+    **{key: 0.0 for key in LOG_FLOAT_CONFIG_KEYS},
 }
 
 
@@ -149,6 +166,22 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
             normalized[key] = max(minimum, int(normalized.get(key, default)))
         except (TypeError, ValueError):
             normalized[key] = default
+    normalized["log_level"] = str(normalized.get("log_level") or "").strip().upper()
+    if normalized["log_level"] not in LOG_LEVEL_NAMES:
+        normalized["log_level"] = "INFO"
+    normalized["log_prompt_bodies"] = str(normalized.get("log_prompt_bodies") or "").strip().lower()
+    if normalized["log_prompt_bodies"] not in LOG_BODY_MODES:
+        normalized["log_prompt_bodies"] = "all"
+    for key, (default, minimum) in LOG_INT_CONFIG_KEYS.items():
+        try:
+            normalized[key] = max(minimum, int(normalized.get(key, default)))
+        except (TypeError, ValueError):
+            normalized[key] = default
+    for key in LOG_FLOAT_CONFIG_KEYS:
+        try:
+            normalized[key] = max(0.0, float(normalized.get(key) or 0.0))
+        except (TypeError, ValueError):
+            normalized[key] = 0.0
     try:
         normalized["scan_limit"] = max(1, int(normalized.get("scan_limit", 200)))
     except (TypeError, ValueError):

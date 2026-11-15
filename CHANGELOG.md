@@ -1,4 +1,23 @@
 # Unreleased
+- **P5: event log and measurement (FR-19, NFR-11).** The worker now leaves a trace of what it decides
+  and what it asks the model, in the database (schema 6) and in files, so "why did this episode not
+  run?" has an answer and later changes to prompts, models or styles can be measured. (1) **Events**:
+  every decision (skip with its reason, claim, model chosen, escalation, deferral, quota pause, publish,
+  version, revert, cue edit, settings saved) is one row with the job or unit and a sentence of reason,
+  also written to `worker.log` as one JSON line; `GET /api/events` reads them. (2) **Call records**:
+  `llm_calls` also keeps the prompt version, glossary hash, call kind (translate, repair, split), part,
+  HTTP status, finish reason, attempt number, cues repaired and an estimated cost. (3) **Quality signals**:
+  a cue edit (before and after), a revert, a retranslation request, and every problem the validator found
+  in a reply, repaired or not. (4) **Bodies**: the prompt and answer of each call go to
+  `logs/llm/<day>.<n>.jsonl` (gzipped once closed) under `log_prompt_bodies` (`all`, `sample`, `errors`,
+  `off`), cut to `log_body_max_bytes`, and bounded by `log_max_mb` and `log_retention_days`; the index in
+  the database says "rotated" once a file is gone. Settings has a new *Logging and measurement* card;
+  `log_level` takes effect when saved. Keys, passwords, cookies and `Authorization` headers are removed
+  from the log, events, bodies and job error files by one shared filter. Recording is best effort on its own
+  thread: a full disk or a locked database drops the record and never fails or delays a job. `subcore`'s
+  `CallLog` gained the call kind, part, attempt, HTTP status, finish reason and the request and answer;
+  `TranslationResult.issues` lists the validator's findings. No change to the queue format,
+  `gst_enqueue.sh` or job behaviour.
 - **Roadmap renumbered in execution order (docs only).** `PLAN.md` now lists the unfinished phases as
   one linear sequence, P5 to P16 (logging, settings and keys in the database, the `openai_compat`
   provider, jobs and versions in SQLite, file cleanup, Bazarr catalog pull, bundle and CLI, style

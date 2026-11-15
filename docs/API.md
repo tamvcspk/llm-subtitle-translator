@@ -212,6 +212,14 @@ current stored key.
   "memory_gap_wait_seconds": 1800,
   "memory_budget_tokens": 8000,
   "memory_recent_episodes": 3,
+  "log_level": "INFO",
+  "log_prompt_bodies": "all",
+  "log_body_max_bytes": 262144,
+  "log_max_mb": 500,
+  "log_retention_days": 30,
+  "events_retention_days": 90,
+  "llm_cost_in_per_mtok": 0.0,
+  "llm_cost_out_per_mtok": 0.0,
   "source_languages": [
     {"code": "en", "language": "English", "enabled": true},
     {"code": "ja", "language": "Japanese", "enabled": true}
@@ -290,6 +298,45 @@ export in the console apply only to this snapshot. Timestamps use UTC with an ex
 ## POST /api/logs/clear
 
 Truncates the current worker log file under the writer lock. Rotated history files are preserved.
+
+## GET /api/events
+
+The event log: what the worker decided and why (skip a job, claim it, pick a model,
+escalate, defer, publish a version, ...). Newest first.
+
+Query (all optional):
+
+| Parameter | Meaning |
+|---|---|
+| `job` | one job id |
+| `unit` | one library unit id |
+| `kind` | an exact kind (`job.skipped`), or a family when it ends with a dot (`job.`) |
+| `level` | that level and worse (`INFO`, `WARNING`, `ERROR`) |
+| `since` | epoch seconds; only newer events |
+| `before` | an event id; only older events (the `next_before` of the previous page) |
+| `limit` | 1-1000, default 100 |
+
+```json
+{
+  "items": [
+    {
+      "id": 412, "at": 1763175010.4, "level": "INFO", "kind": "job.skipped",
+      "job_id": "7fefefb6...", "unit_id": 12,
+      "reason": "target subtitle already exists",
+      "data": {"subtitle": "Episode.en.srt", "target": "vi"}
+    }
+  ],
+  "next_before": 389,
+  "telemetry": {"written": 5120, "dropped": 0, "queued": 0}
+}
+```
+
+`next_before` is `null` on the last page. `telemetry.dropped` counts records that were not
+written because the writer's queue was full or a write failed (the job is never affected).
+`data` never holds an API key, password, cookie or header; the filter that removes them is
+shared with the log. Without the database the answer is `{"items": [], "next_before": null,
+"telemetry": null}`. A malformed number returns `400`. Event kinds are documented in
+`docs/ARCHITECTURE.md` ("Logging and measurement").
 
 ## GET /api/backups
 

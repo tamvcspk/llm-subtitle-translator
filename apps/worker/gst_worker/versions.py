@@ -16,7 +16,8 @@ from typing import Iterable
 
 from subcore import srt
 
-from .ports import VersionRepo
+from .ports import Telemetry, VersionRepo
+from .telemetry import NULL as NULL_TELEMETRY
 
 SKIPPED_EXISTING = "skipped-existing-output"
 AUTO = "auto"
@@ -45,9 +46,10 @@ class Published:
 
 
 class TranslationVersions:
-    def __init__(self, repo: VersionRepo, backup_dir: str | Path) -> None:
+    def __init__(self, repo: VersionRepo, backup_dir: str | Path, telemetry: Telemetry | None = None) -> None:
         self.repo = repo  # the VersionRepo port; callers outside this module read versions through it
         self.backup_dir = Path(backup_dir)
+        self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
 
     # -- paths -------------------------------------------------------------
     def _version_path(self, output_path: str, version: int) -> Path:
@@ -84,6 +86,10 @@ class TranslationVersions:
         self.repo.add_version(
             output_path, version=version, stored_path=str(stored), sha256=sha256_bytes(data), trigger=EXTERNAL
         )
+        self.telemetry.event(
+            "version.external", level="WARNING", target=Path(output_path).name, version=version,
+            reason="the target file was not the stored current version (edited or put there from outside); kept as a version before it was replaced",
+        )
 
     # -- cache (NFR-3) -----------------------------------------------------
     def cached_text(self, source_sha256: str, target_lang: str, context_hash: str) -> str | None:
@@ -117,6 +123,7 @@ class TranslationVersions:
         memory_hash: str = "",
         context_complete: bool = True,
         missing_units: Iterable[str] = (),
+        job_id: str = "",
     ) -> Published:
         path = Path(output_path)
         if path.exists() and trigger == AUTO:
@@ -149,6 +156,11 @@ class TranslationVersions:
             memory_hash=memory_hash,
             context_complete=context_complete,
             missing_units=missing_units,
+        )
+        self.telemetry.event(
+            "version.published", job_id=job_id, unit_id=unit_id, target=path.name, version=version, trigger=trigger, model=model,
+            parent=parent.version if parent else None, sha256=sha256_bytes(data),
+            reason=f"version {version} published ({trigger})",
         )
         return Published("translated", version)
 
@@ -184,5 +196,9 @@ class TranslationVersions:
             memory_hash=target.memory_hash,
             context_complete=target.context_complete,
             missing_units=target.missing_units,
+        )
+        self.telemetry.event(
+            "version.reverted", unit_id=target.unit_id, target=Path(output_path).name, version=new_version,
+            restored=version, sha256=target.sha256, reason=f"restored version {version} as version {new_version}",
         )
         return Published("reverted", new_version)

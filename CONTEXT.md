@@ -154,3 +154,31 @@ read on the spot when its subtitle exists.
 An earlier episode with no source subtitle yet. The job is deferred for up to
 `memory_gap_wait_seconds`, then translated anyway and marked `incomplete`, naming the
 missing episodes.
+
+**Event**:
+One decision of the worker with the job or unit it concerns and a reason an admin can
+read: a job skipped because the target already exists, a model chosen, a job escalated or
+deferred, a version published. Events answer "why did this episode not run?". They are
+rows in the `events` table and one JSON line each in the log, never the place for
+subtitle text, keys or passwords.
+
+**Call record**:
+The row `llm_calls` keeps for each attempt at a model call: tokens, latency, outcome, and
+how the call was made (prompt version, glossary hash, translate, repair or split, part of
+the episode, HTTP status, attempt number, cues repaired, estimated cost).
+
+**Prompt body**:
+The prompt and the answer of one model call, kept in a daily JSONL file under
+`logs/llm/` when `log_prompt_bodies` allows. The database only indexes where it is;
+cleanup removes old files and the index then says the body was *rotated*.
+
+**Quality signal**:
+A sign of how good a translation was, made by what someone did or what the validator saw,
+never by an extra model call: a cue the admin edited (before and after), a revert, a
+retranslation request, a problem the validator found in a reply (missing cue, broken tags,
+too many lines, a broken locked term), even when a repair fixed it.
+
+**Telemetry**:
+Events, call records, quality signals and prompt bodies together. Written best effort on
+one background thread: when it cannot keep up or a write fails the record is dropped and
+counted, and the job is never delayed or failed by it.

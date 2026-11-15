@@ -27,6 +27,7 @@ from .logs import clear_logs, read_log_snapshot
 from .queue import layer_report, queue_snapshot
 from .settings import load_settings, public_app_config, settings_from_payload
 from .subtitles import scan_source_subtitles
+from .telemetry import events_page
 
 
 def read_json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
@@ -328,6 +329,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 )
             elif parsed.path == "/api/logs":
                 self.send_json(read_log_snapshot(self.ctx["log_dir"]))
+            elif parsed.path == "/api/events":
+                telemetry = self.ctx.get("telemetry")
+                if telemetry is None or getattr(telemetry, "repo", None) is None:
+                    self.send_json({"items": [], "next_before": None, "telemetry": None})
+                else:
+                    self.send_json(events_page(telemetry, urllib.parse.parse_qs(parsed.query)))
             elif parsed.path == "/api/gemini-models":
                 settings = load_settings(self.ctx["config_path"])
                 self.ctx["settings"] = settings

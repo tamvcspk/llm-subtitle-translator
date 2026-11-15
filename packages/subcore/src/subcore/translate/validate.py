@@ -79,6 +79,8 @@ class Verdict:
     errors: list[str] = field(default_factory=list)
     terms: list[Term] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # The kinds of problem found, for the quality record (FR-19.4): missing | empty | tags | lines | glossary.
+    kinds: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -89,14 +91,22 @@ def check_cue(source: str, translated: str | None, glossary: Glossary | None = N
     verdict = Verdict()
     if translated is None:
         verdict.errors.append("missing from your answer")
+        verdict.kinds.append("missing")
         return verdict
     if source.strip() and not translated.strip():
         verdict.errors.append("empty translation")
+        verdict.kinds.append("empty")
         return verdict
-    verdict.errors.extend(srt.tag_problems(source, translated))
+    tag_errors = srt.tag_problems(source, translated)
+    verdict.errors.extend(tag_errors)
+    if tag_errors:
+        verdict.kinds.append("tags")
     warning = srt.line_count_warning(translated)
     if warning:
         verdict.warnings.append(warning)
+        verdict.kinds.append("lines")
     if glossary is not None:
         verdict.terms = locked_violations(glossary, source, translated)
+        if verdict.terms:
+            verdict.kinds.append("glossary")
     return verdict

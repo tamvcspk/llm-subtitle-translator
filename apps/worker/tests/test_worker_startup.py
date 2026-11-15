@@ -30,4 +30,7 @@ class WorkerStartupTests(unittest.TestCase):
                 server.assert_called_once()
                 ctx = server.call_args.args[0]
                 self.assertIsInstance(ctx["backups"], BackupMaintenance)
-                thread.return_value.start.assert_called_once()
+                # The backup scheduler is started; the telemetry writer thread may be started beside it (P5).
+                started = [call.kwargs.get("target") for call in thread.call_args_list]
+                self.assertEqual(started.count(worker.run_backup_scheduler), 1)
+                thread.return_value.start.assert_called()

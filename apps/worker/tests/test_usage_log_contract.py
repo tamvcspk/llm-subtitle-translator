@@ -15,14 +15,15 @@ class InMemoryUsageLog:
     def __init__(self) -> None:
         self._calls: list[LlmCall] = []
 
-    def record_llm_call(self, job_id, *, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at=None):
-        self._calls.append(
-            LlmCall(
-                id=len(self._calls) + 1, job_id=job_id, provider=provider, model=model, task=task,
-                tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms, outcome=outcome,
-                at=at or time.time(),
-            )
+    def record_llm_call(self, job_id, *, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at=None,
+                        **details):
+        call = LlmCall(
+            id=len(self._calls) + 1, job_id=job_id, provider=provider, model=model, task=task,
+            tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms, outcome=outcome,
+            at=at or time.time(), **details,
         )
+        self._calls.append(call)
+        return call.id
 
     def llm_calls(self, job_id=None):
         return [c for c in self._calls if job_id is None or c.job_id == job_id]
@@ -75,6 +76,26 @@ class UsageLogContract:
         self.assertEqual(len(self.log.llm_calls("b")), 1)
         self.assertEqual(self.log.llm_calls("missing"), [])
         self.assertEqual(len(self.log.llm_calls()), 3)
+
+    def test_recording_returns_the_id_and_keeps_the_details_of_the_call(self):
+        first = self.log.record_llm_call(
+            "j1", provider="gemini", model="m-1", task="translate", tokens_in=1, tokens_out=2, latency_ms=3,
+            outcome="ok", at=1.0, kind="repair", prompt_version="p3-1", bundle_hash="b", style_hash="s",
+            glossary_hash="g", batch=2, http_status=200, finish_reason="STOP", retries=1, repairs=3, cost_est=0.25,
+        )
+        second = self.log.record_llm_call(
+            "j1", provider="gemini", model="m-1", task="translate", tokens_in=1, tokens_out=2, latency_ms=3,
+            outcome="unavailable", at=2.0,
+        )
+        self.assertNotEqual(first, second)
+        full, plain = self.log.llm_calls("j1")
+        self.assertEqual(full.id, first)
+        self.assertEqual(
+            (full.kind, full.prompt_version, full.bundle_hash, full.style_hash, full.glossary_hash, full.batch,
+             full.http_status, full.finish_reason, full.retries, full.repairs, full.cost_est),
+            ("repair", "p3-1", "b", "s", "g", 2, 200, "STOP", 1, 3, 0.25),
+        )
+        self.assertEqual((plain.kind, plain.http_status, plain.retries, plain.repairs, plain.cost_est), ("", None, 0, 0, 0.0))
 
     def test_at_defaults_to_now(self):
         before = time.time()

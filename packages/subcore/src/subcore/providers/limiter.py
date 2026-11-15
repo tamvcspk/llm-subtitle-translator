@@ -13,7 +13,7 @@ import random
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from .base import (
@@ -130,6 +130,15 @@ class CallLog:
     tokens_out: int
     latency_ms: int
     outcome: str  # ok | rate_limited | quota_exhausted | unavailable | bad_output | auth_error | error
+    # What the log of a call also keeps (FR-19.1, 19.2). All optional so older callers keep working.
+    kind: str = ""  # translate | repair | split (set by the translator; "" for other tasks)
+    batch: int = 0  # which part of the episode the call belongs to (0-based)
+    targets: int = 0  # cues the call asked for
+    retry: int = 0  # 0 for the first attempt of a request, 1 for the first retry, ...
+    http_status: int | None = None  # 200 for a good answer; the provider's code for a failure when it is known
+    finish_reason: str = ""
+    request: LLMRequest | None = field(default=None, repr=False)  # the prompt as sent; not for the database
+    response_text: str = field(default="", repr=False)  # the model's raw answer; not for the database
 
 
 _OUTCOMES: tuple[tuple[type[ProviderError], str], ...] = (
@@ -200,20 +209,35 @@ class ResilientProvider:
         if self.deadline is not None and self._clock() + extra >= self.deadline:
             raise DeadlineExceeded("job time budget exhausted")
 
-    def _log(self, req: LLMRequest, started: float, outcome: str, response: LLMResponse | None) -> None:
+    def _log(
+        self, req: LLMRequest, started: float, outcome: str, response: LLMResponse | None,
+        *, retry: int = 0, error: ProviderError | None = None,
+    ) -> None:
         if self.on_call is None:
             return
-        self.on_call(
-            CallLog(
-                provider=self.inner.name,
-                model=(response.model if response and response.model else self.inner.model),
-                task=req.task,
-                tokens_in=response.tokens_in if response else 0,
-                tokens_out=response.tokens_out if response else 0,
-                latency_ms=int((self._clock() - started) * 1000),
-                outcome=outcome,
+        targets = req.meta.get("targets")
+        try:
+            self.on_call(
+                CallLog(
+                    provider=self.inner.name,
+                    model=(response.model if response and response.model else self.inner.model),
+                    task=req.task,
+                    tokens_in=response.tokens_in if response else 0,
+                    tokens_out=response.tokens_out if response else 0,
+                    latency_ms=int((self._clock() - started) * 1000),
+                    outcome=outcome,
+                    kind=str(req.meta.get("kind") or ""),
+                    batch=int(req.meta.get("batch") or 0),
+                    targets=len(targets) if isinstance(targets, (list, tuple, set)) else 0,
+                    retry=retry,
+                    http_status=200 if response else (error.http_status if error else None),
+                    finish_reason=response.finish_reason if response else "",
+                    request=req,
+                    response_text=response.text if response else "",
+                )
             )
-        )
+        except Exception:  # noqa: BLE001 - a record that cannot be kept must never fail the call (NFR-11)
+            pass
 
     def generate(self, req: LLMRequest) -> LLMResponse:
         estimate = estimate_tokens(req)
@@ -227,7 +251,7 @@ class ResilientProvider:
             try:
                 response = self.inner.generate(req)
             except (RateLimited, Unavailable) as exc:
-                self._log(req, started, _outcome(exc), None)
+                self._log(req, started, _outcome(exc), None, retry=attempt, error=exc)
                 last = exc
                 if attempt + 1 >= self.max_attempts:
                     break
@@ -236,9 +260,9 @@ class ResilientProvider:
                 self._sleep(delay)
                 continue
             except ProviderError as exc:
-                self._log(req, started, _outcome(exc), None)
+                self._log(req, started, _outcome(exc), None, retry=attempt, error=exc)
                 raise
-            self._log(req, started, "ok", response)
+            self._log(req, started, "ok", response, retry=attempt)
             if self.limiter is not None:
                 self.limiter.adjust(response.tokens_in - estimate)
             return response

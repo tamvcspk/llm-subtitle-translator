@@ -28,7 +28,10 @@ from gst_worker.translation_attempt import TranslationAttempt
 from gst_worker.units import UnitService
 from gst_worker.versions import TranslationVersions
 from gst_worker.runtime import RuntimeContext
-from gst_worker.ports import MediaLibrary, Metadata
+from gst_worker.ports import MediaLibrary, Metadata, Telemetry
+from gst_worker.bodies import BodyLog
+from gst_worker.redaction import DEFAULT as DEFAULT_REDACTOR, SECRET_SETTING_KEYS
+from gst_worker.telemetry import NULL as NULL_TELEMETRY, Telemetry as TelemetrySink
 from gst_worker.tmdb import TmdbMetadata
 # The settings functions and the HTTP adapter live in their own modules; they stay importable from here.
 from gst_worker.settings import load_settings, public_app_config, seed_app_config_from_settings, settings_from_payload  # noqa: F401
@@ -47,18 +50,26 @@ def process_job(
     attempt: TranslationAttempt | None = None,
     media: MediaLibrary | None = None,
     metadata: Metadata | None = None,
+    telemetry: Telemetry | None = None,
 ) -> str:
     # The ports default to the adapters over the settings this job runs with (composition done here, not in core).
     media = media or BazarrMedia(http, lambda: settings)
     metadata = metadata or TmdbMetadata(http, cache, lambda: settings)
+    telemetry = telemetry or NULL_TELEMETRY
+    subtitle = Path(str(job.get("subtitle_path") or "")).name or None
     reason = skip_reason(job)
     if reason:
         logging.info("Skipping job for %s: %s", job.get("subtitle_path"), reason)
+        telemetry.event("job.skipped", job_id=str(job.get("job_id") or ""), unit_id=job.get("unit_id") or None,
+                        reason=reason, subtitle=subtitle, target=job.get("target_code"))
         return "skipped"
     # Bazarr decides what is wanted: when it says the language is not missing, spend no model call.
     if job.get("trigger") != "retranslate" and media.target_still_missing(job) is False:
         logging.info("Skipping job for %s: Bazarr does not list %s as missing",
                      job.get("subtitle_path"), job.get("target_code"))
+        telemetry.event("job.skipped", job_id=str(job.get("job_id") or ""), unit_id=job.get("unit_id") or None,
+                        reason=f"Bazarr no longer lists {job.get('target_code')} as missing for this item",
+                        subtitle=subtitle, target=job.get("target_code"), cause="not-wanted")
         return "skipped-not-wanted"
 
     if status_callback:
@@ -100,15 +111,17 @@ class QueueWorker:
         attempt: TranslationAttempt | None = None,
         media: MediaLibrary | None = None,
         metadata: Metadata | None = None,
+        telemetry: Telemetry | None = None,
     ) -> None:
-        self.queue = JobQueue(queue_dir)
+        self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
+        self.queue = JobQueue(queue_dir, self.telemetry)
         self.settings = settings
         self.cache = cache
         self.http = http
         self.attempt = attempt
         self.media = media
         self.metadata = metadata
-        self.console = ConsoleActions(FileJobQueue(queue_dir))
+        self.console = ConsoleActions(FileJobQueue(queue_dir, self.telemetry))
         self.queue.recover_interrupted_jobs()
 
     def models(self) -> tuple[str, ...]:
@@ -122,8 +135,19 @@ class QueueWorker:
         if was != ADMISSION_HOLD and str(settings.get("admission_mode") or "") == ADMISSION_HOLD:
             # Switching to `hold` leaves the line as it is (FR-12.8): what the script queued before now counts as admitted.
             stamp_open_jobs(str(self.queue.queue_dir))
+        old = self.settings
         self.settings = settings
+        changed = sorted(key for key in {*old, *settings} if old.get(key) != settings.get(key))
+        if changed:  # a secret is named, never shown, and a new key is not echoed back
+            self.telemetry.event(
+                "settings.changed", reason="the settings were saved", keys=changed[:40],
+                changes={k: [old.get(k), settings.get(k)] for k in changed[:40] if k not in SECRET_SETTING_KEYS},
+            )
         sync_daily_quota_pause(str(self.queue.queue_dir), self.models())
+        # The log level, the secrets to hide and the body limits follow the saved settings at once (FR-19.3).
+        apply = getattr(self.telemetry, "apply_settings", None)
+        if apply is not None:
+            apply(settings)
 
     def admission_mode(self) -> str:
         return ADMISSION_HOLD if str(self.settings.get("admission_mode") or "") == ADMISSION_HOLD else ADMISSION_AUTO
@@ -133,7 +157,7 @@ class QueueWorker:
         return self.queue.process_once(
             lambda job, update_status: process_job(
                 job, self.settings, self.cache, self.http, update_status, self.attempt,
-                media=self.media, metadata=self.metadata,
+                media=self.media, metadata=self.metadata, telemetry=self.telemetry,
             ),
             settle_seconds=max(0, int(self.settings.get("job_settle_seconds") or 0)),
             now=now,
@@ -190,28 +214,46 @@ def main() -> int:
     http = HTTPClient(timeout=int(os.getenv("HTTP_TIMEOUT_SECONDS", "20")))
     data_dir = os.getenv("DATA_DIR", state_dir)
     store = Store(os.getenv("DB_PATH", f"{data_dir}/app.db"))
-    versions = TranslationVersions(store, f"{data_dir}/backups/subtitles")
-    glossaries = GlossaryFiles(data_dir)
+
     def live_settings() -> dict[str, Any]:
-        return worker.settings  # the worker adopts new settings when they are saved
+        try:
+            return worker.settings  # the worker adopts new settings when they are saved
+        except NameError:  # asked while the worker is still being built
+            return settings
+
+    # Events, quality signals and model-call bodies are written off the job's thread (NFR-11, FR-19).
+    telemetry = TelemetrySink(
+        store, usage=store, bodies=BodyLog(f"{data_dir}/logs/llm"), settings_source=live_settings,
+    )
+    telemetry.apply_settings(settings)  # log level now, and the secrets the log must hide
+    DEFAULT_REDACTOR.add_values([os.getenv("CONSOLE_PASSWORD", "")])
+    versions = TranslationVersions(store, f"{data_dir}/backups/subtitles", telemetry=telemetry)
+    glossaries = GlossaryFiles(data_dir)
 
     media = BazarrMedia(http, live_settings)
     metadata = TmdbMetadata(http, cache, live_settings)
     memory = StoryMemory(store, store, settings_source=live_settings, media=media)
     library = Library(store, glossaries, versions, memory=memory)
     attempt = TranslationAttempt(
-        versions=versions, usage=store, provider_factory=build_provider, library=library, memory=memory
+        versions=versions, usage=store, provider_factory=build_provider, library=library, memory=memory,
+        telemetry=telemetry,
     )
     worker = QueueWorker(
         queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt,
-        media=media, metadata=metadata,
+        media=media, metadata=metadata, telemetry=telemetry,
     )
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
     units = UnitService(
         library, glossaries, versions, worker.console.jobs, refresh_bazarr=media.refresh,
         memory=memory, settings_source=live_settings, usage=store, provider_factory=build_provider,
+        telemetry=telemetry,
     )
     backups = BackupMaintenance(state_dir, config_path, postprocess_targets_path)
+    telemetry.event(
+        "worker.started", reason="the worker process started", model=settings.get("gst_model"),
+        fallback_model=settings.get("gst_fallback_model") or None, admission_mode=settings.get("admission_mode"),
+        log_level=settings.get("log_level"), log_prompt_bodies=settings.get("log_prompt_bodies"),
+    )
 
     try:
         if args.once:
@@ -243,12 +285,14 @@ def main() -> int:
             backups=backups,
             transport=HTTPTransport(http),
             units=units,
+            telemetry=telemetry,
         ).as_handler_context()
         if not args.no_worker:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()
         start_web_server(ctx, args.host, args.port, ConsoleAuth.from_env(os.environ, store))
         return 0
     finally:
+        telemetry.close()
         store.close()
 
 

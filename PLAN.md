@@ -18,7 +18,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P2** | Worker dùng `subcore` thay `gst`; SQLite; rate limiter | Chạy thật với Bazarr, bỏ phụ thuộc gst; tiêu chí 6, 8 | `[~]` Code + test xong (xem dưới); còn bảng `jobs`/importer và chạy thật với Bazarr |
 | **P3** | Console: Library, Episode, correction, dịch lại theo dải, lịch sử/hoàn tác | Tiêu chí 7 | `[~]` Code + test xong, CI xanh (e5babb1); còn thử giao diện trên trình duyệt thật |
 | **P4** | Memory: extractor, fold, scheduler prerequisite/gap/stale; tab Context | Tiêu chí 1, 2 | `[~]` Code + test xong (tiêu chí 1, 2 bằng fake provider); đã đo chất lượng trên 3 series, CI GitHub xanh (263c048); còn thử giao diện trên trình duyệt thật |
-| **P5** | Nhật ký và đo lường (FR-19, NFR-11, ADR-15): `events`, `llm_calls` mở rộng, body prompt JSONL xoay vòng, mức log, `quality_signals`. Chưa đổi luồng job | Tiêu chí 17 a–g: mỗi quyết định có event kèm lý do; body xoay vòng đúng giới hạn và bật tắt được; khoá, mật khẩu, cookie không rò; lỗi ghi log không làm job fail | `[ ]` |
+| **P5** | Nhật ký và đo lường (FR-19, NFR-11, ADR-15): `events`, `llm_calls` mở rộng, body prompt JSONL xoay vòng, mức log, `quality_signals`. Chưa đổi luồng job | Tiêu chí 17 a–g: mỗi quyết định có event kèm lý do; body xoay vòng đúng giới hạn và bật tắt được; khoá, mật khẩu, cookie không rò; lỗi ghi log không làm job fail | `[~]` |
 | **P6** | Cài đặt và khoá API trong DB (FR-20, NFR-5, ADR-13): `settings`, `api_keys`, hiệu lực ngay, Thử khoá | Tiêu chí 19: đổi cài đặt và khoá không cần khởi động lại; khoá gieo từ env lần đầu; chỉ trả 4 ký tự cuối; backup không gồm khoá | `[ ]` |
 | **P7** | Provider thứ hai `openai_compat` (FR-9.1–9.3) | Tiêu chí 22: cùng fixture qua `fake` và `openai_compat` (server giả cục bộ) cho cùng kết quả validate; 401/429/5xx/đầu ra sai thành exception có kiểu; model chọn theo tác vụ; khoá lấy từ `api_keys`, không lộ | `[ ]` |
 | **P8** | Lõi job và phiên bản trong SQLite (FR-15, FR-16, FR-17, ADR-11, ADR-12): `jobs`, scheduler, lease, breaker, chờ thay vì fail, phiên bản có `candidate`/`removed`, importer từ queue file, bỏ port nội bộ | Tiêu chí 14 a–l và 15 a–i; test cũ chuyển sang SQLite `:memory:` vẫn pass; `gst_enqueue.sh` vẫn chạy được qua importer | `[ ]` |
@@ -189,19 +189,20 @@ Tiêu chí 1, 2. FR-5; ADR-6; ARCHITECTURE §3.1, §3.2, §3.4 (các điểm l�
 
 ---
 
-## P5 — Nhật ký và đo lường `[ ]`
+## P5 — Nhật ký và đo lường `[~]`
 
 FR-19, NFR-11; ADR-15; tiêu chí 17 a–g. Làm đầu tiên vì dữ liệu không backfill được; không đổi luồng job. Câu hỏi mở 4 (giá trị mặc định) chốt ở đây khi có số liệu.
 
-- [ ] Migration: bảng `events`, `llm_bodies`, `quality_signals`; mở rộng `llm_calls` (prompt version, hash bundle/style/glossary, batch, mã HTTP, finish reason, retries, repairs, chi phí ước tính). Hash bundle/style chưa có thì để trống cho tới P11, P12.
-- [ ] Sink telemetry có giới hạn, một thread ghi, bỏ bản ghi và đếm khi đầy hoặc lỗi; không nằm trong transaction của job (NFR-11).
-- [ ] Bộ lọc che bí mật dùng chung cho log, event, body, báo cáo lỗi (khoá API, mật khẩu, cookie, header).
-- [ ] Body prompt/response → JSONL theo ngày, nén khi xoay; `log_prompt_bodies`, `log_body_max_bytes`, `log_max_mb`, `log_retention_days`; dọn đúng giới hạn và chỉ mục còn nhất quán.
-- [ ] `log_level` đổi nóng qua Settings (tạm thời `config.json` cho đến P6); event ghi dạng JSON một dòng.
-- [ ] Ghi event tại các quyết định có trong code hiện tại: bỏ qua (kèm lý do), claim, chọn model, leo thang, hoãn, publish, version.
-- [ ] Ghi `quality_signals` cho sửa cue, hoàn tác, dịch lại và lỗi validate.
-- [ ] `GET /api/events` (đọc đơn giản); chưa có trang Insights (P15).
-- [ ] Test tiêu chí 17 a–g bằng fake provider; docs: `docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md`, `CHANGELOG.md`.
+- [x] Migration (schema 6): bảng `events`, `llm_bodies`, `quality_signals`; mở rộng `llm_calls` (prompt version, hash bundle/style/glossary, batch, mã HTTP, finish reason, retries, repairs, chi phí ước tính). Hash bundle/style để trống cho tới P11, P12. Lệch nhỏ so với ADR-15: `quality_signals` lưu `version` (số phiên bản của file đích, vì chưa có bảng `versions`) thay cho `version_id`, cột văn bản tên `before_text`/`after_text`; `llm_bodies` thêm cột `rotated`; `metrics_daily` để P15.
+- [x] Sink telemetry có giới hạn (2000 bản ghi), một thread ghi, bỏ bản ghi và đếm (`dropped`) khi đầy hoặc lỗi; không nằm trong transaction của job (NFR-11): `gst_worker/telemetry.py`. Dọn event theo `events_retention_days` và body theo giới hạn chạy trong chính thread này (mỗi giờ và mỗi khi một file đầy).
+- [x] Bộ lọc che bí mật dùng chung (`gst_worker/redaction.py`) cho log (`RedactingFormatter`, kể cả traceback), event, body, file lỗi của job và `translation.redact`: giá trị đã đăng ký (khoá trong settings, `CONSOLE_PASSWORD`) và dạng của bí mật (`AIza…`, `Bearer`, `Authorization`/`Cookie`, `gst_session`, hash scrypt, `password=`); body bỏ luật `password=` vì lời thoại có thể nói thế.
+- [x] Body prompt/response → JSONL theo ngày (`gst_worker/bodies.py`), file đóng thì nén gzip; `log_prompt_bodies` (`all|sample|errors|off`; `sample` = lời gọi lỗi + 1/10), `log_body_max_bytes` (mặc định 262144), `log_max_mb`, `log_retention_days`; file đóng khi sang ngày hoặc đạt 1/4 `log_max_mb` (tối đa 16 MiB) nên giới hạn dung lượng đạt được bằng cách xoá file đóng cũ nhất; chỉ mục đánh dấu `rotated`. Chưa làm "bundle lưu theo hash qua `context_snapshots`": body hiện ghi trọn prompt, việc đó thuộc P11 khi có bundle.
+- [x] `log_level` đổi nóng qua Settings (`config.json` cho đến P6); event ghi dạng JSON một dòng (`EVENT {...}`) ở logger `gst.event`; mức log cũng là mức thấp nhất của event được ghi vào DB.
+- [x] Ghi event tại các quyết định có trong code hiện tại: bỏ qua (kèm lý do; cả lúc xếp hàng `enqueue.skipped` lẫn lúc chạy `job.skipped`), claim, chọn model, leo thang, hoãn, tạm dừng quota, publish, version, hoàn tác, sửa cue, đổi cài đặt.
+- [x] Ghi `quality_signals` cho sửa cue, hoàn tác, dịch lại và lỗi validate (`subcore.translate.ValidationIssue`; mỗi vấn đề validator thấy là một dòng, kể cả khi repair đã sửa, tối đa 500 dòng mỗi lần dịch). Chưa có CPS/độ dài dòng: validator hiện chỉ kiểm thiếu/rỗng/thẻ/số dòng/glossary.
+- [x] `GET /api/events` (lọc theo job, unit, kind hoặc họ kind, level, since; phân trang bằng `before`); chưa có trang Insights (P15).
+- [x] Test tiêu chí 17 a–g bằng fake provider (`apps/worker/tests/test_telemetry.py`, `packages/subcore/tests/test_call_record.py`); docs: `docs/API.md`, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`, `CONTEXT.md`, `AGENTS.md`, `CHANGELOG.md`. 17h (`/api/metrics`) thuộc P15.
+- [ ] Câu hỏi mở 4 (mặc định `log_max_mb`, `log_retention_days`, `breaker_threshold`, `max_calls_per_job`): giữ 500 MB và 30 ngày như SPEC; chốt lại sau khi có số liệu thật từ các lần dịch (đọc `GET /api/events` và dung lượng `logs/llm/`).
 - [ ] Workflow **CI** trên GitHub xanh cho commit P5.
 
 ## P6 — Cài đặt và khoá API trong DB `[ ]`

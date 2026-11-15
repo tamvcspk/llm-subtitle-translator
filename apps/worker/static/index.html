@@ -438,6 +438,64 @@
 
         <section class="settings-card">
           <div class="settings-intro">
+            <h2>Logging and measurement</h2>
+            <p>Every decision the worker takes is written to an event log with its reason, and every model call to a call record. The prompt and the answer of each call can also be kept in daily files, so you can see exactly what was asked. Keys, passwords and cookies are never written.</p>
+          </div>
+          <div class="field-grid">
+            <div class="field">
+              <label for="f-log_level">Log level</label>
+              <select id="f-log_level" name="log_level" class="input">
+                <option value="DEBUG">Debug</option>
+                <option value="INFO">Info</option>
+                <option value="WARNING">Warning</option>
+                <option value="ERROR">Error</option>
+              </select>
+              <p class="hint">Takes effect at once. Subtitle text appears in the log only at Debug.</p>
+            </div>
+            <div class="field">
+              <label for="f-log_prompt_bodies">Keep prompts and answers</label>
+              <select id="f-log_prompt_bodies" name="log_prompt_bodies" class="input">
+                <option value="all">Every call</option>
+                <option value="sample">Failed calls and one in ten</option>
+                <option value="errors">Failed calls only</option>
+                <option value="off">Nothing</option>
+              </select>
+              <p class="hint">Written to <code>logs/llm/</code> next to the database, one file a day, compressed once closed.</p>
+            </div>
+            <div class="field">
+              <label for="f-log_max_mb">Space for prompt files (MB)</label>
+              <input id="f-log_max_mb" name="log_max_mb" class="input" type="number" min="0" max="100000" data-type="int" data-default="500">
+              <p class="hint">The oldest files are deleted past this. 0 sets no limit.</p>
+            </div>
+            <div class="field">
+              <label for="f-log_retention_days">Keep prompt files (days)</label>
+              <input id="f-log_retention_days" name="log_retention_days" class="input" type="number" min="0" max="3650" data-type="int" data-default="30">
+              <p class="hint">0 keeps them until the space limit removes them.</p>
+            </div>
+            <div class="field">
+              <label for="f-log_body_max_bytes">Largest prompt record (bytes)</label>
+              <input id="f-log_body_max_bytes" name="log_body_max_bytes" class="input" type="number" min="1024" max="16777216" data-type="int" data-default="262144">
+              <p class="hint">A longer prompt or answer is cut to fit.</p>
+            </div>
+            <div class="field">
+              <label for="f-events_retention_days">Keep events (days)</label>
+              <input id="f-events_retention_days" name="events_retention_days" class="input" type="number" min="0" max="3650" data-type="int" data-default="90">
+              <p class="hint">0 never deletes them.</p>
+            </div>
+            <div class="field">
+              <label for="f-llm_cost_in_per_mtok">Price per million input tokens</label>
+              <input id="f-llm_cost_in_per_mtok" name="llm_cost_in_per_mtok" class="input" type="number" min="0" step="any">
+              <p class="hint">Only to estimate the cost of each call, in your own currency. 0 skips the estimate.</p>
+            </div>
+            <div class="field">
+              <label for="f-llm_cost_out_per_mtok">Price per million output tokens</label>
+              <input id="f-llm_cost_out_per_mtok" name="llm_cost_out_per_mtok" class="input" type="number" min="0" step="any">
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-card">
+          <div class="settings-intro">
             <h2>Model tuning</h2>
             <p>Sampling and thinking controls. The thinking budget applies to Gemini 2.5 models only; newer models keep their own default.</p>
           </div>

@@ -18,7 +18,10 @@ from typing import Any, Iterable
 
 from subcore.memory import Facts
 
-from .ports import Account, Correction, LlmCall, Output, Series, StoredFacts, TokenTotals, TranslationVersion, Unit
+from .ports import (
+    Account, BodyRef, Correction, EventRecord, LlmCall, Output, QualitySignal, Series, StoredFacts, TokenTotals,
+    TranslationVersion, Unit,
+)
 
 _MIGRATIONS: tuple[str, ...] = (
     """
@@ -155,6 +158,57 @@ _MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE auth ADD COLUMN session_secret TEXT NOT NULL DEFAULT '';
     """,
+    # Schema 6 (P5, ADR-15): the event log, the quality signals, the index of kept prompt bodies, and the
+    # fuller record of a model call. bundle_hash and style_hash stay '' until P11 and P12 compute them.
+    """
+    ALTER TABLE llm_calls ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+    ALTER TABLE llm_calls ADD COLUMN prompt_version TEXT NOT NULL DEFAULT '';
+    ALTER TABLE llm_calls ADD COLUMN bundle_hash TEXT NOT NULL DEFAULT '';
+    ALTER TABLE llm_calls ADD COLUMN style_hash TEXT NOT NULL DEFAULT '';
+    ALTER TABLE llm_calls ADD COLUMN glossary_hash TEXT NOT NULL DEFAULT '';
+    ALTER TABLE llm_calls ADD COLUMN batch INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE llm_calls ADD COLUMN http_status INTEGER;
+    ALTER TABLE llm_calls ADD COLUMN finish_reason TEXT NOT NULL DEFAULT '';
+    ALTER TABLE llm_calls ADD COLUMN retries INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE llm_calls ADD COLUMN repairs INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE llm_calls ADD COLUMN cost_est REAL NOT NULL DEFAULT 0;
+    CREATE INDEX llm_calls_job ON llm_calls (job_id);
+    CREATE TABLE events (
+        id INTEGER PRIMARY KEY,
+        at REAL NOT NULL,
+        level TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        job_id TEXT NOT NULL DEFAULT '',
+        unit_id INTEGER,
+        reason TEXT NOT NULL DEFAULT '',
+        data_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX events_job ON events (job_id, id);
+    CREATE INDEX events_unit ON events (unit_id, id);
+    CREATE INDEX events_kind ON events (kind, id);
+    CREATE INDEX events_at ON events (at);
+    CREATE TABLE llm_bodies (
+        call_id INTEGER PRIMARY KEY REFERENCES llm_calls(id),
+        file TEXT NOT NULL,
+        byte_offset INTEGER NOT NULL,
+        byte_length INTEGER NOT NULL,
+        rotated INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX llm_bodies_file ON llm_bodies (file);
+    CREATE TABLE quality_signals (
+        id INTEGER PRIMARY KEY,
+        at REAL NOT NULL,
+        kind TEXT NOT NULL,
+        unit_id INTEGER,
+        version INTEGER,
+        cue INTEGER,
+        before_text TEXT NOT NULL DEFAULT '',
+        after_text TEXT NOT NULL DEFAULT '',
+        meta_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX quality_signals_kind ON quality_signals (kind, id);
+    CREATE INDEX quality_signals_unit ON quality_signals (unit_id, id);
+    """,
 )
 
 
@@ -288,13 +342,29 @@ class Store:
         latency_ms: int,
         outcome: str,
         at: float | None = None,
-    ) -> None:
+        kind: str = "",
+        prompt_version: str = "",
+        bundle_hash: str = "",
+        style_hash: str = "",
+        glossary_hash: str = "",
+        batch: int = 0,
+        http_status: int | None = None,
+        finish_reason: str = "",
+        retries: int = 0,
+        repairs: int = 0,
+        cost_est: float = 0.0,
+    ) -> int:
         with self._lock:
-            self._db.execute(
-                "INSERT INTO llm_calls (job_id, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (job_id, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at or time.time()),
+            cursor = self._db.execute(
+                "INSERT INTO llm_calls (job_id, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at,"
+                " kind, prompt_version, bundle_hash, style_hash, glossary_hash, batch, http_status, finish_reason,"
+                " retries, repairs, cost_est)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (job_id, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at or time.time(),
+                 kind, prompt_version, bundle_hash, style_hash, glossary_hash, batch, http_status, finish_reason,
+                 retries, repairs, cost_est),
             )
+            return int(cursor.lastrowid)
 
     def llm_calls(self, job_id: str | None = None) -> list[LlmCall]:
         with self._lock:
@@ -306,10 +376,131 @@ class Store:
             LlmCall(
                 id=row["id"], job_id=row["job_id"], provider=row["provider"], model=row["model"], task=row["task"],
                 tokens_in=row["tokens_in"], tokens_out=row["tokens_out"], latency_ms=row["latency_ms"],
-                outcome=row["outcome"], at=row["at"],
+                outcome=row["outcome"], at=row["at"], kind=row["kind"], prompt_version=row["prompt_version"],
+                bundle_hash=row["bundle_hash"], style_hash=row["style_hash"], glossary_hash=row["glossary_hash"],
+                batch=row["batch"], http_status=row["http_status"], finish_reason=row["finish_reason"],
+                retries=row["retries"], repairs=row["repairs"], cost_est=row["cost_est"],
             )
             for row in rows
         ]
+
+    # -- events, quality signals, body index (P5, ADR-15) ----------------------------
+    def add_event(
+        self, kind: str, *, level: str = "INFO", job_id: str = "", unit_id: int | None = None, reason: str = "",
+        data: dict[str, Any] | None = None, at: float | None = None,
+    ) -> int:
+        with self._lock:
+            cursor = self._db.execute(
+                "INSERT INTO events (at, level, kind, job_id, unit_id, reason, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (at or time.time(), level, kind, job_id, unit_id, reason,
+                 json.dumps(data or {}, ensure_ascii=False, sort_keys=True, default=str)),
+            )
+            return int(cursor.lastrowid)
+
+    def events(
+        self, *, job_id: str | None = None, unit_id: int | None = None, kind: str | None = None,
+        since: float | None = None, before_id: int | None = None, limit: int = 100,
+    ) -> list[EventRecord]:
+        clauses: list[str] = []
+        args: list[Any] = []
+        if job_id:
+            clauses.append("job_id = ?")
+            args.append(job_id)
+        if unit_id is not None:
+            clauses.append("unit_id = ?")
+            args.append(unit_id)
+        if kind:
+            if kind.endswith("."):  # a family: "job." matches every job.* event
+                clauses.append("kind LIKE ? ESCAPE '\\'")
+                args.append(kind.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+            else:
+                clauses.append("kind = ?")
+                args.append(kind)
+        if since is not None:
+            clauses.append("at >= ?")
+            args.append(since)
+        if before_id is not None:
+            clauses.append("id < ?")
+            args.append(before_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT * FROM events{where} ORDER BY id DESC LIMIT ?", (*args, max(1, min(int(limit), 1000)))
+            ).fetchall()
+        return [
+            EventRecord(
+                id=row["id"], at=row["at"], level=row["level"], kind=row["kind"], job_id=row["job_id"],
+                unit_id=row["unit_id"], reason=row["reason"], data=json.loads(row["data_json"] or "{}"),
+            )
+            for row in rows
+        ]
+
+    def prune_events(self, before: float) -> int:
+        with self._lock:
+            return self._db.execute("DELETE FROM events WHERE at < ?", (before,)).rowcount
+
+    def add_signal(
+        self, kind: str, *, unit_id: int | None = None, version: int | None = None, cue: int | None = None,
+        before: str = "", after: str = "", meta: dict[str, Any] | None = None, at: float | None = None,
+    ) -> int:
+        with self._lock:
+            cursor = self._db.execute(
+                "INSERT INTO quality_signals (at, kind, unit_id, version, cue, before_text, after_text, meta_json)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (at or time.time(), kind, unit_id, version, cue, before, after,
+                 json.dumps(meta or {}, ensure_ascii=False, sort_keys=True, default=str)),
+            )
+            return int(cursor.lastrowid)
+
+    def signals(self, *, kind: str | None = None, unit_id: int | None = None, limit: int = 100) -> list[QualitySignal]:
+        clauses: list[str] = []
+        args: list[Any] = []
+        if kind:
+            clauses.append("kind = ?")
+            args.append(kind)
+        if unit_id is not None:
+            clauses.append("unit_id = ?")
+            args.append(unit_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT * FROM quality_signals{where} ORDER BY id DESC LIMIT ?", (*args, max(1, min(int(limit), 5000)))
+            ).fetchall()
+        return [
+            QualitySignal(
+                id=row["id"], at=row["at"], kind=row["kind"], unit_id=row["unit_id"], version=row["version"],
+                cue=row["cue"], before=row["before_text"], after=row["after_text"],
+                meta=json.loads(row["meta_json"] or "{}"),
+            )
+            for row in rows
+        ]
+
+    def add_body_ref(self, call_id: int, file: str, offset: int, length: int) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO llm_bodies (call_id, file, byte_offset, byte_length, rotated) VALUES (?, ?, ?, ?, 0)",
+                (call_id, file, offset, length),
+            )
+
+    def body_ref(self, call_id: int) -> BodyRef | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM llm_bodies WHERE call_id = ?", (call_id,)).fetchone()
+        if row is None:
+            return None
+        return BodyRef(
+            call_id=row["call_id"], file=row["file"], offset=row["byte_offset"], length=row["byte_length"],
+            rotated=bool(row["rotated"]),
+        )
+
+    def mark_bodies_rotated(self, files: Iterable[str]) -> int:
+        names = list(files)
+        if not names:
+            return 0
+        with self._lock:
+            total = 0
+            for name in names:
+                total += self._db.execute("UPDATE llm_bodies SET rotated = 1 WHERE file = ? AND rotated = 0", (name,)).rowcount
+            return total
 
     def token_totals(self, since: float = 0.0) -> TokenTotals:
         with self._lock:

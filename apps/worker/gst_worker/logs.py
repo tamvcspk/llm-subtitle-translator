@@ -7,6 +7,7 @@ import re
 import time
 from pathlib import Path
 
+from .redaction import DEFAULT, Redactor
 
 MAX_LOG_BYTES = 512 * 1024
 LOG_HEADER = re.compile(
@@ -15,8 +16,36 @@ LOG_HEADER = re.compile(
 )
 
 
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+DEFAULT_LOG_LEVEL = "INFO"
+
+
 class UTCFormatter(logging.Formatter):
     converter = time.gmtime
+
+
+class RedactingFormatter(UTCFormatter):
+    """Formats a record, tracebacks included, then removes every secret from the finished text (FR-19.3)."""
+
+    def __init__(self, *args, redactor: Redactor | None = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.redactor = redactor or DEFAULT
+
+    def format(self, record: logging.LogRecord) -> str:
+        return self.redactor.redact(super().format(record))
+
+
+def normalize_log_level(value: object) -> str:
+    """``DEBUG`` | ``INFO`` | ``WARNING`` | ``ERROR``; anything else is the default."""
+    name = str(value or "").strip().upper()
+    return name if name in LOG_LEVELS else DEFAULT_LOG_LEVEL
+
+
+def set_log_level(value: object) -> str:
+    """Change what the process logs, at once and without a restart (FR-19.3); returns the level in force."""
+    name = normalize_log_level(value)
+    logging.getLogger().setLevel(getattr(logging, name))
+    return name
 
 
 def read_log_snapshot(log_dir: str, limit: int = 200) -> dict:
@@ -50,17 +79,17 @@ def read_log_snapshot(log_dir: str, limit: int = 200) -> dict:
     }
 
 
-def configure_logging(log_dir: str) -> None:
+def configure_logging(log_dir: str, level: object = DEFAULT_LOG_LEVEL) -> None:
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     handlers = [
         logging.StreamHandler(),
         RotatingFileHandler(Path(log_dir) / "worker.log", maxBytes=5 * 1024 * 1024,
                             backupCount=3, encoding="utf-8"),
     ]
-    formatter = UTCFormatter("%(asctime)sZ %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S")
+    formatter = RedactingFormatter("%(asctime)sZ %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S")
     for handler in handlers:
         handler.setFormatter(formatter)
-    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
+    logging.basicConfig(level=getattr(logging, normalize_log_level(level)), handlers=handlers, force=True)
 
 
 def clear_logs(log_dir: str) -> bool:

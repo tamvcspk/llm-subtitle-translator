@@ -13,6 +13,8 @@ from .config import (
     DEFAULT_MODEL,
     GST_BOOL_CONFIG_KEYS,
     GST_STRING_CONFIG_KEYS,
+    LOG_FLOAT_CONFIG_KEYS,
+    LOG_INT_CONFIG_KEYS,
     MEMORY_BOOL_CONFIG_KEYS,
     MEMORY_INT_CONFIG_KEYS,
     MEMORY_STRING_CONFIG_KEYS,
@@ -60,6 +62,12 @@ def load_settings(config_path: str | None = None) -> dict[str, Any]:
         settings[key] = str(app_config.get(key) or "").strip()
     for key in MEMORY_INT_CONFIG_KEYS:
         settings[key] = int(app_config[key])
+    settings["log_level"] = str(app_config["log_level"])
+    settings["log_prompt_bodies"] = str(app_config["log_prompt_bodies"])
+    for key in LOG_INT_CONFIG_KEYS:
+        settings[key] = int(app_config[key])
+    for key in LOG_FLOAT_CONFIG_KEYS:
+        settings[key] = float(app_config[key])
     for key in ("llm_rpm", "llm_tpm", "llm_rpd"):
         if os.getenv(key.upper(), "").strip():
             settings[key] = os.getenv(key.upper(), "").strip()

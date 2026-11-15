@@ -52,12 +52,21 @@ Domain code is split under `gst_worker/`:
 - `translation_attempt.py`: `TranslationAttempt`, the execution seam for one
   translation job: it reads the source, calls `subcore` in-process, maps typed
   provider errors to the queue's exceptions, and publishes the result;
-- `translation.py`: the two failure classes the queue acts on
-  (`ProviderUnavailableError`, `DailyQuotaExceededError`) and secret redaction;
+- `translation.py`: the failure classes the queue acts on
+  (`ProviderUnavailableError`, `DailyQuotaExceededError`, `HardJobError`,
+  `ContextGapError`) and `redact`, which delegates to `redaction.py`;
+- `redaction.py`: the one secret filter (known values plus secret shapes) used by
+  the log formatter, events, prompt bodies and error text;
+- `telemetry.py`: `Telemetry`, the bounded queue and single writer thread behind
+  events, quality signals and call records (see "Logging and measurement");
+  `events_page` answers `GET /api/events`;
+- `bodies.py`: `BodyLog`, the rotating JSONL files that keep the prompt and answer
+  of each model call;
 - `llm.py`: builds the provider for an attempt from settings: one rate-limited
   Gemini provider per API key, with failover to the next key;
 - `store.py`: SQLite (`app.db`, versioned migrations) with the `translations`,
-  `llm_calls`, library, `facts`, `summaries_cache` and `context_snapshots` tables;
+  `llm_calls`, library, `facts`, `summaries_cache`, `context_snapshots`, `events`,
+  `quality_signals` and `llm_bodies` tables;
 - `memory.py`: `StoryMemory`, the worker side of story memory: story order,
   prerequisite fact extraction, gap waiting, the context bundle and its staleness;
 - `versions.py`: `TranslationVersions`, publishing with version history, backup
@@ -65,8 +74,9 @@ Domain code is split under `gst_worker/`:
 - `tmdb.py`: TMDB lookup and translation description generation;
 - `bazarr.py`: Bazarr API refresh, wanted-item lookup, and API-key parsing;
 - `backups.py`: server-side backup listing and creation;
-- `logs.py`: logging setup, UTC formatting, 5 MiB rotation (three backups),
-  bounded event snapshots, and clearing the current log;
+- `logs.py`: logging setup, UTC formatting with secrets removed from every line
+  (`RedactingFormatter`), a log level that can change while running, 5 MiB rotation
+  (three backups), bounded snapshots, and clearing the current log;
 - `http.py`: small HTTP client and JSON file cache helpers.
 
 The worker translates in-process with the `subcore` engine (workspace package
@@ -161,6 +171,37 @@ bundle and checking staleness can never disagree. `TranslationAttempt` takes the
 sections from the plan (after the glossary and the episode corrections) and maps provider
 errors raised while extracting exactly as for translating, so a spent daily quota pauses
 the queue and the facts already read are kept.
+
+### Logging and measurement (P5)
+
+The worker leaves three kinds of trace, all in `app.db`, plus the prompt bodies in files
+(FR-19, ADR-15). Core code reaches them through the `Telemetry` port (`event`, `signal`,
+`llm_call`); `NULL` (`telemetry.NULL`) is the default wherever it is optional, and
+`worker.py` builds the real one over the `Store` and a `BodyLog`.
+
+- **Events** (`events`): a decision with its reason: `enqueue.skipped`, `job.created`,
+  `job.held`, `job.claimed`, `model.selected`, `job.escalated`, `job.deferred`,
+  `job.requeued`, `job.skipped`, `job.failed`, `job.done`, `quota.paused`,
+  `translation.cached`, `translation.finished`, `version.published`, `version.reverted`,
+  `version.cue_edit`, `settings.changed`, `worker.started`. `GET /api/events` reads them
+  (filter by job, unit, kind or kind family). Each is also written to the log as one JSON
+  line (`EVENT {...}`), which is why the log level also decides which events are kept.
+- **Call records** (`llm_calls`): one row per provider attempt with the prompt version,
+  glossary hash, kind (translate, repair or split), batch, HTTP status, finish reason,
+  attempt number, cues repaired and an estimated cost. `subcore`'s `CallLog` carries what
+  the provider layer knows; the worker adds the hashes.
+- **Quality signals** (`quality_signals`): `cue_edit` (before and after), `revert`,
+  `retranslate` and `validate` (one per problem the validator found, repaired or not).
+- **Bodies**: `DATA_DIR/logs/llm/<day>.<n>.jsonl`, gzipped when closed; `llm_bodies`
+  indexes `(call, segment, offset, length)` with offsets into the uncompressed stream, and
+  keeps the row (marked `rotated`) after cleanup removes the file.
+
+`Telemetry` never raises and never waits: records go into a bounded in-memory queue read by
+one writer thread, outside any job transaction. A full queue or a failed write drops the
+record, counts it (`dropped`, shown by `/api/events`) and logs a warning now and then
+(NFR-11). The same thread prunes events past `events_retention_days` and body files past
+`log_retention_days` and `log_max_mb` once an hour and whenever a segment fills. Every text
+passes the shared redactor first.
 
 `RuntimeContext` is the composition seam for the running process. It carries the
 queue console actions, Bazarr integration, backup maintenance, and HTTP transport

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from subcore import srt
+from subcore.memory.facts import EXTRACT_PROMPT_VERSION
 from subcore.providers import (
     AuthError,
     CallLog,
@@ -27,9 +28,10 @@ from subcore.translate import PromptContext, TranslateOptions, TranslationError,
 from .config import DEFAULT_MODEL
 from .library import Library
 from .memory import StoryMemory
-from .ports import MissingApiKey, ProviderFactory, Unit, UsageLog
+from .ports import MissingApiKey, ProviderFactory, Telemetry, Unit, UsageLog
 from .rules import UnitRules
 from .subtitles import target_output_path
+from .telemetry import Telemetry as TelemetrySink
 from .translation import ERROR_TAIL_LENGTH, DailyQuotaExceededError, HardJobError, ProviderUnavailableError, redact
 from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, TranslationVersions, sha256_bytes
 
@@ -37,6 +39,15 @@ from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, TranslationVersions, 
 PROMPT_VERSION = "p3-1"
 DEFAULT_JOB_TIMEOUT_SECONDS = 1800  # NFR-2 watchdog
 
+
+
+def prompt_version_of(task: str) -> str:
+    """The version of the prompt a call of this task used, for the call record (FR-19.1)."""
+    if task == "translate":
+        return PROMPT_VERSION
+    if task in ("extract", "summarize"):
+        return f"memory-{EXTRACT_PROMPT_VERSION}"
+    return ""
 
 
 def job_timeout_seconds() -> float:
@@ -78,12 +89,15 @@ class TranslationAttempt:
         provider_factory: ProviderFactory | None = None,
         library: Library | None = None,
         memory: StoryMemory | None = None,
+        telemetry: Telemetry | None = None,
     ) -> None:
         self.versions = versions
         self.usage = usage
         self.provider_factory = provider_factory
         self.library = library
         self.memory = memory
+        # Without a shared telemetry the attempt still keeps its plain call record (synchronously, as before P5).
+        self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)
 
     def run(
         self,
@@ -97,7 +111,13 @@ class TranslationAttempt:
         output = str(job.get("output_path") or target_output_path(str(source), target_code))
         trigger = str(job.get("trigger") or AUTO)
         unit = self._register(job)
+        job_id = str(job.get("job_id") or "")
+        unit_id = unit.id if unit else None
         if trigger == AUTO and Path(output).exists():
+            self.telemetry.event(
+                "translation.skipped", job_id=job_id, unit_id=unit_id, target=target_code,
+                reason="a target subtitle already exists; an automatic job never overwrites it",
+            )
             return SKIPPED_EXISTING
 
         source_sha = sha256_bytes(source.read_bytes())
@@ -109,15 +129,11 @@ class TranslationAttempt:
         rules = self._rules(unit, target_code, cues, retranslate.get("correction_ids"))
         model = str(settings.get("gst_model") or os.getenv("GST_MODEL", DEFAULT_MODEL))
         temperature = _temperature(settings)
-        job_id = str(job.get("job_id") or "")
 
         def record(log: CallLog) -> None:
-            if self.usage is not None:
-                self.usage.record_llm_call(
-                    job_id, provider=log.provider, model=log.model, task=log.task,
-                    tokens_in=log.tokens_in, tokens_out=log.tokens_out,
-                    latency_ms=log.latency_ms, outcome=log.outcome,
-                )
+            self.telemetry.llm_call(
+                job_id, log, prompt_version=prompt_version_of(log.task), glossary_hash=rules.hash,
+            )
 
         deadline = time.monotonic() + job_timeout_seconds()
         providers: dict[str, Provider] = {}
@@ -145,16 +161,54 @@ class TranslationAttempt:
             memory_hash=plan.fingerprint if plan else "",
             context_complete=plan.complete if plan else True,
             missing_units=plan.missing if plan else [],
+            job_id=job_id,
         )
 
         if self.versions is not None and trigger == AUTO and not rules.locked:
             cached = self.versions.cached_text(source_sha, target_code, ctx_hash)
             if cached is not None:
                 logging.info("Reusing stored translation for %s (same input and context); no model call", output)
+                self.telemetry.event(
+                    "translation.cached", job_id=job_id, unit_id=unit_id, target=target_code, model=model,
+                    reason="the same source and context were translated before; the stored result is reused",
+                )
                 return self.versions.publish(output, cached, **published).status
 
         only, keep = self._plan(retranslate, rules, cues, output)
 
+        try:
+            result = self._translate(
+                provider_for, cues, job, description, settings, rules, plan, unit, only, keep, temperature, on_progress,
+            )
+        except HardJobError as exc:
+            self._record_issues(getattr(exc, "issues", None), job_id, unit_id, model)
+            raise
+
+        self._record_issues(result.issues, job_id, unit_id, model)
+        self.telemetry.event(
+            "translation.finished", job_id=job_id, unit_id=unit_id, target=target_code, model=model,
+            reason=f"{len(result.calls)} model call(s), {sum(1 for c in result.calls if c.kind != 'translate')} repair or split",
+            calls=len(result.calls), tokens_in=result.tokens_in, tokens_out=result.tokens_out,
+            issues=len(result.issues), trigger=trigger,
+        )
+
+        for warning in result.warnings:
+            logging.warning("Job %s: %s", job_id or source.name, redact(warning, settings))
+        text = srt.serialize(result.cues)
+        if self.versions is None:
+            if Path(output).exists():
+                return SKIPPED_EXISTING
+            srt.write_atomic(output, text)
+            return "translated"
+        return self.versions.publish(
+            output, text, tokens_in=result.tokens_in, tokens_out=result.tokens_out, **published
+        ).status
+
+    def _translate(
+        self, provider_for, cues, job, description, settings, rules, plan, unit, only, keep, temperature, on_progress,
+    ):
+        """The model work of one attempt: build the prompt context, run ``subcore.translate``."""
+        target_code = str(job.get("target_code") or "zh")
         with self._mapped(settings):
             provider = provider_for("translate")
             context = PromptContext(
@@ -170,22 +224,20 @@ class TranslationAttempt:
                 episode=unit.episode if unit else None,
                 title=self._title(unit),  # the series, or the movie
             )
-            result = translate(
+            return translate(
                 provider, cues, context, TranslateOptions(temperature=temperature),
                 on_progress=on_progress, only=only, keep=keep,
             )
 
-        for warning in result.warnings:
-            logging.warning("Job %s: %s", job_id or source.name, redact(warning, settings))
-        text = srt.serialize(result.cues)
-        if self.versions is None:
-            if Path(output).exists():
-                return SKIPPED_EXISTING
-            srt.write_atomic(output, text)
-            return "translated"
-        return self.versions.publish(
-            output, text, tokens_in=result.tokens_in, tokens_out=result.tokens_out, **published
-        ).status
+    MAX_ISSUE_SIGNALS = 500  # per attempt: a source that fails everywhere must not flood the table
+
+    def _record_issues(self, issues, job_id: str, unit_id: int | None, model: str) -> None:
+        """One ``validate`` quality signal per problem the validator found, repaired or not (FR-19.4)."""
+        for issue in list(issues or [])[: self.MAX_ISSUE_SIGNALS]:
+            self.telemetry.signal(
+                "validate", unit_id=unit_id, cue=issue.cue, before=issue.source, after=issue.candidate,
+                issue=issue.kind, call=issue.call, error=issue.error, detail=issue.detail, job_id=job_id, model=model,
+            )
 
     @contextmanager
     def _mapped(self, settings: dict[str, Any]):
@@ -205,7 +257,9 @@ class TranslationAttempt:
         except MissingApiKey as exc:
             raise RuntimeError(str(exc)) from None
         except TranslationError as exc:
-            raise HardJobError(self._message("Translation failed", exc, settings)) from None
+            error = HardJobError(self._message("Translation failed", exc, settings))
+            error.issues = list(getattr(exc, "issues", ()))  # type: ignore[attr-defined]
+            raise error from None
         except ProviderError as exc:
             raise RuntimeError(self._message("Translation failed", exc, settings)) from None
 

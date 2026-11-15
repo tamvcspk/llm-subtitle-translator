@@ -71,6 +71,8 @@ class FrontendStructureTests(unittest.TestCase):
             "media_roots", "scan_limit",
             "memory_enabled", "memory_model", "memory_gap_wait_seconds", "memory_budget_tokens",
             "memory_recent_episodes",
+            "log_level", "log_prompt_bodies", "log_max_mb", "log_retention_days", "log_body_max_bytes",
+            "events_retention_days", "llm_cost_in_per_mtok", "llm_cost_out_per_mtok",
         })
         self.assertIn('<select id="f-gst_model" name="gst_model"', settings)
         self.assertIn('<select id="f-gst_fallback_model" name="gst_fallback_model"', settings)

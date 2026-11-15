@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .redaction import DEFAULT, REDACTED, SECRET_SETTING_KEYS
+
 ERROR_TAIL_LENGTH = 1000
 _KEY_PATTERN = re.compile(r"AIza[A-Za-z0-9_-]+")
 
@@ -43,9 +45,9 @@ class ContextGapError(RuntimeError):
 
 
 def redact(text: str, settings: dict[str, Any] | None = None) -> str:
-    """Remove configured API keys and Google key patterns from ``text``."""
-    for name in ("gemini_api_key", "gemini_api_key2", "bazarr_api_key", "tmdb_api_key"):
+    """Remove the configured API keys, the keys the process registered and every secret shape from ``text``."""
+    for name in SECRET_SETTING_KEYS:
         value = str((settings or {}).get(name) or "")
         if value:
-            text = text.replace(value, "[REDACTED]")
-    return _KEY_PATTERN.sub("[REDACTED]", text)
+            text = text.replace(value, REDACTED)
+    return DEFAULT.redact(_KEY_PATTERN.sub(REDACTED, text))

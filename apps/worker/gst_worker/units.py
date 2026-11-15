@@ -16,15 +16,17 @@ from typing import Any, Callable
 
 from subcore import glossary as g
 from subcore import srt
+from subcore.memory.facts import EXTRACT_PROMPT_VERSION
 
 from subcore.providers import ProviderError
 
 from .config import DEFAULT_MODEL
 from .glossaries import GlossaryFiles
 from .library import Library
-from .ports import CURRENT, Correction, JobQueue, MissingApiKey, Output, ProviderFactory, Unit, UsageLog
+from .ports import CURRENT, Correction, JobQueue, MissingApiKey, Output, ProviderFactory, Telemetry, Unit, UsageLog
 from .memory import MEMORY_MODES, StoryMemory, parse_anchor, unit_label
 from .rules import correction_position
+from .telemetry import Telemetry as TelemetrySink
 from .translation import redact
 from .versions import CUE_EDIT, TranslationVersions
 
@@ -78,7 +80,9 @@ class UnitService:
         settings_source: Callable[[], dict[str, Any]] | None = None,
         provider_factory: ProviderFactory | None = None,
         usage: UsageLog | None = None,
+        telemetry: Telemetry | None = None,
     ) -> None:
+        self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)
         self.library = library
         self.catalog = library.catalog
         self.version_repo = versions.repo
@@ -328,6 +332,16 @@ class UnitService:
                 unit.id, lang, "cue_edit",
                 {"cue": ordinal, "text": text, "source_text": source[ordinal - 1].text},
             ))
+            # What the admin changed in a cue is the clearest sign of what the machine got wrong (FR-19.4).
+            self.telemetry.signal(
+                "cue_edit", unit_id=unit.id, version=published.version, cue=ordinal,
+                before=target[ordinal - 1].text, after=text, lang=lang, source=source[ordinal - 1].text,
+                model=current.model if current else "", context_hash=current.context_hash if current else "",
+            )
+        self.telemetry.event(
+            "version.cue_edit", unit_id=unit.id, reason=f"{len(parsed)} cue(s) edited by the admin",
+            target=Path(output_path).name, version=published.version, cues=sorted(parsed),
+        )
         self._bazarr_refresh(unit)
         return {"ok": True, "scope": "episode", "ids": ids, "version": published.version, "warnings": warnings}
 
@@ -367,6 +381,13 @@ class UnitService:
             "series_id": series.bazarr_id if series else "", "media_id": unit.bazarr_id,
             "unit_id": unit.id, "retranslate": {"range": window, "correction_ids": ids},
         })
+        # An admin asking for a retranslation says the current translation was not good enough (FR-19.4).
+        current = self.version_repo.current_version(out.output_path)
+        self.telemetry.signal(
+            "retranslate", unit_id=unit.id, version=current.version if current else None,
+            cue=window["first"] if window else None, lang=lang, range=window, correction_ids=ids,
+            job_id=job_id, whole_episode=window is None, model=current.model if current else "",
+        )
         return {"ok": True, "job_id": job_id, "range": window, "correction_ids": ids}
 
     @staticmethod
@@ -458,7 +479,13 @@ class UnitService:
         row = self.version_repo.get_version(out.output_path, version)
         if row is None:
             raise LookupError(f"no version {version}")
+        before = self.version_repo.current_version(out.output_path)
         published = self.versions.revert(out.output_path, version)
+        # Going back says the version in force was worse than an older one (FR-19.4).
+        self.telemetry.signal(
+            "revert", unit_id=unit.id, version=published.version, lang=out.target_lang, restored=version,
+            replaced=before.version if before else None, model=before.model if before else "",
+        )
         # Cue edits that the restored text no longer contains are undone, so they stop locking their cues.
         restored = self._target(out)
         for correction in self.catalog.corrections(unit.id, out.target_lang):
@@ -552,12 +579,9 @@ class UnitService:
                 if self._provider_factory is None:
                     raise RuntimeError("no provider factory is wired into the unit service")
                 def record(log) -> None:
-                    if self.usage is not None:
-                        self.usage.record_llm_call(
-                            "console-context", provider=log.provider, model=log.model, task=log.task,
-                            tokens_in=log.tokens_in, tokens_out=log.tokens_out, latency_ms=log.latency_ms,
-                            outcome=log.outcome,
-                        )
+                    self.telemetry.llm_call(
+                        "console-context", log, prompt_version=f"memory-{EXTRACT_PROMPT_VERSION}",
+                    )
                 providers[name] = self._provider_factory(settings, name, deadline=time.monotonic() + 600, on_call=record)
             return providers[name]
 

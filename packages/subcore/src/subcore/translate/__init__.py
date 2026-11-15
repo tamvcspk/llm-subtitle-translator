@@ -1,6 +1,6 @@
 """Translator: planner, prompt builder, validate + repair loop."""
 
-from .engine import CallRecord, TranslateOptions, TranslationError, TranslationResult, translate
+from .engine import CallRecord, TranslateOptions, TranslationError, TranslationResult, ValidationIssue, translate
 from .prompt import PromptContext
 
 __all__ = [
@@ -9,5 +9,6 @@ __all__ = [
     "TranslateOptions",
     "TranslationError",
     "TranslationResult",
+    "ValidationIssue",
     "translate",
 ]

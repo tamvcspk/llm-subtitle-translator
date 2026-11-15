@@ -25,7 +25,9 @@ __all__ = [
 
 
 class ProviderError(Exception):
-    """Base class for provider failures."""
+    """Base class for provider failures. ``http_status`` is the HTTP code behind it when the adapter knows it."""
+
+    http_status: int | None = None
 
 
 class AuthError(ProviderError):

@@ -180,7 +180,15 @@ Default:
   "memory_model": "",
   "memory_gap_wait_seconds": 1800,
   "memory_budget_tokens": 8000,
-  "memory_recent_episodes": 3
+  "memory_recent_episodes": 3,
+  "log_level": "INFO",
+  "log_prompt_bodies": "all",
+  "log_body_max_bytes": 262144,
+  "log_max_mb": 500,
+  "log_retention_days": 30,
+  "events_retention_days": 90,
+  "llm_cost_in_per_mtok": 0.0,
+  "llm_cost_out_per_mtok": 0.0
 }
 ```
 
@@ -230,6 +238,37 @@ The Settings page writes these options into app config:
   not hold what is already pending. `GST_ONLY_PATHS` still applies; held jobs
   are not counted by `GST_MAX_PENDING`, and approving is not limited by it.
   `gst_enqueue.sh` is the same in both modes.
+
+## Logging and Measurement
+
+The worker keeps a trace of what it decides and what it asks the model, so you can answer
+"why did this episode not run?" and later tell which prompt or model did better. Settings →
+*Logging and measurement* (all take effect when saved, no restart):
+
+- `log_level` (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`): the level of
+  `worker.log`, and the lowest level of event that is recorded. Subtitle text appears in the
+  log only at `DEBUG`. Each event is also one JSON line in the log (`EVENT {...}`).
+- `log_prompt_bodies` (`all` default, `sample`, `errors`, `off`): which model calls keep their
+  prompt and answer. `errors` keeps failed calls only; `sample` keeps failed calls and one in
+  ten; `off` writes no body file at all. The call record itself (tokens, latency, outcome,
+  prompt version, ...) is always kept.
+- Bodies are JSONL files in `$DATA_DIR/logs/llm/` (`<day>.<n>.jsonl`, gzipped once closed),
+  one line per call. A line is cut to `log_body_max_bytes` (default `262144`, at least `1024`)
+  by shortening its longest text; `log_max_mb` (default `500`) and `log_retention_days`
+  (default `30`) bound the folder: the oldest closed files are deleted past either limit, and
+  `0` turns that limit off. Disk use is also bounded because a file is closed at a quarter of
+  `log_max_mb` (at most 16 MiB).
+- `events_retention_days` (default `90`; `0` keeps events forever): older rows of the event
+  log are deleted.
+- `llm_cost_in_per_mtok`, `llm_cost_out_per_mtok` (default `0`): the price of a million input
+  and output tokens, in your currency, used only to fill `cost_est` on each call record.
+  `0` leaves the estimate at zero.
+
+Keys, passwords, cookies and `Authorization` headers are removed from the log, the events, the
+bodies and error text. A key is recognized by its value (the configured ones) and by its shape
+(`AIza...`, `Bearer ...`, `Cookie:`, `password=...`); prompt bodies skip the `password=` rule
+because dialogue may say it. Recording is best effort: a full disk or a locked database drops
+the record (counted in `GET /api/events` `telemetry.dropped`) and never fails a job.
 
 ## Story Memory
 
