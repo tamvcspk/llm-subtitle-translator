@@ -35,6 +35,7 @@ export function estimateLines(estimate: Estimate): Array<[string, string]> {
 function withoutAction(request: EstimateRequest): CostRequest {
   if ("retry" in request) return { retry: request.retry };
   if ("retranslate" in request) return { retranslate: request.retranslate };
+  if ("variant" in request) return { variant: request.variant };
   return { selector: request.selector };
 }
 

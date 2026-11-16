@@ -227,8 +227,17 @@ class StyleService:
         if not isinstance(style_doc, dict):
             raise ValueError("style must be an object")
         style = _style(style_doc)
+        # What saving would flag: this one episode, in the language asked for (default: the one it has). ``dry_run``
+        # only counts, as every other save of a style does.
+        outputs = [o.target_lang for o in self.catalog.outputs(unit.id)]
+        lang = str(body.get("lang") or (outputs[0] if outputs else "vi"))
+        impact = self.library.impact_units(
+            [unit], lang, layers=lambda u: replace(self.library.style_layers(u), unit=style),
+        )
+        if body.get("dry_run"):
+            return {"ok": True, "saved": False, "style": style.to_doc(), **impact}
         saved = self.styles.save_unit_style(unit.id, style.to_doc())
-        return {"ok": True, "style": saved.to_doc()}
+        return {"ok": True, "saved": True, "style": saved.to_doc(), **impact}
 
     def _unit(self, unit_id: int):
         unit = self.catalog.get_unit(unit_id)

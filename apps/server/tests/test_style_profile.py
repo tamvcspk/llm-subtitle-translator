@@ -157,6 +157,19 @@ class StaleTests(unittest.TestCase):
         env.style.save_unit_style(env.unit(2), {"style": {"tone": "frantic"}})
         self.assertEqual(env.statuses(), {1: "current", 2: "stale"})
 
+    def test_the_style_of_one_episode_says_what_it_would_flag_before_it_saves(self):
+        env = Env(self)
+        env.translated(1, 2)
+        preview = env.style.save_unit_style(env.unit(2), {"style": {"tone": "frantic"}, "dry_run": True})
+        self.assertEqual((preview["saved"], preview["would_stale"], preview["style"]), (False, 1, {"tone": "frantic"}))
+        self.assertEqual(env.style.unit_style(env.unit(2))["style"], {})  # a dry run stores nothing
+        self.assertEqual(env.statuses(), {1: "current", 2: "current"})
+        saved = env.style.save_unit_style(env.unit(2), {"style": {"tone": "frantic"}})
+        self.assertEqual((saved["saved"], saved["would_stale"]), (True, 1))
+        # The same override again flags nothing new: the episode is already stale.
+        again = env.style.save_unit_style(env.unit(2), {"style": {"tone": "frantic"}, "dry_run": True})
+        self.assertEqual(again["would_stale"], 0)
+
     def test_a_bad_style_is_refused_with_the_offending_field_and_stores_nothing(self):
         env = Env(self)
         series = env.translated(1)

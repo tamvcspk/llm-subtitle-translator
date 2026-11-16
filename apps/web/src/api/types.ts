@@ -219,6 +219,64 @@ export interface Correction {
   created_at: number;
 }
 
+// -- style (`/api/series/{id}/style`, `/api/movies/{id}/style`, `/api/units/{id}/style`) --------------------------
+
+/** Every field is optional: an axis left out inherits from the layer below (language < preset < series < episode < card). */
+export interface Style {
+  formality?: "casual" | "neutral" | "formal";
+  tone?: string;
+  profanity?: "keep" | "soften" | "remove";
+  localization?: "literal" | "balanced" | "adapt";
+  dialect?: "north" | "south" | "neutral";
+  honorifics?: "keep" | "translate";
+  max_cps?: number;
+  max_line_length?: number;
+  max_lines?: number;
+  allow_condense?: boolean;
+  notes?: string;
+}
+
+export interface Preset {
+  id: string;
+  name: string;
+  genres: string[];
+  style: Style;
+  builtin: boolean;
+}
+
+export interface StyleOverview {
+  lang: string;
+  preset: string;
+  style: Style;
+  /** What is in force once the language and the preset are laid under the owner's own style. */
+  effective: Style;
+  presets: Preset[];
+}
+
+/** What saving would do to the translations made without it. Nothing is retranslated. */
+export interface StyleImpact {
+  ok: boolean;
+  saved: boolean;
+  stale_now: number;
+  stale_after: number;
+  would_stale: number;
+}
+
+export interface PreviewRow {
+  n: number;
+  source: string;
+  /** What the current translation says; `null` when there is none. */
+  current: string | null;
+  preview: string;
+}
+
+export interface StylePreview {
+  rows: PreviewRow[];
+  model: string;
+  tokens_in: number;
+  tokens_out: number;
+}
+
 export interface ContextSection {
   title: string;
   body: string;

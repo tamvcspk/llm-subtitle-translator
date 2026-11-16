@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { StyleDraft } from "../lib/style";
 import { api } from "./client";
 import type {
   AuthMe,
@@ -14,6 +15,10 @@ import type {
   MoviesPage,
   SeriesPage,
   StatusResponse,
+  Style,
+  StyleImpact,
+  StyleOverview,
+  StylePreview,
   UnitContextAnswer,
   UnitDetail,
   VersionsAnswer,
@@ -90,7 +95,16 @@ export function useMovies() {
 export type CostRequest =
   | { selector: JobsSelector }
   | { retry: { job_id: string } }
-  | { retranslate: { unit_id: number; body: RetranslateBody } };
+  | { retranslate: { unit_id: number; body: RetranslateBody } }
+  | { variant: { unit_id: number; body: VariantBody } };
+
+/** The whole episode translated with another style, kept as a candidate to compare with the current one. */
+export interface VariantBody {
+  lang: string;
+  label: string;
+  preset: string;
+  style: Style;
+}
 
 /** `range` is `{cues: [first, last]}` or `{time: [start, end]}`; leave it out for the whole episode. */
 export interface RetranslateBody {
@@ -114,11 +128,11 @@ export function useEstimate(request: CostRequest | null) {
       if (request && "retry" in request) {
         return api<JobsAnswer>("/api/queue/retry", { method: "POST", body: { ...request.retry, estimate_only: true }, signal });
       }
-      if (request && "retranslate" in request) {
-        const { unit_id, body } = request.retranslate;
-        const answer = await api<RetranslateAnswer>(`/api/units/${unit_id}/retranslate`, {
+      if (request && ("retranslate" in request || "variant" in request)) {
+        const [path, call] = "retranslate" in request ? ["retranslate", request.retranslate] : ["variant", request.variant];
+        const answer = await api<RetranslateAnswer>(`/api/units/${call.unit_id}/${path}`, {
           method: "POST",
-          body: { ...body, estimate_only: true },
+          body: { ...call.body, estimate_only: true },
           signal,
         });
         return { estimate_only: true, estimate: answer.estimate, planned_total: answer.estimate.jobs, skipped_total: 0, skipped_by_reason: {} };
@@ -154,11 +168,9 @@ export function useRequestJobs() {
         if (!answer.ok) throw new Error("The job could not be retried: it is not failed any more, or the file already has a job.");
         return { count: 1 };
       }
-      if ("retranslate" in request) {
-        await api<{ ok: boolean }>(`/api/units/${request.retranslate.unit_id}/retranslate`, {
-          method: "POST",
-          body: request.retranslate.body,
-        });
+      if ("retranslate" in request || "variant" in request) {
+        const [path, call] = "retranslate" in request ? ["retranslate", request.retranslate] : ["variant", request.variant];
+        await api<{ ok: boolean }>(`/api/units/${call.unit_id}/${path}`, { method: "POST", body: call.body });
         return { count: 1 };
       }
       const answer = await api<JobsAnswer>("/api/jobs", { method: "POST", body: request.selector });
@@ -275,6 +287,100 @@ export function useAdopt(id: number) {
         body: { lang: args.lang },
       }),
     onSettled: () => void refresh(),
+  });
+}
+
+// -- style ----------------------------------------------------------------------------------------------------------
+
+/** Whose style it is: a series, or a movie (reached by the movie's unit id). */
+export type StyleOwner = { kind: "series" | "movie"; id: number };
+
+const ownerPath = (owner: StyleOwner) => (owner.kind === "series" ? `/api/series/${owner.id}` : `/api/movies/${owner.id}`);
+
+export function useOwnerStyle(owner: StyleOwner | null, lang: string) {
+  return useQuery({
+    queryKey: ["style", owner, lang] as const,
+    queryFn: ({ signal }) => api<StyleOverview>(`${ownerPath(owner!)}/style?lang=${encodeURIComponent(lang)}`, { signal }),
+    enabled: owner !== null && lang !== "",
+  });
+}
+
+/** Presets that fit the series' genres on TMDB (it asks TMDB, so once in a while is enough). */
+export function useStyleSuggestions(seriesId: number | null) {
+  return useQuery({
+    queryKey: ["style", "suggestions", seriesId] as const,
+    queryFn: ({ signal }) =>
+      api<{ genres: string[]; presets: Array<{ id: string; name: string }> }>(`/api/series/${seriesId}/style/suggestions`, { signal }),
+    enabled: seriesId !== null,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+}
+
+/** What saving this draft would flag stale: a dry run that counts, stores nothing and costs no model call (UX §6.2). */
+export function useStyleImpact(owner: StyleOwner | { kind: "episode"; id: number }, lang: string, draft: StyleDraft, enabled: boolean) {
+  return useQuery({
+    queryKey: ["style-impact", owner, lang, draft] as const,
+    queryFn: ({ signal }) =>
+      owner.kind === "episode"
+        ? api<StyleImpact>(`/api/units/${owner.id}/style`, { method: "PUT", body: { lang, style: draft.style, dry_run: true }, signal })
+        : api<StyleImpact>(`${ownerPath(owner)}/style?lang=${encodeURIComponent(lang)}`, {
+            method: "PUT",
+            body: { preset: draft.preset, style: draft.style, dry_run: true },
+            signal,
+          }),
+    enabled,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+function useRefreshStyle() {
+  const client = useQueryClient();
+  return () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: ["style"] }),
+      client.invalidateQueries({ queryKey: ["catalog"] }),
+      client.invalidateQueries({ queryKey: ["library"] }),
+      client.invalidateQueries({ queryKey: ["unit"] }),
+    ]);
+}
+
+export function useSaveStyle(owner: StyleOwner | { kind: "episode"; id: number }, lang: string) {
+  const refresh = useRefreshStyle();
+  return useMutation({
+    mutationFn: (draft: StyleDraft) =>
+      owner.kind === "episode"
+        ? api<StyleImpact>(`/api/units/${owner.id}/style`, { method: "PUT", body: { lang, style: draft.style } })
+        : api<StyleImpact>(`${ownerPath(owner)}/style?lang=${encodeURIComponent(lang)}`, {
+            method: "PUT",
+            body: { preset: draft.preset, style: draft.style },
+          }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** The override of one episode: the layer above its series' style. */
+export function useEpisodeStyle(unitId: number) {
+  return useQuery({
+    queryKey: ["style", "episode", unitId] as const,
+    queryFn: ({ signal }) => api<{ style: Style }>(`/api/units/${unitId}/style`, { signal }),
+  });
+}
+
+export interface PreviewRequest {
+  lang: string;
+  unit_id?: number;
+  cues?: number[];
+  preset: string;
+  style: Style;
+}
+
+/** "Try 20 lines": one model call on the draft, written nowhere. */
+export function usePreviewStyle(owner: StyleOwner) {
+  return useMutation({
+    mutationFn: (request: PreviewRequest) => api<StylePreview>(`${ownerPath(owner)}/style/preview`, { method: "POST", body: request }),
   });
 }
 

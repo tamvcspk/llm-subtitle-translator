@@ -1,4 +1,13 @@
 # Unreleased
+- **P12b: Style in `apps/web`, for a series, a movie and one episode.** One form (`StyleForm`) with every axis at **Inherit**
+  ("Inherit · now Neutral", read from `effective`), Tone as free text, Dialect, Honorifics, Fast dialogue, the three limits and
+  Notes behind **More**, and a Preset with the TMDB suggestion ("Apply Drama"). The line "Saving flags N episodes stale." is
+  counted live from a dry run (debounced; "Checking…" meanwhile) and **Save** asks once, only when N > 0 ("Nothing is
+  retranslated"). **Try 20 lines (≈ 1 call)** shows Source, Now and With this style (no Now column for a series nothing is
+  translated in) and writes nothing; **Compare on a whole episode** asks the price of a variant job first and ends as a
+  Candidate in History. The tab of a movie is its own style; the tab of an episode is its override
+  ("Overrides the series style for this episode only", Clear episode override). Backend: `PUT /api/units/{id}/style` now takes
+  `dry_run` and `lang` and answers the stale count for that episode.
 - **P12b: episode and movie page in `apps/web`, Subtitles tab.** `#/unit/:id` has the shared header (code and title, state,
   `Missing units`, current version, model and time, a warning for a file changed outside the worker, **Remove output** behind a
   confirmation sheet), a target-language choice when there are several, and the tabs (a movie has no Context). Subtitles lists

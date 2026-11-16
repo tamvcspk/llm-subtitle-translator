@@ -805,7 +805,10 @@ Body `{"name": "My sitcom"}`. A copy under a new id (`my-sitcom`) to edit; `400`
 Deletes a preset the admin made (`400` for a built-in one: edit it instead).
 
 ### GET /api/units/{id}/style · PUT /api/units/{id}/style
-`{"style": {...}}`: the episode's own override, the layer above the series'. An empty style removes it.
+`{"style": {...}}`: the episode's own override, the layer above the series'. An empty style removes it. `PUT` takes
+`{"style": {...}, "lang"?, "dry_run"?}` (P12b; `lang` defaults to the first target the unit has) and answers `{"ok", "saved",
+"style", "stale_now", "stale_after", "would_stale"}`, counted for this one episode; with `"dry_run": true` it only counts
+and stores nothing.
 
 ### POST /api/units/{id}/variant
 Body `{"lang": "vi", "label": "warmer", "preset": "", "style": {...}}`. Queues a **variant** job (kind `variant`,

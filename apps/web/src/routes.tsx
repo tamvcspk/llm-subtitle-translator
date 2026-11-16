@@ -3,7 +3,9 @@ import { Episodes } from "./pages/Episodes";
 import { Home } from "./pages/Home";
 import { Placeholder } from "./pages/Placeholder";
 import { Series } from "./pages/Series";
+import { SeriesStyle } from "./pages/series/StyleTab";
 import { Corrections } from "./pages/unit/Corrections";
+import { UnitStyle } from "./pages/unit/StyleTab";
 import { Context } from "./pages/unit/Context";
 import { History } from "./pages/unit/History";
 import { Retranslate } from "./pages/unit/Retranslate";
@@ -21,7 +23,7 @@ export function AppRoutes() {
         <Route path="series/:id" element={<Series />}>
           <Route index element={<Navigate to="episodes" replace />} />
           <Route path="episodes" element={<Episodes />} />
-          <Route path="style" element={<Placeholder title="Style" note="Presets, Try 20 lines and the impact line: next in P12b." />} />
+          <Route path="style" element={<SeriesStyle />} />
           <Route path="glossary" element={<Placeholder title="Glossary" note="Terms, forms of address and history: later in P12b." />} />
           <Route path="characters" element={<Placeholder title="Characters" note="Character cards: later in P12b." />} />
           <Route path="context" element={<Placeholder title="Context" note="Story memory, Specials after and Extract facts: later in P12b." />} />
@@ -35,7 +37,7 @@ export function AppRoutes() {
           <Route path="history" element={<History />} />
           <Route path="compare/:version" element={<Placeholder title="Compare" note="Current against a candidate, cue by cue: next in P12b." />} />
           <Route path="context" element={<Context />} />
-          <Route path="style" element={<Placeholder title="Style" note="The episode's own style layer: later in P12b." />} />
+          <Route path="style" element={<UnitStyle />} />
           <Route path="*" element={<Navigate to="subtitles" replace />} />
         </Route>
         <Route path="activity" element={<Placeholder title="Activity" note="Queue, providers and quota: later in P12b." />} />
