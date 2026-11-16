@@ -1,4 +1,10 @@
 # Unreleased
+- **P12b: Compare in `apps/web`** (`#/unit/:id/compare/:version`). The current translation against a candidate, cue by cue,
+  differing cues only by default ("48 of 342"), a "Pick variant" box on each, and a sticky bar ("Selected 12 from variant, 330 kept
+  from current"). **Apply picked cues** records a verdict on every differing cue (picked: variant, the rest: current) and
+  writes the picked ones as cue edits; **Use this version** takes the whole candidate and, for a variant, ticks "Also apply this
+  variant's style to the series" by default, listing what the variant sets and counting the stale episodes from a dry run of
+  `adopt` before anything is saved. A version that is no longer a candidate can only be looked at.
 - **P12b: Style in `apps/web`, for a series, a movie and one episode.** One form (`StyleForm`) with every axis at **Inherit**
   ("Inherit · now Neutral", read from `effective`), Tone as free text, Dialect, Honorifics, Fast dialogue, the three limits and
   Notes behind **More**, and a Preset with the TMDB suggestion ("Apply Drama"). The line "Saving flags N episodes stale." is

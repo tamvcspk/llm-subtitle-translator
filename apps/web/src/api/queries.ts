@@ -5,6 +5,7 @@ import type {
   AuthMe,
   CatalogOverview,
   CatalogStatus,
+  CompareAnswer,
   Correction,
   CuesPage,
   DiffAnswer,
@@ -261,6 +262,54 @@ export function useDiff(id: number, lang: string, version: number | null) {
     queryFn: ({ signal }) =>
       api<DiffAnswer>(`/api/units/${id}/versions/${version}/diff?lang=${encodeURIComponent(lang)}`, { signal }),
     enabled: version !== null,
+  });
+}
+
+export function useCompare(id: number, lang: string, version: number) {
+  return useQuery({
+    queryKey: [...keys.unit(id), "compare", lang, version] as const,
+    queryFn: ({ signal }) =>
+      api<CompareAnswer>(`/api/units/${id}/versions/${version}/compare?lang=${encodeURIComponent(lang)}`, { signal }),
+    enabled: lang !== "",
+  });
+}
+
+/** What keeping a variant's style as the series' own would flag stale: a dry run of "Use this version" (UX §4). */
+export function useAdoptImpact(id: number, lang: string, version: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ["adopt-impact", id, lang, version] as const,
+    queryFn: ({ signal }) =>
+      api<StyleImpact>(`/api/units/${id}/versions/${version}/adopt`, {
+        method: "POST",
+        body: { lang, apply_style: true, dry_run: true },
+        signal,
+      }),
+    enabled,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+export type Winner = "variant" | "current" | "tie";
+
+/**
+ * The admin's verdict on a candidate. It is recorded as a quality signal; with `apply` it is acted on: the cues won by
+ * the variant become cue edits, and a win of the whole episode adopts the candidate (and, with `apply_style`, its style).
+ */
+export function useChoose(id: number, version: number) {
+  const refresh = useRefreshUnit(id);
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (verdict: { lang: string; picks?: Record<string, Winner>; whole?: Winner; apply: boolean; apply_style?: boolean }) =>
+      api<{ ok: boolean; recorded: number; applied: Record<string, unknown> }>(`/api/units/${id}/versions/${version}/choose`, {
+        method: "POST",
+        body: verdict,
+      }),
+    onSettled: () => {
+      void refresh();
+      void client.invalidateQueries({ queryKey: ["style"] });
+    },
   });
 }
 

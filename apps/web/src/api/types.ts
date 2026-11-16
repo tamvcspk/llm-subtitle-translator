@@ -307,13 +307,33 @@ export interface Version {
   /** Unix seconds. */
   created_at: number;
   current: boolean;
-  params: { range?: { first: number; last: number }; variant?: { label: string; preset: string } };
+  params: { range?: { first: number; last: number }; variant?: { label: string; preset: string; style?: Style } };
 }
 
 export interface VersionsAnswer {
   lang: string;
   modified_outside: boolean;
   versions: Version[];
+}
+
+export interface CompareRow {
+  n: number;
+  source: string;
+  current: string | null;
+  variant: string | null;
+  differs: boolean;
+}
+
+/** `GET /api/units/{id}/versions/{v}/compare`: the current translation and one version, cue by cue. */
+export interface CompareAnswer {
+  lang: string;
+  version: number;
+  status: Version["status"];
+  params: Version["params"] & { variant?: { label: string; preset: string; style: Style } };
+  model: string;
+  aligned: boolean;
+  differing: number;
+  rows: CompareRow[];
 }
 
 export interface DiffCue {

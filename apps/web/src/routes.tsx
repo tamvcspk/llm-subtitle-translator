@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router";
 import { Episodes } from "./pages/Episodes";
+import { Compare } from "./pages/Compare";
 import { Home } from "./pages/Home";
 import { Placeholder } from "./pages/Placeholder";
 import { Series } from "./pages/Series";
@@ -29,13 +30,13 @@ export function AppRoutes() {
           <Route path="context" element={<Placeholder title="Context" note="Story memory, Specials after and Extract facts: later in P12b." />} />
           <Route path="*" element={<Navigate to="episodes" replace />} />
         </Route>
+        <Route path="unit/:id/compare/:version" element={<Compare />} />
         <Route path="unit/:id" element={<Unit />}>
           <Route index element={<Navigate to="subtitles" replace />} />
           <Route path="subtitles" element={<Subtitles />} />
           <Route path="corrections" element={<Corrections />} />
           <Route path="retranslate" element={<Retranslate />} />
           <Route path="history" element={<History />} />
-          <Route path="compare/:version" element={<Placeholder title="Compare" note="Current against a candidate, cue by cue: next in P12b." />} />
           <Route path="context" element={<Context />} />
           <Route path="style" element={<UnitStyle />} />
           <Route path="*" element={<Navigate to="subtitles" replace />} />
