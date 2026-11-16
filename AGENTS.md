@@ -42,6 +42,16 @@ Local console preview on Windows: `scripts/start-local.ps1 [-Demo] [-NoWorker]` 
 
 `subcore` has a declarative CLI for judging translation quality without the worker (it knows no DB, queue or HTTP): `uv run subcore translate file.srt --glossary g.yaml` (key from `GEMINI_API_KEY`, or `--api-key-file`; `--provider fake` for a dry run), plus `bundle` (write the bundle of a translation), `render-prompt` (print the requests, no call), `validate` (review a translation against its source) and `compare` (two bundles, or one against a golden set). Every translating command works from a bundle (`--bundle`); flags win over it.
 
+## Frontend (decided, not built yet: PLAN P12b, ADR-17)
+
+The console is moving from vanilla JS (`apps/server/static/`) to a React app (Vite + Mantine) in `apps/web`. Until `apps/web` exists, change `apps/server/static/` as before and do not start the React app early; the target layout, screens and data sources are in `docs/design/UX.md` (v0.14).
+
+- **Delivery:** the Dockerfile becomes multi-stage. A Node stage (pinned version, `npm ci` with the lockfile, `npm run build`) produces `dist/`; the final stage stays `python:3.14-slim` + uv and only receives `dist/` as `/app/static`. The final image must never contain Node, `node_modules` or the UI sources. One container, one process, port `6789`.
+- **`apps/web` is not a uv workspace member** (it has its own `package.json` and lockfile). Add its build and test commands to "Development Commands" when it lands, and add a Node job to `.github/workflows/ci.yml`; `docker-image.yml` must also watch `apps/web/**`. JS tests use their own runner; the "stdlib `unittest`, not pytest" rule is for Python.
+- **Login stays a standalone static page** (`GET /login`, outside the React bundle) so the auth middleware's only exception does not widen; every other file of the build requires a session.
+- The UI calls only `/api/*` (`docs/API.md`), routes with `#hash` (it runs in an iframe of Organizr on an iPad), is English-only, touch-first (targets ≥ 44 px, no hover-only controls), portrait first (about 820 px, iPad held upright; landscape ≥ 1024 px is secondary and only widens tables and grids, which fold into cards below 1024 px) and has no CDN dependency (fonts and icons are bundled).
+- Rules the UI must keep (UX.md §3, §6): every button that spends model calls goes through an Estimate/Confirm dialog (Try 20 lines is the one exception and shows its cost on the button); the number of translations a Style or Glossary save would flag stale is shown live from `dry_run`, not behind a Check button; downloads use server-served links plus a Copy button, never `blob:`.
+
 ## Architecture
 
 Read `docs/ARCHITECTURE.md` before changing queue, translation, or Bazarr behavior; it is the source of truth for module responsibilities, queue layout, and job shape. Domain vocabulary (translation job, translation attempt, translation version, daily quota pause, queue lifecycle) is defined in `CONTEXT.md`; use those terms in code and reports. HTTP endpoints are in `docs/API.md`, settings in `docs/CONFIGURATION.md`.
@@ -50,7 +60,7 @@ The end-to-end flow spans three independent pieces (Bazarr pushes nothing, ADR-1
 
 1. The worker **pulls** the library from Bazarr's API into the catalog cache (`catalog.py`, `MediaLibrary.catalog()`), and makes jobs only when the admin requests translations in Library (`job_requests.py`) or the `auto_request` policy asks (`auto_request.py`).
 2. `apps/server/worker.py` + `subserver/` consume the queue one job at a time, translate in-process with `subcore`, write the target `.srt` beside the media, and ask Bazarr to rescan.
-3. `apps/server/static/` is a dependency-free web console that talks only to the worker's own API.
+3. `apps/server/static/` is a dependency-free web console that talks only to the worker's own API. **Decided 2026-11-16 (ADR-17, SPEC #26, PLAN P12b): it is being replaced by a React (Vite + Mantine) app in `apps/web`; until P12b lands, `static/` stays the live console.** See "Frontend" below.
 
 `packages/subcore` must stay free of Bazarr, queue, and HTTP knowledge (ADR-2); the worker depends on it, never the reverse. Roadmap phases (P0–P16, including P0b–P0d), their checklists, and status are in `PLAN.md`; tick items there as work lands.
 

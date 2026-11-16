@@ -1,6 +1,6 @@
 # ARCHITECTURE — LLM Subtitle Translator for Bazarr
 
-> Trạng thái: **Draft v0.12** · 2026-11-15 (v0.12: bundle thuần và few-shot ngoài hash stale (ADR-14, ADR-16), bootstrap của `auto_request` (ADR-10), dịch lại theo dải đóng dấu hash cả tập (ADR-14), đổi tên `apps/server` và `subserver` (ADR-2); v0.11: đánh số lại phase P5–P16 theo thứ tự làm — §3.5 research làm cuối, §3.6 đề xuất và Review inbox, §4 `suggestions` thêm `source`; v0.10: thiết kế lại luồng job — ADR-10 đến ADR-16, §2 sơ đồ đích, §4 schema đích, §5, §6, §8; ADR-8 được điều chỉnh bởi ADR-12, ADR-9 bị thay bởi ADR-10/11, ADR-5 điều chỉnh, quy tắc upstream của ADR-2 bỏ; v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8; v0.9: ADR-8 ranh giới và port chuyển từ SPEC mục 9 sang §1 và §2, theo số phiên bản của SPEC; thêm ADR-9 chế độ `hold` ở §1, P0d phần 2) · Hiện thực hoá [SPEC.md](SPEC.md)
+> Trạng thái: **Draft v0.17** · 2026-11-16 (v0.17: theo SPEC, §5 thêm route glossary/style/cards cấp phim và số `failed`/`ignored` theo series (đã kiểm là đếm rẻ được), không đổi ADR; v0.16: theo SPEC, khổ chính của giao diện là dọc ~820 px, không đổi ADR; v0.15: theo SPEC, không đổi ADR, chỉ UX.md v0.15 và quyết định #26 điểm 12; v0.14: giao diện React (Vite + Mantine) build nhiều tầng, image cuối vẫn chỉ Python — ADR-17 mới, sửa ADR-7 và ADR-2, §5 API dự kiến cho P12b, §8 rủi ro, xem [UX.md](UX.md) v0.14; v0.13: yêu cầu UI của ADR-7 — chạy trong iframe của Organizr trên iPad, cookie `SameSite`, tiếng Anh, xem [UX.md](UX.md); v0.12: bundle thuần và few-shot ngoài hash stale (ADR-14, ADR-16), bootstrap của `auto_request` (ADR-10), dịch lại theo dải đóng dấu hash cả tập (ADR-14), đổi tên `apps/server` và `subserver` (ADR-2); v0.11: đánh số lại phase P5–P16 theo thứ tự làm — §3.5 research làm cuối, §3.6 đề xuất và Review inbox, §4 `suggestions` thêm `source`; v0.10: thiết kế lại luồng job — ADR-10 đến ADR-16, §2 sơ đồ đích, §4 schema đích, §5, §6, §8; ADR-8 được điều chỉnh bởi ADR-12, ADR-9 bị thay bởi ADR-10/11, ADR-5 điều chỉnh, quy tắc upstream của ADR-2 bỏ; v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8; v0.9: ADR-8 ranh giới và port chuyển từ SPEC mục 9 sang §1 và §2, theo số phiên bản của SPEC; thêm ADR-9 chế độ `hold` ở §1, P0d phần 2) · Hiện thực hoá [SPEC.md](SPEC.md)
 > Tài liệu này mô tả kiến trúc **đích**. Kiến trúc hiện tại kế thừa từ upstream nằm ở [docs/ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
@@ -47,7 +47,7 @@ llm-subtitle-translator/            # fork
 
 **Đã làm ở P0:** root `pyproject.toml` là *virtual workspace root* (không có `[project]`), một `uv.lock` chung. `subcore` dùng `src/` layout (`packages/subcore/src/subcore/`), build bằng `uv_build`, cài editable. `apps/server` khai báo `package = false` (chạy dạng script, giữ nguyên import `subserver`). Image chỉ cài member `llm-subtitle-server` và giữ layout runtime cũ (`/app/worker.py`, `/app/subserver`, `/app/static`).
 
-**Đổi tên (v0.12, P0e).** `apps/worker` → `apps/server`, package Python `gst_worker` → `subserver` ("gst" là gemini-srt-translator, đã bỏ ở ADR-1; "worker" chỉ còn là vai consumer của hàng đợi trong server), thành viên workspace `llm-subtitle-worker` → `llm-subtitle-server`. `worker.py` (gốc cấu thành) và `/app/worker.py` trong image giữ tên. Chỉ `git mv` và sửa import, không đổi hành vi. `static/` ở lại `apps/server/static/` và image vẫn một tầng build: thư mục giao diện riêng (`apps/web`) chỉ tạo khi có bước build (P13 trở đi), kèm Dockerfile nhiều tầng; không tách container (ADR-4, ADR-7). CLI nằm trong `subcore` và không là kênh phân phối của image dù `subcore` đã cài sẵn trong đó: dùng `docker exec … subcore …` để tái hiện job là tiện ích phụ.
+**Đổi tên (v0.12, P0e).** `apps/worker` → `apps/server`, package Python `gst_worker` → `subserver` ("gst" là gemini-srt-translator, đã bỏ ở ADR-1; "worker" chỉ còn là vai consumer của hàng đợi trong server), thành viên workspace `llm-subtitle-worker` → `llm-subtitle-server`. `worker.py` (gốc cấu thành) và `/app/worker.py` trong image giữ tên. Chỉ `git mv` và sửa import, không đổi hành vi. `static/` ở lại `apps/server/static/` và image vẫn một tầng build: thư mục giao diện riêng `apps/web` được tạo ở P12b (v0.14, ADR-17), kèm Dockerfile nhiều tầng; không tách container (ADR-4, ADR-7). CLI nằm trong `subcore` và không là kênh phân phối của image dù `subcore` đã cài sẵn trong đó: dùng `docker exec … subcore …` để tái hiện job là tiện ích phụ.
 
 **Đã làm ở P1 (các chỗ tài liệu còn để mở):**
 - `i` gửi cho LLM là **số thứ tự 1-based** của cue trong danh sách đã parse, không phải index trong file SRT (index có thể trùng/đứt quãng); `Cue` giữ nguyên `index` và dòng `timing` gốc, nên file ra trùng timecode byte-by-byte do cấu tạo.
@@ -141,14 +141,14 @@ Lỗ hổng thật của đề xuất trước là chiều ngược lại và l�
 
 ### ADR-7 · Duyệt / correction / dịch lại nằm trong console của worker
 
-**Quyết định:** Mở rộng console tĩnh sẵn có (`static/`, vanilla JS không build step, cùng process, cùng port 6789). Không làm UI riêng.
+**Quyết định:** Mở rộng console tĩnh sẵn có (`static/`, vanilla JS không build step, cùng process, cùng port 6789). Không làm UI riêng. **[Đổi]** (v0.14, ADR-17): console chuyển sang ứng dụng React (Vite + Mantine) trong `apps/web`, build trong tầng Node của Dockerfile nhiều tầng và phục vụ như file tĩnh từ cùng process, cùng cổng. Vẫn không thêm container và không làm UI riêng ngoài console. *Lý do:* số màn hình và thành phần cảm ứng của UX v0.14 vượt mức hợp lý để tự viết bằng vanilla JS.
 
 | Phương án | Đánh giá |
 |---|---|
 | **Console worker (chọn)** | Cùng process, đọc thẳng SQLite + YAML; đã có khung điều hướng, settings, logs; không thêm container/port. |
 | UI của Bazarr | Bazarr không có cơ chế plugin/extension cho UI ⇒ không chèn được nút. Chỉ dùng Bazarr cho việc nó đã làm: hook + scan. |
 | Plugin Jellyfin/Plex ("báo câu sai" ngay trong player) | Trải nghiệm tốt nhất nhưng mỗi player một plugin, ngôn ngữ khác (C#/…), gắn với player bạn đang dùng. Ngoài v1; API ở mục 5 đủ để làm sau. |
-| SPA riêng (React…) | Thêm build pipeline + container, trùng chức năng console. |
+| SPA React trong cùng process (**[Đổi]** v0.14: **chọn**, ADR-17) | Thêm build pipeline (tầng Node trong Dockerfile) nhưng không thêm container. Ban đầu bị loại vì build pipeline và container; v0.14 chấp nhận build pipeline vì UX cần nhiều thành phần cảm ứng. SPA tách thành container riêng vẫn bị loại (trùng chức năng console, ADR-4). |
 | Chỉ sửa file YAML bằng tay | Vẫn được hỗ trợ (YAML là nguồn sự thật), nhưng không đủ cho duyệt có bằng chứng, tìm cue theo timecode, diff/hoàn tác. |
 
 **Trang mới:**
@@ -158,6 +158,8 @@ Lỗ hổng thật của đề xuất trước là chiều ngược lại và l�
 - **Glossary** — sửa theo series; lưu xuống YAML; hiện số bản dịch sẽ stale.
 
 Yêu cầu UI: responsive (điện thoại), không phụ thuộc CDN (homelab có thể offline).
+
+**Yêu cầu UI bổ sung (v0.13, [UX.md](UX.md)):** (1) Console chạy trong **iframe** của Organizr. Nó không gửi `X-Frame-Options` hay `frame-ancestors` (đúng ý), nhưng cookie phiên đang đặt `SameSite=Strict` (`auth.py`): cookie chỉ được gửi khi iframe và trang Organizr **cùng site** (cùng host, khác cổng vẫn là cùng site). Khác site (truy cập Organizr bằng tên miền còn console bằng IP, chẳng hạn) thì Safari không gửi cookie và đăng nhập lặp. Cần cài đặt cho phép `SameSite=None; Secure` hoặc đặt cả hai sau cùng một host; chưa làm, ghi ở PLAN. Kiểm `Origin`/`Host` của ghi (CSRF) vẫn đúng trong iframe vì yêu cầu xuất phát từ chính origin của console. (2) Cảm ứng là chính: không có chức năng nào chỉ hiện khi rê chuột; vùng bấm tối thiểu 44 px; không dựa vào thanh địa chỉ của trình duyệt (route bằng `#hash` trong iframe vẫn chạy). (3) Giao diện tiếng Anh. **Từ v0.14:** cấu trúc trang, nhãn trạng thái, luồng cải thiện style, hộp Estimate/Confirm và nội dung từng màn hình ở [UX.md](UX.md) (kể cả Phụ lục A nguồn dữ liệu và Phụ lục B cài đặt); trang đăng nhập vẫn là trang tĩnh độc lập (ADR-17).
 
 **Xác thực** (SPEC NFR-5, quyết định #8): một middleware trong HTTP handler chặn **mọi** request trước khi route (static + `/api/*`). Ngoại lệ duy nhất, hẹp: trang đăng nhập (`GET /login`, tài nguyên tĩnh của riêng nó) và `POST /api/auth/login`. Một tài khoản, hai cách vào:
 
@@ -336,6 +338,29 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 **Đã làm ở P12 (chốt các điểm để ngỏ, và chỗ lệch nhỏ so với bảng của ADR-14):** (1) `glossaries` và `character_cards` khoá theo `(owner_kind, owner_key)` với `owner_kind` là `series` hoặc `movies`, đúng tên thư mục YAML cũ, thay cho `series_id`: phim cũng có glossary và không dòng nào cần id series. `style_profiles.scope` chỉ có `preset | series | unit` (không có `global`: FR-18.1 không có tầng global); `scope_id` là id preset, `series/<key>` (hay `movies/<key>`) hoặc id unit. `translations` thêm `params_json` (migration 12). (2) `doc_json` là schema YAML ở dạng mapping (`subcore.glossary.to_doc`/`from_doc`; `loads`/`dumps` chỉ còn là lớp YAML bọc ngoài), nên xuất YAML rồi nhập lại cho cùng một glossary. `glossary_history` giữ trạng thái **bị thay**, `note` cho biết lần lưu nào thay nó (`console`, `import`, `correction`, `restore`, `copy`); lưu lại đúng nội dung thì không thành phiên bản mới. `retention_glossary_keep` đếm dòng lịch sử; thư mục `backups/glossary/` cũ không còn được dọn. (3) Importer chạy một lần (cờ `_glossaries_imported` trong `settings`), giữ nguyên file, bản trong DB thắng file, file hỏng được báo trong log và để nguyên; dòng `style:` chữ tự do của glossary **không** bị chuyển sang style profile (xuất lại phải y nguyên): nó vẫn được đọc và gửi cho model, form ghi là "Old style note". (4) Hash luật: nếu không có tầng style nào được lưu và không có thẻ nào thì dữ liệu băm y như trước P12, nên nâng cấp không làm bản dịch nào `stale`; có thì băm các tầng đã lưu (preset đang dùng, series, tập) và **mọi** thẻ của series (băm không có cue nên không biết thẻ nào "có mặt"). Tầng ngôn ngữ nằm ngoài hash và thuộc `PROMPT_VERSION` (`p12-1`). (5) Thẻ "có mặt" ở một tập khi tên hoặc bí danh xuất hiện nguyên từ trong thoại (SRT không có nhãn người nói) hoặc thẻ đặt `always`; thẻ ghi đè trục nào thì prompt in giá trị của thẻ dưới tên nhân vật, sau mục *Effective style*. (6) Few-shot được chọn một lần cho cả bundle theo độ giống từ vựng với các cue được yêu cầu (từ ≥ 4 ký tự, trọng số theo độ hiếm), không theo từng batch vì system prompt dùng chung cho cả tập; cue sửa của chính tập đó bị loại (đã là `keep`); ngân sách `few_shot_budget_tokens` (600, 0 = tắt). (7) Lọc `terms` theo request: `glossary_filter_threshold` là tham số của bundle (có trong hash), `render_system(bundle, texts)` lọc theo các dòng của từng lời gọi, và `render-prompt` lọc theo cả nguồn. (8) "Thử style": ~20 cue rải đều cộng 2 cue lân cận mỗi bên làm ngữ cảnh, dựng thành bundle nhỏ có cue đánh số lại; model mặc định, không ghi file, không tạo phiên bản; correction `address` có `from_cue` theo số thứ tự cue của cả tập không áp được trong mẫu này. (9) Variant: khoá job riêng (`variant|…`) để không bị nhầm với job dịch lỗi của cùng file, ưu tiên `interactive`, tối đa một job mở mỗi (tập, ngôn ngữ), luôn kết thúc là `candidate` (`TranslationVersions.publish` với `trigger = variant`), `params.variant = {label, preset, style}`. Điểm A/B ghi `quality_signals` loại `ab` kèm label, style, model và prompt version; gom theo style là việc của P15. (10) Dịch lại theo dải: hành vi cũ đã đóng dấu hash của cả tập; nay có test và `params.range`. (11) **Chưa làm ở P12:** đo `variant` trên vài tập thật để trả lời câu hỏi mở 3 (cần quota và tập thật), LLM-as-judge (mặc định tắt theo FR-18.8), `--style` cho CLI (CLI chạy bundle do worker xuất nên tái hiện đúng style), giao diện chưa được thử trên trình duyệt thật.
 
 **Rủi ro chấp nhận:** lỗi trong bước gom (`gather`) CLI không thấy vì nó chỉ chạy từ bundle đã gom. Giảm bằng test của `gather` ở worker và bằng việc đọc bundle xuất từ một job thật.
+
+### ADR-17 · Giao diện React (Vite + Mantine), build nhiều tầng (FR-10.4, FR-10.5)
+
+**Quyết định (v0.14):** console chuyển từ vanilla JS (`apps/server/static/`) sang ứng dụng **React** dùng **Vite** và **Mantine** trong `apps/web`. Dockerfile thành nhiều tầng: tầng `web` (Node, phiên bản cố định) chạy `npm ci` rồi `npm run build`; tầng cuối vẫn là `python:3.14-slim` + uv như hiện nay và chỉ nhận thư mục `dist/` qua `COPY --from=web … /app/static`. **Image cuối không có Node, `node_modules` hay mã nguồn giao diện.** Một container, một process, một cổng 6789 (ADR-4). Sửa ADR-7 (đã loại SPA vì build pipeline và container) và ADR-2 (`apps/web` tạo ở P12b, không đợi P13). Làm ở PLAN P12b, sau P12 và trước P13 để Review inbox dựng bằng giao diện mới.
+
+| Phương án | Đánh giá |
+|---|---|
+| Giữ vanilla JS không build | Giữ ràng buộc không phụ thuộc và test cấu trúc bằng so khớp chuỗi, nhưng mỗi thành phần cảm ứng (segmented, bottom sheet, chip, accordion, bảng thu về thẻ) phải tự viết và tự giữ nhất quán qua hơn tám màn hình. |
+| **React + Vite + Mantine (chọn)** | Có sẵn thành phần cảm ứng và theme tối; build tách khỏi runtime. Chi phí: build pipeline, phụ thuộc npm, bộ test mới. Mantine do admin chỉ định; chưa so sánh với thư viện khác ở mức quyết định này. |
+
+**Cơ chế:**
+1. `apps/web` **không** là thành viên của uv workspace: có `package.json` và lockfile (`npm ci` bắt buộc lockfile). Phiên bản Node cố định trong Dockerfile và trong CI.
+2. Giao diện được phục vụ như file tĩnh qua đúng đường cũ (`/app/static`), nên hợp đồng của `subserver/web.py` không đổi: cùng middleware xác thực, cùng `/api/*`. Không có route phía server cho từng trang; điều hướng bằng `#hash` (hash router), chạy trong iframe và khi tải lại trang.
+3. **Trang đăng nhập là trang tĩnh độc lập** (HTML và JS nhỏ, không tải gói React) ở `GET /login`. Nhờ vậy ngoại lệ duy nhất của middleware (ADR-7 "Xác thực") không mở rộng; test của rủi ro §8 quét thư mục `dist/`: mọi tệp ngoài trang đăng nhập đòi phiên.
+4. **Hết phiên:** mọi `401` từ `/api/*` làm giao diện hiện lớp phủ đăng nhập lại, giữ bản nháp đang sửa trong bộ nhớ trình duyệt; đăng nhập xong quay về `#hash` đang mở (cần kiểm trang đăng nhập có nhận tham số quay về hay không).
+5. **Không CDN:** font và icon đóng gói trong bản build (homelab có thể offline, ADR-7).
+6. **Test:** CI thêm job Node (`npm ci`, kiểm kiểu và lint nếu có, test đơn vị, build). Phần của `tests/test_frontend_structure.py` so khớp chuỗi trong HTML cũ được thay bằng test của gói mới; phần kiểm compose và Dockerfile giữ. Quy ước "unittest, không pytest" áp dụng cho Python; JS dùng runner riêng, chọn khi cài.
+7. **CI và image:** `docker-image.yml` theo dõi thêm `apps/web/**`; Dependabot thêm hệ sinh thái npm.
+8. **Chuyển đổi một lần:** `apps/web` dựng song song và console cũ ở `apps/server/static/` giữ chạy đến khi các màn hình của đường đi chính xong; sau đó chuyển hẳn và gỡ `static/` cũ (trừ trang đăng nhập), không chạy hai giao diện trong một image.
+
+**Để ngỏ (chốt khi vào P12b):** TypeScript hay JavaScript (nghiêng về TypeScript để kiểu của `docs/API.md` thành mã), thư viện router và lấy dữ liệu, bộ icon, runner test JS.
+
+**Rủi ro chấp nhận:** chuỗi cung ứng npm (lockfile bắt buộc, Dependabot, không chạy script cài đặt không cần); thời gian build image lâu hơn; hai bộ công cụ (uv và npm) trong một repo; phải viết lại test giao diện. Khổ chính ~820 px (iPad cầm dọc) theo lời admin, chưa thử trên iPad thật.
 
 ---
 
@@ -660,6 +685,12 @@ Trạng thái hiển thị (Missing, Requested, Translated, Edited, External, Re
 | `POST /api/units/{id}/preview-style` · `GET/PUT /api/styles/{scope}/{id}` · `GET/PUT /api/series/{id}/characters` | Xem thử style, form style, thẻ nhân vật | P12 |
 | `GET/PUT /api/series/{id}/glossary?lang=` (JSON; `?format=yaml` nhập/xuất) | Glossary trong DB | P12 |
 | `GET /api/metrics` | Metrics vận hành và chất lượng | P15 |
+| `POST /api/units/{id}/versions/{v}/adopt` nhận thêm `apply_style` (dự kiến) | Dùng bản variant và lưu preset + style của nó (`params.variant`) cho series trong một yêu cầu; `dry_run` đếm trước | P12b |
+| `estimate_only` cho Retry (`POST /api/queue/retry`), variant và retranslate theo dải (dự kiến) | Hộp Estimate cho mọi nút tốn quota (UX 6.4); Retranslate cả tập và Translate đã có qua `POST /api/jobs` | P12b |
+| `GET /api/catalog` thêm số `failed` và `ignored` theo series và cho `movies` (dự kiến; đã kiểm: đếm rẻ được bằng SQL trên `jobs` và `unit_decisions`, theo định nghĩa nhãn Failed của `CatalogView._job`) | Chip Failed và Ignored và số Failed ở Home | P12b |
+| `GET/PUT /api/movies/{unit_id}/glossary` (+ `/history`, `/restore`) · `GET/PUT /api/movies/{unit_id}/style` · `POST …/style/preview` · `PUT …/cards` (dự kiến; đường dẫn cuối chốt khi viết) | Glossary, style, thẻ nhân vật cấp phim (`owner_kind = movies`, `owner_key = movie_key`; tầng lưu có sẵn, chưa có route); impact tính cho đúng một unit | P12b |
+| Bỏ `GET /api/wanted`, `GET /api/scan`, `POST /api/enqueue-scan` và cài đặt `scan_limit` | Gỡ cùng trang Bazarr wanted và Media scan khi giao diện mới thay `static/` | P12b |
+| `dry_run` cho `PUT /api/series/{id}/memory` | Dòng impact của Memory và Specials after; cần `StoryMemory` tính stale theo chính sách ứng viên | v1.1 |
 
 ---
 
@@ -695,5 +726,7 @@ Trạng thái hiển thị (Missing, Requested, Translated, Edited, External, Re
 | Ghi đè chỉnh sửa của admin khi job `replace` chạy lâu | Khoá lạc quan `base_version`; kết quả thành `candidate` (FR-16.3, tiêu chí 15d). |
 | Body prompt làm đầy đĩa; log lộ khoá hoặc nội dung | JSONL xoay vòng có `log_max_mb` và `log_retention_days`, giới hạn từng bản ghi; bộ lọc che bí mật dùng chung; telemetry không chặn việc (NFR-11, tiêu chí 17c, 17e, 17g). |
 | Khoá API nằm trong DB bị lộ qua backup | Backup mặc định loại `api_keys`; quyền `0600`; chỉ trả 4 ký tự cuối (FR-20.3, tiêu chí 19c, 19e). |
+| Bản build giao diện kéo Node hoặc phụ thuộc npm không kiểm soát vào image | Dockerfile nhiều tầng, tầng cuối chỉ Python; `npm ci` với lockfile, Node cố định, Dependabot npm (ADR-17, tiêu chí 24a, 24b). |
+| Gói React làm rộng ngoại lệ của xác thực | Trang đăng nhập tĩnh độc lập; test quét `dist/`: mọi tệp khác đòi phiên (ADR-17, tiêu chí 24c). |
 | Bước gom bundle sai mà CLI không thấy | Test `gather` ở worker; xuất bundle từ job thật để đọc và chạy lại (ADR-16). |
 | Style và few-shot làm prompt dài, tốn quota hơn | Ngân sách token cho few-shot; xem thử 20 cue và `variant` để đo trước khi bật; hai lượt dịch chỉ khi số liệu cho thấy đáng (FR-18.9, mục 8 của SPEC). |
