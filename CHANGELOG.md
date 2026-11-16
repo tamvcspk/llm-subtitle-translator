@@ -1,4 +1,10 @@
 # Unreleased
+- **P12b backend: cost before you spend, and "Use this version" keeps the style.** `estimate_only: true` now works on
+  `POST /api/queue/retry` (one job, a list, or `all` for Retry All Failed), `POST /api/units/{id}/variant` and
+  `POST /api/units/{id}/retranslate` (a range costs its own cues); the answer has the same `estimate` as a bulk request and
+  nothing is queued, saved or called. `POST …/versions/{v}/adopt` (and `…/choose` with a whole-episode win) takes
+  `apply_style` to keep the variant's preset and style as the series' (or the movie's) own in one request, and `dry_run` to
+  count first how many other translations that would flag stale; nothing is retranslated.
 - **P12b backend: a movie has its own glossary, style and character cards** (`/api/movies/{unit_id}/glossary`, `…/glossary/history`,
   `…/glossary/restore`, `…/style`, `…/style/preview`, `…/cards`, `…/cards/delete`; `docs/API.md`). They are the stored rows of
   owner `movies/<movie key>`, so nothing reaches a series, and the stale count is for the movie's one unit. Before this a movie

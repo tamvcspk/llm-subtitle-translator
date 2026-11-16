@@ -18,12 +18,12 @@ from pathlib import Path
 from typing import Any
 
 from subcore import srt
-from subcore.translate.planner import plan_parts
 
 from . import queue_policy as policy
 from .catalog import pick_source
-from .config import PROVIDER_OPENAI_COMPAT, enabled_source_languages, enabled_target_languages, provider_name
+from .config import enabled_source_languages, enabled_target_languages
 from .console import CONSOLE_PROVIDER
+from .estimates import Estimate, Estimator
 from .jobs import FILL, REPLACE, job_key
 from .library import Library
 from .ports import KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, Telemetry
@@ -33,7 +33,6 @@ from .subtitles import existing_target_subtitle, target_output_path
 from .telemetry import NULL as NULL_TELEMETRY
 from .versions import TranslationVersions
 
-GEMINI_MAX_OUTPUT_TOKENS = 65_536
 REASONS = {
     "ignored": "ignored by the admin",
     "same-language": "the source and the target language are the same",
@@ -109,22 +108,6 @@ class PlannedJob:
 
 
 @dataclass(frozen=True)
-class Estimate:
-    """What the planned jobs would cost (FR-15.5). ``calls`` is the model calls to translate (a story-memory
-    extraction adds some); ``calls_left_today`` is what ``max_calls_per_day`` still allows (None: no cap);
-    ``paused_until`` is when a spent quota ends (None: not paused); ``minutes``/``finish_at`` are None until a
-    call has been timed."""
-
-    jobs: int = 0
-    cues: int = 0
-    calls: int = 0
-    calls_left_today: int | None = None
-    paused_until: float | None = None
-    minutes: float | None = None
-    finish_at: float | None = None
-
-
-@dataclass(frozen=True)
 class RequestPlan:
     planned: tuple[PlannedJob, ...] = ()
     skipped: tuple[PlannedJob, ...] = ()
@@ -151,6 +134,7 @@ class JobRequests:
         settings_source: Callable[[], dict[str, Any]],
         telemetry: Telemetry | None = None,
         clock: Callable[[], float] = time.time,
+        estimator: Estimator | None = None,
     ) -> None:
         self.store = store
         self.library = library
@@ -160,6 +144,7 @@ class JobRequests:
         self._settings = settings_source
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
         self._clock = clock
+        self.estimator = estimator or Estimator(store, queue, settings_source, clock=clock)
 
     # -- what the selection names ----------------------------------------------------------------------------------
     def leaves(self, selection: Selection) -> list[CatalogEntry]:
@@ -301,34 +286,12 @@ class JobRequests:
             return None
         return job
 
-    def _max_output_tokens(self) -> int:
-        settings = self._settings()
-        if provider_name(settings) == PROVIDER_OPENAI_COMPAT:
-            return max(256, int(settings.get("llm_max_output_tokens") or 8_192))
-        return GEMINI_MAX_OUTPUT_TOKENS
-
     def _calls(self, cues: list[srt.Cue]) -> int:
         """Model calls to translate these cues: the planner's parts (a repair or a split adds a few more)."""
-        return max(1, len(plan_parts(cues, list(range(1, len(cues) + 1)), self._max_output_tokens())))
+        return self.estimator.calls_for(cues)
 
     def estimate(self, planned: list[PlannedJob]) -> Estimate:
-        now = self._clock()
-        calls = sum(job.calls for job in planned)
-        cap = int(self._settings().get("max_calls_per_day") or 0)
-        left = None
-        if cap > 0:
-            used = self.store.calls_since(policy.next_utc_midnight(now) - 86_400)
-            left = max(0, cap - used)
-        average = self.store.average_call_seconds()
-        minutes = calls * average / 60.0 if average is not None and calls else None
-        paused = self.queue.quota_pause_until()
-        finish = None
-        if minutes is not None:
-            finish = max(now, paused or 0.0) + minutes * 60.0
-        return Estimate(
-            jobs=len(planned), cues=sum(job.cues for job in planned), calls=calls, calls_left_today=left,
-            paused_until=paused, minutes=round(minutes, 1) if minutes is not None else None, finish_at=finish,
-        )
+        return self.estimator.of(len(planned), sum(job.cues for job in planned), sum(job.calls for job in planned))
 
     # -- making the jobs -------------------------------------------------------------------------------------------
     def create(

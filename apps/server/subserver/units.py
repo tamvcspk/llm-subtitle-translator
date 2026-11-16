@@ -12,18 +12,22 @@ import logging
 import re
 import threading
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
 from subcore import glossary as g
 from subcore import srt
 from subcore.memory.facts import EXTRACT_PROMPT_VERSION
+from subcore.style import Style, StyleError
 from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
 
 from subcore.providers import ProviderError
 
 from .config import DEFAULT_MODEL, model_for_task
+from .estimates import Estimator
 from .glossaries import Glossaries
+from .jobs import FAILED, VARIANT, variant_key
 from .library import Library, Owner
 from .ports import CURRENT, PRUNED, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit
 from .store import Store
@@ -37,6 +41,7 @@ from .versions import CUE_EDIT, TranslationVersions
 KINDS = ("term", "address", "note", "cue_edit")
 SCOPES = ("episode", "forward", "series")
 MAX_CUE_PAGE = 5000
+RETRY_ROWS_SHOWN = 200  # like a bulk request: the first rows are named, the rest are counted
 
 _TIME = re.compile(r"^\s*(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?\s*$")
 
@@ -85,6 +90,7 @@ class UnitService:
         provider_factory: ProviderFactory | None = None,
         usage: Store | None = None,
         telemetry: Telemetry | None = None,
+        estimator: Estimator | None = None,
     ) -> None:
         self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)
         self.library = library
@@ -98,6 +104,7 @@ class UnitService:
         self.memory = memory
         self._settings = settings_source or (lambda: {})
         self._provider_factory = provider_factory
+        self.estimator = estimator or Estimator(jobs.jobs.store, jobs, self._settings)
 
     # -- lookups -----------------------------------------------------------------
     def unit(self, unit_id: int) -> Unit:
@@ -412,11 +419,13 @@ class UnitService:
         if window and not Path(out.output_path).is_file():
             raise ValueError("there is no target subtitle yet; retranslate the whole episode")
 
+        estimate_only = body.get("estimate_only") is True  # says what it would cost; makes no job and no correction
         created: list[int] = []
         for new in body.get("new_corrections") or []:
             if not isinstance(new, dict):
                 raise ValueError("new_corrections must be a list of corrections")
-            created.extend(self.add_correction(unit_id, {**new, "lang": lang}).get("ids", []))
+            if not estimate_only:
+                created.extend(self.add_correction(unit_id, {**new, "lang": lang}).get("ids", []))
 
         ids = body.get("correction_ids")
         if ids is not None:
@@ -427,9 +436,18 @@ class UnitService:
                 raise ValueError(f"unknown or inactive correction(s): {', '.join(map(str, unknown))}")
             ids = sorted(set(wanted))
 
-        job_id = self.jobs.enqueue_retranslation({
-            **self._job_payload(unit, out), "retranslate": {"range": window, "correction_ids": ids},
-        })
+        job = {**self._job_payload(unit, out), "retranslate": {"range": window, "correction_ids": ids}}
+        if estimate_only:
+            blocker = self.jobs.retranslation_blocker(job)
+            if blocker:
+                raise ValueError(blocker)
+            ordinals = list(range(window["first"], window["last"] + 1)) if window else None
+            cues = len(ordinals) if ordinals else len(source)
+            return {
+                "ok": True, "estimate_only": True, "range": window, "correction_ids": ids,
+                "estimate": asdict(self.estimator.of(1, cues, self.estimator.calls_for(source, ordinals))),
+            }
+        job_id = self.jobs.enqueue_retranslation(job)
         # An admin asking for a retranslation says the current translation was not good enough (FR-19.4).
         current = self.version_repo.current_version(out.output_path)
         self.telemetry.signal(
@@ -459,7 +477,7 @@ class UnitService:
         current translation. Nothing goes on disk; the style is checked now, not when the job runs."""
         unit = self.unit(unit_id)
         out = self.output(unit, body.get("lang"))
-        self._source(unit)  # also proves the source is still there
+        source = self._source(unit)  # also proves the source is still there
         style = body.get("style") or {}
         if not isinstance(style, dict):
             raise ValueError("style must be an object")
@@ -469,8 +487,73 @@ class UnitService:
             raise LookupError(f"no preset {preset!r}")
         variant = {"label": str(body.get("label") or "").strip()[:80] or "variant", "preset": preset, "style": style}
         self.library.variant_layers(unit, variant)  # raises ValueError naming the bad field
-        job_id = self.jobs.enqueue_variant({**self._job_payload(unit, out), "variant": variant})
+        job = {**self._job_payload(unit, out), "variant": variant}
+        if body.get("estimate_only") is True:  # the whole episode is translated again: its cost, nothing queued
+            key = variant_key(job["subtitle_path"], job["output_path"], job["target_code"])
+            if self.jobs.jobs.open_for(key, VARIANT) is not None:
+                raise ValueError("A variant of this episode is already queued")
+            return {
+                "ok": True, "estimate_only": True, "label": variant["label"],
+                "estimate": asdict(self.estimator.of(1, len(source), self.estimator.calls_for(source))),
+            }
+        job_id = self.jobs.enqueue_variant(job)
         return {"ok": True, "job_id": job_id, "label": variant["label"]}
+
+    # -- what Retry would cost (UX 6.4) ---------------------------------------------------
+    def estimate_retry(self, body: dict[str, Any]) -> dict[str, Any]:
+        """The cost of putting failed jobs back in line, before the admin confirms. Name them with exactly one of
+        ``job_id``, ``job_ids`` or ``all`` (every failed job: Retry All Failed). A job that is not failed, or whose
+        file already has an open job, is listed under ``skipped`` with the reason, as ``retry`` would do nothing for it.
+        A retranslation retried over a range costs that range only."""
+        given = [body.get("job_id") not in (None, ""), body.get("job_ids") is not None, body.get("all") is True]
+        if sum(given) != 1:
+            raise ValueError("Name the jobs with exactly one of job_id, job_ids or all")
+        store = self.jobs.jobs
+        if body.get("all") is True:
+            ids = [str(job["job_id"]) for job in store.by_state(FAILED)]
+        elif body.get("job_ids") is not None:
+            ids = body["job_ids"]
+            if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+                raise ValueError("job_ids must be a list of job ids")
+        else:
+            ids = [str(body["job_id"])]
+        planned: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for job_id in dict.fromkeys(ids):
+            job = store.get(job_id)
+            row: dict[str, Any] = {"job_id": job_id, "title": "", "lang": "", "cues": 0, "calls": 0, "skip": "", "reason": ""}
+            if job is not None:
+                row.update(title=Path(str(job.get("subtitle_path") or "")).name, lang=str(job.get("target_code") or ""))
+            reason = (
+                "no such job" if job is None else "the job is not failed" if job["state"] != FAILED
+                else "already requested" if store.has_open_twin(job_id) else ""
+            )
+            cues = calls = 0
+            if not reason and job is not None:
+                try:
+                    source = srt.parse_file(str(job.get("subtitle_path") or ""))
+                except (OSError, srt.SrtError):
+                    reason = "the source subtitle cannot be read"
+                else:
+                    window = (job.get("retranslate") or {}).get("range") if isinstance(job.get("retranslate"), dict) else None
+                    ordinals = None
+                    if isinstance(window, dict) and 1 <= int(window["first"]) <= int(window["last"]) <= len(source):
+                        ordinals = list(range(int(window["first"]), int(window["last"]) + 1))
+                    cues = len(ordinals) if ordinals else len(source)
+                    calls = self.estimator.calls_for(source, ordinals)
+            if reason:
+                skipped.append({**row, "skip": reason, "reason": reason})
+            else:
+                planned.append({**row, "cues": cues, "calls": calls})
+        estimate = self.estimator.of(len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned))
+        counts: dict[str, int] = {}
+        for row in skipped:
+            counts[row["reason"]] = counts.get(row["reason"], 0) + 1
+        return {
+            "estimate_only": True, "estimate": asdict(estimate),
+            "planned_total": len(planned), "planned": planned[:RETRY_ROWS_SHOWN],
+            "skipped_total": len(skipped), "skipped_by_reason": counts, "skipped": skipped[:RETRY_ROWS_SHOWN],
+        }
 
     def compare(self, unit_id: int, version: int, lang: str | None = None) -> dict[str, Any]:
         """The current translation and a candidate side by side, cue by cue (FR-18.8)."""
@@ -546,7 +629,8 @@ class UnitService:
             edits = [{"cue": n, "text": by_cue[n]["variant"]} for n, w in sorted(chosen.items())
                      if w == "variant" and by_cue[n]["variant"] and by_cue[n]["differs"]]
             if whole == "variant":
-                applied = {"adopted": self.adopt(unit_id, version, out.target_lang)["adopted"]}
+                applied = self.adopt(unit_id, version, out.target_lang, apply_style=bool(body.get("apply_style")))
+                applied = {"adopted": applied["adopted"], **({"style": applied["style"]} if "style" in applied else {})}
             elif edits:
                 result = self.add_correction(unit_id, {
                     "lang": out.target_lang, "kind": "cue_edit", "payload": {"edits": edits},
@@ -602,13 +686,59 @@ class UnitService:
             ],
         }
 
-    def adopt(self, unit_id: int, version: int, lang: str | None = None) -> dict[str, Any]:
-        """"Dùng bản này" (FR-16.4): a candidate goes on disk and becomes the current version."""
+    def adopt(
+        self, unit_id: int, version: int, lang: str | None = None, *, apply_style: bool = False, dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """"Dùng bản này" (FR-16.4): a candidate goes on disk and becomes the current version.
+
+        With ``apply_style`` and a version made by a variant (FR-18.8), the variant's preset and style are also saved
+        as the series' (or the movie's) own, in one request; the answer adds ``style`` and how many *other* translations
+        that makes stale (this episode is replaced by the variant, so it is not counted). ``dry_run`` only reports that
+        and adopts nothing. Nothing is retranslated."""
+        if dry_run and not apply_style:
+            raise ValueError("dry_run counts what apply_style would flag; add apply_style")
         unit = self.unit(unit_id)
         out = self.output(unit, lang)
+        if not apply_style:
+            published = self.versions.adopt(out.output_path, version)
+            self._bazarr_refresh(unit)
+            return {"ok": True, "version": published.version, "adopted": version}
+        preset, style = self._variant_style(out, version)
+        kind, key = self.library.owner(unit)
+        others = [u for u in self._owner_units(unit) if u.id != unit.id]
+        impact = self.library.impact_units(
+            others, out.target_lang, layers=lambda u: self.library.layers_with(u, preset, style),
+        )
+        saved_style = {"preset": preset, "style": style.to_doc()}
+        if dry_run:
+            return {"ok": True, "dry_run": True, "adopted": None, "style": saved_style, **impact}
         published = self.versions.adopt(out.output_path, version)
+        self.library.styles.save_owner_style(kind, key, preset, style.to_doc())
+        self.telemetry.event(
+            "style.saved", unit_id=unit.id, preset=preset or None, stale=impact["would_stale"],
+            reason="the admin used a variant and kept its style for the whole series; translations made without it are flagged stale, not redone",
+        )
         self._bazarr_refresh(unit)
-        return {"ok": True, "version": published.version, "adopted": version}
+        return {"ok": True, "version": published.version, "adopted": version, "style": saved_style, **impact}
+
+    def _owner_units(self, unit: Unit) -> list[Unit]:
+        return self.catalog.list_units(unit.series_id) if unit.series_id is not None else [unit]
+
+    def _variant_style(self, out: Output, version: int) -> tuple[str, Style]:
+        """The preset and style a variant version was made with, checked as a style is when it is saved."""
+        row = self.version_repo.get_version(out.output_path, version)
+        if row is None:
+            raise LookupError(f"no version {version}")
+        variant = row.params.get("variant") if isinstance(row.params, dict) else None
+        if not isinstance(variant, dict):
+            raise ValueError(f"version {version} was not made by a variant: there is no style to save")
+        preset = str(variant.get("preset") or "")
+        if preset and (self.library.styles is None or self.library.styles.preset(preset) is None):
+            raise ValueError(f"the preset {preset!r} of this variant no longer exists")
+        try:
+            return preset, Style.from_doc(variant.get("style") or {}, "variant.style")
+        except StyleError as exc:
+            raise ValueError(str(exc)) from None
 
     def remove_output(self, unit_id: int, lang: str | None = None) -> dict[str, Any]:
         """Delete the target subtitle from the console (FR-16.6): the history keeps a removed version and the unit

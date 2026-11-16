@@ -187,10 +187,10 @@ Hộp Estimate là dialog hoặc bottom sheet có **Cancel** và **Confirm** (kh
 |---|---|---|
 | Translate (tập, mùa, series, tất cả), Translate again | `POST /api/jobs` với `estimate_only` | Có |
 | Retranslate cả tập | `POST /api/jobs` với `mode: replace`, `estimate_only` | Có |
-| Retranslate theo dải cue hoặc thời gian | số cue sẽ ghi đè và số cue khoá giữ lại (tính ở giao diện) | Số lời gọi: chưa có |
-| Retry một job, **Retry All Failed** | số job | Số lời gọi: chưa có (cần `estimate_only` cho retry) |
+| Retranslate theo dải cue hoặc thời gian | `POST /api/units/{id}/retranslate` với `estimate_only` (số cue của dải và số lời gọi); số cue khoá giữ lại vẫn tính ở giao diện | Có |
+| Retry một job, **Retry All Failed** | `POST /api/queue/retry` với `estimate_only` và `job_id`, `job_ids` hoặc `all` | Có |
 | **Extract facts** (tab Context) | số tập có phụ đề nguồn mà chưa có facts, mỗi tập một lời gọi (`memory_model`); từ `GET /api/series/{id}/memory` | Tính được ở giao diện |
-| **Compare on a whole episode** (variant) | cue và lời gọi của một tập | Chưa có endpoint ước lượng |
+| **Compare on a whole episode** (variant) | `POST /api/units/{id}/variant` với `estimate_only` (cue và lời gọi của một tập) | Có |
 | Request that episode (Waiting · context) | như Translate | Có |
 | Try 20 lines | ≈ 1 lời gọi, ghi trên nút | Ngoại lệ, không có hộp |
 
@@ -290,8 +290,8 @@ Nhóm theo series; mỗi mục: `source`, nội dung đề xuất, bằng chứn
 
 ### A.7 Còn thiếu (Mới, làm ở P12b hoặc để sau)
 
-- Lưu style của variant khi **Use this version** (`adopt` nhận thêm `apply_style`, hoặc giao diện gọi hai bước).
-- `estimate_only` cho Retry và cho variant; ước lượng lời gọi cho Retranslate theo dải.
+- Lưu style của variant khi **Use this version**: `POST /api/units/{id}/versions/{v}/adopt` nhận `apply_style` (một yêu cầu) và `dry_run` (đếm số tập khác sẽ stale trước; không tính tập đang dùng bản variant). Đã làm 2026-11-17.
+- `estimate_only` cho Retry, variant và Retranslate theo dải: đã làm 2026-11-17 (xem bảng 6.4).
 - Số đếm `failed`, `ignored` theo series (và cho `movies`) ở `GET /api/catalog`: đếm rẻ được bằng SQL trên `jobs` và `unit_decisions`, theo đúng định nghĩa nhãn Failed (không có job mở và job kết thúc mới nhất của key là `failed`); chỉ là hai số trong phần tổng quan có sẵn, không phải read model mới.
 - Glossary, style và thẻ nhân vật **cấp phim** (`owner_kind = movies`): route đã có từ 2026-11-17 theo unit phim (`/api/movies/{unit_id}/glossary|glossary/history|glossary/restore|style|style/preview|cards`, xem `docs/API.md`) cho liên kết **Movie Glossary** và tab Style của trang Unit; impact tính cho một unit.
 - "Try 20 lines" khi series chưa có bản dịch: **không cần backend**. `rows[].current` là `null`; giao diện để trống cột hiện tại.

@@ -455,7 +455,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 created = self.ctx["console"].enqueue_found(items)
                 self.send_json({"created": created, "count": len(created)})
             elif parsed.path == "/api/queue/retry":
-                self.send_json({"ok": self.ctx["console"].retry(str(body.get("job_id", "")))})
+                if body.get("estimate_only") is True:  # what Retry (or Retry All Failed) would cost; retries nothing
+                    self.send_json(self.ctx["units"].estimate_retry(body))
+                else:
+                    self.send_json({"ok": self.ctx["console"].retry(str(body.get("job_id", "")))})
             elif parsed.path == "/api/queue/cancel":
                 self.send_json({"ok": self.ctx["console"].cancel(str(body.get("job_id", "")))})
             elif parsed.path == "/api/queue/request-prerequisites":

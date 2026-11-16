@@ -297,6 +297,19 @@ class JobQueue:
         )
         return job_id
 
+    def retranslation_blocker(self, job: dict[str, Any]) -> str | None:
+        """Why ``enqueue_retranslation`` would refuse this job now, or None. Lets the Estimate box say so before
+        the admin confirms; the two must agree, so a change to one reads the other."""
+        key = job_key(str(job.get("subtitle_path", "")), str(job.get("output_path", "")), str(job.get("target_code", "")))
+        open_job = self.jobs.open_for(key)
+        if open_job is None:
+            return None
+        if open_job["mode"] == REPLACE:
+            return "A retranslation of this subtitle is already queued"
+        if open_job["state"] not in (QUEUED, WAITING):
+            return "This subtitle is being translated right now; retranslate it when the job ends"
+        return None
+
     def enqueue_variant(self, job: dict[str, Any]) -> str:
         """One variant job (FR-18.8): the whole episode translated with another style and kept as a candidate, never
         put on disk. At most one is open per episode and language (FR-15.3); a second request is refused."""

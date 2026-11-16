@@ -274,6 +274,18 @@ class Library:
                 cache[slot] = base
         return replace(base, unit=self.styles.unit_style(unit.id))
 
+    def layers_with(self, unit: Unit, preset: str | None, style: Style | None) -> StyleLayers:
+        """The unit's stored layers with its owner's preset and style swapped for a candidate (``None`` keeps the stored
+        one; an empty ``preset`` takes the preset away). Nothing is saved."""
+        base = self.style_layers(unit)
+        if preset is None and style is None:
+            return base
+        chosen = self.styles.preset(preset) if preset and self.styles else None
+        return replace(
+            base, preset=chosen.style if chosen else (None if preset is not None else base.preset),
+            series=style if style is not None else base.series,
+        )
+
     def source_cues(self, unit: Unit) -> list[srt.Cue]:
         path = Path(unit.source_path)
         if not unit.source_path or not path.is_file():

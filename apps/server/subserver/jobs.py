@@ -160,6 +160,14 @@ class JobStore:
         )
         return view(rows[0]) if rows else None
 
+    def has_open_twin(self, job_id: str) -> bool:
+        """Whether another job holds the same ``(key, kind)`` open: the reason ``retry`` would do nothing."""
+        rows = self.store.query(
+            "SELECT 1 FROM jobs o JOIN jobs j ON j.key = o.key AND j.kind = o.kind WHERE j.job_id = ?"
+            " AND o.state IN (?, ?, ?) LIMIT 1", (job_id, *OPEN_STATES),
+        )
+        return bool(rows)
+
     def latest_for_unit(self, unit_id: int, target_lang: str, *states: str, kind: str = PUBLISH) -> dict[str, Any] | None:
         """The newest job of this unit and language in one of ``states``, whatever key its paths gave it."""
         marks = ",".join("?" * len(states))

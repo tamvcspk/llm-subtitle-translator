@@ -319,6 +319,15 @@ open job.
 {"job_id": "7fefefb6fdb4f200bbb5fcac70e917492cea4d8f"}
 ```
 
+**Estimate first (P12b, UX 6.4).** With `"estimate_only": true` nothing is retried; the answer says what retrying would cost.
+Name the jobs with exactly one of `job_id`, `job_ids` (a list) or `all` (every failed job: Retry All Failed), else `400`.
+Reply, in the shape of a bulk request's estimate: `{"estimate_only": true, "estimate": {"jobs", "cues", "calls",
+"calls_left_today", "paused_until", "minutes", "finish_at"}, "planned_total", "planned": [{"job_id", "title", "lang",
+"cues", "calls"}], "skipped_total", "skipped_by_reason", "skipped": [{..., "reason"}]}` (at most 200 rows of each are
+named). A job that is not failed (`the job is not failed`), is unknown (`no such job`), whose file already has an open
+job (`already requested`) or whose source cannot be read is under `skipped`, as the real retry would do nothing for it.
+A retranslation of a range that failed costs that range only.
+
 ## POST /api/queue/delete
 
 Deletes one job from a queue state. Deleting a
@@ -611,6 +620,12 @@ target can be queued at a time. Reply: `{"ok": true, "job_id", "range", "correct
 The result overwrites the target and is recorded as a version; the old file is
 kept in `backups/subtitles/`.
 
+With `"estimate_only": true` (P12b) nothing is queued and no correction is made: the same checks run (a bad range, an
+unknown correction, a retranslation already queued or a job running are the same `400`) and the reply is `{"ok",
+"estimate_only": true, "range", "correction_ids", "estimate": {"jobs", "cues", "calls", "calls_left_today", "paused_until",
+"minutes", "finish_at"}}`. `cues` is the size of the range (or of the episode) and `calls` the planner's parts for those cues.
+The whole-episode retranslation is also estimated by `POST /api/jobs` with `mode: "replace"`.
+
 ### GET /api/units/{id}/versions?lang=
 `{"lang", "modified_outside", "versions": [{"version", "trigger", "origin", "status", "parent_version", "model", "sha256", "tokens_in", "tokens_out", "created_at", "current", "params"}]}`, newest first.
 `trigger` is `auto`, `retranslate`, `variant`, `cue_edit`, `revert`, `external` (a hand edit kept before an overwrite) or `remove`.
@@ -636,6 +651,12 @@ longer in the restored file are released. Reply `{"ok": true, "version", "restor
 Body `{"lang": "vi"}`. "Dùng bản này": a `candidate` version is written to the file and becomes `current`; the
 version that was on disk becomes `superseded`. Only a candidate can be adopted (`400` otherwise). Reply
 `{"ok": true, "version", "adopted"}`.
+
+Optional (P12b), both only as JSON `true`: `"apply_style": true` also keeps the variant's preset and style as the series'
+(or the movie's) own, in one request, for a version made by a variant (`400` when it was not, or when its preset no longer
+exists; nothing is adopted then). The reply adds `"style": {"preset", "style"}` and `{"stale_now", "stale_after",
+"would_stale"}` for the **other** episodes (this one is replaced by the variant, so it is not counted); they are flagged stale,
+never retranslated. `"dry_run": true` (needs `apply_style`) only returns that count and `"adopted": null`: nothing is adopted or saved.
 
 ### POST /api/units/{id}/output/remove
 Body `{"lang": "vi"}`. Deletes the target subtitle file. The last version is kept as a `removed` version, so
@@ -786,7 +807,8 @@ Body `{"lang": "vi", "label": "warmer", "preset": "", "style": {...}}`. Queues a
 origin `variant`): the whole episode translated with that style in place of the series' own and the episode's
 override, kept as a `candidate` version whose `params.variant` says `{label, preset, style}`. It never goes on disk
 by itself and ignores an existing target. At most one variant per episode and language is open at a time (`400`).
-Reply `{"ok", "job_id", "label"}`.
+Reply `{"ok", "job_id", "label"}`. With `"estimate_only": true` (P12b) the style, the preset and an open variant are checked
+the same way, nothing is queued, and the reply is `{"ok", "estimate_only": true, "label", "estimate": {...}}` for the whole episode.
 
 ### GET /api/units/{id}/versions/{v}/compare?lang=
 The current translation and a version side by side: `{"lang", "version", "status", "params", "model", "aligned",
@@ -797,4 +819,5 @@ Body `{"lang": "vi", "picks": {"12": "variant", "13": "current"}, "whole": "vari
 verdict on a candidate: one `ab` quality signal per pick (winner `variant`, `current` or `tie`) and one for `whole`, each
 carrying the variant's label, style, model and prompt version, so scores add up by style and prompt version. With
 `apply` the verdict is acted on: the cues won by `variant` become cue edits of the current translation, and a
-`whole` win adopts the candidate. `400` when the version is not a candidate. Reply `{"ok", "recorded", "applied"}`.
+`whole` win adopts the candidate (with `"apply_style": true` it also keeps the variant's style, as `adopt` does; `applied`
+then has `style`). `400` when the version is not a candidate. Reply `{"ok", "recorded", "applied"}`.

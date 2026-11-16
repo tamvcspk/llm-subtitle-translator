@@ -83,14 +83,7 @@ class StyleService:
 
     def _layers_with(self, unit, preset: str | None, style: Style | None) -> StyleLayers:
         """The unit's stored layers with the series' preset and style swapped for a candidate."""
-        base = self.library.style_layers(unit)
-        if preset is None and style is None:
-            return base
-        chosen = self.styles.preset(preset) if preset else None
-        return replace(
-            base, preset=chosen.style if chosen else (None if preset is not None else base.preset),
-            series=style if style is not None else base.series,
-        )
+        return self.library.layers_with(unit, preset, style)
 
     # -- the series' style -----------------------------------------------------------------------
     def overview(self, series_id: int, lang: str = "vi") -> dict[str, Any]:
