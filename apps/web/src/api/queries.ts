@@ -6,6 +6,7 @@ import type {
   CatalogStatus,
   Correction,
   CuesPage,
+  Estimate,
   JobsAnswer,
   JobsSelector,
   LibraryUnits,
@@ -83,16 +84,44 @@ export function useMovies() {
 }
 
 /** A button that spends model calls says what it is about: translate these, or retry that failed job. */
-export type CostRequest = { selector: JobsSelector } | { retry: { job_id: string } };
+export type CostRequest =
+  | { selector: JobsSelector }
+  | { retry: { job_id: string } }
+  | { retranslate: { unit_id: number; body: RetranslateBody } };
+
+/** `range` is `{cues: [first, last]}` or `{time: [start, end]}`; leave it out for the whole episode. */
+export interface RetranslateBody {
+  lang: string;
+  range?: { cues: [number, number] } | { time: [string, string] };
+  /** The term, address and note corrections to use; leave out for all of them. */
+  correction_ids?: number[];
+}
+
+interface RetranslateAnswer {
+  ok: boolean;
+  estimate_only?: boolean;
+  estimate: Estimate;
+}
 
 /** What a request would cost (UX §6.4): nothing is made, saved or called. */
 export function useEstimate(request: CostRequest | null) {
   return useQuery({
     queryKey: ["estimate", request],
-    queryFn: ({ signal }) =>
-      request && "retry" in request
-        ? api<JobsAnswer>("/api/queue/retry", { method: "POST", body: { ...request.retry, estimate_only: true }, signal })
-        : api<JobsAnswer>("/api/jobs", { method: "POST", body: { ...request?.selector, estimate_only: true }, signal }),
+    queryFn: async ({ signal }): Promise<JobsAnswer> => {
+      if (request && "retry" in request) {
+        return api<JobsAnswer>("/api/queue/retry", { method: "POST", body: { ...request.retry, estimate_only: true }, signal });
+      }
+      if (request && "retranslate" in request) {
+        const { unit_id, body } = request.retranslate;
+        const answer = await api<RetranslateAnswer>(`/api/units/${unit_id}/retranslate`, {
+          method: "POST",
+          body: { ...body, estimate_only: true },
+          signal,
+        });
+        return { estimate_only: true, estimate: answer.estimate, planned_total: answer.estimate.jobs, skipped_total: 0, skipped_by_reason: {} };
+      }
+      return api<JobsAnswer>("/api/jobs", { method: "POST", body: { ...request?.selector, estimate_only: true }, signal });
+    },
     enabled: request !== null,
     // A price is only true now: never reuse the one from the last time the box was open.
     gcTime: 0,
@@ -120,6 +149,13 @@ export function useRequestJobs() {
       if ("retry" in request) {
         const answer = await api<{ ok: boolean }>("/api/queue/retry", { method: "POST", body: request.retry });
         if (!answer.ok) throw new Error("The job could not be retried: it is not failed any more, or the file already has a job.");
+        return { count: 1 };
+      }
+      if ("retranslate" in request) {
+        await api<{ ok: boolean }>(`/api/units/${request.retranslate.unit_id}/retranslate`, {
+          method: "POST",
+          body: request.retranslate.body,
+        });
         return { count: 1 };
       }
       const answer = await api<JobsAnswer>("/api/jobs", { method: "POST", body: request.selector });
@@ -185,6 +221,11 @@ export function useCues(id: number, query: CueQuery, enabled: boolean) {
     enabled,
     placeholderData: (previous) => previous,
   });
+}
+
+/** How many cues the target has: one cheap read of the cue list, for a line that says what a range would overwrite. */
+export function useCueTotal(id: number, lang: string) {
+  return useCues(id, { lang, q: "", offset: 0, at: "", limit: 1 }, lang !== "");
 }
 
 export function useCorrections(id: number, lang: string) {

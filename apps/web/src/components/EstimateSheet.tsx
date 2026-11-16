@@ -33,7 +33,9 @@ export function estimateLines(estimate: Estimate): Array<[string, string]> {
 
 /** The request without its title, so the same box asked twice for the same thing shares one query key. */
 function withoutAction(request: EstimateRequest): CostRequest {
-  return "retry" in request ? { retry: request.retry } : { selector: request.selector };
+  if ("retry" in request) return { retry: request.retry };
+  if ("retranslate" in request) return { retranslate: request.retranslate };
+  return { selector: request.selector };
 }
 
 function skippedNote(answer: JobsAnswer): string | null {
