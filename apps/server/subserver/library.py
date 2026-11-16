@@ -15,6 +15,7 @@ import logging
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any, Callable
 
 from subcore import glossary as g
@@ -34,6 +35,21 @@ _ATTENTION = {"stale": 0, "incomplete": 1, "untranslated": 2, "current": 3}
 _EPISODE = re.compile(r"[Ss](\d{1,2})[ ._-]?[Ee](\d{1,3})")
 _X_EPISODE = re.compile(r"(?<![\dA-Za-z])(\d{1,2})x(\d{2,3})(?!\d)")
 _SEASON_DIR = re.compile(r"^(season|series|staffel|saison|temporada)\s*\d+$|^s\d{1,2}$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Owner:
+    """What owns a glossary, a style and character cards: a series (all its episodes) or one movie (its single unit).
+    ``id`` is the series id, or the movie's unit id; ``units`` are the translations a change would reach."""
+    kind: str  # SERIES | MOVIES, the ``owner_kind`` of the stored rows
+    key: str
+    id: int
+    title: str
+    units: tuple[Unit, ...]
+
+    @property
+    def label(self) -> str:
+        return "series" if self.kind == SERIES else "movie"
 
 
 @dataclass
@@ -370,15 +386,35 @@ class Library:
     def glossary_impact(self, series_id: int, lang: str, candidate: g.Glossary) -> dict[str, int]:
         return self.impact(series_id, lang, glossary=candidate)
 
+    def series_owner(self, series_id: int) -> Owner:
+        series = self.catalog.get_series(series_id)
+        if series is None:
+            raise LookupError(f"no series {series_id}")
+        return Owner(SERIES, series.key, series.id, series.title, tuple(self.catalog.list_units(series_id)))
+
+    def movie_owner(self, unit_id: int) -> Owner:
+        """The owner of a movie's glossary, style and cards, found by the movie's unit id (P12b)."""
+        unit = self.catalog.get_unit(unit_id)
+        if unit is None or unit.series_id is not None or not unit.movie_key:
+            raise LookupError(f"no movie {unit_id}")
+        return Owner(MOVIES, str(unit.movie_key), unit.id, unit.title, (unit,))
+
     def impact(
         self, series_id: int, lang: str, *, glossary: g.Glossary | None = None,
         layers: Callable[[Unit], StyleLayers] | None = None,
     ) -> dict[str, int]:
         """How many translations of a series a candidate glossary, or a candidate set of style layers (``layers``
         answers per unit), would make stale (FR-5.6, FR-18.6). Nothing is saved."""
+        return self.impact_units(self.catalog.list_units(series_id), lang, glossary=glossary, layers=layers)
+
+    def impact_units(
+        self, units: Iterable[Unit], lang: str, *, glossary: g.Glossary | None = None,
+        layers: Callable[[Unit], StyleLayers] | None = None,
+    ) -> dict[str, int]:
+        """The same count for any set of units: a series' episodes, or the one unit of a movie."""
         series_cache: dict = {}
         now = after = would = 0
-        for unit in self.catalog.list_units(series_id):
+        for unit in units:
             for out in self.catalog.outputs(unit.id):
                 if out.target_lang != lang:
                     continue

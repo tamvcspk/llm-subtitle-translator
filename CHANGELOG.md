@@ -1,4 +1,8 @@
 # Unreleased
+- **P12b backend: a movie has its own glossary, style and character cards** (`/api/movies/{unit_id}/glossary`, `…/glossary/history`,
+  `…/glossary/restore`, `…/style`, `…/style/preview`, `…/cards`, `…/cards/delete`; `docs/API.md`). They are the stored rows of
+  owner `movies/<movie key>`, so nothing reaches a series, and the stale count is for the movie's one unit. Before this a movie
+  could only get glossary terms through corrections.
 - **P12b backend: `GET /api/catalog` adds `failed` and `ignored`** per series and for movies, per target language (for the
   Failed and Ignored chips of the new Home). They equal what the labels of the series page add up to. The `Failed` label is now
   read by (unit, language) instead of by the file-path key, so a request renamed by Sonarr still shows its earlier failure, and

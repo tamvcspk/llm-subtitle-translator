@@ -21,7 +21,7 @@ from subcore.translate.prompt import PROMPT_VERSION
 
 from .config import DEFAULT_MODEL
 from .gather import gather
-from .library import Library
+from .library import Library, Owner
 from .ports import MissingApiKey, Metadata, ProviderFactory, Telemetry
 from .rules import StyleLayers
 from .store import Store
@@ -96,20 +96,31 @@ class StyleService:
     def overview(self, series_id: int, lang: str = "vi") -> dict[str, Any]:
         """Everything the Style page shows: the series' preset and style, what is in force once the language and the
         preset are laid under it, the presets to choose from and the characters' cards. No network call is made."""
-        series = self._series(series_id)
-        preset_id, style = self.styles.owner_style("series", series.key)
+        return self.owner_overview(self.library.series_owner(series_id), lang)
+
+    def movie_overview(self, unit_id: int, lang: str = "vi") -> dict[str, Any]:
+        """The same for a movie (P12b): its own preset, style and cards; the answer names it under ``movie``."""
+        return self.owner_overview(self.library.movie_owner(unit_id), lang)
+
+    def owner_overview(self, owner: Owner, lang: str) -> dict[str, Any]:
+        preset_id, style = self.styles.owner_style(owner.kind, owner.key)
         preset = self.styles.preset(preset_id) if preset_id else None
         effective = resolve_style([language_style(lang), preset.style if preset else None, style])
         return {
-            "series": {"id": series.id, "title": series.title}, "lang": lang,
+            owner.label: {"id": owner.id, "title": owner.title}, "lang": lang,
             "preset": preset_id if preset else "", "style": style.to_doc(), "effective": effective.to_doc(),
             "presets": [_preset_json(p) for p in self.styles.presets()],
-            "cards": [_card_json(c) for c in self.styles.cards("series", series.key)],
+            "cards": [_card_json(c) for c in self.styles.cards(owner.kind, owner.key)],
         }
 
     def save_style(self, series_id: int, body: dict[str, Any]) -> dict[str, Any]:
         """Save the series' preset and style (``dry_run`` only counts what it would make stale)."""
-        series = self._series(series_id)
+        return self.save_owner_style(self.library.series_owner(series_id), body)
+
+    def save_movie_style(self, unit_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        return self.save_owner_style(self.library.movie_owner(unit_id), body)
+
+    def save_owner_style(self, owner: Owner, body: dict[str, Any]) -> dict[str, Any]:
         lang = str(body.get("lang") or "vi")
         preset_id = str(body.get("preset") or "")
         style_doc = body.get("style") or {}
@@ -118,14 +129,15 @@ class StyleService:
         style = _style(style_doc)
         if preset_id and self.styles.preset(preset_id) is None:
             raise LookupError(f"no preset {preset_id!r}")
-        impact = self.library.impact(
-            series_id, lang, layers=lambda unit: self._layers_with(unit, preset_id, style),
+        impact = self.library.impact_units(
+            owner.units, lang, layers=lambda unit: self._layers_with(unit, preset_id, style),
         )
         if not body.get("dry_run"):
-            self.styles.save_owner_style("series", series.key, preset_id, style.to_doc())
+            self.styles.save_owner_style(owner.kind, owner.key, preset_id, style.to_doc())
             self.telemetry.event(
-                "style.saved", reason="the admin changed the style of a series; translations made without it are flagged stale, not redone",
-                series=series.title, preset=preset_id or None, stale=impact["would_stale"],
+                "style.saved",
+                reason=f"the admin changed the style of a {owner.label}; translations made without it are flagged stale, not redone",
+                **{owner.label: owner.title}, preset=preset_id or None, stale=impact["would_stale"],
             )
         return {"ok": True, "saved": not body.get("dry_run"), **impact}
 
@@ -172,7 +184,12 @@ class StyleService:
     # -- character cards -----------------------------------------------------------------------------
     def save_card(self, series_id: int, body: dict[str, Any]) -> dict[str, Any]:
         """Create or replace one card (``replaces`` renames). ``dry_run`` only counts the translations it would make stale."""
-        series = self._series(series_id)
+        return self.save_owner_card(self.library.series_owner(series_id), body)
+
+    def save_movie_card(self, unit_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        return self.save_owner_card(self.library.movie_owner(unit_id), body)
+
+    def save_owner_card(self, owner: Owner, body: dict[str, Any]) -> dict[str, Any]:
         lang = str(body.get("lang") or "vi")
         doc = body.get("card")
         if not isinstance(doc, dict):
@@ -182,22 +199,27 @@ class StyleService:
         except StyleError as exc:
             raise ValueError(str(exc)) from None
         replaces = str(body.get("replaces") or "") or None
-        cards = [c for c in self.styles.cards("series", series.key) if c.name.casefold() not in {card.name.casefold(), (replaces or "").casefold()}]
-        impact = self.library.impact(
-            series_id, lang,
+        cards = [c for c in self.styles.cards(owner.kind, owner.key) if c.name.casefold() not in {card.name.casefold(), (replaces or "").casefold()}]
+        impact = self.library.impact_units(
+            owner.units, lang,
             layers=lambda unit: replace(self.library.style_layers(unit), cards=tuple([*cards, card])),
         )
         if not body.get("dry_run"):
-            self.styles.save_card("series", series.key, card.to_doc(), replaces=replaces)
+            self.styles.save_card(owner.kind, owner.key, card.to_doc(), replaces=replaces)
         return {"ok": True, "saved": not body.get("dry_run"), "card": _card_json(card), **impact}
 
     def delete_card(self, series_id: int, name: str, lang: str = "vi") -> dict[str, Any]:
-        series = self._series(series_id)
-        remaining = tuple(c for c in self.styles.cards("series", series.key) if c.name.casefold() != name.casefold())
-        impact = self.library.impact(
-            series_id, lang, layers=lambda unit: replace(self.library.style_layers(unit), cards=remaining),
+        return self.delete_owner_card(self.library.series_owner(series_id), name, lang)
+
+    def delete_movie_card(self, unit_id: int, name: str, lang: str = "vi") -> dict[str, Any]:
+        return self.delete_owner_card(self.library.movie_owner(unit_id), name, lang)
+
+    def delete_owner_card(self, owner: Owner, name: str, lang: str) -> dict[str, Any]:
+        remaining = tuple(c for c in self.styles.cards(owner.kind, owner.key) if c.name.casefold() != name.casefold())
+        impact = self.library.impact_units(
+            owner.units, lang, layers=lambda unit: replace(self.library.style_layers(unit), cards=remaining),
         )
-        if not self.styles.delete_card("series", series.key, name):
+        if not self.styles.delete_card(owner.kind, owner.key, name):
             raise LookupError(f"no card for {name!r}")
         return {"ok": True, **impact}
 
@@ -223,14 +245,19 @@ class StyleService:
 
     # -- the trial of a style (FR-18.7) -----------------------------------------------------------------------
     def preview(self, series_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        return self.owner_preview(self.library.series_owner(series_id), body)
+
+    def preview_movie(self, unit_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        return self.owner_preview(self.library.movie_owner(unit_id), body)
+
+    def owner_preview(self, owner: Owner, body: dict[str, Any]) -> dict[str, Any]:
         """Translate about twenty sample cues with a style that need not be saved, next to what the episode has now.
 
         Writes nothing: no file, no version. The model is the default one; the style is the candidate in the body, or
         the stored one when the body has none. A sample is taken from ``unit_id``, or from the first episode of the
         series that has a source subtitle."""
-        series = self._series(series_id)
         lang = str(body.get("lang") or "vi")
-        unit = self._preview_unit(series_id, body.get("unit_id"), lang)
+        unit = self._preview_unit(owner, body.get("unit_id"), lang)
         cues = self.library.source_cues(unit)
         if not cues:
             raise ValueError("the source subtitle has no cues")
@@ -263,7 +290,7 @@ class StyleService:
                 settings, model, deadline=time.monotonic() + PREVIEW_TIMEOUT_SECONDS, on_call=record,
             )
             bundle = gather(
-                cues=trimmed, rules=rules, unit=unit, title=series.title, overview="", target_code=lang,
+                cues=trimmed, rules=rules, unit=unit, title=owner.title, overview="", target_code=lang,
                 target_name=next((o.target_language for o in self.catalog.outputs(unit.id) if o.target_lang == lang), ""),
                 source_code=unit.source_code, model=str(getattr(provider, "model", "") or model),
                 max_output_tokens=provider.caps.max_output_tokens, temperature=_temperature(settings),
@@ -298,15 +325,18 @@ class StyleService:
             "style_hash": rules.style_hash,
         }
 
-    def _preview_unit(self, series_id: int, unit_id: Any, lang: str):
+    def _preview_unit(self, owner: Owner, unit_id: Any, lang: str):
         if unit_id not in (None, ""):
             unit = self._unit(int(unit_id))
-            if unit.series_id != series_id:
-                raise ValueError("that episode belongs to another series")
+            if all(unit.id != u.id for u in owner.units):
+                raise ValueError(f"that unit belongs to another {owner.label}")
             return unit
-        units = [u for u in self.catalog.list_units(series_id) if u.source_path]
+        units = [u for u in owner.units if u.source_path]
         if not units:
-            raise ValueError("no episode of this series has a source subtitle to try the style on")
+            raise ValueError(
+                "no episode of this series has a source subtitle to try the style on" if owner.label == "series"
+                else "this movie has no source subtitle to try the style on"
+            )
         translated = [u for u in units if any(o.target_lang == lang for o in self.catalog.outputs(u.id))]
         return (translated or units)[0]
 

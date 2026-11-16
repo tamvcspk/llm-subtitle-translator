@@ -28,7 +28,17 @@ ROUTES: list[tuple[str, str, Handler]] = [
         r"/api/series/(\d+)/cards/delete",
         lambda s, m, q, b: s.delete_card(int(m[1]), str(b.get("name") or ""), _lang(q, b)),
     ),
-    ("GET", r"/api/style/presets", lambda s, m, q, b: s.presets()),
+    # A movie has the same pages as a series, by the movie's unit id (P12b). No suggestions: they ask TMDB for a series.
+    ("GET", r"/api/movies/(\d+)/style", lambda s, m, q, b: s.movie_overview(int(m[1]), _lang(q, b))),
+    ("PUT", r"/api/movies/(\d+)/style", lambda s, m, q, b: s.save_movie_style(int(m[1]), {**b, "lang": _lang(q, b)})),
+    ("POST", r"/api/movies/(\d+)/style/preview", lambda s, m, q, b: s.preview_movie(int(m[1]), {**b, "lang": _lang(q, b)})),
+    ("PUT", r"/api/movies/(\d+)/cards", lambda s, m, q, b: s.save_movie_card(int(m[1]), {**b, "lang": _lang(q, b)})),
+    (
+        "POST",
+        r"/api/movies/(\d+)/cards/delete",
+        lambda s, m, q, b: s.delete_movie_card(int(m[1]), str(b.get("name") or ""), _lang(q, b)),
+    ),
+    ("GET", r"/api/style/presets",lambda s, m, q, b: s.presets()),
     ("PUT", r"/api/style/presets/([a-z0-9-]+)", lambda s, m, q, b: s.save_preset(m[1], b)),
     ("POST", r"/api/style/presets/([a-z0-9-]+)/clone", lambda s, m, q, b: s.clone_preset(m[1], b)),
     ("POST", r"/api/style/presets/([a-z0-9-]+)/delete", lambda s, m, q, b: s.delete_preset(m[1])),

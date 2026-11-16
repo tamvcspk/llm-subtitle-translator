@@ -24,7 +24,7 @@ from subcore.providers import ProviderError
 
 from .config import DEFAULT_MODEL, model_for_task
 from .glossaries import Glossaries
-from .library import Library
+from .library import Library, Owner
 from .ports import CURRENT, PRUNED, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit
 from .store import Store
 from .queue import JobQueue
@@ -784,24 +784,53 @@ class UnitService:
         return series
 
     def glossary(self, series_id: int, lang: str) -> dict[str, Any]:
-        """The glossary as a document (for the form) and as YAML (to export), with the number of stale translations."""
-        series = self._series(series_id)
-        stored = self.glossaries.stored("series", series.key, lang)
-        glossary = self.glossaries.load("series", series.key, lang)
-        impact = self.library.glossary_impact(series_id, lang, glossary)
-        return {
-            "lang": lang, "exists": stored is not None,
-            "doc": g.to_doc(glossary) if stored else {"version": 1}, "yaml": self.glossaries.read_text("series", series.key, lang),
-            "version": stored.version if stored else 0, "stale_units": impact["stale_now"],
-        }
+        return self.owner_glossary(self.library.series_owner(series_id), lang)
 
     def save_glossary(
         self, series_id: int, lang: str, text: str | None = None, *, doc: dict[str, Any] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
+        return self.save_owner_glossary(self.library.series_owner(series_id), lang, text, doc=doc, dry_run=dry_run)
+
+    def glossary_history(self, series_id: int, lang: str) -> dict[str, Any]:
+        return self.owner_glossary_history(self.library.series_owner(series_id), lang)
+
+    def restore_glossary(self, series_id: int, lang: str, version: int) -> dict[str, Any]:
+        return self.restore_owner_glossary(self.library.series_owner(series_id), lang, version)
+
+    # The same four for a movie, by the movie's unit id (P12b): the glossary of `movies/<movie_key>`.
+    def movie_glossary(self, unit_id: int, lang: str) -> dict[str, Any]:
+        return self.owner_glossary(self.library.movie_owner(unit_id), lang)
+
+    def save_movie_glossary(
+        self, unit_id: int, lang: str, text: str | None = None, *, doc: dict[str, Any] | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        return self.save_owner_glossary(self.library.movie_owner(unit_id), lang, text, doc=doc, dry_run=dry_run)
+
+    def movie_glossary_history(self, unit_id: int, lang: str) -> dict[str, Any]:
+        return self.owner_glossary_history(self.library.movie_owner(unit_id), lang)
+
+    def restore_movie_glossary(self, unit_id: int, lang: str, version: int) -> dict[str, Any]:
+        return self.restore_owner_glossary(self.library.movie_owner(unit_id), lang, version)
+
+    def owner_glossary(self, owner: Owner, lang: str) -> dict[str, Any]:
+        """The glossary as a document (for the form) and as YAML (to export), with the number of stale translations."""
+        stored = self.glossaries.stored(owner.kind, owner.key, lang)
+        glossary = self.glossaries.load(owner.kind, owner.key, lang)
+        impact = self.library.impact_units(owner.units, lang, glossary=glossary)
+        return {
+            "lang": lang, "exists": stored is not None,
+            "doc": g.to_doc(glossary) if stored else {"version": 1}, "yaml": self.glossaries.read_text(owner.kind, owner.key, lang),
+            "version": stored.version if stored else 0, "stale_units": impact["stale_now"],
+        }
+
+    def save_owner_glossary(
+        self, owner: Owner, lang: str, text: str | None = None, *, doc: dict[str, Any] | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
         """Save a glossary given as a document (the form) or as YAML text (an import). A bad one raises ValueError
         naming the offending path; ``dry_run`` only says how many translations the save would make stale."""
-        series = self._series(series_id)
         if doc is not None:
             if not isinstance(doc, dict):
                 raise ValueError("doc must be an object")
@@ -809,27 +838,25 @@ class UnitService:
         else:
             text = text or ""
             parsed, note = (g.loads(text) if text.strip() else g.Glossary()), "import"
-        impact = self.library.glossary_impact(series_id, lang, parsed)
+        impact = self.library.impact_units(owner.units, lang, glossary=parsed)
         saved = None
         if not dry_run:
-            saved = self.glossaries.save("series", series.key, lang, parsed, note=note)
+            saved = self.glossaries.save(owner.kind, owner.key, lang, parsed, note=note)
         return {"ok": True, "saved": not dry_run, "version": saved.version if saved else None, **impact}
 
-    def glossary_history(self, series_id: int, lang: str) -> dict[str, Any]:
+    def owner_glossary_history(self, owner: Owner, lang: str) -> dict[str, Any]:
         """What each save replaced, newest first (the history that stands in for the old backups)."""
-        series = self._series(series_id)
         return {
             "lang": lang,
             "items": [
                 {"version": r.version, "at": r.at, "note": r.note, "terms": len(r.doc.get("terms") or ()),
                  "characters": len(r.doc.get("characters") or ()), "address_rules": len(r.doc.get("address_rules") or ())}
-                for r in self.glossaries.history("series", series.key, lang)
+                for r in self.glossaries.history(owner.kind, owner.key, lang)
             ],
         }
 
-    def restore_glossary(self, series_id: int, lang: str, version: int) -> dict[str, Any]:
-        series = self._series(series_id)
-        restored = self.glossaries.restore("series", series.key, lang, int(version))
+    def restore_owner_glossary(self, owner: Owner, lang: str, version: int) -> dict[str, Any]:
+        restored = self.glossaries.restore(owner.kind, owner.key, lang, int(version))
         return {"ok": True, "version": restored.version, "restored": int(version)}
 
     def copy_glossary(self, series_id: int, lang: str, source_series_id: int, *, merge: bool) -> dict[str, Any]:

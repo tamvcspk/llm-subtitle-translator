@@ -747,6 +747,23 @@ character (or all, with `always`). Reply `{"ok", "saved", "card", "stale_now", "
 ### POST /api/series/{id}/cards/delete?lang=
 Body `{"name": "Bob"}`. Reply `{"ok", "stale_now", "stale_after", "would_stale"}`; `404` for an unknown card.
 
+### A movie's glossary, style and cards: `/api/movies/{unit_id}/...`
+A movie has the same pages as a series (P12b), reached by the **movie's unit id** (`id` of an item in `GET /api/catalog/movies`
+or `GET /api/library/movies`). They use the rows of owner `movies/<movie key>`, so a movie's glossary and style are its
+own and never reach a series. The stale count (`stale_now`, `stale_after`, `would_stale`, `stale_units`) is worked out
+for the movie's one unit. A unit id that is missing or belongs to an episode is a `404`.
+
+| Method and path | Same as |
+|---|---|
+| `GET /api/movies/{unit_id}/glossary?lang=` · `PUT …` | `GET`/`PUT /api/series/{id}/glossary` |
+| `GET /api/movies/{unit_id}/glossary/history?lang=` · `POST …/glossary/restore` | the series' history and restore |
+| `GET /api/movies/{unit_id}/style?lang=` · `PUT …` | the series' style; the reply names the movie under `"movie": {"id", "title"}` instead of `"series"` |
+| `POST /api/movies/{unit_id}/style/preview` | "Thử style" on the movie's own source subtitle (`unit_id` in the body, if given, must be the movie's); spends model calls, writes nothing |
+| `PUT /api/movies/{unit_id}/cards?lang=` · `POST …/cards/delete` | the series' cards |
+
+There is no `…/glossary/copy` (a glossary is copied between series) and no `…/style/suggestions`. The style of the movie's
+unit itself (the "episode" override) stays at `GET`/`PUT /api/units/{id}/style`.
+
 ### GET /api/style/presets
 `{"items": [{"id", "name", "genres", "style", "builtin"}]}`. The five built-in presets (sitcom, drama, anime, documentary,
 kids) are stored once and belong to the admin from then on.

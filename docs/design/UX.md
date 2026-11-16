@@ -293,7 +293,7 @@ Nhóm theo series; mỗi mục: `source`, nội dung đề xuất, bằng chứn
 - Lưu style của variant khi **Use this version** (`adopt` nhận thêm `apply_style`, hoặc giao diện gọi hai bước).
 - `estimate_only` cho Retry và cho variant; ước lượng lời gọi cho Retranslate theo dải.
 - Số đếm `failed`, `ignored` theo series (và cho `movies`) ở `GET /api/catalog`: đếm rẻ được bằng SQL trên `jobs` và `unit_decisions`, theo đúng định nghĩa nhãn Failed (không có job mở và job kết thúc mới nhất của key là `failed`); chỉ là hai số trong phần tổng quan có sẵn, không phải read model mới.
-- Glossary, style và thẻ nhân vật **cấp phim** (`owner_kind = movies`): tầng lưu có sẵn nhưng chưa có route. Cần route theo unit phim (đề xuất `/api/movies/{unit_id}/glossary|style|cards…`) cho liên kết **Movie Glossary** và tab Style của trang Unit; impact tính cho một unit.
+- Glossary, style và thẻ nhân vật **cấp phim** (`owner_kind = movies`): route đã có từ 2026-11-17 theo unit phim (`/api/movies/{unit_id}/glossary|glossary/history|glossary/restore|style|style/preview|cards`, xem `docs/API.md`) cho liên kết **Movie Glossary** và tab Style của trang Unit; impact tính cho một unit.
 - "Try 20 lines" khi series chưa có bản dịch: **không cần backend**. `rows[].current` là `null`; giao diện để trống cột hiện tại.
 - Không làm ở v1: `dry_run` và dòng impact cho `PUT /api/series/{id}/memory` (xem 6.2 và SPEC #26 điểm 14).
 - Quota ngày đã dùng; danh sách few-shot theo series; lý do một bản dịch bị Stale; tầng nguồn của từng giá trị style.

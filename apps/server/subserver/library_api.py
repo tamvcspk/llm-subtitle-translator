@@ -109,13 +109,29 @@ ROUTES: list[tuple[str, str, Handler]] = [
             int(m[1]), _glossary_lang(q, b), _body_int(b, "from_series"), merge=bool(b.get("merge")),
         ),
     ),
+    # A movie's own glossary, by the movie's unit id (P12b). No copy: a glossary is copied between series.
+    ("GET", r"/api/movies/(\d+)/glossary", lambda s, m, q, b: s.movie_glossary(int(m[1]), _glossary_lang(q))),
+    (
+        "PUT",
+        r"/api/movies/(\d+)/glossary",
+        lambda s, m, q, b: s.save_movie_glossary(
+            int(m[1]), _glossary_lang(q, b), None if b.get("doc") is not None else str(b.get("yaml") or ""),
+            doc=b.get("doc"), dry_run=bool(b.get("dry_run")),
+        ),
+    ),
+    ("GET", r"/api/movies/(\d+)/glossary/history", lambda s, m, q, b: s.movie_glossary_history(int(m[1]), _glossary_lang(q))),
+    (
+        "POST",
+        r"/api/movies/(\d+)/glossary/restore",
+        lambda s, m, q, b: s.restore_movie_glossary(int(m[1]), _glossary_lang(q, b), _body_int(b, "version")),
+    ),
 ]
 
-_COMPILED = [(method, re.compile(rf"^{pattern}/?$"), handler) for method, pattern, handler in ROUTES]
+_COMPILED =[(method, re.compile(rf"^{pattern}/?$"), handler) for method, pattern, handler in ROUTES]
 
 
 def handles(path: str) -> bool:
-    return path.startswith(("/api/library/", "/api/units/", "/api/series/"))
+    return path.startswith(("/api/library/", "/api/units/", "/api/series/", "/api/movies/"))
 
 
 def handle(
