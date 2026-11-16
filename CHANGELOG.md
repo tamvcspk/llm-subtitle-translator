@@ -11,8 +11,9 @@
   could only get glossary terms through corrections.
 - **P12b backend: `GET /api/catalog` adds `failed` and `ignored`** per series and for movies, per target language (for the
   Failed and Ignored chips of the new Home). They equal what the labels of the series page add up to. The `Failed` label is now
-  read by (unit, language) instead of by the file-path key, so a request renamed by Sonarr still shows its earlier failure, and
-  a failed retranslation shows as Failed too (a failed variant, which has its own kind, still does not).
+  read by (unit, language) instead of by the file-path key, so a request whose files were renamed (Sonarr) still shows its
+  earlier failure. A failed retranslation already counted before (it shares the key of a normal job); a failed variant, which
+  has its own kind, still does not.
 - **P12: style profile, glossary in the database, trial of a style, variants (FR-18, ADR-14).** **Upgrade note:** glossaries
   moved from `series/<key>/glossary.<lang>.yaml` into `app.db`. At the first start the worker reads those files into the
   database once and leaves them where they are; **from then on editing a file changes nothing**: use the Glossary page
