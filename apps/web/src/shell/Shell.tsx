@@ -8,7 +8,7 @@ import { StatusStrip } from "./StatusStrip";
 
 // Review joins this list in P13 (with a badge of pending suggestions); until then it does not exist.
 export const NAV = [
-  { to: "/", label: "Library", end: true },
+  { to: "/library", label: "Library", end: false },
   { to: "/activity", label: "Activity", end: false },
   { to: "/settings", label: "Settings", end: false },
 ] as const;

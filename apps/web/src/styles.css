@@ -31,3 +31,9 @@ body {
   color: var(--mantine-color-teal-light-color);
   font-weight: 600;
 }
+
+.mantine-Chip-label {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}

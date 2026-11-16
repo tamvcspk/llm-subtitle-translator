@@ -51,3 +51,92 @@ export interface AuthMe {
   via: "session" | "basic" | "off";
   can_change_password: boolean;
 }
+
+// -- the catalog (docs/API.md, "The catalog") ---------------------------------------------------------------------
+
+export type JobAxis = "requested" | "running" | "waiting" | "failed" | "";
+
+/** One (item, language): the content axis, the job axis and the decision, with the label the console shows. */
+export interface CatalogTarget {
+  lang: string;
+  content: "missing" | "translated" | "edited" | "external" | "outside";
+  removed: boolean;
+  stale: boolean;
+  job: JobAxis;
+  wait: string;
+  ignored: boolean;
+  text: string;
+}
+
+export interface CatalogItem {
+  id: number;
+  kind: "series" | "episode" | "movie";
+  bazarr_id: number;
+  title: string;
+  season: number | null;
+  episode: number | null;
+  /** Set once the worker keeps a unit for the item; it opens the Episode or Unit page. */
+  unit_id: number | null;
+  source: string | null;
+  has_source: boolean;
+  gone: boolean;
+  targets: CatalogTarget[];
+}
+
+/** Counts per target language, `{"vi": 3}`. */
+export type PerLang = Record<string, number>;
+
+export interface CatalogSeries {
+  id: number;
+  title: string;
+  key: string;
+  episodes: number;
+  missing: PerLang;
+  /** `requested`, `running`, `waiting`: open jobs of the series by state. */
+  open_jobs: Partial<Record<"requested" | "running" | "waiting", number>>;
+  failed: PerLang;
+  ignored: PerLang;
+  auto_request: "" | "on" | "off";
+  series_id: number | null;
+}
+
+export interface CatalogOverview {
+  status: CatalogStatus;
+  /** Enabled target languages, lower case. */
+  languages: string[];
+  series: CatalogSeries[];
+  movies: { count: number; missing: PerLang; failed: PerLang; ignored: PerLang };
+}
+
+export interface MoviesPage {
+  status: CatalogStatus;
+  languages: string[];
+  items: CatalogItem[];
+}
+
+// -- requesting translations (POST /api/jobs) ---------------------------------------------------------------------
+
+/** Name what a request is about in exactly one way. */
+export type JobsSelector = { items: number[] } | { series: number; season?: number } | { all: true };
+
+export interface Estimate {
+  jobs: number;
+  cues: number;
+  calls: number | null;
+  calls_left_today: number | null;
+  /** Unix seconds; set only while the daily quota is spent. */
+  paused_until: number | null;
+  minutes: number | null;
+  finish_at: number | null;
+}
+
+export interface JobsAnswer {
+  estimate_only: boolean;
+  estimate: Estimate;
+  planned_total: number;
+  skipped_total: number;
+  skipped_by_reason: Record<string, number>;
+  /** Present on a real request. */
+  created?: string[];
+  count?: number;
+}

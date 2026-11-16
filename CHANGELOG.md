@@ -1,4 +1,8 @@
 # Unreleased
+- **P12b: Home in `apps/web`.** Search by title (ignores case and accents), the five chips, one next-action button per row
+  (View failed, Translate missing or Improve), empty, no-match and error states, and Sync now. **Translate missing** goes
+  through the shared Estimate box: it asks for the price first (`estimate_only`) and makes jobs only on Confirm. Routes are
+  `#/library`, `#/series/:id/*` and `#/unit/:id/*` (the last two are placeholders). Still not served.
 - **P12b: `apps/web`, the new console's frame (not served yet).** TypeScript, React 19, Vite, Mantine, React Router in hash
   mode, TanStack Query and Tabler icons, all bundled (fonts included, no CDN), with Vitest, ESLint and a lockfile
   (`npm ci`). The shell is there: Library, Activity and Settings in the nav (the screens are placeholders), the global

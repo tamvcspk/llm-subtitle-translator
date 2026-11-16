@@ -1,41 +1,8 @@
-import { MantineProvider } from "@mantine/core";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeQueryClient } from "../App";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetSession } from "../api/session";
-import { AppRoutes } from "../routes";
-import { theme } from "../theme";
-
-type Reply = { status?: number; body: unknown };
-
-function serve(routes: Record<string, Reply>): void {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
-      const reply = routes[path] ?? { status: 404, body: { error: "not found" } };
-      return new Response(JSON.stringify(reply.body), {
-        status: reply.status ?? 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }),
-  );
-}
-
-function show(path = "/") {
-  return render(
-    <QueryClientProvider client={makeQueryClient()}>
-      <MantineProvider theme={theme}>
-        <MemoryRouter initialEntries={[path]}>
-          <AppRoutes />
-        </MemoryRouter>
-      </MantineProvider>
-    </QueryClientProvider>,
-  );
-}
+import { serve, show } from "../test/render";
 
 const healthy = {
   "/api/status": {
@@ -50,6 +17,15 @@ const healthy = {
     body: { synced_at: Date.now() / 1000 - 30, attempted_at: null, status: "ok", warning: "", items: 3 },
   },
   "/api/auth/me": { body: { user: "admin", via: "session", can_change_password: true } },
+  "/api/catalog": {
+    body: {
+      status: { synced_at: null, attempted_at: null, status: "", warning: "", items: 0 },
+      languages: ["vi"],
+      series: [],
+      movies: { count: 0, missing: {}, failed: {}, ignored: {} },
+    },
+  },
+  "/api/catalog/movies": { body: { status: {}, languages: ["vi"], items: [] } },
 };
 
 describe("Shell", () => {
@@ -74,10 +50,10 @@ describe("Shell", () => {
     expect(await screen.findByRole("heading", { name: "Activity" })).toBeInTheDocument();
   });
 
-  it("sends an unknown route back to the Library", () => {
+  it("sends the root and an unknown route to the Library", async () => {
     serve(healthy);
     show("/nowhere");
-    expect(screen.getByRole("heading", { name: "Library" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "Search by title" })).toBeInTheDocument();
   });
 
   it("shows the kept-catalog banner with Sync now", async () => {
@@ -90,7 +66,7 @@ describe("Shell", () => {
     show();
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Bazarr could not be read.");
-    expect(screen.getByRole("button", { name: "Sync now" })).toBeInTheDocument();
+    expect(within(alert).getByRole("button", { name: "Sync now" })).toBeInTheDocument();
   });
 
   it("blocks the page with the session overlay when a call answers 401", async () => {
