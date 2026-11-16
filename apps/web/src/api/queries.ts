@@ -6,6 +6,7 @@ import type {
   CatalogStatus,
   Correction,
   CuesPage,
+  DiffAnswer,
   Estimate,
   JobsAnswer,
   JobsSelector,
@@ -14,6 +15,7 @@ import type {
   SeriesPage,
   StatusResponse,
   UnitDetail,
+  VersionsAnswer,
 } from "./types";
 
 export const keys = {
@@ -220,6 +222,50 @@ export function useCues(id: number, query: CueQuery, enabled: boolean) {
     queryFn: ({ signal }) => api<CuesPage>(`/api/units/${id}/cues?${params}`, { signal }),
     enabled,
     placeholderData: (previous) => previous,
+  });
+}
+
+export function useVersions(id: number, lang: string) {
+  return useQuery({
+    queryKey: [...keys.unit(id), "versions", lang] as const,
+    queryFn: ({ signal }) => api<VersionsAnswer>(`/api/units/${id}/versions?lang=${encodeURIComponent(lang)}`, { signal }),
+    enabled: lang !== "",
+  });
+}
+
+/** What changed from `against` (default: the version before) to `version`. Read when asked for, never before. */
+export function useDiff(id: number, lang: string, version: number | null) {
+  return useQuery({
+    queryKey: [...keys.unit(id), "diff", lang, version] as const,
+    queryFn: ({ signal }) =>
+      api<DiffAnswer>(`/api/units/${id}/versions/${version}/diff?lang=${encodeURIComponent(lang)}`, { signal }),
+    enabled: version !== null,
+  });
+}
+
+/** Restore an older version: it is written back as a new one, and what was on disk is kept first. No model call. */
+export function useRevert(id: number) {
+  const refresh = useRefreshUnit(id);
+  return useMutation({
+    mutationFn: (args: { version: number; lang: string }) =>
+      api<{ ok: boolean; version: number }>(`/api/units/${id}/versions/${args.version}/revert`, {
+        method: "POST",
+        body: { lang: args.lang },
+      }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** "Use this version": a candidate (a result that was not allowed onto the disk) is written and becomes current. */
+export function useAdopt(id: number) {
+  const refresh = useRefreshUnit(id);
+  return useMutation({
+    mutationFn: (args: { version: number; lang: string }) =>
+      api<{ ok: boolean; version: number }>(`/api/units/${id}/versions/${args.version}/adopt`, {
+        method: "POST",
+        body: { lang: args.lang },
+      }),
+    onSettled: () => void refresh(),
   });
 }
 

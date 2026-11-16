@@ -219,6 +219,42 @@ export interface Correction {
   created_at: number;
 }
 
+export interface Version {
+  version: number;
+  /** `auto`, `retranslate`, `variant`, `cue_edit`, `revert`, `external`, `remove`. */
+  trigger: string;
+  /** `machine`, `edit`, `revert`, `external`. */
+  origin: string;
+  status: "current" | "superseded" | "candidate" | "removed" | "pruned";
+  parent_version: number | null;
+  model: string;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  /** Unix seconds. */
+  created_at: number;
+  current: boolean;
+  params: { range?: { first: number; last: number }; variant?: { label: string; preset: string } };
+}
+
+export interface VersionsAnswer {
+  lang: string;
+  modified_outside: boolean;
+  versions: Version[];
+}
+
+export interface DiffCue {
+  n: number;
+  text: string;
+  time?: string;
+}
+
+export interface DiffAnswer {
+  version: number;
+  against: number | null;
+  changed_cues: number;
+  changes: Array<{ op: string; before: DiffCue[]; after: DiffCue[] }>;
+}
+
 // -- requesting translations (POST /api/jobs) ---------------------------------------------------------------------
 
 /** Name what a request is about in exactly one way. */

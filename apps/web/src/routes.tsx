@@ -4,6 +4,7 @@ import { Home } from "./pages/Home";
 import { Placeholder } from "./pages/Placeholder";
 import { Series } from "./pages/Series";
 import { Corrections } from "./pages/unit/Corrections";
+import { History } from "./pages/unit/History";
 import { Retranslate } from "./pages/unit/Retranslate";
 import { Subtitles } from "./pages/unit/Subtitles";
 import { Unit } from "./pages/Unit";
@@ -30,7 +31,8 @@ export function AppRoutes() {
           <Route path="subtitles" element={<Subtitles />} />
           <Route path="corrections" element={<Corrections />} />
           <Route path="retranslate" element={<Retranslate />} />
-          <Route path="history" element={<Placeholder title="History" note="Versions, Diff, Restore and Use this version: next in P12b." />} />
+          <Route path="history" element={<History />} />
+          <Route path="compare/:version" element={<Placeholder title="Compare" note="Current against a candidate, cue by cue: next in P12b." />} />
           <Route path="context" element={<Placeholder title="Context" note="The story memory behind this translation: later in P12b." />} />
           <Route path="style" element={<Placeholder title="Style" note="The episode's own style layer: later in P12b." />} />
           <Route path="*" element={<Navigate to="subtitles" replace />} />
