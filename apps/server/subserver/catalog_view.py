@@ -119,7 +119,12 @@ class CatalogView:
             if state == WAITING:
                 return "waiting", str(open_job.get("wait_reason") or "")
             return "requested", ""
-        last = jobs.latest_for(job_key(source, output, lang), FAILED, DONE, SKIPPED, CANCELLED) if source and output else None
+        # "Failed" is read by (unit, language), the same way ``_failed_units`` counts it for the overview, so the number
+        # on a Home row and the labels of its page cannot disagree after a rename gives the request a new key.
+        if unit is not None:
+            last = jobs.latest_for_unit(unit.id, lang, FAILED, DONE, SKIPPED, CANCELLED)
+        else:
+            last = jobs.latest_for(job_key(source, output, lang), FAILED, DONE, SKIPPED, CANCELLED) if source and output else None
         if last is not None and last["state"] == FAILED:
             return "failed", ""
         return "", ""
@@ -148,6 +153,7 @@ class CatalogView:
         """Series (with counts that need no per-item work) and movies, for the Library list."""
         langs = self._targets()
         open_by_series = self._open_by_series()
+        failed, ignored = self._failed_units(), self._ignored_units()
         out = []
         for series in self.store.catalog_entries(KIND_SERIES):
             episodes = self.store.catalog_entries(KIND_EPISODE, parent_id=series.id)
@@ -156,13 +162,53 @@ class CatalogView:
             out.append({
                 "id": series.id, "title": series.title, "key": series.series_key, "episodes": len(episodes),
                 "missing": counts, "open_jobs": open_by_series.get(series.bazarr_id, {}),
+                "failed": self._per_lang(failed, series.series_key, langs),
+                "ignored": self._per_lang(ignored, series.series_key, langs),
                 "auto_request": stored.auto_request if stored else "", "series_id": stored.id if stored else None,
             })
         movies = self.store.catalog_entries(KIND_MOVIE)
         return {
             "status": self.status(), "languages": langs, "series": out,
-            "movies": {"count": len(movies), "missing": {lang: sum(1 for m in movies if lang in m.missing) for lang in langs}},
+            "movies": {"count": len(movies), "missing": {lang: sum(1 for m in movies if lang in m.missing) for lang in langs},
+                       "failed": self._per_lang(failed, None, langs), "ignored": self._per_lang(ignored, None, langs)},
         }
+
+    @staticmethod
+    def _per_lang(counts: dict[tuple[str | None, str], int], owner: str | None, langs: list[str]) -> dict[str, int]:
+        return {lang: counts.get((owner, lang), 0) for lang in langs}
+
+    # The two counts below stand for the labels of ``item`` without working them out per item. ``owner`` is the series
+    # key, or None for a movie; only units the catalog still lists as a movie, or that belong to a listed series, are counted.
+    _LISTED = (
+        "LEFT JOIN series s ON s.id = u.series_id"
+        " LEFT JOIN catalog_items c ON c.kind = 'movie' AND c.series_key = u.movie_key AND c.gone_at IS NULL"
+        " WHERE (u.series_id IS NOT NULL OR c.id IS NOT NULL)"
+    )
+
+    def _failed_units(self) -> dict[tuple[str | None, str], int]:
+        """Per (series key or None, language): units with no open job whose newest finished job is ``failed`` (the
+        ``Failed`` label of ``_job``). A job that failed and was asked for again is open, so it is not counted."""
+        finished, open_states = (FAILED, DONE, SKIPPED, CANCELLED), OPEN_STATES
+        done_marks, open_marks = ",".join("?" * len(finished)), ",".join("?" * len(open_states))
+        rows = self.store.query(
+            "SELECT s.key AS owner, j.target_lang AS lang, COUNT(DISTINCT j.unit_id) AS n FROM jobs j"
+            " JOIN units u ON u.id = j.unit_id " + self._LISTED +
+            " AND j.kind = 'publish' AND j.state = ?"
+            f" AND j.id = (SELECT MAX(k.id) FROM jobs k WHERE k.unit_id = j.unit_id AND k.target_lang = j.target_lang"
+            f"  AND k.kind = 'publish' AND k.state IN ({done_marks}))"
+            f" AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.unit_id = j.unit_id AND o.target_lang = j.target_lang"
+            f"  AND o.kind = 'publish' AND o.state IN ({open_marks}))"
+            " GROUP BY s.key, j.target_lang", (FAILED, *finished, *open_states),
+        )
+        return {(row["owner"], str(row["lang"])): int(row["n"]) for row in rows}
+
+    def _ignored_units(self) -> dict[tuple[str | None, str], int]:
+        rows = self.store.query(
+            "SELECT s.key AS owner, d.target_lang AS lang, COUNT(*) AS n FROM unit_decisions d"
+            " JOIN units u ON u.id = d.unit_id " + self._LISTED + " AND d.decision = 'ignored'"
+            " GROUP BY s.key, d.target_lang"
+        )
+        return {(row["owner"], str(row["lang"])): int(row["n"]) for row in rows}
 
     def _open_by_series(self) -> dict[str, dict[str, int]]:
         rows = self.store.query(

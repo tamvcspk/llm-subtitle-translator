@@ -617,6 +617,78 @@ class OverviewAndApi(CatalogCase):
         self.assertEqual(page["languages"], ["vi"])
         self.assertEqual(env.actions.series_page(series["id"])["items"][0]["targets"][0]["text"], "Missing · Requested")
 
+    def _label_counts(self, env, page):
+        """What the labels of a series page say, counted per language: the number the overview must equal."""
+        labels = [t for item in page["items"] for t in item["targets"]]
+        return ({t["lang"]: sum(1 for x in labels if x["lang"] == t["lang"] and x["job"] == "failed") for t in labels},
+                {t["lang"]: sum(1 for x in labels if x["lang"] == t["lang"] and x["ignored"]) for t in labels})
+
+    def test_the_overview_counts_failed_and_ignored_like_the_labels_of_the_page(self):
+        env = self.env()
+        for n in (1, 2, 3, 4):
+            env.episode(n)
+        env.sync.run()
+        (series,) = env.actions.overview()["series"]
+        self.assertEqual((series["failed"], series["ignored"]), ({"vi": 0}, {"vi": 0}))
+        created = env.actions.request({"items": env.ids("7101", "7102", "7103")})["created"]
+        for job_id in created[:2]:
+            env.queue.jobs.transition(job_id, "running")
+            env.queue.jobs.transition(job_id, "failed", error="boom")
+        env.queue.jobs.transition(created[2], "running")
+        env.queue.jobs.transition(created[2], "done")
+        env.actions.ignore({"items": env.ids("7104")}, True)
+        page = env.actions.overview()
+        (series,) = page["series"]
+        self.assertEqual((series["failed"], series["ignored"]), ({"vi": 2}, {"vi": 1}))
+        self.assertEqual(self._label_counts(env, env.actions.series_page(series["id"])), (series["failed"], series["ignored"]))
+        self.assertEqual(page["movies"]["failed"], {"vi": 0})
+
+    def test_a_failed_job_asked_for_again_is_open_and_no_longer_counted_as_failed(self):
+        env = self.env()
+        env.episode(1)
+        env.sync.run()
+        (job_id,) = env.actions.request({"items": env.ids("7101")})["created"]
+        env.queue.jobs.transition(job_id, "running")
+        env.queue.jobs.transition(job_id, "failed", error="boom")
+        self.assertEqual(env.actions.overview()["series"][0]["failed"], {"vi": 1})
+        env.actions.request({"items": env.ids("7101")})
+        series = env.actions.overview()["series"][0]
+        self.assertEqual((series["failed"], series["open_jobs"]), ({"vi": 0}, {"requested": 1}))
+        self.assertEqual(env.label("7101")["job"], "requested")
+
+    def test_a_job_that_failed_before_a_later_one_succeeded_is_not_failed(self):
+        env = self.env()
+        env.episode(1)
+        env.sync.run()
+        (first,) = env.actions.request({"items": env.ids("7101")})["created"]
+        env.queue.jobs.transition(first, "running")
+        env.queue.jobs.transition(first, "failed", error="boom")
+        (second,) = env.actions.request({"items": env.ids("7101")})["created"]
+        env.queue.jobs.transition(second, "running")
+        env.queue.jobs.transition(second, "done")
+        self.assertEqual(env.actions.overview()["series"][0]["failed"], {"vi": 0})
+        self.assertEqual(env.label("7101")["job"], "")
+
+    def test_the_overview_counts_failed_and_ignored_movies_apart_from_series(self):
+        env = self.env()
+        movie_dir = env.media_dir / "Heat"
+        movie_dir.mkdir()
+        (movie_dir / "Heat.en.srt").write_text(SRT, encoding="utf-8")
+        env.fake.entries.append(CatalogEntry(
+            kind="movie", bazarr_id="5", title="Heat", video_path=str(movie_dir / "Heat.mkv"),
+            subtitles=(CatalogSubtitle("en", str(movie_dir / "Heat.en.srt")),), missing=("vi",),
+        ))
+        env.episode(1)
+        env.sync.run()
+        movie_id = env.item("5", "movie").id
+        (job_id,) = env.actions.request({"items": [movie_id]})["created"]
+        env.queue.jobs.transition(job_id, "running")
+        env.queue.jobs.transition(job_id, "failed", error="boom")
+        env.actions.ignore({"items": env.ids("7101")}, True)
+        page = env.actions.overview()
+        self.assertEqual((page["movies"]["failed"], page["movies"]["ignored"]), ({"vi": 1}, {"vi": 0}))
+        self.assertEqual((page["series"][0]["failed"], page["series"][0]["ignored"]), ({"vi": 0}, {"vi": 1}))
+
     def test_the_routes_map_to_the_use_cases_and_say_404_and_400(self):
         env = self.env()
         env.episode(1)

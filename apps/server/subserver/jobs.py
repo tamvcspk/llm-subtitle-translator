@@ -160,6 +160,15 @@ class JobStore:
         )
         return view(rows[0]) if rows else None
 
+    def latest_for_unit(self, unit_id: int, target_lang: str, *states: str, kind: str = PUBLISH) -> dict[str, Any] | None:
+        """The newest job of this unit and language in one of ``states``, whatever key its paths gave it."""
+        marks = ",".join("?" * len(states))
+        rows = self.store.query(
+            f"SELECT * FROM jobs WHERE unit_id = ? AND target_lang = ? AND kind = ? AND state IN ({marks})"
+            " ORDER BY id DESC LIMIT 1", (unit_id, target_lang, kind, *states),
+        )
+        return view(rows[0]) if rows else None
+
     def last_served(self) -> dict[str, float]:
         rows = self.store.query(
             "SELECT series_key, MAX(started_at) AS at FROM jobs WHERE series_key <> '' AND started_at IS NOT NULL"
