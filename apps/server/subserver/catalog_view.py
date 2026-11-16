@@ -96,29 +96,46 @@ class CatalogView:
         else:
             removed = bool(derived) and self.versions.latest_status(derived) == "removed"
             content = "missing" if (lang in entry.missing or removed) else "outside"
-        job, wait = self._job(entry, unit, lang, picked[0].path if picked else "", derived)
+        job, wait, info = self._job(entry, unit, lang, picked[0].path if picked else "", derived)
         return {
             "lang": lang, "content": content, "removed": removed, "stale": stale, "job": job, "wait": wait,
-            "ignored": unit is not None and (unit.id, lang) in ignored,
+            "ignored": unit is not None and (unit.id, lang) in ignored, "job_info": info,
         }
 
     def _edited(self, path: str) -> bool:
         current = self.versions.repo.current_version(path)
         return current is not None and current.origin == "edit"
 
-    def _job(self, entry: CatalogEntry, unit: Unit | None, lang: str, source: str, output: str) -> tuple[str, str]:
-        """``(axis value, wait reason)``: requested | running | waiting | failed, or '' when no job says anything."""
+    @staticmethod
+    def _job_info(job: dict[str, Any]) -> dict[str, Any]:
+        """What a row needs to act on the job it shows (Cancel, Stop, Retry, a progress bar), never the job's payload."""
+        done, total = job.get("progress_done"), job.get("progress_total")
+        retry_at = job.get("retry_at") if job["state"] == WAITING else None
+        return {
+            "job_id": str(job["job_id"]),
+            "progress_done": int(done) if isinstance(done, (int, float)) else None,
+            "progress_total": int(total) if isinstance(total, (int, float)) else None,
+            "retry_at": float(retry_at) if isinstance(retry_at, (int, float)) and retry_at else None,
+            "error": str(job.get("error") or "")[-300:],
+            "missing_units": [str(m) for m in job.get("missing_units") or []] if job["state"] == WAITING else [],
+        }
+
+    def _job(self, entry: CatalogEntry, unit: Unit | None, lang: str, source: str,
+             output: str) -> tuple[str, str, dict[str, Any] | None]:
+        """``(axis value, wait reason, job info)``: requested | running | waiting | failed, or '' when no job says
+        anything (``info`` is then None)."""
         jobs = self.queue.jobs
         open_job = jobs.open_for(job_key(source, output, lang)) if source and output else None
         if open_job is None and unit is not None:
             open_job = jobs.open_for_unit(unit.id, lang)
         if open_job is not None:
             state = open_job["state"]
+            info = self._job_info(open_job)
             if state == RUNNING:
-                return "running", ""
+                return "running", "", info
             if state == WAITING:
-                return "waiting", str(open_job.get("wait_reason") or "")
-            return "requested", ""
+                return "waiting", str(open_job.get("wait_reason") or ""), info
+            return "requested", "", info
         # "Failed" is read by (unit, language), the same way ``_failed_units`` counts it for the overview, so the number
         # on a Home row and the labels of its page cannot disagree after a rename gives the request a new key.
         if unit is not None:
@@ -126,8 +143,8 @@ class CatalogView:
         else:
             last = jobs.latest_for(job_key(source, output, lang), FAILED, DONE, SKIPPED, CANCELLED) if source and output else None
         if last is not None and last["state"] == FAILED:
-            return "failed", ""
-        return "", ""
+            return "failed", "", self._job_info(last)
+        return "", "", None
 
     def _targets(self) -> list[str]:
         return [str(t["code"]).lower() for t in enabled_target_languages(self._config())]

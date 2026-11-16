@@ -56,6 +56,18 @@ export interface AuthMe {
 
 export type JobAxis = "requested" | "running" | "waiting" | "failed" | "";
 
+/** The job a row can act on (Cancel, Stop, Retry) and what it shows about it. */
+export interface JobInfo {
+  job_id: string;
+  progress_done: number | null;
+  progress_total: number | null;
+  /** Unix seconds, waiting jobs only. */
+  retry_at: number | null;
+  error: string;
+  /** `["S01E03"]`: the earlier episodes a `context` wait is for. */
+  missing_units: string[];
+}
+
 /** One (item, language): the content axis, the job axis and the decision, with the label the console shows. */
 export interface CatalogTarget {
   lang: string;
@@ -66,6 +78,7 @@ export interface CatalogTarget {
   wait: string;
   ignored: boolean;
   text: string;
+  job_info: JobInfo | null;
 }
 
 export interface CatalogItem {
@@ -114,10 +127,50 @@ export interface MoviesPage {
   items: CatalogItem[];
 }
 
+/** `GET /api/catalog/series/{id}`: one series with the label of every episode and language. */
+export interface SeriesPage {
+  status: CatalogStatus;
+  languages: string[];
+  series: { id: number; title: string; key: string; auto_request: "" | "on" | "off"; series_id: number | null; gone: boolean };
+  items: CatalogItem[];
+}
+
+/** `GET /api/library/series/{id}/units`: what the version history says about each episode's file. */
+export interface LibraryTarget {
+  lang: string;
+  status: "current" | "stale" | "incomplete" | "untranslated";
+  version: number | null;
+  model: string;
+  /** Unix seconds. */
+  updated_at: number | null;
+  modified_outside: boolean;
+}
+
+export interface LibraryUnit {
+  id: number;
+  season: number | null;
+  episode: number | null;
+  targets: LibraryTarget[];
+}
+
+export interface LibraryUnits {
+  languages: string[];
+  units: LibraryUnit[];
+}
+
 // -- requesting translations (POST /api/jobs) ---------------------------------------------------------------------
 
 /** Name what a request is about in exactly one way. */
-export type JobsSelector = { items: number[] } | { series: number; season?: number } | { all: true };
+export type JobsSelector = (
+  | { items: number[] }
+  | { series: number; season?: number }
+  | { all: true }
+) & {
+  /** Only these target languages (default: every enabled one). */
+  languages?: string[];
+  /** `fill` (default) never overwrites; `replace` is a retranslation. */
+  mode?: "fill" | "replace";
+};
 
 export interface Estimate {
   jobs: number;

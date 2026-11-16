@@ -498,7 +498,12 @@ An item is a *series*, an *episode* or a *movie*, addressed by its catalog `id` 
 
 The state of each (item, language) is **derived when read**, from the catalog, the version history, the jobs
 and the decisions. A target comes as
-`{"lang", "content", "removed", "stale", "job", "wait", "ignored", "text"}`: `content` is `missing`,
+`{"lang", "content", "removed", "stale", "job", "wait", "ignored", "text", "job_info"}`: `job_info` is `null` when no job
+says anything, else `{"job_id", "progress_done", "progress_total", "retry_at", "error", "missing_units"}` of the open job
+(or of the failed one that gives the `failed` label): what a row needs to Cancel, Stop or Retry it and to show its
+progress, the time it resumes (`retry_at`, Unix seconds, waiting only), the reason it failed (the last 300 characters) and,
+for `wait: "context"`, the earlier episodes it waits for (`["S01E03"]`); fields the job does not have are `null`, `""` or
+`[]`. `content` is `missing`,
 `translated`, `edited`, `external` (a subtitle the worker did not make) or `outside` (the language is not in
 Bazarr's profile for the item; it can still be requested); `job` is `requested`, `running`, `waiting` (with
 `wait`: `quota`, `provider`, `context`, `settle`, `rate`), `failed` or `""`; `text` is the label as the console

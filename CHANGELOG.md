@@ -1,4 +1,13 @@
 # Unreleased
+- **P12b: Series page, Episodes tab in `apps/web`.** Header with title, target language and Auto-request (saved at once);
+  one row per episode with its label (`Missing · Waiting · quota`, `Translated · Stale`, …), the reason under it (resume time,
+  error, `v2 · model · 2d ago`, "File changed outside the worker") and one button: Translate, Cancel, Stop, Retry, Request that
+  episode, Open Connections, Retranslate, Improve, History, View, Translate again, Stop ignoring. Translate season, whole
+  series and the ticked episodes all go through the Estimate box, Retry too (`/api/queue/retry` with `estimate_only`); Cancel,
+  Stop and Ignore cost nothing and do not. Status chips follow `?status=` (the Home "View failed" link). Not yet: Restore (use
+  History on the episode page, later), the Candidate badge, Memory and Specials after in the header (they come with Context).
+  The API reads one more field: each target of `GET /api/catalog/series/{id}` carries `job_info` (job id, progress, resume time,
+  error, the earlier episodes a context wait is for). Client: a 4xx answer is not retried.
 - **P12b: Home in `apps/web`.** Search by title (ignores case and accents), the five chips, one next-action button per row
   (View failed, Translate missing or Improve), empty, no-match and error states, and Sync now. **Translate missing** goes
   through the shared Estimate box: it asks for the price first (`estimate_only`) and makes jobs only on Confirm. Routes are

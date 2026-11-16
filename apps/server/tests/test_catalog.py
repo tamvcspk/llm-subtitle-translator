@@ -391,6 +391,20 @@ class Criterion13e(CatalogCase):
         env.queue.jobs.transition(job_id, "failed", error="boom")
         self.assertEqual(env.label("7101")["text"], "Missing · Failed")
 
+    def test_13e_a_row_carries_the_job_it_can_act_on(self):
+        env = self.env()
+        env.episode(1)
+        env.sync.run()
+        self.assertIsNone(env.label("7101")["job_info"])  # no job, nothing to act on
+        (job_id,) = env.actions.request({"items": env.ids("7101")})["created"]
+        self.assertEqual(env.label("7101")["job_info"]["job_id"], job_id)
+        env.queue.jobs.transition(job_id, "waiting", wait_reason="quota", not_before=9e12, error="spent")
+        waiting = env.label("7101")["job_info"]
+        self.assertEqual((waiting["job_id"], waiting["retry_at"], waiting["error"]), (job_id, 9e12, "spent"))
+        env.queue.jobs.transition(job_id, "failed", error="boom")
+        failed = env.label("7101")["job_info"]
+        self.assertEqual((failed["job_id"], failed["error"], failed["retry_at"]), (job_id, "boom", None))
+
     def test_13e_a_whole_series_or_season_is_one_request_and_an_estimate_comes_first(self):
         env = self.env()
         for n in (1, 2, 3):

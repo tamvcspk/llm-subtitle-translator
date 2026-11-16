@@ -1,13 +1,10 @@
 import { Alert, Button, Drawer, Group, Loader, Stack, Text } from "@mantine/core";
-import { useRequestJobs, useEstimate } from "../api/queries";
-import type { Estimate, JobsAnswer, JobsSelector } from "../api/types";
+import { useRequestJobs, useEstimate, type CostRequest } from "../api/queries";
+import type { Estimate, JobsAnswer } from "../api/types";
 import { clock } from "../lib/format";
 
-export interface EstimateRequest {
-  /** "Translate missing · Arcane": what the person is about to pay for. */
-  action: string;
-  selector: JobsSelector;
-}
+/** `action` is "Translate missing · Arcane": what the person is about to pay for. */
+export type EstimateRequest = { action: string } & CostRequest;
 
 function Line({ label, value }: { label: string; value: string }) {
   return (
@@ -34,6 +31,11 @@ export function estimateLines(estimate: Estimate): Array<[string, string]> {
   return lines;
 }
 
+/** The request without its title, so the same box asked twice for the same thing shares one query key. */
+function withoutAction(request: EstimateRequest): CostRequest {
+  return "retry" in request ? { retry: request.retry } : { selector: request.selector };
+}
+
 function skippedNote(answer: JobsAnswer): string | null {
   if (answer.skipped_total === 0) return null;
   const reasons = Object.entries(answer.skipped_by_reason).map(([reason, n]) => `${n} ${reason}`);
@@ -42,7 +44,7 @@ function skippedNote(answer: JobsAnswer): string | null {
 
 /** The bottom sheet every button that spends model calls goes through (UX §6.4). */
 export function EstimateSheet({ request, onClose }: { request: EstimateRequest | null; onClose: () => void }) {
-  const estimate = useEstimate(request?.selector ?? null);
+  const estimate = useEstimate(request ? withoutAction(request) : null);
   const make = useRequestJobs();
   const answer = estimate.data;
   const done = make.data;
@@ -66,7 +68,7 @@ export function EstimateSheet({ request, onClose }: { request: EstimateRequest |
         {done ? (
           <>
             <Text>
-              {done.count === 1 ? "1 job is in line." : `${done.count ?? 0} jobs are in line.`} They start when the worker is free.
+              {done.count === 1 ? "1 job is in line." : `${done.count} jobs are in line.`} They start when the worker is free.
             </Text>
             <Button onClick={close}>Close</Button>
           </>
@@ -95,7 +97,7 @@ export function EstimateSheet({ request, onClose }: { request: EstimateRequest |
               <Button
                 disabled={!answer || answer.estimate.jobs === 0}
                 loading={make.isPending}
-                onClick={() => request && make.mutate(request.selector)}
+                onClick={() => request && make.mutate(withoutAction(request))}
               >
                 Confirm
               </Button>

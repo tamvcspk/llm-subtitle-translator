@@ -9,8 +9,9 @@ export function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        // A 401 raises the session overlay; asking again only repeats it. Other failures get one more try.
-        retry: (count, error) => !(error instanceof ApiError && error.status === 401) && count < 1,
+        // A 401 raises the session overlay and any other 4xx (a series that is not there) is the answer: asking again
+        // only repeats it. Other failures (network, 5xx) get one more try.
+        retry: (count, error) => !(error instanceof ApiError && error.status >= 400 && error.status < 500) && count < 1,
         refetchOnWindowFocus: true,
       },
     },
