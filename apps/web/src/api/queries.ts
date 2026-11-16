@@ -219,6 +219,35 @@ export function useEditCue(id: number) {
   });
 }
 
+export type CorrectionScope = "episode" | "forward" | "series";
+
+export interface NewCorrection {
+  lang: string;
+  kind: "term" | "address" | "note" | "cue_edit";
+  scope: CorrectionScope;
+  payload: Record<string, unknown>;
+}
+
+export interface CorrectionAnswer {
+  ok: boolean;
+  scope?: CorrectionScope;
+  ids?: number[];
+  version?: number;
+  warnings?: string[];
+  /** For a correction that writes the glossary: how many translations it flags stale. Nothing is retranslated. */
+  impact?: { stale_now: number; stale_after: number; would_stale: number };
+}
+
+/** Add a correction. It costs nothing now: it acts on the next retranslation (a cue edit writes a version at once). */
+export function useAddCorrection(id: number) {
+  const refresh = useRefreshUnit(id);
+  return useMutation({
+    mutationFn: (correction: NewCorrection) =>
+      api<CorrectionAnswer>(`/api/units/${id}/corrections`, { method: "POST", body: correction }),
+    onSettled: () => void refresh(),
+  });
+}
+
 /** Take a correction off; for a cue edit that unlocks the cue and leaves the file as it is. */
 export function useRemoveCorrection(id: number) {
   const refresh = useRefreshUnit(id);
