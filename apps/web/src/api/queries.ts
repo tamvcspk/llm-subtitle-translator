@@ -14,6 +14,7 @@ import type {
   MoviesPage,
   SeriesPage,
   StatusResponse,
+  UnitContextAnswer,
   UnitDetail,
   VersionsAnswer,
 } from "./types";
@@ -222,6 +223,14 @@ export function useCues(id: number, query: CueQuery, enabled: boolean) {
     queryFn: ({ signal }) => api<CuesPage>(`/api/units/${id}/cues?${params}`, { signal }),
     enabled,
     placeholderData: (previous) => previous,
+  });
+}
+
+export function useUnitContext(id: number, lang: string) {
+  return useQuery({
+    queryKey: [...keys.unit(id), "context", lang] as const,
+    queryFn: ({ signal }) => api<UnitContextAnswer>(`/api/units/${id}/context?lang=${encodeURIComponent(lang)}`, { signal }),
+    enabled: lang !== "",
   });
 }
 

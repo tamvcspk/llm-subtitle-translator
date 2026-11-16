@@ -9,8 +9,9 @@
   cue range or a time range, the corrections to attach, shows "Will overwrite N cues and keep M locked", and goes through the
   Estimate box (`estimate_only` on `POST /api/units/{id}/retranslate`) before it queues anything. **History** lists every
   version (Current and Candidate badges, variant label, range, model, tokens), with **Diff** (read only when asked), **Restore**
-  and **Use this version** behind a confirmation sheet; Compare links to a page that is still a placeholder. Context and Style
-  are placeholders. Back link
+  and **Use this version** behind a confirmation sheet; Compare links to a page that is still a placeholder. **Context** shows
+  the story memory the translation used, what a new one would get, "Changed" and the missing earlier episodes (read only).
+  Only the episode's Style tab is still a placeholder. Back link
   goes to the episode's series, found from the catalog.
 - **P12b: Series page, Episodes tab in `apps/web`.** Header with title, target language and Auto-request (saved at once);
   one row per episode with its label (`Missing · Waiting · quota`, `Translated · Stale`, …), the reason under it (resume time,

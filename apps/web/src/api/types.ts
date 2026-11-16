@@ -219,6 +219,22 @@ export interface Correction {
   created_at: number;
 }
 
+export interface ContextSection {
+  title: string;
+  body: string;
+}
+
+/** `GET /api/units/{id}/context`: stored facts only, never a model call. */
+export interface UnitContextAnswer {
+  applicable: boolean;
+  enabled: boolean;
+  label?: string;
+  /** The context of the current version of the target; `null` when it was made without memory. */
+  used?: { version: number; complete: boolean; missing: string[]; changed: boolean; sections: ContextSection[] } | null;
+  /** What a translation started now would get. */
+  now?: { approximate: boolean; sections: ContextSection[]; missing: string[] };
+}
+
 export interface Version {
   version: number;
   /** `auto`, `retranslate`, `variant`, `cue_edit`, `revert`, `external`, `remove`. */
