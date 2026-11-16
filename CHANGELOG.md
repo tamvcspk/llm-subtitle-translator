@@ -1,4 +1,12 @@
 # Unreleased
+- **P12b: `apps/web`, the new console's frame (not served yet).** TypeScript, React 19, Vite, Mantine, React Router in hash
+  mode, TanStack Query and Tabler icons, all bundled (fonts included, no CDN), with Vitest, ESLint and a lockfile
+  (`npm ci`). The shell is there: Library, Activity and Settings in the nav (the screens are placeholders), the global
+  banners (a refused key or unknown model, a catalog that Bazarr could not refresh with **Sync now**), the status strip
+  and the blocking *Your session expired* overlay. The Dockerfile has a Node build stage and puts the result in
+  `/app/static-next`; `/app/static` is still the old console and nothing serves the new one until its main path is done.
+  `login.html` now sends a person back to the `#hash` they were on (only a fragment is accepted). CI has a Web job and
+  Dependabot watches npm. The server also gives `.woff2` files their own content type.
 - **P12b backend: cost before you spend, and "Use this version" keeps the style.** `estimate_only: true` now works on
   `POST /api/queue/retry` (one job, a list, or `all` for Retry All Failed), `POST /api/units/{id}/variant` and
   `POST /api/units/{id}/retranslate` (a range costs its own cues); the answer has the same `estimate` as a bulk request and

@@ -1,3 +1,13 @@
+# Console build. The output is plain files, so it is built once on the build host (no QEMU for arm64)
+# and only dist/ reaches the final image: no Node, node_modules or UI sources there (ADR-17).
+FROM --platform=$BUILDPLATFORM node:24.22.1-slim AS web
+
+WORKDIR /web
+COPY apps/web/package.json apps/web/package-lock.json apps/web/.npmrc ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY apps/web/ ./
+RUN npm run build
+
 FROM python:3.14-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
@@ -33,5 +43,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY apps/server/worker.py /app/worker.py
 COPY apps/server/subserver /app/subserver
 COPY apps/server/static /app/static
+# The React console, built beside the old one. It replaces /app/static when the screens of the main path are done
+# (PLAN P12b); until then it is only built here, so a broken build fails the image.
+COPY --from=web /web/dist /app/static-next
 
 CMD ["python", "/app/worker.py"]

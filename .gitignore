@@ -14,5 +14,6 @@ venv/
 state/
 queue/
 dist/
+node_modules/
 build/
 *.egg-info/

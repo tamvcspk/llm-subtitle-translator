@@ -358,7 +358,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 7. **CI và image:** `docker-image.yml` theo dõi thêm `apps/web/**`; Dependabot thêm hệ sinh thái npm.
 8. **Chuyển đổi một lần:** `apps/web` dựng song song và console cũ ở `apps/server/static/` giữ chạy đến khi các màn hình của đường đi chính xong; sau đó chuyển hẳn và gỡ `static/` cũ (trừ trang đăng nhập), không chạy hai giao diện trong một image.
 
-**Để ngỏ (chốt khi vào P12b):** TypeScript hay JavaScript (nghiêng về TypeScript để kiểu của `docs/API.md` thành mã), thư viện router và lấy dữ liệu, bộ icon, runner test JS.
+**Đã chốt khi vào P12b (2026-11-17):** **TypeScript** (strict; kiểu của `docs/API.md` thành mã trong `src/api/types.ts`), **React Router** ở chế độ hash, **TanStack Query** lấy dữ liệu, **Tabler icons** (`@tabler/icons-react`, đi kèm Mantine, đóng gói trong bản build), **Vitest** + Testing Library + jsdom làm runner test, ESLint (typescript-eslint, react-hooks), Node 24 (`.nvmrc`, `engines`, tầng `web` của Dockerfile), font Inter đóng gói (`@fontsource-variable/inter`, có bộ Latin mở rộng và tiếng Việt). `.npmrc` đặt `ignore-scripts=true` và `save-exact=true`: không chạy script cài đặt, phiên bản ghim đúng.
 
 **Rủi ro chấp nhận:** chuỗi cung ứng npm (lockfile bắt buộc, Dependabot, không chạy script cài đặt không cần); thời gian build image lâu hơn; hai bộ công cụ (uv và npm) trong một repo; phải viết lại test giao diện. Khổ chính ~820 px (iPad cầm dọc) theo lời admin, chưa thử trên iPad thật.
 

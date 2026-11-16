@@ -79,6 +79,15 @@
     </form>
   </main>
   <script>
+    // <return-target>
+    // The console (apps/web) stores the open `#hash` under this key before it sends an expired session here.
+    // Only a fragment is accepted, so the way back always stays on this origin.
+    const RETURN_KEY = "gst-return";
+    function returnTarget(saved) {
+      const safe = typeof saved === "string" && saved.length <= 512 && /^#[\w\-./?=&%:~,+@!$'()*;]*$/.test(saved);
+      return safe ? "/" + saved : "/";
+    }
+    // </return-target>
     const form = document.getElementById("login");
     const error = document.getElementById("error");
     form.addEventListener("submit", async (event) => {
@@ -93,7 +102,12 @@
           body: JSON.stringify({ user: form.user.value, password: form.password.value }),
         });
         if (response.ok) {
-          location.replace("/");
+          let saved = null;
+          try {
+            saved = sessionStorage.getItem(RETURN_KEY);
+            sessionStorage.removeItem(RETURN_KEY);
+          } catch {}
+          location.replace(returnTarget(saved));
           return;
         }
         let message = `Sign-in failed (${response.status})`;

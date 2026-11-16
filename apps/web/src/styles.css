@@ -1,0 +1,33 @@
+/* Touch targets: nothing the finger must hit is shorter than 44 px, and nothing relies on hover. */
+.mantine-Button-root,
+.mantine-ActionIcon-root,
+.mantine-Input-input,
+.mantine-SegmentedControl-label {
+  min-height: 44px;
+}
+
+.mantine-ActionIcon-root {
+  min-width: 44px;
+}
+
+/* The page body never scrolls sideways (UX §3 rule 6); wide tables scroll inside their own box. */
+html,
+body {
+  overflow-x: hidden;
+}
+
+body {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+.nav-link {
+  color: var(--mantine-color-text);
+  text-decoration: none;
+}
+
+.nav-link[aria-current="page"] {
+  background: var(--mantine-color-teal-light);
+  color: var(--mantine-color-teal-light-color);
+  font-weight: 600;
+}
