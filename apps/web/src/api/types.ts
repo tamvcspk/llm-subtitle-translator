@@ -158,6 +158,67 @@ export interface LibraryUnits {
   units: LibraryUnit[];
 }
 
+// -- one episode or movie (`/api/units/{id}`) ---------------------------------------------------------------------
+
+export interface UnitTarget {
+  lang: string;
+  language: string;
+  /** The target file is on disk. */
+  exists: boolean;
+  status: "current" | "stale" | "incomplete" | "untranslated";
+  version: number | null;
+  trigger: string | null;
+  model: string;
+  missing_units: string[];
+  /** Unix seconds. */
+  updated_at: number | null;
+  modified_outside: boolean;
+  removed: boolean;
+}
+
+export interface UnitDetail {
+  id: number;
+  /** The worker's own series id (not the catalog id), `null` for a movie. */
+  series_id: number | null;
+  season: number | null;
+  episode: number | null;
+  title: string;
+  targets: UnitTarget[];
+  series: { id: number; title: string } | null;
+  source_exists: boolean;
+  /** An episode of a series: the Context tab applies. */
+  memory_applicable: boolean;
+}
+
+export interface CueRow {
+  /** 1-based number in the source subtitle, the one the model sees. */
+  n: number;
+  start: string;
+  start_ms: number;
+  end_ms: number;
+  source: string;
+  /** `null` where the target has no such cue (or no target exists). */
+  target: string | null;
+  locked: boolean;
+}
+
+export interface CuesPage {
+  lang: string;
+  total: number;
+  offset: number;
+  focus: number | null;
+  aligned: boolean;
+  has_target: boolean;
+  rows: CueRow[];
+}
+
+export interface Correction {
+  id: number;
+  kind: "term" | "address" | "note" | "cue_edit";
+  payload: Record<string, unknown>;
+  created_at: number;
+}
+
 // -- requesting translations (POST /api/jobs) ---------------------------------------------------------------------
 
 /** Name what a request is about in exactly one way. */

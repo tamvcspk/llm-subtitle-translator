@@ -23,6 +23,13 @@ globalThis.ResizeObserver ??= ResizeObserverStub;
 
 window.HTMLElement.prototype.scrollIntoView ??= () => undefined;
 
+// An autosizing textarea listens for fonts to load; jsdom has no `document.fonts`.
+if (!("fonts" in document)) {
+  Object.defineProperty(document, "fonts", {
+    value: { addEventListener: () => undefined, removeEventListener: () => undefined },
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();

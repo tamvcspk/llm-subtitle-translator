@@ -1,4 +1,10 @@
 # Unreleased
+- **P12b: episode and movie page in `apps/web`, Subtitles tab.** `#/unit/:id` has the shared header (code and title, state,
+  `Missing units`, current version, model and time, a warning for a file changed outside the worker, **Remove output** behind a
+  confirmation sheet), a target-language choice when there are several, and the tabs (a movie has no Context). Subtitles lists
+  source and target cue by cue, 50 to a page, with search, **Jump to** a player time, the lock badge, and **Edit cue** in a
+  bottom sheet (Prev/Next, Save locks the cue, Unlock, warnings after saving). The other five tabs are placeholders. Back link
+  goes to the episode's series, found from the catalog.
 - **P12b: Series page, Episodes tab in `apps/web`.** Header with title, target language and Auto-request (saved at once);
   one row per episode with its label (`Missing · Waiting · quota`, `Translated · Stale`, …), the reason under it (resume time,
   error, `v2 · model · 2d ago`, "File changed outside the worker") and one button: Translate, Cancel, Stop, Retry, Request that

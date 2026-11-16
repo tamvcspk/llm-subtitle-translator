@@ -1,9 +1,10 @@
-import { Alert, Anchor, Card, Group, SegmentedControl, Select, Skeleton, Stack, Tabs, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Card, Group, SegmentedControl, Select, Skeleton, Stack, Text, Title } from "@mantine/core";
 import { IconChevronLeft } from "@tabler/icons-react";
-import { Link, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, Outlet, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../api/client";
 import { useSeriesPage, useSetAutoRequest } from "../api/queries";
 import type { SeriesPage } from "../api/types";
+import { RouteTabs } from "../components/RouteTabs";
 import { languageName } from "../lib/home";
 
 /** What the tabs of one series share: the page the header already loaded, and the target language it is read in. */
@@ -33,11 +34,7 @@ export function Series() {
   const seriesId = Number(id);
   const page = useSeriesPage(seriesId);
   const policy = useSetAutoRequest(seriesId);
-  const location = useLocation();
-  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-
-  const tab = TABS.find((candidate) => location.pathname.split("/")[3] === candidate.value)?.value ?? "episodes";
 
   if (page.isPending) {
     return (
@@ -81,11 +78,6 @@ export function Series() {
     );
   };
 
-  const goTo = (value: string | null) => {
-    if (!value) return;
-    void navigate({ pathname: `/series/${seriesId}/${value}`, search: lang && params.has("lang") ? `?lang=${lang}` : "" });
-  };
-
   return (
     <Stack gap="md">
       <Stack gap="xs">
@@ -122,15 +114,7 @@ export function Series() {
       </Group>
       {policy.isError && <Alert color="red">{policy.error.message}</Alert>}
 
-      <Tabs value={tab} onChange={goTo} keepMounted={false}>
-        <Tabs.List style={{ overflowX: "auto", flexWrap: "nowrap" }}>
-          {TABS.map((item) => (
-            <Tabs.Tab key={item.value} value={item.value} style={{ minHeight: 44 }}>
-              {item.label}
-            </Tabs.Tab>
-          ))}
-        </Tabs.List>
-      </Tabs>
+      <RouteTabs base={`/series/${seriesId}`} tabs={TABS} keep={["lang"]} />
 
       <Outlet context={context} />
     </Stack>

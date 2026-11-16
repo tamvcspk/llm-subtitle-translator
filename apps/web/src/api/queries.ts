@@ -4,15 +4,19 @@ import type {
   AuthMe,
   CatalogOverview,
   CatalogStatus,
+  Correction,
+  CuesPage,
   JobsAnswer,
   JobsSelector,
   LibraryUnits,
   MoviesPage,
   SeriesPage,
   StatusResponse,
+  UnitDetail,
 } from "./types";
 
 export const keys = {
+  unit: (id: number) => ["unit", id] as const,
   series: (id: number) => ["catalog", "series", id] as const,
   seriesUnits: (storedId: number) => ["library", "series", storedId, "units"] as const,
   status: ["status"] as const,
@@ -149,6 +153,88 @@ export function useSeriesUnits(storedId: number | null | undefined) {
     queryFn: ({ signal }) => api<LibraryUnits>(`/api/library/series/${storedId}/units`, { signal }),
     enabled: typeof storedId === "number",
     refetchInterval: 30_000,
+  });
+}
+
+// -- one episode or movie -----------------------------------------------------------------------------------------
+
+export function useUnit(id: number) {
+  return useQuery({
+    queryKey: keys.unit(id),
+    queryFn: ({ signal }) => api<UnitDetail>(`/api/units/${id}`, { signal }),
+    refetchInterval: 15_000,
+  });
+}
+
+export interface CueQuery {
+  lang: string;
+  q: string;
+  offset: number;
+  /** A player time (`00:23:10`): the page that holds it, with `focus` on the cue. */
+  at: string;
+  limit: number;
+}
+
+export function useCues(id: number, query: CueQuery, enabled: boolean) {
+  const params = new URLSearchParams({ lang: query.lang, offset: String(query.offset), limit: String(query.limit) });
+  if (query.q.trim()) params.set("q", query.q.trim());
+  if (query.at.trim()) params.set("at", query.at.trim());
+  return useQuery({
+    queryKey: [...keys.unit(id), "cues", query] as const,
+    queryFn: ({ signal }) => api<CuesPage>(`/api/units/${id}/cues?${params}`, { signal }),
+    enabled,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useCorrections(id: number, lang: string) {
+  return useQuery({
+    queryKey: [...keys.unit(id), "corrections", lang] as const,
+    queryFn: ({ signal }) => api<{ items: Correction[] }>(`/api/units/${id}/corrections?lang=${encodeURIComponent(lang)}`, { signal }),
+    enabled: lang !== "",
+  });
+}
+
+/** What a change to one unit makes out of date: its own pages, and the labels and versions of the lists. */
+function useRefreshUnit(id: number) {
+  const client = useQueryClient();
+  return () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: keys.unit(id) }),
+      client.invalidateQueries({ queryKey: ["catalog"] }),
+      client.invalidateQueries({ queryKey: ["library"] }),
+    ]);
+}
+
+/** Save a cue by hand: a new version is written at once (no model call) and the cue is locked. */
+export function useEditCue(id: number) {
+  const refresh = useRefreshUnit(id);
+  return useMutation({
+    mutationFn: (edit: { lang: string; cue: number; text: string }) =>
+      api<{ version: number; warnings?: string[] }>(`/api/units/${id}/corrections`, {
+        method: "POST",
+        body: { lang: edit.lang, kind: "cue_edit", scope: "episode", payload: { cue: edit.cue, text: edit.text } },
+      }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** Take a correction off; for a cue edit that unlocks the cue and leaves the file as it is. */
+export function useRemoveCorrection(id: number) {
+  const refresh = useRefreshUnit(id);
+  return useMutation({
+    mutationFn: (correctionId: number) =>
+      api<unknown>(`/api/units/${id}/corrections/${correctionId}/remove`, { method: "POST", body: {} }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** Delete the target file; the version stays in History and can be restored. */
+export function useRemoveOutput(id: number) {
+  const refresh = useRefreshUnit(id);
+  return useMutation({
+    mutationFn: (lang: string) => api<{ ok: boolean }>(`/api/units/${id}/output/remove`, { method: "POST", body: { lang } }),
+    onSettled: () => void refresh(),
   });
 }
 
