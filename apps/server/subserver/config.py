@@ -15,6 +15,7 @@ FALLBACK_LANGUAGES = [
     {"name": "Spanish", "code2": "es", "code3": "spa", "enabled": True},
     {"name": "French", "code2": "fr", "code3": "fra", "enabled": True},
     {"name": "German", "code2": "de", "code3": "deu", "enabled": True},
+    {"name": "Vietnamese", "code2": "vi", "code3": "vie", "enabled": True},
 ]
 GEMINI_LANGUAGE_NAMES = {
     "Chinese Simplified": "Simplified Chinese",
