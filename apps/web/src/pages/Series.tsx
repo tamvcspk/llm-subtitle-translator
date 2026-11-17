@@ -4,6 +4,7 @@ import { Link, Outlet, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../api/client";
 import { useSeriesPage, useSetAutoRequest } from "../api/queries";
 import type { SeriesPage } from "../api/types";
+import { MemoryControls } from "../components/MemoryControls";
 import { RouteTabs } from "../components/RouteTabs";
 import { languageName } from "../lib/home";
 
@@ -113,6 +114,7 @@ export function Series() {
         </Stack>
       </Group>
       {policy.isError && <Alert color="red">{policy.error.message}</Alert>}
+      {series.series_id !== null && <MemoryControls storedId={series.series_id} />}
 
       <RouteTabs base={`/series/${seriesId}`} tabs={TABS} keep={["lang"]} />
 

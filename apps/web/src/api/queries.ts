@@ -11,6 +11,7 @@ import type {
   CuesPage,
   DiffAnswer,
   Estimate,
+  ExtractAnswer,
   GlossaryAnswer,
   GlossaryDoc,
   GlossaryRevision,
@@ -18,7 +19,9 @@ import type {
   JobsAnswer,
   JobsSelector,
   LibraryUnits,
+  MemoryPolicy,
   MoviesPage,
+  SeriesMemory,
   SeriesPage,
   StatusResponse,
   Style,
@@ -436,6 +439,48 @@ export interface PreviewRequest {
 export function usePreviewStyle(owner: StyleOwner) {
   return useMutation({
     mutationFn: (request: PreviewRequest) => api<StylePreview>(`${ownerPath(owner)}/style/preview`, { method: "POST", body: request }),
+  });
+}
+
+// -- story memory of a series -----------------------------------------------------------------------------------------
+
+export function useSeriesMemory(storedId: number | null | undefined) {
+  return useQuery({
+    queryKey: ["memory", storedId ?? 0] as const,
+    queryFn: ({ signal }) => api<SeriesMemory>(`/api/series/${storedId}/memory`, { signal }),
+    enabled: typeof storedId === "number",
+    refetchInterval: 30_000,
+  });
+}
+
+/** Everything a change of story memory can make stale: the labels and versions of the lists, and every episode's context. */
+function useRefreshMemory() {
+  const client = useQueryClient();
+  return () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: ["memory"] }),
+      client.invalidateQueries({ queryKey: ["catalog"] }),
+      client.invalidateQueries({ queryKey: ["library"] }),
+      client.invalidateQueries({ queryKey: ["unit"] }),
+    ]);
+}
+
+/** **Apply**: the series' switch and where its specials sit. Translations made without it become Stale; nothing is redone. */
+export function useSaveMemory(storedId: number) {
+  const refresh = useRefreshMemory();
+  return useMutation({
+    mutationFn: (body: { policy: MemoryPolicy; specials_after: string }) =>
+      api<SeriesMemory>(`/api/series/${storedId}/memory`, { method: "PUT", body }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** Read the facts of this episode and of every earlier one that has a source and none yet. Spends one model call each. */
+export function useExtractFacts() {
+  const refresh = useRefreshMemory();
+  return useMutation({
+    mutationFn: (unitId: number) => api<ExtractAnswer>(`/api/units/${unitId}/context/extract`, { method: "POST", body: {} }),
+    onSettled: () => void refresh(),
   });
 }
 

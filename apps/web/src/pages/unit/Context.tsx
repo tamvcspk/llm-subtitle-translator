@@ -41,7 +41,7 @@ export function Context() {
   const { applicable, enabled, used, now } = context.data;
   if (!applicable) return <Alert color="blue">A movie has no earlier episodes, so it has no story memory.</Alert>;
   if (!enabled) {
-    return <Alert color="blue">Story memory is off for this series. Turn it on in the series' Context tab to give later episodes the story so far.</Alert>;
+    return <Alert color="blue">Story memory is off for this series. Turn it on under Story memory in the series header to give later episodes the story so far.</Alert>;
   }
   const missing = [...new Set([...(used?.missing ?? []), ...(now?.missing ?? [])])];
 

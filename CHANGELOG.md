@@ -1,4 +1,12 @@
 # Unreleased
+- **P12b: Context of a series in `apps/web`, and Story memory in its header.** The header of a series now has **Story memory**
+  (Default / On / Off) and **Specials after** (`S02E05`, checked before it is sent), saved together with **Apply**, which
+  appears only when one of them changed ("Existing translations are never redone"). The **Context** tab
+  (`#/series/:id/context`) lists the episodes in story order with `Source ✓ · Facts ✗`, each linking to the episode's own
+  Context tab, says how many have a source subtitle but no facts and offers **Extract facts (N episodes)** through a price box
+  (N model calls with the memory model); one `POST /api/units/{id}/context/extract` from the last episode that lacks facts
+  reads them all, and the box then says which episode was read, which failed and which had no source. It says when story
+  memory is off for the series (its own switch, or the global one it follows). No API change.
 - **P12b: Glossary and Characters in `apps/web`, and Movie Glossary.** The **Glossary** tab of a series
   (`#/series/:id/glossary`) edits Terms (source, target, Locked, note, From/Until episode) and Forms of address (A calls B, B
   calls A, From/Until) as cards; fields the form does not edit (aliases, the characters, `style`) are sent back as they were.

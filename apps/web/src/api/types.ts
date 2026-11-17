@@ -374,6 +374,36 @@ export interface UnitContextAnswer {
   now?: { approximate: boolean; sections: ContextSection[]; missing: string[] };
 }
 
+/** One episode of `GET /api/series/{id}/memory`, in story order. */
+export interface MemoryUnit {
+  id: number;
+  label: string;
+  season: number | null;
+  episode: number | null;
+  has_source: boolean;
+  has_facts: boolean;
+  facts_hash: string;
+}
+
+/** The series' story-memory switch: `""` follows the global `memory_enabled`. */
+export type MemoryPolicy = "" | "on" | "off";
+
+export interface SeriesMemory {
+  series: { id: number; title: string };
+  policy: MemoryPolicy;
+  /** Where season 0 sits in the story (`S02E05`); blank is after the last episode of the first season. */
+  specials_after: string;
+  global_enabled: boolean;
+  units: MemoryUnit[];
+}
+
+/** `POST /api/units/{id}/context/extract`: a result per episode: `cached`, `extracted`, `stored`, `no-source` or `failed`. */
+export interface ExtractAnswer {
+  ok: boolean;
+  extracted: string[];
+  results: Record<string, string>;
+}
+
 export interface Version {
   version: number;
   /** `auto`, `retranslate`, `variant`, `cue_edit`, `revert`, `external`, `remove`. */
