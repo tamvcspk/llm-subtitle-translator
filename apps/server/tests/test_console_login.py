@@ -207,6 +207,18 @@ class HelperTests(unittest.TestCase):
         self.assertIsNone(session_token("a=b"))
         self.assertIsNone(session_token(None))
 
+    def test_same_origin_behind_a_proxy_that_rewrites_host_and_with_a_cookie_that_crosses_sites(self):
+        # The proxy says which host the browser used: Origin may match that instead of the rewritten Host.
+        self.assertTrue(same_origin("https://console.example", "worker:6789", "console.example"))
+        self.assertTrue(same_origin("https://console.example", "worker:6789", "console.example, other.example"))
+        self.assertFalse(same_origin("https://evil.example", "worker:6789", "console.example"))
+        self.assertFalse(same_origin("https://console.example", "worker:6789", None))
+        # SameSite=None: no Origin is only fine when the browser says the request is same-origin.
+        self.assertTrue(same_origin(None, "h:1"))
+        self.assertFalse(same_origin(None, "h:1", require_origin=True))
+        self.assertFalse(same_origin(None, "h:1", fetch_site="cross-site", require_origin=True))
+        self.assertTrue(same_origin(None, "h:1", fetch_site="same-origin", require_origin=True))
+
     def test_same_origin(self):
         self.assertTrue(same_origin(None, "h:1"))
         self.assertTrue(same_origin("http://h:1", "h:1"))
@@ -350,7 +362,10 @@ class LoginServerTests(unittest.TestCase):
 
         self.server.auth = dataclasses.replace(self.server.auth, cookie_same_site="none")
         https = {"X-Forwarded-Proto": "https"}
-        _, headers, _ = self.login(headers=https)
+        same_site = {"Sec-Fetch-Site": "same-origin"}  # a browser's own page: with SameSite=None a login must say so too
+        status, headers, _ = self.login(headers=https)
+        self.assertEqual(status, 403)
+        _, headers, _ = self.login(headers={**https, **same_site})
         issued = headers["Set-Cookie"]
         self.assertIn("SameSite=None", issued)
         self.assertIn("Secure", issued)
@@ -360,11 +375,19 @@ class LoginServerTests(unittest.TestCase):
             "POST", "/api/queue/stop", {"Cookie": cookie, "Origin": "https://evil.example", "Content-Type": "application/json"}, "{}"
         )
         self.assertEqual(status, 403)
-        _, cleared, _ = self.request("POST", "/api/auth/logout", {"Cookie": cookie, "Content-Type": "application/json", **https}, "{}")
+        # A write with no Origin at all is refused too unless the browser says it is same-origin, and a proxy that
+        # rewrites Host is understood through X-Forwarded-Host.
+        post = lambda extra: self.request("POST", "/api/queue/stop", {"Cookie": cookie, "Content-Type": "application/json", **extra}, "{}")[0]
+        self.assertEqual(post({}), 403)
+        self.assertEqual(post({"Sec-Fetch-Site": "cross-site"}), 403)
+        self.assertEqual(post({"Sec-Fetch-Site": "same-origin"}), 200)
+        self.assertEqual(post({"Origin": "https://console.example", "X-Forwarded-Host": "console.example"}), 200)
+        self.assertEqual(post({"Origin": "https://console.example", "X-Forwarded-Host": "other.example"}), 403)
+        _, cleared, _ = self.request("POST", "/api/auth/logout", {"Cookie": cookie, "Content-Type": "application/json", **https, **same_site}, "{}")
         self.assertIn("SameSite=None", cleared["Set-Cookie"])
         self.assertIn("Max-Age=0", cleared["Set-Cookie"])
         # Plain HTTP: a browser would drop SameSite=None, so the cookie asks for Lax.
-        _, plain, _ = self.login()
+        _, plain, _ = self.login(headers=same_site)
         self.assertIn("SameSite=Lax", plain["Set-Cookie"])
 
     def test_wrong_credentials_are_401_without_cookie(self):

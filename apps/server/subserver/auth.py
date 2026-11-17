@@ -406,11 +406,25 @@ def session_cookie(token: str, *, secure: bool, max_age: int = SESSION_TTL_SECON
     return "; ".join(parts)
 
 
-def same_origin(origin: str | None, host: str | None) -> bool:
-    """A browser write must come from this very host; requests without Origin (scripts) pass."""
+def same_origin(
+    origin: str | None,
+    host: str | None,
+    forwarded_host: str | None = None,
+    *,
+    fetch_site: str | None = None,
+    require_origin: bool = False,
+) -> bool:
+    """A browser write must come from this very host; requests without Origin (scripts) pass.
+
+    Behind a proxy that rewrites ``Host`` the page's origin is the host the browser used, which the proxy reports in
+    ``X-Forwarded-Host`` (the first entry): either one matches. With ``require_origin`` (the cookie is ``SameSite=None``,
+    so it travels with a request from another site and this check is the only guard) a request with no ``Origin``
+    passes only when the browser says it is same-origin (``Sec-Fetch-Site``)."""
     if origin is None:
-        return True
-    return bool(host) and urlsplit(origin).netloc.lower() == host.lower()
+        return not require_origin or (fetch_site or "").strip().lower() == "same-origin"
+    netloc = urlsplit(origin).netloc.lower()
+    allowed = {value.strip().lower() for value in (host, (forwarded_host or "").split(",")[0]) if value and value.strip()}
+    return bool(netloc) and netloc in allowed
 
 
 def _parse_basic(header: str | None) -> tuple[str, str] | None:

@@ -29,6 +29,11 @@ function write(id: string, value: Record<string, unknown> | null): void {
   }
 }
 
+/** Forget a kept draft: after a save the worker has the values, normalised, and an older copy must not come back. */
+export function forgetDraft(id: string): void {
+  write(id, null);
+}
+
 export interface Draft<T extends Record<string, unknown>> {
   draft: T;
   set: (patch: Partial<T>) => void;

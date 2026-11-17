@@ -6,6 +6,7 @@ import { FieldGroup } from "../components/settings/FieldGroup";
 import { LanguageLists, languagesProblem, MediaRoots, rootsProblem } from "../components/settings/ListParts";
 import { MaintenanceTools } from "../components/settings/MaintenanceTools";
 import { SecurityGroup } from "../components/settings/SecurityGroup";
+import { forgetDraft } from "../lib/draft";
 import { keysOf, LIBRARY_FIELDS, MAINTENANCE_FIELDS, pick, QUEUE_FIELDS, STORY_FIELDS, TRANSLATION_FIELDS } from "../lib/settings";
 
 const CONNECTION_KEYS = ["bazarr_url", "llm_provider", "llm_base_url"];
@@ -19,13 +20,25 @@ function Groups({ settings }: { settings: SettingsAnswer }) {
   const fresh = (keys: string[]) => JSON.stringify(pick(settings, keys));
   const [open, setOpen] = useState<string[]>(["connections", "translation"]);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
-  const saving = (id: string) => ({ settings, saved: lastSaved === id, onSaved: () => setLastSaved(id) });
+  // A save also starts its group again even when the values it shows did not change (the worker normalises: a blank path
+  // row or a trailing space is gone), and the copy of the draft kept for a sign-in is forgotten with it.
+  const [versions, setVersions] = useState<Record<string, number>>({});
+  const saving = (id: string) => ({
+    settings,
+    saved: lastSaved === id,
+    onSaved: () => {
+      forgetDraft(`settings:${id}`);
+      setLastSaved(id);
+      setVersions((previous) => ({ ...previous, [id]: (previous[id] ?? 0) + 1 }));
+    },
+  });
+  const keyOf = (id: string, keys: string[]) => `${fresh(keys)}#${versions[id] ?? 0}`;
 
   return (
     <Accordion multiple variant="separated" value={open} onChange={setOpen} chevronPosition="right">
-      <ConnectionsGroup key={fresh(CONNECTION_KEYS)} {...saving("connections")} />
+      <ConnectionsGroup key={keyOf("connections", CONNECTION_KEYS)} {...saving("connections")} />
       <FieldGroup
-        key={fresh([...keysOf(TRANSLATION_FIELDS), ...LANGUAGE_KEYS])}
+        key={keyOf("translation", [...keysOf(TRANSLATION_FIELDS), ...LANGUAGE_KEYS])}
         id="translation"
         title="2. Translation"
         fields={TRANSLATION_FIELDS}
@@ -35,7 +48,7 @@ function Groups({ settings }: { settings: SettingsAnswer }) {
         {...saving("translation")}
       />
       <FieldGroup
-        key={fresh([...keysOf(LIBRARY_FIELDS), ...LIBRARY_EXTRA])}
+        key={keyOf("library", [...keysOf(LIBRARY_FIELDS), ...LIBRARY_EXTRA])}
         id="library"
         title="3. Library"
         fields={LIBRARY_FIELDS}
@@ -44,10 +57,10 @@ function Groups({ settings }: { settings: SettingsAnswer }) {
         extraProblem={rootsProblem}
         {...saving("library")}
       />
-      <FieldGroup key={fresh(keysOf(QUEUE_FIELDS))} id="queue" title="4. Queue and quota" fields={QUEUE_FIELDS} {...saving("queue")} />
-      <FieldGroup key={fresh(keysOf(STORY_FIELDS))} id="story" title="5. Story and style" fields={STORY_FIELDS} {...saving("story")} />
+      <FieldGroup key={keyOf("queue", keysOf(QUEUE_FIELDS))} id="queue" title="4. Queue and quota" fields={QUEUE_FIELDS} {...saving("queue")} />
+      <FieldGroup key={keyOf("story", keysOf(STORY_FIELDS))} id="story" title="5. Story and style" fields={STORY_FIELDS} {...saving("story")} />
       <FieldGroup
-        key={fresh(keysOf(MAINTENANCE_FIELDS))}
+        key={keyOf("maintenance", keysOf(MAINTENANCE_FIELDS))}
         id="maintenance"
         title="6. Maintenance"
         fields={MAINTENANCE_FIELDS}

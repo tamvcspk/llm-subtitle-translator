@@ -115,6 +115,8 @@ export function Corrections() {
             value={kind}
             onChange={(value) => {
               setKind(value as CorrectionKind);
+              // Kinds share field names (a note and a cue edit both have `text`): what was typed for one must not follow into the other.
+              setValues({});
               setProblem(null);
               setDone(null);
             }}

@@ -102,7 +102,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         is_login_page = self.command in {"GET", "HEAD"} and path == "/login"
         is_login_call = self.command == "POST" and path == "/api/auth/login"
         if (is_login_page or is_login_call) and sessions is not None:
-            if is_login_call and not console_auth.same_origin(self.headers.get("Origin"), self.headers.get("Host")):
+            if is_login_call and not self.origin_ok():
                 self.close_connection = True
                 self.send_error_json("cross-origin login refused", status=403)
                 return False
@@ -114,9 +114,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         resolved = sessions.resolve(cookie_token) if sessions is not None else None
         if resolved:
             self.refreshed_token = resolved[1]  # sliding expiry: sent back with whatever this request answers
-            if self.command not in {"GET", "HEAD", "OPTIONS"} and not console_auth.same_origin(
-                self.headers.get("Origin"), self.headers.get("Host")
-            ):
+            if self.command not in {"GET", "HEAD", "OPTIONS"} and not self.origin_ok():
                 self.close_connection = True
                 self.send_error_json("cross-origin request refused", status=403)
                 return False
@@ -180,6 +178,16 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         extra = {} if max_age is None else {"max_age": max_age}
         return console_auth.session_cookie(
             token, secure=self.is_https(), same_site=getattr(auth, "cookie_same_site", "strict"), **extra,
+        )
+
+    def origin_ok(self) -> bool:
+        """Does a write come from this console's own page? With ``CONSOLE_COOKIE_SAMESITE=none`` the cookie crosses sites, so
+        this is the only CSRF guard and a request that names no origin must at least say it is same-origin."""
+        auth = getattr(self.server, "auth", None)
+        return console_auth.same_origin(
+            self.headers.get("Origin"), self.headers.get("Host"), self.headers.get("X-Forwarded-Host"),
+            fetch_site=self.headers.get("Sec-Fetch-Site"),
+            require_origin=getattr(auth, "cookie_same_site", "strict") == "none",
         )
 
     def is_https(self) -> bool:

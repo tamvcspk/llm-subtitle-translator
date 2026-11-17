@@ -84,6 +84,40 @@ describe("Unit page", () => {
     await waitFor(() => expect(sent("/api/units/7/corrections/31/remove")).toHaveLength(1));
   });
 
+  it("keeps a half-written line when the sheet moves to the next cue and back", async () => {
+    serve({
+      ...base,
+      "/api/units/7": { body: episode() },
+      "/api/units/7/cues?lang=vi&offset=0&limit=50": { body: cues([cue(1), cue(2)]) },
+      "/api/units/7/corrections?lang=vi": { body: { items: [] } },
+    });
+    show("/unit/7/subtitles");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit cue 1" }));
+    const sheet = await screen.findByRole("dialog");
+    await userEvent.type(within(sheet).getByRole("textbox", { name: /Target/ }), " (draft)");
+    await userEvent.click(within(sheet).getByRole("button", { name: "Next" }));
+    expect(within(sheet).getByRole("textbox", { name: /Target/ })).toHaveValue("Target line 2");
+    await userEvent.click(within(sheet).getByRole("button", { name: "Prev" }));
+    expect(within(sheet).getByRole("textbox", { name: /Target/ })).toHaveValue("Target line 1 (draft)");
+  });
+
+  it("starts the cue list again from the top when the target language changes", async () => {
+    serve({
+      ...base,
+      "/api/units/7": { body: episode({ targets: [target(), target({ lang: "ja", language: "Japanese" })] }) },
+      "/api/units/7/cues?lang=vi&offset=0&limit=50": { body: cues([cue(1)], { total: 120 }) },
+      "/api/units/7/cues?lang=vi&offset=50&limit=50": { body: cues([cue(51)], { total: 120, offset: 50 }) },
+      "/api/units/7/cues?lang=ja&offset=0&limit=50": { body: cues([cue(1, { target: "日本語" })], { lang: "ja", total: 10 }) },
+    });
+    show("/unit/7/subtitles");
+    await screen.findByText(/Cue #1 /);
+    await userEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText(/Cue #51/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("combobox", { name: "Target language" }));
+    await userEvent.click(await screen.findByRole("option", { name: "Japanese", hidden: true }));
+    expect(await screen.findByText("日本語")).toBeInTheDocument();
+  });
+
   it("jumps to a player time and searches by text", async () => {
     serve({
       ...base,

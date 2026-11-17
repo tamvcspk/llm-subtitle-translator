@@ -7,7 +7,7 @@ def target_output_path(subtitle_path: str, target_code: str, source_code: str | 
     separator_index = max(subtitle_path.rfind("/"), subtitle_path.rfind("\\"))
     directory = subtitle_path[: separator_index + 1] if separator_index >= 0 else ""
     name = subtitle_path[separator_index + 1 :] if separator_index >= 0 else subtitle_path
-    target_code = str(target_code or "zh").strip()
+    target_code = str(target_code or "vi").strip()
     if not name.lower().endswith(".srt"):
         return f"{directory}{name}.{target_code}.srt"
 

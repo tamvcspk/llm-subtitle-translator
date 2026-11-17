@@ -167,7 +167,7 @@ class TranslationAttempt:
         on_progress: Callable[[int, int], None] | None = None,
     ) -> str:
         source = Path(str(job["subtitle_path"]))
-        target_code = str(job.get("target_code") or "zh")
+        target_code = str(job.get("target_code") or "vi")
         output = str(job.get("output_path") or target_output_path(str(source), target_code))
         trigger = str(job.get("trigger") or AUTO)
         unit = self._register(job)
@@ -316,7 +316,7 @@ class TranslationAttempt:
         current: dict[str, str],
     ) -> tuple[TranslationResult, Any]:
         """The model work of one attempt: gather the bundle, keep it, run it through ``subcore``."""
-        target_code = str(job.get("target_code") or "zh")
+        target_code = str(job.get("target_code") or "vi")
         with self._mapped(settings):
             provider = provider_for("translate")
             bundle = gather(

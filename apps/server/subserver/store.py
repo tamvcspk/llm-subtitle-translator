@@ -1209,32 +1209,39 @@ class Store:
     ) -> StoredGlossary:
         """Store a glossary document. What it replaces goes to the history first; saving the same document again
         changes nothing (no new version, no history line)."""
+        with self.transaction() as db:
+            saved = self._glossary_write(db, owner_kind, owner_key, lang, doc, rules_hash, note)
+        return _glossary_from_row(saved)
+
+    @staticmethod
+    def _glossary_write(
+        db: sqlite3.Connection, owner_kind: str, owner_key: str, lang: str, doc: dict[str, Any], rules_hash: str, note: str,
+    ) -> sqlite3.Row:
+        """The body of ``glossary_save`` inside a transaction the caller holds."""
         text = json.dumps(doc, ensure_ascii=False, sort_keys=True)
         now = time.time()
-        with self.transaction() as db:
-            row = db.execute(
-                "SELECT * FROM glossaries WHERE owner_kind = ? AND owner_key = ? AND lang = ?",
-                (owner_kind, owner_key, lang),
-            ).fetchone()
-            if row is None:
-                db.execute(
-                    "INSERT INTO glossaries (owner_kind, owner_key, lang, doc_json, rules_hash, version, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, 1, ?)", (owner_kind, owner_key, lang, text, rules_hash, now),
-                )
-            elif json.dumps(json.loads(row["doc_json"]), ensure_ascii=False, sort_keys=True) != text:
-                db.execute(
-                    "INSERT INTO glossary_history (glossary_id, version, doc_json, note, at) VALUES (?, ?, ?, ?, ?)",
-                    (row["id"], row["version"], row["doc_json"], note, now),
-                )
-                db.execute(
-                    "UPDATE glossaries SET doc_json = ?, rules_hash = ?, version = version + 1, updated_at = ? WHERE id = ?",
-                    (text, rules_hash, now, row["id"]),
-                )
-            saved = db.execute(
-                "SELECT * FROM glossaries WHERE owner_kind = ? AND owner_key = ? AND lang = ?",
-                (owner_kind, owner_key, lang),
-            ).fetchone()
-        return _glossary_from_row(saved)
+        row = db.execute(
+            "SELECT * FROM glossaries WHERE owner_kind = ? AND owner_key = ? AND lang = ?",
+            (owner_kind, owner_key, lang),
+        ).fetchone()
+        if row is None:
+            db.execute(
+                "INSERT INTO glossaries (owner_kind, owner_key, lang, doc_json, rules_hash, version, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, 1, ?)", (owner_kind, owner_key, lang, text, rules_hash, now),
+            )
+        elif json.dumps(json.loads(row["doc_json"]), ensure_ascii=False, sort_keys=True) != text:
+            db.execute(
+                "INSERT INTO glossary_history (glossary_id, version, doc_json, note, at) VALUES (?, ?, ?, ?, ?)",
+                (row["id"], row["version"], row["doc_json"], note, now),
+            )
+            db.execute(
+                "UPDATE glossaries SET doc_json = ?, rules_hash = ?, version = version + 1, updated_at = ? WHERE id = ?",
+                (text, rules_hash, now, row["id"]),
+            )
+        return db.execute(
+            "SELECT * FROM glossaries WHERE owner_kind = ? AND owner_key = ? AND lang = ?",
+            (owner_kind, owner_key, lang),
+        ).fetchone()
 
     def glossary_history(self, owner_kind: str, owner_key: str, lang: str, *, limit: int = 50) -> list[GlossaryRevision]:
         """Earlier states of a glossary, newest first (the current one is not in the list)."""
@@ -1297,28 +1304,35 @@ class Store:
         self, owner_kind: str, owner_key: str, name: str, doc: dict[str, Any], *, replaces: str | None = None,
     ) -> CardRow:
         """Create or update a card. ``replaces`` is the old name when the card is renamed."""
+        with self.transaction() as db:
+            row = self._card_write(db, owner_kind, owner_key, name, doc, replaces)
+        return _card_from_row(row)
+
+    @staticmethod
+    def _card_write(
+        db: sqlite3.Connection, owner_kind: str, owner_key: str, name: str, doc: dict[str, Any], replaces: str | None,
+    ) -> sqlite3.Row:
+        """The body of ``card_save`` inside a transaction the caller holds."""
         text = json.dumps(doc, ensure_ascii=False, sort_keys=True)
         now = time.time()
-        with self.transaction() as db:
-            old = db.execute(
-                "SELECT id FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
-                (owner_kind, owner_key, replaces or name),
-            ).fetchone()
-            if old is None:
-                db.execute(
-                    "INSERT INTO character_cards (owner_kind, owner_key, name, doc_json, version, updated_at)"
-                    " VALUES (?, ?, ?, ?, 1, ?)", (owner_kind, owner_key, name, text, now),
-                )
-            else:
-                db.execute(
-                    "UPDATE character_cards SET name = ?, doc_json = ?, version = version + 1, updated_at = ? WHERE id = ?",
-                    (name, text, now, old["id"]),
-                )
-            row = db.execute(
-                "SELECT * FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
-                (owner_kind, owner_key, name),
-            ).fetchone()
-        return _card_from_row(row)
+        old = db.execute(
+            "SELECT id FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
+            (owner_kind, owner_key, replaces or name),
+        ).fetchone()
+        if old is None:
+            db.execute(
+                "INSERT INTO character_cards (owner_kind, owner_key, name, doc_json, version, updated_at)"
+                " VALUES (?, ?, ?, ?, 1, ?)", (owner_kind, owner_key, name, text, now),
+            )
+        else:
+            db.execute(
+                "UPDATE character_cards SET name = ?, doc_json = ?, version = version + 1, updated_at = ? WHERE id = ?",
+                (name, text, now, old["id"]),
+            )
+        return db.execute(
+            "SELECT * FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
+            (owner_kind, owner_key, name),
+        ).fetchone()
 
     def card_delete(self, owner_kind: str, owner_key: str, name: str) -> bool:
         with self.transaction() as db:
@@ -1326,6 +1340,32 @@ class Store:
                 "DELETE FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
                 (owner_kind, owner_key, name),
             ).rowcount > 0
+
+    def character_write(
+        self,
+        owner_kind: str,
+        owner_key: str,
+        lang: str,
+        *,
+        glossary: tuple[dict[str, Any], str] | None = None,
+        card: tuple[str, dict[str, Any], str | None] | None = None,
+        delete_card: str | None = None,
+    ) -> None:
+        """One character is two rows: its Name in the glossary and its Voice in a card. They are written (or the card is
+        deleted) in ONE transaction, so a failure leaves neither half behind. ``glossary`` is ``(document, rules hash)``,
+        ``card`` is ``(name, document, replaces)``. A card to delete that is not there is an error and rolls back."""
+        with self.transaction() as db:
+            if delete_card is not None:
+                removed = db.execute(
+                    "DELETE FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
+                    (owner_kind, owner_key, delete_card),
+                ).rowcount
+                if removed == 0:
+                    raise LookupError(f"no card for {delete_card!r}")
+            if glossary is not None:
+                self._glossary_write(db, owner_kind, owner_key, lang, glossary[0], glossary[1], "console")
+            if card is not None:
+                self._card_write(db, owner_kind, owner_key, card[0], card[1], card[2])
 
     # -- story memory (P4) ------------------------------------------------------------
     def find_unit(self, series_id: int, season: int, episode: int) -> Unit | None:

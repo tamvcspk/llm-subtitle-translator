@@ -309,6 +309,7 @@ export function OwnerCharacters({ owner, lang }: { owner: StyleOwner; lang: stri
   const [deleting, setDeleting] = useState<Person | null>(null);
   const noun = owner.kind === "movie" ? "movie" : "episode";
 
+  if (lang === "") return <Alert color="blue">There is no target language to work in: add one in Settings, Translation, then come back.</Alert>;
   if (glossary.isPending || style.isPending) return <Loader size="sm" aria-label="Loading characters" />;
   if (glossary.isError) return <Alert color="red">{glossary.error.message}</Alert>;
   if (style.isError) return <Alert color="red">{style.error.message}</Alert>;

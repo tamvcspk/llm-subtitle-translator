@@ -1,6 +1,6 @@
 import { Alert, Badge, Button, Collapse, Group, NumberInput, Select, SegmentedControl, Stack, Text, Textarea, TextInput } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSaveStyle, useStyleImpact, type StyleOwner } from "../api/queries";
 import type { Preset, Style } from "../api/types";
 import {
@@ -69,8 +69,11 @@ export function StyleForm({
   const [asking, setAsking] = useState(false);
   const save = useSaveStyle(target, lang);
   const dirty = !sameDraft(draft, stored);
-  const [settled] = useDebouncedValue(cleanDraft(draft), 400);
-  const waiting = dirty && !sameDraft(settled, draft);
+  // Debounce the text of the draft, which only changes when the draft does: a fresh object every render would re-arm the timer forever.
+  const json = JSON.stringify(cleanDraft(draft));
+  const [settledJson] = useDebouncedValue(json, 400);
+  const settled = useMemo(() => JSON.parse(settledJson) as StyleDraft, [settledJson]);
+  const waiting = dirty && settledJson !== json;
   const impact = useStyleImpact(target, lang, settled, dirty && !waiting);
   const sentence = impactSentence(impact.data, noun);
   const affected = impact.data?.would_stale ?? 0;

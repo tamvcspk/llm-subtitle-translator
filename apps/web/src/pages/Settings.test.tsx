@@ -369,6 +369,11 @@ describe("Settings: Library, maintenance, security", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save 3. Library" }));
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(posts()[0]?.media_roots).toEqual(["/media"]);
+    // The worker normalised the list (the blank row is gone), so the group is clean again and nothing is kept for a sign-in.
+    expect(await screen.findByText("✓ Saved")).toBeInTheDocument();
+    expect(within(screen.getByRole("button", { name: /^3\. Library/ })).queryByText("Unsaved changes")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Media root 2" })).not.toBeInTheDocument();
+    expect(sessionStorage.getItem("gst-draft:settings:library")).toBeNull();
   });
 
   it("previews the cleanup, and deletes only after the confirmation", async () => {

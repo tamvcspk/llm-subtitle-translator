@@ -5,7 +5,7 @@ from typing import Any
 
 
 DEFAULT_SOURCE_LANGUAGES = [{"code": "en", "language": "English", "enabled": True}]
-DEFAULT_TARGET_LANGUAGES = [{"code": "zh", "language": "Simplified Chinese", "enabled": True}]
+DEFAULT_TARGET_LANGUAGES = [{"code": "vi", "language": "Vietnamese", "enabled": True}]
 FALLBACK_LANGUAGES = [
     {"name": "Chinese Simplified", "code2": "zh", "code3": "zho", "enabled": True},
     {"name": "Chinese Traditional", "code2": "zt", "code3": "zht", "enabled": True},

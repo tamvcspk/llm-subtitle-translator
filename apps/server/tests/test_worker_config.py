@@ -118,10 +118,10 @@ class TestWorkerConfigTests(unittest.TestCase):
         )
 
 
-    def test_enabled_target_languages_default_to_simplified_chinese(self):
+    def test_enabled_target_languages_default_to_vietnamese(self):
         self.assertEqual(
             gst_config.enabled_target_languages({}),
-            [{"code": "zh", "language": "Simplified Chinese", "enabled": True}],
+            [{"code": "vi", "language": "Vietnamese", "enabled": True}],
         )
         self.assertEqual(
             gst_config.enabled_target_languages(

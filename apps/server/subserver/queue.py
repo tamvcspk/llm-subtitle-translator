@@ -63,7 +63,7 @@ def skip_reason(job: dict[str, Any]) -> str | None:
     provider = str(job.get("provider", "")).lower()
     language = str(job.get("source_code") or job.get("language") or "").split(":", 1)[0].lower()
     subtitle_path = str(job.get("subtitle_path", ""))
-    target_code = str(job.get("target_code") or "zh")
+    target_code = str(job.get("target_code") or "vi")
     output_path = str(job.get("output_path") or target_output_path(subtitle_path, target_code, source_code=language))
 
     if provider and provider not in {"embeddedsubtitles", "gemini-console", "manual", "local"}:
@@ -138,6 +138,10 @@ class _Heartbeat(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+
+
+def _is_id(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 class JobQueue:
@@ -371,30 +375,34 @@ class JobQueue:
             "daily_quota_pause": {"retry_at": pause} if pause is not None else None,
             "providers": self.health_report(),
         }
-        names: dict[int, tuple[str, str]] = {}
-        for name in LEGACY_STATES:
-            jobs = self.jobs.by_state(*FROM_LEGACY[name], limit=limit, newest_first=True)
+        listed = {name: self.jobs.by_state(*FROM_LEGACY[name], limit=limit, newest_first=True) for name in LEGACY_STATES}
+        names = self._unit_names({job["unit_id"] for jobs in listed.values() for job in jobs if _is_id(job.get("unit_id"))})
+        for name, jobs in listed.items():
             for job in jobs:
-                job["title"], job["label"] = self._names_of(job, names)
+                job["title"], job["label"] = names.get(job.get("unit_id"), ("", ""))
             snapshot[name] = jobs
         return snapshot
 
-    def _names_of(self, job: dict[str, Any], cache: dict[int, tuple[str, str]]) -> tuple[str, str]:
-        """``(title, label)`` of what a job is for: the series (or movie) and ``S01E04`` (empty for a movie). The payload
-        only carries ids; a job made before units existed has neither, and the reader falls back to the file name."""
-        unit_id = job.get("unit_id")
-        if not isinstance(unit_id, int) or isinstance(unit_id, bool):
-            return "", ""
-        if unit_id not in cache:
-            unit = self.store.get_unit(unit_id)
-            if unit is None:
-                cache[unit_id] = ("", "")
-            elif unit.series_id is None:
-                cache[unit_id] = (unit.title, "")
+    def _unit_names(self, unit_ids: set[int]) -> dict[int, tuple[str, str]]:
+        """``{unit id: (title, label)}`` for what the jobs are for: the series (or movie) and ``S01E04`` (empty for a
+        movie). One query for the whole list: the console asks every few seconds. The payload only carries ids; a job made
+        before units existed has neither, and the reader falls back to the file name."""
+        if not unit_ids:
+            return {}
+        marks = ",".join("?" * len(unit_ids))
+        rows = self.store.query(
+            "SELECT u.id, u.title, u.season, u.episode, u.series_id, s.title AS series_title"
+            f" FROM units u LEFT JOIN series s ON s.id = u.series_id WHERE u.id IN ({marks})",
+            sorted(unit_ids),
+        )
+        out: dict[int, tuple[str, str]] = {}
+        for row in rows:
+            if row["series_id"] is None:
+                out[row["id"]] = (row["title"] or "", "")
             else:
-                series = self.store.get_series(unit.series_id)
-                cache[unit_id] = ((series.title if series else "") or unit.title, f"S{unit.season or 0:02d}E{unit.episode or 0:02d}")
-        return cache[unit_id]
+                label = f"S{row['season'] or 0:02d}E{row['episode'] or 0:02d}"
+                out[row["id"]] = ((row["series_title"] or "") or (row["title"] or ""), label)
+        return out
 
     def layer_report(self) -> dict[str, Any]:
         """How the two model layers are doing, from the jobs: is the strong model worth having?

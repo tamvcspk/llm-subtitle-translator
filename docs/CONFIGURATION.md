@@ -36,7 +36,7 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `JOB_TIMEOUT_SECONDS` | No | `1800` | Watchdog for one translation job (minimum 60). |
 | `DATA_DIR` | No | `STATE_DIR` | Where `app.db` and `backups/subtitles/` (subtitle versions) live. |
 | `DB_PATH` | No | `DATA_DIR/app.db` | SQLite database path. |
-| `GST_TARGET_LANGUAGE` | No | `Simplified Chinese` | Legacy fallback when a job has no target language. |
+| `GST_TARGET_LANGUAGE` | No | `Vietnamese` | Legacy fallback when a job has no target language. |
 | `WORKER_SLEEP_SECONDS` | No | `15` | Delay between queue polling cycles. |
 | `HTTP_TIMEOUT_SECONDS` | No | `20` | Timeout for Bazarr and TMDB HTTP calls. |
 
@@ -204,7 +204,7 @@ Saved settings with their defaults (the Settings page shows the same fields; key
     {"code": "en", "language": "English", "enabled": true}
   ],
   "target_languages": [
-    {"code": "zh", "language": "Simplified Chinese", "enabled": true}
+    {"code": "vi", "language": "Vietnamese", "enabled": true}
   ],
   "media_roots": ["/media"],
   "bazarr_url": "",

@@ -784,34 +784,28 @@ export function useCardImpact(owner: StyleOwner, lang: string, request: { card: 
   });
 }
 
-/** Save a character: its Name goes into the glossary and its Voice into its card, one request each (UX §6.3). */
+/** Save a character: its Name goes into the glossary and its Voice into its card, in one request the worker writes in one transaction (UX §6.3). */
 export function useSaveCharacter(owner: StyleOwner, lang: string) {
   const refresh = useRefreshStyle();
   return useMutation({
-    mutationFn: async (parts: { glossary: GlossaryDoc | null; card: { card: CharacterCard; replaces?: string } | null }) => {
-      if (parts.glossary) {
-        await api<GlossarySave>(`${ownerPath(owner)}/glossary?lang=${encodeURIComponent(lang)}`, { method: "PUT", body: { doc: parts.glossary } });
-      }
-      if (parts.card) {
-        await api<StyleImpact>(`${ownerPath(owner)}/cards?lang=${encodeURIComponent(lang)}`, { method: "PUT", body: parts.card });
-      }
-    },
+    mutationFn: (parts: { glossary: GlossaryDoc | null; card: { card: CharacterCard; replaces?: string } | null }) =>
+      api<{ ok: boolean }>(`${ownerPath(owner)}/characters?lang=${encodeURIComponent(lang)}`, {
+        method: "PUT",
+        body: { ...(parts.glossary ? { glossary: parts.glossary } : {}), ...(parts.card ? { card: parts.card } : {}) },
+      }),
     onSettled: () => void refresh(),
   });
 }
 
-/** Delete a character from both places it lives in. */
+/** Delete a character from both places it lives in, in one request: the card goes and the glossary is written without its Name. */
 export function useDeleteCharacter(owner: StyleOwner, lang: string) {
   const refresh = useRefreshStyle();
   return useMutation({
-    mutationFn: async (parts: { glossary: GlossaryDoc | null; card: string | null }) => {
-      if (parts.card !== null) {
-        await api<StyleImpact>(`${ownerPath(owner)}/cards/delete?lang=${encodeURIComponent(lang)}`, { method: "POST", body: { name: parts.card } });
-      }
-      if (parts.glossary) {
-        await api<GlossarySave>(`${ownerPath(owner)}/glossary?lang=${encodeURIComponent(lang)}`, { method: "PUT", body: { doc: parts.glossary } });
-      }
-    },
+    mutationFn: (parts: { glossary: GlossaryDoc | null; card: string | null }) =>
+      api<{ ok: boolean }>(`${ownerPath(owner)}/characters?lang=${encodeURIComponent(lang)}`, {
+        method: "PUT",
+        body: { ...(parts.glossary ? { glossary: parts.glossary } : {}), ...(parts.card !== null ? { delete_card: parts.card } : {}) },
+      }),
     onSettled: () => void refresh(),
   });
 }

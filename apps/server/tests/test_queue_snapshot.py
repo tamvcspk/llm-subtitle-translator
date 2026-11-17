@@ -19,6 +19,23 @@ class SnapshotNamesTests(SchedulerCase):
         self.assertEqual((jobs["old"]["title"], jobs["old"]["label"]), ("", ""))
         self.assertEqual((jobs["gone"]["title"], jobs["gone"]["label"]), ("", ""))
 
+    def test_the_names_of_a_whole_list_cost_one_query_however_many_jobs_and_units(self):
+        series = self.store.upsert_series("arcane", title="Arcane")
+        for number in range(1, 7):
+            unit = self.store.upsert_unit(series_id=series, season=1, episode=number, title=f"E{number}")
+            self.add(f"job{number}", unit_id=unit)
+            self.add(f"twin{number}", unit_id=unit)  # two jobs of one unit
+        seen = []
+        real = self.store.query
+        self.store.query = lambda sql, args=(): (seen.append(sql), real(sql, args))[1]
+        try:
+            jobs = self.queue.snapshot()["pending"]
+        finally:
+            self.store.query = real
+        self.assertEqual(len(jobs), 12)
+        self.assertEqual(len([sql for sql in seen if "FROM units" in sql]), 1)
+        self.assertEqual({job["title"] for job in jobs}, {"Arcane"})
+
     def test_the_names_are_read_from_the_job_not_stored_in_it(self):
         series = self.store.upsert_series("arcane", title="Arcane")
         episode = self.store.upsert_unit(series_id=series, season=2, episode=1, title="x")

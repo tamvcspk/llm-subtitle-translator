@@ -31,13 +31,13 @@ function CueSheet({
   const corrections = useCorrections(unitId, lang);
   const save = useEditCue(unitId);
   const unlock = useRemoveCorrection(unitId);
-  const [draft, setDraft] = useState<{ n: number; text: string } | null>(null);
+  // What was typed is kept per cue while the sheet is open, so Prev and Next never throw a half-written line away.
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
   if (!cue) return null;
 
-  const text = draft && draft.n === cue.n ? draft.text : (cue.target ?? "");
+  const text = drafts[cue.n] ?? (cue.target ?? "");
   const lock = corrections.data?.items.find((item) => item.kind === "cue_edit" && Number(item.payload.cue) === cue.n);
   const move = (to: number) => {
-    setDraft(null);
     save.reset();
     onMove(to);
   };
@@ -77,7 +77,7 @@ function CueSheet({
         minRows={2}
         maxRows={8}
         value={text}
-        onChange={(event) => setDraft({ n: cue.n, text: event.currentTarget.value })}
+        onChange={(event) => setDrafts({ ...drafts, [cue.n]: event.currentTarget.value })}
         description="Saving locks this cue: later retranslations keep it as it is."
       />
       {save.isError && <Alert color="red">{save.error.message}</Alert>}
@@ -104,7 +104,7 @@ function CueSheet({
                 {
                   onSuccess: (answer) => {
                     onWarnings(answer.warnings ?? []);
-                    setDraft(null);
+                    setDrafts({});
                     onClose();
                   },
                 },
@@ -119,9 +119,16 @@ function CueSheet({
   );
 }
 
-/** Subtitles tab (wireframe 3a): source and target side by side; an edit is a sheet, never inline. */
+/**
+ * Subtitles tab (wireframe 3a): source and target side by side; an edit is a sheet, never inline. The page starts again
+ * when the target language changes: an offset, a search or a jump of one language says nothing about another's cues.
+ */
 export function Subtitles() {
   const { unit, target } = useOutletContext<UnitContext>();
+  return <SubtitlesOf key={target?.lang ?? ""} unit={unit} target={target} />;
+}
+
+function SubtitlesOf({ unit, target }: UnitContext) {
   const lang = target?.lang ?? "";
   const [text, setText] = useState("");
   const [q] = useDebouncedValue(text, 300);

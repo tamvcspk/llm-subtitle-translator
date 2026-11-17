@@ -86,6 +86,18 @@ describe("Corrections tab", () => {
     expect(sent("/api/units/7/corrections")).toEqual([]);
   });
 
+  it("does not carry what was typed for a note into a cue edit, which would overwrite a cue", async () => {
+    serve(routes());
+    show("/unit/7/corrections");
+    await userEvent.click(await screen.findByRole("radio", { name: "Note" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Note for the translator" }), "Whispered scene");
+    await userEvent.click(screen.getByRole("radio", { name: "Cue edit" }));
+    expect(screen.getByRole("textbox", { name: "New line" })).toHaveValue("");
+    // and back again: the note box does not keep it either
+    await userEvent.click(screen.getByRole("radio", { name: "Note" }));
+    expect(screen.getByRole("textbox", { name: "Note for the translator" })).toHaveValue("");
+  });
+
   it("keeps a note to the episode", async () => {
     serve(routes());
     show("/unit/7/corrections");

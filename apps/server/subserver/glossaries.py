@@ -91,12 +91,36 @@ class Glossaries:
     def save_doc(self, kind: str, key: str, lang: str, doc: dict[str, Any], *, note: str = "console") -> StoredGlossary:
         """Validate ``doc`` (raises :class:`subcore.glossary.GlossaryError` naming the offending path) and store it.
         The stored form is the normalised one, so a document and its YAML export always agree."""
-        glossary = g.from_doc(doc)
         lang = _clean_lang(lang)
+        clean = self._normalised(doc, lang)
+        return self.store.glossary_save(_kind(kind), safe_name(key), lang, clean, doc_hash(clean), note=note)
+
+    @staticmethod
+    def _normalised(doc: dict[str, Any], lang: str) -> dict[str, Any]:
+        """The document as it is stored: validated (a GlossaryError names the offending path) and written back out."""
+        glossary = g.from_doc(doc)
         if not glossary.target_lang:
             glossary = replace(glossary, target_lang=lang)
-        clean = g.to_doc(glossary)
-        return self.store.glossary_save(_kind(kind), safe_name(key), lang, clean, doc_hash(clean), note=note)
+        return g.to_doc(glossary)
+
+    def write_character(
+        self,
+        kind: str,
+        key: str,
+        lang: str,
+        *,
+        glossary_doc: dict[str, Any] | None = None,
+        card: tuple[str, dict[str, Any], str | None] | None = None,
+        delete_card: str | None = None,
+    ) -> None:
+        """Save a character's Name (a glossary document) and Voice (a card ``(name, document, replaces)``), or delete its
+        card with the Name written, as one transaction: both are validated first and written together or not at all."""
+        kind, key, lang = _kind(kind), safe_name(key), _clean_lang(lang)
+        prepared = None
+        if glossary_doc is not None:
+            clean = self._normalised(glossary_doc, lang)
+            prepared = (clean, doc_hash(clean))
+        self.store.character_write(kind, key, lang, glossary=prepared, card=card, delete_card=delete_card)
 
     def save(self, kind: str, key: str, lang: str, glossary: g.Glossary, *, note: str = "console") -> StoredGlossary:
         return self.save_doc(kind, key, lang, g.to_doc(glossary), note=note)

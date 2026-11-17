@@ -216,6 +216,37 @@ class StyleService:
             raise LookupError(f"no card for {name!r}")
         return {"ok": True, **impact}
 
+    def save_character(self, series_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        """A character's Name (the glossary) and Voice (its card) written together, or its card deleted with the Name
+        rewritten (``delete_card``): one transaction, so a failure leaves neither half behind (P12b)."""
+        return self.save_owner_character(self.library.series_owner(series_id), body)
+
+    def save_movie_character(self, unit_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        return self.save_owner_character(self.library.movie_owner(unit_id), body)
+
+    def save_owner_character(self, owner: Owner, body: dict[str, Any]) -> dict[str, Any]:
+        lang = str(body.get("lang") or "vi")
+        glossary, part, delete = body.get("glossary"), body.get("card"), body.get("delete_card")
+        if glossary is not None and not isinstance(glossary, dict):
+            raise ValueError("glossary must be a document")
+        card: tuple[str, dict[str, Any], str | None] | None = None
+        if part is not None:
+            if not isinstance(part, dict) or not isinstance(part.get("card"), dict):
+                raise ValueError("card must be {\"card\": {...}, \"replaces\": \"old name\"}")
+            try:
+                parsed = CharacterCard.from_doc(part["card"], "card")
+            except StyleError as exc:
+                raise ValueError(str(exc)) from None
+            card = (parsed.name, parsed.to_doc(), str(part.get("replaces") or "") or None)
+        if delete is not None and card is not None:
+            raise ValueError("save a card or delete one, not both")
+        if glossary is None and card is None and delete is None:
+            raise ValueError("there is nothing to save")
+        self.library.glossaries.write_character(
+            owner.kind, owner.key, lang, glossary_doc=glossary, card=card, delete_card=None if delete is None else str(delete),
+        )
+        return {"ok": True, "saved": True}
+
     # -- the style of one episode -------------------------------------------------------------------------
     def unit_style(self, unit_id: int) -> dict[str, Any]:
         self._unit(unit_id)
@@ -230,7 +261,11 @@ class StyleService:
         # What saving would flag: this one episode, in the language asked for (default: the one it has). ``dry_run``
         # only counts, as every other save of a style does.
         outputs = [o.target_lang for o in self.catalog.outputs(unit.id)]
-        lang = str(body.get("lang") or (outputs[0] if outputs else "vi"))
+        lang = str(body.get("lang") or (outputs[0] if outputs else ""))
+        if not lang:
+            # No default language to guess: counting for the wrong one would say "no translation is affected" and skip
+            # the confirmation the admin needs.
+            raise ValueError("lang is required: this episode has no translation to take it from")
         impact = self.library.impact_units(
             [unit], lang, layers=lambda u: replace(self.library.style_layers(u), unit=style),
         )

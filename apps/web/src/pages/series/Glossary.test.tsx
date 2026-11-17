@@ -252,6 +252,16 @@ describe("Series Glossary tab", () => {
     expect(await screen.findByText(/nothing to export yet/)).toBeInTheDocument();
   });
 
+  it("says there is no target language instead of spinning for a series that has none", async () => {
+    serve({ ...base, "/api/catalog/series/1": { body: { ...seriesPage([episode(1)]), languages: [] } } });
+    for (const tab of ["glossary", "characters", "style"]) {
+      const view = show(`/series/1/${tab}`);
+      expect(await screen.findByText(/no target language to work in/)).toBeInTheDocument();
+      expect(screen.queryByLabelText(/Loading/)).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
   it("says so for a series the worker keeps nothing of yet", async () => {
     serve({ ...base, "/api/catalog/series/1": { body: seriesPage([episode(1)], { series_id: null }) } });
     show("/series/1/glossary");

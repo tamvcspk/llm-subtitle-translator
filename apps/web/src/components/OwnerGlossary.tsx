@@ -283,6 +283,8 @@ function Editor({ owner, lang, answer }: { owner: StyleOwner; lang: string; answ
  */
 export function OwnerGlossary({ owner, lang }: { owner: StyleOwner; lang: string }) {
   const glossary = useGlossary(owner, lang);
+  // A query without a language is disabled and stays pending for good: say so instead of spinning.
+  if (lang === "") return <Alert color="blue">There is no target language to work in: add one in Settings, Translation, then come back.</Alert>;
   if (glossary.isPending) return <Loader size="sm" aria-label="Loading glossary" />;
   if (glossary.isError) return <Alert color="red">{glossary.error.message}</Alert>;
   return <Editor key={JSON.stringify([glossary.data.version, glossary.data.doc])} owner={owner} lang={lang} answer={glossary.data} />;

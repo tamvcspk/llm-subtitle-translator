@@ -28,6 +28,9 @@ ROUTES: list[tuple[str, str, Handler]] = [
         r"/api/series/(\d+)/cards/delete",
         lambda s, m, q, b: s.delete_card(int(m[1]), str(b.get("name") or ""), _lang(q, b)),
     ),
+    # One character, both halves in one transaction (P12b): the Name in the glossary and the Voice in a card.
+    ("PUT", r"/api/series/(\d+)/characters", lambda s, m, q, b: s.save_character(int(m[1]), {**b, "lang": _lang(q, b)})),
+    ("PUT", r"/api/movies/(\d+)/characters", lambda s, m, q, b: s.save_movie_character(int(m[1]), {**b, "lang": _lang(q, b)})),
     # A movie has the same pages as a series, by the movie's unit id (P12b). No suggestions: they ask TMDB for a series.
     ("GET", r"/api/movies/(\d+)/style", lambda s, m, q, b: s.movie_overview(int(m[1]), _lang(q, b))),
     ("PUT", r"/api/movies/(\d+)/style", lambda s, m, q, b: s.save_movie_style(int(m[1]), {**b, "lang": _lang(q, b)})),
@@ -50,7 +53,7 @@ _COMPILED = [(method, re.compile(rf"^{pattern}/?$"), handler) for method, patter
 
 
 def handles(path: str) -> bool:
-    return path.startswith("/api/style/") or path.endswith(("/style", "/style/suggestions", "/style/preview", "/cards", "/cards/delete"))
+    return path.startswith("/api/style/") or path.endswith(("/style", "/style/suggestions", "/style/preview", "/cards", "/cards/delete", "/characters"))
 
 
 def handle(

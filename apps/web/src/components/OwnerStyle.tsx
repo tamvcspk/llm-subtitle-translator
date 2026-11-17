@@ -50,6 +50,7 @@ export function OwnerStyle({ owner, lang, episodes }: { owner: StyleOwner; lang:
   const style = useOwnerStyle(owner, lang);
   const suggestions = useStyleSuggestions(owner.kind === "series" ? owner.id : null);
 
+  if (lang === "") return <Alert color="blue">There is no target language to work in: add one in Settings, Translation, then come back.</Alert>;
   if (style.isPending) return <Loader size="sm" aria-label="Loading style" />;
   if (style.isError) return <Alert color="red">{style.error.message}</Alert>;
 

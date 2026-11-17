@@ -775,6 +775,15 @@ character (or all, with `always`). Reply `{"ok", "saved", "card", "stale_now", "
 ### POST /api/series/{id}/cards/delete?lang=
 Body `{"name": "Bob"}`. Reply `{"ok", "stale_now", "stale_after", "would_stale"}`; `404` for an unknown card.
 
+### PUT /api/series/{id}/characters?lang=
+One character, both halves **in one transaction** (P12b): its Name (a glossary document) and its Voice (a card). Body
+`{"glossary": {...document...}, "card": {"card": {...}, "replaces": "old name"}}` (each part optional) or, to delete,
+`{"glossary": {...document without the Name...}, "delete_card": "Bob"}`. Everything is validated first (`400` names the
+offending path, for example `card.speech: expected text`), then written together or not at all (a `delete_card` that names
+no card is `404` and writes nothing). Saving a card and deleting one in the same request, or sending nothing, is `400`.
+Reply `{"ok", "saved"}`; the live count of what it would flag stale comes from the `dry_run` of the glossary and card
+routes, as before. A movie has the same at `PUT /api/movies/{unit_id}/characters`.
+
 ### A movie's glossary, style and cards: `/api/movies/{unit_id}/...`
 A movie has the same pages as a series (P12b), reached by the **movie's unit id** (`id` of an item in `GET /api/catalog/movies`
 or `GET /api/library/movies`). They use the rows of owner `movies/<movie key>`, so a movie's glossary and style are its

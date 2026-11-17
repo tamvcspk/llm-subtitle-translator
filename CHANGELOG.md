@@ -1,4 +1,20 @@
 # Unreleased
+- **Code review of P12b: fixes, and the default target language is now Vietnamese.**
+  - Defaults: `DEFAULT_TARGET_LANGUAGES` is `vi` (Vietnamese) instead of `zh`, and so are the "no target on the job" fallbacks
+    (`target_output_path`, the queue and the translation attempt) and the legacy `GST_TARGET_LANGUAGE` default. A worker that
+    already has target languages saved keeps them; Vietnamese is also in the bundled language list used when Bazarr cannot be read.
+  - Corrections: switching the kind (Note, Cue edit, …) clears what was typed, so a note can no longer land as a cue's new text.
+  - Subtitles: the page starts again when the target language changes; Prev/Next in the cue sheet keep a half-written line.
+  - Style form: the live impact is debounced on stable text (it used to re-render every 400 ms for as long as it was open).
+  - Settings: a save starts its group again from what the worker stored (a blank path row or a trailing space is gone) and
+    forgets the kept draft; a series with no target language says so instead of spinning in Glossary, Characters and Style.
+  - **Characters are saved atomically**: `PUT /api/series/{id}/characters` (and the movie form) writes the Name (glossary) and
+    the Voice (card), or deletes the card with the Name rewritten, in one transaction after validating both.
+  - `PUT /api/units/{id}/style` no longer guesses `vi` when there is no `lang` and no translation: it asks for `lang`.
+  - `GET /api/queue` resolves the titles of every job in one query (it used to read two rows per unit on every poll).
+  - Origin check: it understands a proxy that rewrites `Host` (`X-Forwarded-Host`), and with `CONSOLE_COOKIE_SAMESITE=none`,
+    where it is the only CSRF guard, a write with no `Origin` must say `Sec-Fetch-Site: same-origin`.
+  - Removed the leftover `Debug.test.tsx` and the unused `Placeholder` page.
 - **The console is now the React app; the old vanilla-JS console is removed (P12b).** The Docker image serves the build of
   `apps/web` as `/app/static` (it no longer carries `apps/server/static/`, nor a `static-next` copy). `login.html` moved to
   `apps/web/public/` and stays the one self-contained page served without a session; a test now walks a build-shaped folder
