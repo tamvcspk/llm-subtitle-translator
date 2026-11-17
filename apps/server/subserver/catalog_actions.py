@@ -99,3 +99,16 @@ class CatalogActions:
         series_id = self.store.upsert_series(entry.series_key, title=entry.title, bazarr_id=entry.bazarr_id)
         self.store.set_series_auto_request(series_id, value)
         return {"ok": True, "auto_request": value}
+
+    def set_bootstrap(self, catalog_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        """**Continue** (FR-15.12): let ``auto_request`` go past the first episodes of a series whose glossary nobody has
+        reviewed. ``released: false`` holds it again. The rest is requested after the next sync, not at once."""
+        released = body.get("released", True)
+        if not isinstance(released, bool):
+            raise ValueError("released must be true or false")
+        entry = self.store.catalog_entry(catalog_id)
+        if entry is None or entry.kind != KIND_SERIES:
+            raise LookupError(f"no series {catalog_id} in the catalog")
+        series_id = self.store.upsert_series(entry.series_key, title=entry.title, bazarr_id=entry.bazarr_id)
+        self.store.set_series_bootstrap_released(series_id, released)
+        return {"ok": True, "released": released}

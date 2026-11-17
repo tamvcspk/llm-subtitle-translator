@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import auth as console_auth
-from . import catalog_api, keys_api, library_api, style_api
+from . import catalog_api, keys_api, library_api, style_api, suggestion_api
 from .auth import ConsoleAuth
 from .backups import backup_file_path, create_backup, list_backups, restore_backup_archive
 from .config import KEY_SLOTS, PROVIDER_OPENAI_COMPAT, SECRET_MASK, supported_languages
@@ -308,6 +308,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_json(result[1], status=result[0])
         return True
 
+    def suggestion_route(self, method: str, parsed: urllib.parse.ParseResult, body: dict[str, Any] | None = None) -> bool:
+        """Serve the Review inbox's routes (``/api/suggestions…``); False when the path is not one of them."""
+        service = self.ctx.get("suggestions")
+        if service is None or not suggestion_api.handles(parsed.path):
+            return False
+        result = suggestion_api.handle(service, method, parsed.path, urllib.parse.parse_qs(parsed.query), body)
+        if result is None:
+            return False
+        self.send_json(result[1], status=result[0])
+        return True
+
     def catalog_route(self, method: str, parsed: urllib.parse.ParseResult, body: dict[str, Any] | None = None) -> bool:
         """Serve the Library page's catalog routes and ``POST /api/jobs``; False when the path is not one of them."""
         actions = self.ctx.get("catalog")
@@ -356,7 +367,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         try:
             if (self.library_api("GET", parsed) or self.style_route("GET", parsed) or self.keys_route("GET", parsed)
-                    or self.catalog_route("GET", parsed)):
+                    or self.catalog_route("GET", parsed) or self.suggestion_route("GET", parsed)):
                 return
             if parsed.path == "/login":
                 self.serve_static("/login.html", no_store=True)
@@ -421,7 +432,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
             body = read_json_body(self)
             if (self.library_api("POST", parsed, body) or self.style_route("POST", parsed, body)
-                    or self.keys_route("POST", parsed, body) or self.catalog_route("POST", parsed, body)):
+                    or self.keys_route("POST", parsed, body) or self.catalog_route("POST", parsed, body)
+                    or self.suggestion_route("POST", parsed, body)):
                 return
             if parsed.path == "/api/auth/login":
                 self.api_login(body)

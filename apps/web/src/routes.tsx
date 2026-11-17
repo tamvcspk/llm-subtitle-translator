@@ -6,6 +6,7 @@ import { Episodes } from "./pages/Episodes";
 import { Compare } from "./pages/Compare";
 import { Home } from "./pages/Home";
 import { MovieGlossary } from "./pages/MovieGlossary";
+import { Review } from "./pages/Review";
 import { Series } from "./pages/Series";
 import { Settings } from "./pages/Settings";
 import { SeriesContextTab } from "./pages/series/ContextTab";
@@ -48,6 +49,7 @@ export function AppRoutes() {
           <Route path="style" element={<UnitStyle />} />
           <Route path="*" element={<Navigate to="subtitles" replace />} />
         </Route>
+        <Route path="review" element={<Review />} />
         <Route path="activity" element={<Activity />} />
         <Route path="settings" element={<Settings />} />
         <Route path="backups" element={<Backups />} />

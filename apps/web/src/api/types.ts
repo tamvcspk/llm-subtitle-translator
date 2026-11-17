@@ -131,6 +131,8 @@ export interface CatalogTarget {
   job: JobAxis;
   wait: string;
   ignored: boolean;
+  /** Why `auto_request` has not asked for this Missing item yet; `bootstrap` = its series' glossary awaits review. */
+  reason: "" | "bootstrap";
   text: string;
   job_info: JobInfo | null;
 }
@@ -185,8 +187,28 @@ export interface MoviesPage {
 export interface SeriesPage {
   status: CatalogStatus;
   languages: string[];
-  series: { id: number; title: string; key: string; auto_request: "" | "on" | "off"; series_id: number | null; gone: boolean };
+  series: {
+    id: number;
+    title: string;
+    key: string;
+    auto_request: "" | "on" | "off";
+    series_id: number | null;
+    gone: boolean;
+    bootstrap: SeriesBootstrap;
+  };
   items: CatalogItem[];
+}
+
+/**
+ * While nothing of a series is approved, `auto_request` asks for its first `limit` episodes only (FR-15.12). `locked`
+ * says it is holding the rest back (`held` labels); `pending` is how many suggestions wait for review.
+ */
+export interface SeriesBootstrap {
+  locked: boolean;
+  limit: number;
+  pending: number;
+  released: boolean;
+  held: number;
 }
 
 /** `GET /api/library/series/{id}/units`: what the version history says about each episode's file. */
@@ -548,4 +570,72 @@ export interface JobsAnswer {
   /** Present on a real request. */
   created?: string[];
   count?: number;
+}
+
+// -- Review inbox (`/api/suggestions`, P13) ---------------------------------------------------------------------------
+
+export type SuggestionKind = "term" | "address_rule" | "character";
+export type SuggestionSource = "facts" | "memory" | "feedback" | "research";
+export type SuggestionStatus = "pending" | "accepted" | "rejected";
+
+/** A character a generator proposes: its Name (glossary entry) and, optionally, its Voice (the card). */
+export interface CharacterPayload extends GlossaryCharacter {
+  card?: CharacterCard;
+}
+
+export type SuggestionPayload = GlossaryTerm | GlossaryAddress | CharacterPayload;
+
+/** What shows why: a cue and its timecode (`text`, `timecode`, `unit_id`, `cue`), or a line a person can check. */
+export type Evidence =
+  | string
+  | { text?: string; timecode?: string; episode?: string; unit_id?: number; cue?: number; url?: string };
+
+export interface Suggestion {
+  id: number;
+  series_id: number;
+  series: string;
+  lang: string;
+  kind: SuggestionKind;
+  source: SuggestionSource;
+  payload: SuggestionPayload;
+  evidence: Evidence[];
+  /** URLs of a research answer. */
+  sources: string[];
+  status: SuggestionStatus;
+  auto_accepted: boolean;
+  /** Unix seconds; 0 while pending. */
+  decided_at: number;
+  created_at: number;
+  /** An accepted suggestion that changed the glossary can be undone. */
+  undoable: boolean;
+  /** Accepted after the admin changed it. */
+  edited: boolean;
+}
+
+export interface SuggestionSummary {
+  counts: Record<SuggestionStatus, number>;
+  /** The pending total: what the badge on the nav shows. */
+  pending: number;
+  series: Array<{ series_id: number; series: string; pending: number }>;
+}
+
+export interface SuggestionList extends SuggestionSummary {
+  items: Suggestion[];
+}
+
+/** An accept or an undo, or a dry run of one (`saved: false`): what it flags stale. Nothing is retranslated. */
+export interface SuggestionDecision extends StyleImpact {
+  unchanged?: boolean;
+  suggestion?: Suggestion;
+}
+
+export interface BulkAnswer {
+  ok: boolean;
+  saved: boolean;
+  count: number;
+  stale_now?: number;
+  stale_after?: number;
+  would_stale: number;
+  failed?: Array<{ id: number; error: string }>;
+  series?: string;
 }

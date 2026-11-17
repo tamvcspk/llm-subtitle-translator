@@ -18,6 +18,7 @@ ROUTES: list[tuple[str, str, Handler]] = [
     ("GET", r"/api/catalog/series/(\d+)", lambda a, m, b: a.series_page(int(m[1]))),
     ("POST", r"/api/catalog/sync", lambda a, m, b: a.sync_now()),
     ("PUT", r"/api/catalog/series/(\d+)/policy", lambda a, m, b: a.set_policy(int(m[1]), b)),
+    ("PUT", r"/api/catalog/series/(\d+)/bootstrap", lambda a, m, b: a.set_bootstrap(int(m[1]), b)),
     ("POST", r"/api/catalog/ignore", lambda a, m, b: a.ignore(b, True)),
     ("POST", r"/api/catalog/unignore", lambda a, m, b: a.ignore(b, False)),
     ("POST", r"/api/jobs", lambda a, m, b: a.request(b)),

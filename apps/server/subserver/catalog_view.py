@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .bootstrap import Bootstrap
 from .catalog import pick_source
 from .config import enabled_source_languages, enabled_target_languages
 from .jobs import CANCELLED, DONE, FAILED, OPEN_STATES, QUEUED, RUNNING, SKIPPED, WAITING, job_key
@@ -30,6 +31,8 @@ CONTENT_TEXT = {
     "outside": "Outside profile",
 }
 WAIT_TEXT = {"quota": "daily quota", "provider": "provider", "context": "earlier episodes", "settle": "settling", "rate": "busy"}
+# Why the policy has not asked for a Missing item yet. A reason of the Library, never a state of a job (FR-15.12).
+REASON_TEXT = {"bootstrap": "Waiting for glossary review"}
 
 
 def display_text(label: dict[str, Any]) -> str:
@@ -44,6 +47,8 @@ def display_text(label: dict[str, Any]) -> str:
                      f"Waiting · {WAIT_TEXT.get(label['wait'], label['wait'])}")
     if label["ignored"]:
         parts.append("Ignored")
+    if label.get("reason"):
+        parts.append(REASON_TEXT[label["reason"]])
     return " · ".join(parts)
 
 
@@ -64,6 +69,7 @@ class CatalogView:
         self.versions = versions
         self._config = config_source
         self._settings = settings_source
+        self.bootstrap = Bootstrap(store, settings_source)
 
     # -- the cache and its age -----------------------------------------------------------------------------------------
     def status(self) -> dict[str, Any]:
@@ -150,11 +156,14 @@ class CatalogView:
         return [str(t["code"]).lower() for t in enabled_target_languages(self._config())]
 
     def item(self, entry: CatalogEntry, series: CatalogEntry | None, langs: list[str],
-             ignored: set[tuple[int, str]], sources: list[dict[str, Any]]) -> dict[str, Any]:
+             ignored: set[tuple[int, str]], sources: list[dict[str, Any]], *, hold: bool = False) -> dict[str, Any]:
+        """``hold``: the policy would ask for this item but waits for the series' glossary to be reviewed."""
         unit = self.library.unit_of(entry)
         labels = []
         for lang in langs:
             label = self.label(entry, lang, unit, ignored, sources)
+            waiting = hold and label["content"] == "missing" and not label["job"] and not label["ignored"] and not label["removed"]
+            label["reason"] = "bootstrap" if waiting else ""
             label["text"] = display_text(label)
             labels.append(label)
         picked = pick_source(entry, sources)
@@ -244,14 +253,21 @@ class CatalogView:
         langs, sources = self._targets(), enabled_source_languages(self._config())
         ignored = self.store.decisions()
         stored = self.store.series_by_key(series.series_key)
+        listed = [e for e in self.store.catalog_entries(KIND_EPISODE, parent_id=series.id, include_gone=True)
+                  if e.gone_at is None or self.library.unit_of(e) is not None]
+        override = stored.auto_request if stored else ""
+        policy_on = override == "on" or (override != "off" and bool(self._settings().get("auto_request")))
+        state = self.bootstrap.state(series, [e for e in listed if e.gone_at is None], stored)
+        held = policy_on and state.locked
+        items = [self.item(e, series, langs, ignored, sources, hold=held and e.id not in state.allowed) for e in listed]
         return {
             "status": self.status(), "languages": langs,
             "series": {"id": series.id, "title": series.title, "key": series.series_key,
                        "auto_request": stored.auto_request if stored else "", "series_id": stored.id if stored else None,
-                       "gone": series.gone_at is not None},
-            "items": [self.item(e, series, langs, ignored, sources)
-                      for e in self.store.catalog_entries(KIND_EPISODE, parent_id=series.id, include_gone=True)
-                      if e.gone_at is None or self.library.unit_of(e) is not None],
+                       "gone": series.gone_at is not None,
+                       "bootstrap": {"locked": held, "limit": state.limit, "pending": state.pending, "released": state.released,
+                                     "held": sum(1 for i in items for t in i["targets"] if t["reason"])}},
+            "items": items,
         }
 
     def movies_page(self) -> dict[str, Any]:

@@ -1,4 +1,23 @@
 # Unreleased
+- **P13: suggestions and the Review inbox.**
+  - New table `suggestions` (migration 13: `source`, `fingerprint`, `UNIQUE(series_id, target_lang, fingerprint)`) and
+    `SuggestionService` (`subserver/suggestions.py`): `propose` (skips what waits, was decided or the glossary already says),
+    `accept` (optionally after an edit), `reject`, `undo`, and `bulk` for one series with the confirmed count. Accepting writes
+    the glossary in the database (a character with its voice writes the card in the same transaction) and counts the
+    translations it flags stale with the number the Glossary page uses; nothing is retranslated. A rejected suggestion is not
+    proposed again; every `source` (`facts`, `memory`, `feedback`, `research`) goes through the same code.
+  - API: `GET /api/suggestions`, `GET /api/suggestions/summary`, `POST /api/suggestions/{id}/accept|reject|undo`,
+    `POST /api/suggestions/bulk` (all with `dry_run` where they write). See `docs/API.md`.
+  - Settings: `auto_accept_terms` (on; a term is applied only when two independent sources agree), `auto_accept_address_rules`
+    and `auto_accept_characters` (off). An applied suggestion shows in the history marked *Auto* and can be undone.
+  - **Bootstrap of `auto_request`** (`bootstrap.py`, setting `auto_request_bootstrap`, default 2): a series with nothing approved
+    yet gets only its first episodes from the policy; the rest stay Missing with the reason *Waiting for glossary review* until
+    the suggestions are reviewed or the admin presses **Continue** (`PUT /api/catalog/series/{id}/bootstrap`). The admin's own
+    requests are never held. Targets carry `reason`, the series page `series.bootstrap`.
+  - Console: **Review** page (`#/review`, grouped by series: evidence with cue and timecode, the live count of translations
+    accepting would flag stale, Accept · Edit · Reject, Accept all in series with the number and the count before it, History
+    with Undo), a nav entry with a badge of the pending ones (hidden until the machine has proposed something), the
+    Continue notice on the series page, and the three `auto_accept_*` switches and `auto_request_bootstrap` in Settings.
 - **Code review of P12b: fixes, and the default target language is now Vietnamese.**
   - Defaults: `DEFAULT_TARGET_LANGUAGES` is `vi` (Vietnamese) instead of `zh`, and so are the "no target on the job" fallbacks
     (`target_output_path`, the queue and the translation attempt) and the legacy `GST_TARGET_LANGUAGE` default. A worker that

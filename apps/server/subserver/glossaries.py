@@ -112,6 +112,7 @@ class Glossaries:
         glossary_doc: dict[str, Any] | None = None,
         card: tuple[str, dict[str, Any], str | None] | None = None,
         delete_card: str | None = None,
+        note: str = "console",
     ) -> None:
         """Save a character's Name (a glossary document) and Voice (a card ``(name, document, replaces)``), or delete its
         card with the Name written, as one transaction: both are validated first and written together or not at all."""
@@ -120,7 +121,7 @@ class Glossaries:
         if glossary_doc is not None:
             clean = self._normalised(glossary_doc, lang)
             prepared = (clean, doc_hash(clean))
-        self.store.character_write(kind, key, lang, glossary=prepared, card=card, delete_card=delete_card)
+        self.store.character_write(kind, key, lang, glossary=prepared, card=card, delete_card=delete_card, note=note)
 
     def save(self, kind: str, key: str, lang: str, glossary: g.Glossary, *, note: str = "console") -> StoredGlossary:
         return self.save_doc(kind, key, lang, g.to_doc(glossary), note=note)

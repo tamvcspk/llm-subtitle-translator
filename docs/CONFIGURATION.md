@@ -344,9 +344,29 @@ Library browses that cache. Reading it never creates a job. These settings are l
   Turn it on for one series first: a whole library at once spends a lot of quota.
 - `auto_request_daily_cap` (default `0`, no cap): most jobs the policy may create per UTC day. What is over stays
   Missing and is tried again after the next read.
+- `auto_request_bootstrap` (default `2`, `0` = no wait): a series with **nothing approved yet** (no glossary with anything
+  in it, no character card, no suggestion decided) gets only this many first episodes (story order, specials last) from the
+  policy. The rest stay Missing with the reason *Waiting for glossary review*, and the series page says so. It is let go
+  when you press **Continue**, or when something was approved and nothing is left waiting in Review (or every suggestion
+  was decided). The rest is then requested after the next read. Your own requests are never held back.
 
 A request you make in Library is not limited by the cap. A request for more than one job shows an estimate first
 (jobs, cues, model calls, what is left of `max_calls_per_day`, the time at the recent pace) and asks you to confirm.
+
+## Review and auto-accept
+
+The machine proposes terms, forms of address and characters; they wait in **Review** until you decide, and accepting
+writes the glossary (see [API](API.md#review-suggestions-for-the-glossary-and-the-character-cards)). Settings → *Story and
+style*, live without a restart:
+
+- `auto_accept_terms` (default **on**): a `term` is applied the moment it is proposed, but only when two independent sources
+  (different hosts) agree on it, so until a generator that cites sources exists every term waits for you.
+- `auto_accept_address_rules` (default **off**): who calls whom how is your decision.
+- `auto_accept_characters` (default **off**).
+
+An applied suggestion stays in the Review history, marked *Auto*, and can be undone while the glossary still has the entry as
+it was written. Review keeps what you rejected (a few bytes per suggestion) so it is not proposed again: the clean-up never
+deletes suggestions.
 
 ## Logging and Measurement
 

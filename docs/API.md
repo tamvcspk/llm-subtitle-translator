@@ -494,7 +494,7 @@ An item is a *series*, an *episode* or a *movie*, addressed by its catalog `id` 
 
 The state of each (item, language) is **derived when read**, from the catalog, the version history, the jobs
 and the decisions. A target comes as
-`{"lang", "content", "removed", "stale", "job", "wait", "ignored", "text", "job_info"}`: `job_info` is `null` when no job
+`{"lang", "content", "removed", "stale", "job", "wait", "ignored", "reason", "text", "job_info"}`: `job_info` is `null` when no job
 says anything, else `{"job_id", "progress_done", "progress_total", "retry_at", "error", "missing_units"}` of the open job
 (or of the failed one that gives the `failed` label): what a row needs to Cancel, Stop or Retry it and to show its
 progress, the time it resumes (`retry_at`, Unix seconds, waiting only), the reason it failed (the last 300 characters) and,
@@ -502,17 +502,21 @@ for `wait: "context"`, the earlier episodes it waits for (`["S01E03"]`); fields 
 `[]`. `content` is `missing`,
 `translated`, `edited`, `external` (a subtitle the worker did not make) or `outside` (the language is not in
 Bazarr's profile for the item; it can still be requested); `job` is `requested`, `running`, `waiting` (with
-`wait`: `quota`, `provider`, `context`, `settle`, `rate`), `failed` or `""`; `text` is the label as the console
-shows it, such as `Missing · Requested`, `Translated · Stale` or `Missing · Removed · Ignored`.
+`wait`: `quota`, `provider`, `context`, `settle`, `rate`), `failed` or `""`; `reason` is `"bootstrap"` on a Missing item
+the `auto_request` policy would ask for but holds back until its series' glossary is reviewed (FR-15.12; a reason of the
+Library, never a state of a job, and an admin's own request is not held); `text` is the label as the console
+shows it, such as `Missing · Requested`, `Translated · Stale`, `Missing · Removed · Ignored` or `Missing · Waiting for
+glossary review`.
 
 | Method and path | Answer |
 |---|---|
 | `GET /api/catalog` | `{"status", "languages", "series": [{"id", "title", "key", "episodes", "missing": {"vi": 3}, "open_jobs": {"requested": 1}, "failed": {"vi": 2}, "ignored": {"vi": 1}, "auto_request", "series_id"}], "movies": {"count", "missing", "failed", "ignored"}}`. Counts come from the catalog, the jobs and the decisions in a few queries (no per-item work). `failed` and `ignored` are per target language and equal what the `Failed` and `Ignored` labels of the series page (or the movies page) add up to: `failed` counts units with no open job whose newest finished job for that language is `failed` (so a failure asked for again, or followed by a success, is not counted); `ignored` counts the "do not translate" decisions. They feed the Failed and Ignored chips of Home. |
 | `GET /api/catalog/status` | `{"synced_at", "attempted_at", "status": "ok" \| "kept" \| "", "warning", "items", "listed", "auto_request", "auto_request_daily_cap"}`. `synced_at` is the last accepted read; `status: "kept"` means the last read was set aside and `warning` says why (Bazarr unreachable, empty, or shrunk by more than `catalog_shrink_guard`). |
-| `GET /api/catalog/series/{id}` | `{"status", "languages", "series": {"id", "title", "key", "auto_request", "series_id", "gone"}, "items": [{"id", "kind", "bazarr_id", "title", "season", "episode", "unit_id", "source", "has_source", "gone", "targets": [<target>]}]}`. `unit_id` is set once the worker keeps a unit for the item (it opens the Episode page). |
+| `GET /api/catalog/series/{id}` | `{"status", "languages", "series": {"id", "title", "key", "auto_request", "series_id", "gone", "bootstrap": {"locked", "limit", "pending", "released", "held"}}, "items": [{"id", "kind", "bazarr_id", "title", "season", "episode", "unit_id", "source", "has_source", "gone", "targets": [<target>]}]}`. `unit_id` is set once the worker keeps a unit for the item (it opens the Episode page). |
 | `GET /api/catalog/movies` | The same `items` for movies. |
 | `POST /api/catalog/sync` | **Sync now**: reads Bazarr, and if the answer was accepted lets the `auto_request` policy act. Returns the status plus `"auto_requested": {"created", "capped", "considered"}` (null when the read was set aside). A read never creates a job by itself. |
 | `PUT /api/catalog/series/{id}/policy` | `{"auto_request": "" \| "on" \| "off"}`: follow the global `auto_request` setting, force it on, or off for this series. |
+| `PUT /api/catalog/series/{id}/bootstrap` | **Continue** (FR-15.12): `{"released": true}` (the default) lets `auto_request` go past the first `auto_request_bootstrap` episodes of a series whose glossary nobody has reviewed; `false` holds it again. Nothing is requested at once: the rest is asked for after the next sync. `series.bootstrap` of the series page says where it stands: `locked` (the policy is on for it and holding episodes back), `limit`, `pending` (suggestions waiting for review), `released`, `held` (labels with `reason: "bootstrap"`). |
 | `POST /api/catalog/ignore` · `POST /api/catalog/unignore` | Select as for `POST /api/jobs` (`items`, `series`/`season`, or `all`), optional `languages`. Records or removes the decision "do not translate this language of this item": neither a sync nor the policy creates a job for it. Returns `{"ok", "changed", "ignored"}`. |
 | `POST /api/jobs` | Request translations (below). |
 
@@ -840,3 +844,38 @@ carrying the variant's label, style, model and prompt version, so scores add up 
 `apply` the verdict is acted on: the cues won by `variant` become cue edits of the current translation, and a
 `whole` win adopts the candidate (with `"apply_style": true` it also keeps the variant's style, as `adopt` does; `applied`
 then has `style`). `400` when the version is not a candidate. Reply `{"ok", "recorded", "applied"}`.
+
+## Review: suggestions for the glossary and the character cards
+
+What a generator proposes (story facts, story memory, the feedback loop, research: the `source`) waits here until the admin
+decides (FR-4.4, FR-11.1; [ARCHITECTURE §3.6](design/ARCHITECTURE.md)). Accepting writes the glossary in the database (a
+character also writes its card, in the same transaction) and flags the translations made without it as stale; it never
+retranslates (FR-5.6). Errors are `{"error": "..."}` with `400` (a payload the glossary refuses names the offending path,
+`address_rules[0]: needs 'a_to_b' and/or 'b_to_a'`; a suggestion already decided) or `404`.
+
+A suggestion is
+`{"id", "series_id", "series", "lang", "kind", "source", "payload", "evidence", "sources", "status", "auto_accepted", "decided_at", "created_at", "undoable", "edited"}`:
+
+- `kind` is `term` (`payload` is a glossary term: `source`, `target`, optional `aliases`, `locked`, `note`, `from`, `until`),
+  `address_rule` (`a`, `b`, `a_to_b`, `b_to_a`, `from`, `until`, `note`) or `character` (`name`, `target`, `gender`,
+  `description`, and optionally the character's voice as `card`, a character card, whose name is the character's).
+- `source` is `facts`, `memory`, `feedback` or `research`. `evidence` is a list of what shows why (a cue with its
+  timecode, `{"episode", "cue", "timecode", "text", "unit_id"}`, or a line of text); `sources` are the URLs of a research answer.
+- `status` is `pending`, `accepted` or `rejected`. `auto_accepted` marks one applied by `auto_accept_*`; `undoable` is true
+  for an accepted one that changed the glossary; `edited` for one accepted after the admin changed it.
+- Content is identified by a fingerprint (series, language, kind, the content without case or spacing): the same content is
+  never stored twice, so a rejected suggestion is not proposed again and an accepted one is skipped.
+
+| Method and path | Answer |
+|---|---|
+| `GET /api/suggestions?status=&series=&source=&lang=&limit=` | `{"items": [<suggestion>], "counts": {"pending", "accepted", "rejected"}, "pending", "series": [{"series_id", "series", "pending"}]}`. Grouped by series (oldest first inside; newest first when `status` is `accepted` or `rejected`). `limit` is at most 1000 (default 500). |
+| `GET /api/suggestions/summary` | The counts and the per-series pending numbers, without the items: what the badge on the nav shows (the nav hides Review while all three counts are 0). |
+| `POST /api/suggestions/{id}/accept` | Apply a pending one. Optional `"payload"`: the content as the admin edited it (**Edit, then accept**; it is checked like a glossary save, and the stored suggestion becomes the edited one). Optional `"dry_run": true`: nothing is written, the answer only counts. Reply `{"ok", "saved", "unchanged", "stale_now", "stale_after", "would_stale", "suggestion"}`: `would_stale` is how many translations accepting makes stale (the same number the Glossary page shows before it saves), `unchanged` that the glossary already says it. |
+| `POST /api/suggestions/{id}/reject` | Reject: the row stays and the same content is never proposed again. Reply `{"ok", "suggestion"}`. |
+| `POST /api/suggestions/{id}/undo` | Put back exactly what accepting replaced (the entry it overwrote, the character's earlier card or none) and return the suggestion to `pending`. `400` when the glossary or the card was changed after the accept: a later edit is never overwritten. `"dry_run": true` counts the translations undoing would flag stale. |
+| `POST /api/suggestions/bulk` | Accept every pending suggestion of **one** series: `{"series_id", "lang"?, "expect", "dry_run"?}`. `expect` is the number the admin confirmed; if the inbox has changed (`400` "the list changed"), nothing is applied, and a real request without it is refused. `dry_run` returns `{"ok", "saved": false, "count", "stale_now", "stale_after", "would_stale"}` for all of them together. A real request returns `{"ok", "saved", "count", "failed": [{"id", "error"}], "series", "would_stale"}`; one that cannot be applied stays pending and does not stop the rest. |
+
+`auto_accept_terms` (default on), `auto_accept_address_rules` and `auto_accept_characters` (default off) apply a suggestion
+of that kind the moment it is proposed ([CONFIGURATION](CONFIGURATION.md#review-and-auto-accept)); it then shows in
+`status=accepted` with `auto_accepted: true` and can be undone. A `term` is applied by itself only when two independent
+sources (different hosts) agree on it.

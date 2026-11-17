@@ -1,14 +1,14 @@
-import { ActionIcon, Box, Container, Group, Stack, Title, UnstyledButton } from "@mantine/core";
+import { ActionIcon, Badge, Box, Container, Group, Stack, Title, UnstyledButton } from "@mantine/core";
 import { IconLogout } from "@tabler/icons-react";
 import { NavLink, Outlet } from "react-router";
-import { useMe, useSignOut } from "../api/queries";
+import { useMe, useSignOut, useSuggestionSummary } from "../api/queries";
 import { Banners } from "./Banners";
 import { SessionOverlay } from "./SessionOverlay";
 import { StatusStrip } from "./StatusStrip";
 
-// Review joins this list in P13 (with a badge of pending suggestions); until then it does not exist.
 export const NAV = [
   { to: "/library", label: "Library", end: false },
+  { to: "/review", label: "Review", end: false },
   { to: "/activity", label: "Activity", end: false },
   { to: "/settings", label: "Settings", end: false },
 ] as const;
@@ -16,6 +16,10 @@ export const NAV = [
 export function Shell() {
   const me = useMe();
   const signOut = useSignOut();
+  // Review stays out of the nav until the machine has proposed something (UX §4); its badge counts what is waiting.
+  const suggestions = useSuggestionSummary().data;
+  const total = suggestions ? suggestions.counts.pending + suggestions.counts.accepted + suggestions.counts.rejected : 0;
+  const items = NAV.filter((item) => item.to !== "/review" || total > 0);
   return (
     <Container size={1100} py="md" px="md">
       <Stack gap="md">
@@ -29,7 +33,7 @@ export function Shell() {
         </Group>
         <Box component="nav" aria-label="Main">
           <Group gap="xs" wrap="wrap">
-            {NAV.map((item) => (
+            {items.map((item) => (
               <UnstyledButton
                 key={item.to}
                 component={NavLink}
@@ -40,6 +44,11 @@ export function Shell() {
                 className="nav-link"
               >
                 {item.label}
+                {item.to === "/review" && suggestions && suggestions.pending > 0 && (
+                  <Badge ml={8} size="sm" circle={suggestions.pending < 10} aria-label={`${suggestions.pending} pending`}>
+                    {suggestions.pending}
+                  </Badge>
+                )}
               </UnstyledButton>
             ))}
           </Group>

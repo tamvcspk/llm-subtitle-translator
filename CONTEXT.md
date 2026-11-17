@@ -95,6 +95,13 @@ as missing: only where it is on (everywhere, or for a series), never for an Igno
 one that has a job, within `GST_ONLY_PATHS` and `auto_request_daily_cap`. Off by default. Its jobs have
 origin `policy` and are the automatic class, so they never bring back what the admin removed.
 
+**Bootstrap** (setting `auto_request_bootstrap`, `bootstrap.py`):
+While a series has nothing approved (no glossary with anything in it, no character card, no suggestion
+decided), `auto_request` asks for only its first episodes in story order; the rest stay Missing with the
+reason *Waiting for glossary review*. It is a reason shown by Library, not a job state. It ends when the
+admin presses **Continue**, or once something is approved and nothing waits in Review. The admin's own
+requests are never held back.
+
 **Ignored** (table `unit_decisions`):
 The admin's "do not translate this language of this item". Neither a read nor the policy makes a job for
 it; the admin's own request refuses it too until it is taken back.
@@ -141,6 +148,15 @@ style is in the bundle and in the rules hash (changing it flags translations sta
 The voice of one character of a series: how they speak, how they address others,
 catchphrases, sample lines, and the style axes where they differ from the series. It
 is in an episode's prompt where the dialogue names the character.
+
+**Suggestion** (table `suggestions`, `suggestions.py`):
+Something a generator proposes for the glossary or the character cards of a series: a `term`, an
+`address_rule` or a `character` (with its voice), with the cue and timecode or the URLs that show why. Its
+`source` (`facts`, `memory`, `feedback`, `research`) is only a label: every source is stored, decided
+and applied the same way. It waits as `pending` until the admin accepts it (optionally after editing it),
+rejects it, or `auto_accept_*` applies it. Accepting writes the glossary and flags translations made without
+it stale, never retranslates; the same content is never proposed again once decided (its fingerprint).
+**Review** is the page that lists them, with a badge of the pending ones on the nav.
 
 **Preset**:
 A genre's starting style (sitcom, drama, anime, documentary, kids), stored once and then

@@ -46,7 +46,7 @@ Home (search + list of series and movies)          nav: Library · Activity · S
  │    └─ Episode page (Subtitles · Corrections · Retranslate · History · Context · Style override)
  └─ [MV] row → Unit page (cùng layout Episode page; không có bộ chọn tập, không có tab Context)
 Activity  = Queue + provider health + quota   (dải trạng thái chạy cũng hiện trên Home)
-Review    = suggestions inbox (P13), badge on nav; ẩn cho tới khi có
+Review    = suggestions inbox (P13, xong 2026-11-17), badge on nav; mục nav ẩn cho tới khi máy đã đề xuất gì đó
 Settings  = 7 nhóm gập (mục 4.1); Backups và Logs là hai trang riêng, mở từ nhóm Maintenance
 Login     = trang tĩnh riêng, ngoài giao diện chính (mục 7)
 ```
@@ -286,7 +286,7 @@ Ký hiệu: **Có** = đã có endpoint; **Mới** = cần backend nhỏ (P12b);
 
 ### A.6 Review (P13)
 
-Nhóm theo series; mỗi mục: `source`, nội dung đề xuất, bằng chứng (cue + timecode hoặc URL), số bản dịch sẽ stale; Accept · Edit · Reject; Accept all in series (kèm số lượng). Chưa có API (P13).
+Nhóm theo series; mỗi mục: `source`, nội dung đề xuất, bằng chứng (cue + timecode hoặc URL), số bản dịch sẽ stale; Accept · Edit · Reject; Accept all in series (kèm số lượng). Đã làm ở P13: hai tab **Pending** và **History** (đã chấp nhận, kèm nhãn *Auto* và *Edited*, và đã từ chối); số stale đọc từ `POST /api/suggestions/{id}/accept` với `dry_run` (không có nút Check); Edit là bottom sheet có số stale theo bản sửa; Accept all hỏi trong bottom sheet kèm số và số stale của cả nhóm (`POST /api/suggestions/bulk`, `dry_run`); sau mỗi quyết định có dòng thông báo kèm **Undo**. Accept một mục không hỏi lại vì số stale đã hiện trên thẻ. Series bị `auto_request` giữ lại (FR-15.12) có khung **Continue** ở đầu trang series và nhãn *Waiting for glossary review*.
 
 ### A.7 Còn thiếu (Mới, làm ở P12b hoặc để sau)
 

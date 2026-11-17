@@ -25,6 +25,7 @@ export function target(overrides: Partial<CatalogTarget> = {}): CatalogTarget {
     job: "",
     wait: "",
     ignored: false,
+    reason: "",
     text: "Missing",
     job_info: null,
     ...overrides,
@@ -53,7 +54,16 @@ export function seriesPage(items: CatalogItem[], overrides: Partial<SeriesPage["
   return {
     status: { synced_at: null, attempted_at: null, status: "ok", warning: "", items: items.length },
     languages: ["vi"],
-    series: { id: 1, title: "Arcane", key: "arcane", auto_request: "", series_id: 9, gone: false, ...overrides },
+    series: {
+      id: 1,
+      title: "Arcane",
+      key: "arcane",
+      auto_request: "",
+      series_id: 9,
+      gone: false,
+      bootstrap: { locked: false, limit: 2, pending: 0, released: false, held: 0 },
+      ...overrides,
+    },
     items,
   };
 }

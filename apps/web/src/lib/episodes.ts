@@ -81,6 +81,7 @@ export function rowLabel(target: CatalogTarget): string {
     target.stale ? "Stale" : null,
     jobText(target),
     target.ignored ? "Ignored" : null,
+    target.reason === "bootstrap" ? "Waiting for glossary review" : null,
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");

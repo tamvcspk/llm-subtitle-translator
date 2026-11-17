@@ -39,6 +39,13 @@ export const LIBRARY_FIELDS: Field[] = [
     hint: "Off by default. Translates missing items of chosen series without asking.",
   },
   { key: "auto_request_daily_cap", label: "Auto-request daily cap", kind: "int", min: 0, hint: "0 = no cap." },
+  {
+    key: "auto_request_bootstrap",
+    label: "Auto-request first episodes",
+    kind: "int",
+    min: 0,
+    hint: "A series with nothing approved gets this many episodes, then waits for its glossary to be reviewed. 0 = no wait.",
+  },
 ];
 
 export const QUEUE_FIELDS: Field[] = [
@@ -66,6 +73,14 @@ export const STORY_FIELDS: Field[] = [
   { key: "few_shot_budget_tokens", label: "Few-shot budget, tokens", kind: "int", min: 0, hint: "0 = off." },
   { key: "glossary_filter_threshold", label: "Filter terms above, terms", kind: "int", min: 0, hint: "0 = never filter." },
   { key: "edit_coalesce_minutes", label: "Merge cue edits within, minutes", kind: "int", min: 0 },
+  {
+    key: "auto_accept_terms",
+    label: "Auto-accept terms",
+    kind: "switch",
+    hint: "Only a term that two independent sources agree on; every other one waits in Review.",
+  },
+  { key: "auto_accept_address_rules", label: "Auto-accept forms of address", kind: "switch", hint: "Off by default: who calls whom how is your call." },
+  { key: "auto_accept_characters", label: "Auto-accept characters", kind: "switch", hint: "Off by default." },
 ];
 
 export const MAINTENANCE_FIELDS: Field[] = [

@@ -1,8 +1,8 @@
-import { Alert, Anchor, Card, Group, SegmentedControl, Select, Skeleton, Stack, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Button, Card, Group, SegmentedControl, Select, Skeleton, Stack, Text, Title } from "@mantine/core";
 import { IconChevronLeft } from "@tabler/icons-react";
 import { Link, Outlet, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../api/client";
-import { useSeriesPage, useSetAutoRequest } from "../api/queries";
+import { useReleaseBootstrap, useSeriesPage, useSetAutoRequest } from "../api/queries";
 import type { SeriesPage } from "../api/types";
 import { MemoryControls } from "../components/MemoryControls";
 import { RouteTabs } from "../components/RouteTabs";
@@ -35,6 +35,7 @@ export function Series() {
   const seriesId = Number(id);
   const page = useSeriesPage(seriesId);
   const policy = useSetAutoRequest(seriesId);
+  const release = useReleaseBootstrap(seriesId);
   const [params, setParams] = useSearchParams();
 
   if (page.isPending) {
@@ -114,6 +115,32 @@ export function Series() {
         </Stack>
       </Group>
       {policy.isError && <Alert color="red">{policy.error.message}</Alert>}
+      {series.bootstrap.locked && (
+        <Alert color="yellow" title="Auto-request is waiting for this series' glossary" role="status">
+          <Stack gap="xs">
+            <Text size="sm">
+              Nothing is approved for {series.title} yet, so only its first {series.bootstrap.limit} episode
+              {series.bootstrap.limit === 1 ? " was" : "s were"} requested. {series.bootstrap.held} more wait
+              {series.bootstrap.held === 1 ? "s" : ""} until the suggestions are reviewed
+              {series.bootstrap.pending > 0 ? ` (${series.bootstrap.pending} waiting)` : ""}. You can still translate any episode yourself.
+            </Text>
+            <Group gap="xs" wrap="wrap">
+              {series.bootstrap.pending > 0 && (
+                <Button component={Link} to="/review" variant="light">
+                  Review suggestions
+                </Button>
+              )}
+              <Button variant="default" loading={release.isPending} onClick={() => release.mutate(true)}>
+                Continue
+              </Button>
+            </Group>
+            <Text size="xs" c="dimmed">
+              Continue lets the rest through at the next sync.
+            </Text>
+          </Stack>
+        </Alert>
+      )}
+      {release.isError && <Alert color="red">{release.error.message}</Alert>}
       {series.series_id !== null && <MemoryControls storedId={series.series_id} />}
 
       <RouteTabs base={`/series/${seriesId}`} tabs={TABS} keep={["lang"]} />

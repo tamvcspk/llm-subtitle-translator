@@ -27,6 +27,7 @@ from subserver.console import ConsoleActions
 from subserver.glossaries import Glossaries
 from subserver.style_service import StyleService
 from subserver.styles import Styles
+from subserver.suggestions import SuggestionService
 from subserver.library import Library, enrich_job_identity
 from subserver.memory import StoryMemory
 from subserver.queue_policy import configured_models
@@ -321,6 +322,7 @@ def main() -> int:
         library, styles, metadata=metadata, settings_source=live_settings, provider_factory=provider_factory,
         telemetry=telemetry, usage=store,
     )
+    suggestion_service = SuggestionService(store, library, settings_source=live_settings, telemetry=telemetry)
     # The library as Bazarr lists it, what the admin asks for from it, and the policy that asks by itself (P10, ADR-10).
     job_requests = JobRequests(
         store, library, worker.queue, versions, config_source=settings_service.app_config,
@@ -384,6 +386,7 @@ def main() -> int:
             cleanup=cleanup,
             catalog=CatalogActions(store, library, catalog_sync, auto_request, job_requests, catalog_view),
             style=style_service,
+            suggestions=suggestion_service,
         ).as_handler_context()
         if not args.no_worker:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()

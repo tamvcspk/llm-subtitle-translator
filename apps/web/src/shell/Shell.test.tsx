@@ -32,15 +32,26 @@ describe("Shell", () => {
   beforeEach(() => resetSession());
   afterEach(() => resetSession());
 
-  it("offers Library, Activity and Settings, and no Review before P13", async () => {
-    serve(healthy);
+  it("offers Library, Activity and Settings, and no Review while nothing was ever proposed", async () => {
+    serve({ ...healthy, "/api/suggestions/summary": { body: { counts: { pending: 0, accepted: 0, rejected: 0 }, pending: 0, series: [] } } });
     show();
     const nav = screen.getByRole("navigation", { name: "Main" });
     expect(nav).toHaveTextContent("Library");
     expect(nav).toHaveTextContent("Activity");
     expect(nav).toHaveTextContent("Settings");
-    expect(nav).not.toHaveTextContent("Review");
     await screen.findByText("Running 1");
+    expect(nav).not.toHaveTextContent("Review");
+  });
+
+  it("shows Review with the number of pending suggestions as its badge, and hides the badge at zero", async () => {
+    serve({ ...healthy, "/api/suggestions/summary": { body: { counts: { pending: 3, accepted: 1, rejected: 0 }, pending: 3, series: [] } } });
+    const first = show();
+    expect(await screen.findByRole("link", { name: "Review 3 pending" })).toHaveAttribute("href", "/review");
+    first.unmount();
+    serve({ ...healthy, "/api/suggestions/summary": { body: { counts: { pending: 0, accepted: 2, rejected: 1 }, pending: 0, series: [] } } });
+    show();
+    const link = await screen.findByRole("link", { name: "Review" });
+    expect(link).not.toHaveTextContent("0");
   });
 
   it("moves between pages by link", async () => {

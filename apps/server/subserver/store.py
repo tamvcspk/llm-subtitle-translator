@@ -26,7 +26,8 @@ from .ports import (
     JobBundle,
     Account, ApiKey, SettingRow, BodyRef, CardRow, CatalogApplied, CatalogEntry, CatalogState, CatalogSubtitle,
     Correction, CueEdit, EventRecord, GlossaryRevision, LlmCall, Output, QualitySignal, Reclaimed, Series, StoredFacts,
-    StoredGlossary, StyleRow, TokenTotals, TranslationVersion, Unit,
+    SeriesSeed, StoredGlossary, StyleRow, Suggestion, SuggestionCount, TokenTotals, TranslationVersion, Unit,
+    SUGGESTION_ACCEPTED, SUGGESTION_PENDING, SUGGESTION_REJECTED,
 )
 
 _MIGRATIONS: tuple[str, ...] = (
@@ -401,6 +402,31 @@ _MIGRATIONS: tuple[str, ...] = (
         UNIQUE (owner_kind, owner_key, name)
     );
     """,
+    # Migration 13 (P13, FR-4.4, FR-11.1.5): what the generators propose, one table for every source. The
+    # fingerprint is the hash of the normalised content, so the same content is never stored twice for a series
+    # and language: a rejected suggestion stays as a row and is why it is not proposed again. ``applied_json``
+    # is what accepting changed, kept so it can be undone.
+    """
+    CREATE TABLE suggestions (
+        id INTEGER PRIMARY KEY,
+        series_id INTEGER NOT NULL REFERENCES series(id),
+        target_lang TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        source TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        sources_json TEXT NOT NULL DEFAULT '[]',
+        auto_accepted INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        applied_json TEXT NOT NULL DEFAULT '{}',
+        decided_at REAL NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL,
+        UNIQUE (series_id, target_lang, fingerprint)
+    );
+    CREATE INDEX suggestions_status ON suggestions (status, series_id);
+    ALTER TABLE series ADD COLUMN bootstrap_released INTEGER NOT NULL DEFAULT 0;
+    """,
 )
 
 
@@ -435,6 +461,7 @@ def _series_from_row(row: sqlite3.Row) -> Series:
         id=row["id"], key=row["key"], title=row["title"], bazarr_id=row["bazarr_id"],
         stale_policy=row["stale_policy"], memory=row["memory"], specials_after=row["specials_after"],
         created_at=row["created_at"], auto_request=row["auto_request"],
+        bootstrap_released=bool(row["bootstrap_released"]),
     )
 
 
@@ -489,6 +516,16 @@ def _card_from_row(row: sqlite3.Row) -> CardRow:
     return CardRow(
         owner_kind=row["owner_kind"], owner_key=row["owner_key"], name=row["name"], doc=json.loads(row["doc_json"]),
         version=row["version"], updated_at=row["updated_at"],
+    )
+
+
+def _suggestion_from_row(row: sqlite3.Row) -> Suggestion:
+    return Suggestion(
+        id=row["id"], series_id=row["series_id"], target_lang=row["target_lang"], kind=row["kind"],
+        source=row["source"], fingerprint=row["fingerprint"], payload=json.loads(row["payload_json"]),
+        evidence=json.loads(row["evidence_json"] or "[]"), sources=json.loads(row["sources_json"] or "[]"),
+        auto_accepted=bool(row["auto_accepted"]), status=row["status"], applied=json.loads(row["applied_json"] or "{}"),
+        decided_at=row["decided_at"], created_at=row["created_at"],
     )
 
 
@@ -1350,10 +1387,12 @@ class Store:
         glossary: tuple[dict[str, Any], str] | None = None,
         card: tuple[str, dict[str, Any], str | None] | None = None,
         delete_card: str | None = None,
+        note: str = "console",
     ) -> None:
         """One character is two rows: its Name in the glossary and its Voice in a card. They are written (or the card is
         deleted) in ONE transaction, so a failure leaves neither half behind. ``glossary`` is ``(document, rules hash)``,
-        ``card`` is ``(name, document, replaces)``. A card to delete that is not there is an error and rolls back."""
+        ``card`` is ``(name, document, replaces)``. A card to delete that is not there is an error and rolls back.
+        ``note`` is what the glossary history says made the change."""
         with self.transaction() as db:
             if delete_card is not None:
                 removed = db.execute(
@@ -1363,9 +1402,90 @@ class Store:
                 if removed == 0:
                     raise LookupError(f"no card for {delete_card!r}")
             if glossary is not None:
-                self._glossary_write(db, owner_kind, owner_key, lang, glossary[0], glossary[1], "console")
+                self._glossary_write(db, owner_kind, owner_key, lang, glossary[0], glossary[1], note)
             if card is not None:
                 self._card_write(db, owner_kind, owner_key, card[0], card[1], card[2])
+
+    # -- suggestions (P13, FR-4.4, FR-11.1) ---------------------------------------------------------------
+    def suggestion_add(
+        self, series_id: int, target_lang: str, kind: str, source: str, fingerprint: str, payload: dict[str, Any],
+        evidence: list[Any], sources: list[str],
+    ) -> Suggestion | None:
+        """Store a pending suggestion; ``None`` when the series already has one with that fingerprint in that language
+        (pending, accepted or rejected: a rejected one is exactly what must not come back)."""
+        with self.transaction() as db:
+            cursor = db.execute(
+                "INSERT INTO suggestions (series_id, target_lang, kind, source, fingerprint, payload_json, evidence_json,"
+                " sources_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (series_id, target_lang, fingerprint) DO NOTHING",
+                (
+                    series_id, target_lang, kind, source, fingerprint, json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    json.dumps(evidence, ensure_ascii=False), json.dumps(sources, ensure_ascii=False), time.time(),
+                ),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = db.execute("SELECT * FROM suggestions WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return _suggestion_from_row(row)
+
+    def suggestion(self, suggestion_id: int) -> Suggestion | None:
+        rows = self.query("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,))
+        return _suggestion_from_row(rows[0]) if rows else None
+
+    def suggestion_by_fingerprint(self, series_id: int, target_lang: str, fingerprint: str) -> Suggestion | None:
+        rows = self.query(
+            "SELECT * FROM suggestions WHERE series_id = ? AND target_lang = ? AND fingerprint = ?",
+            (series_id, target_lang, fingerprint),
+        )
+        return _suggestion_from_row(rows[0]) if rows else None
+
+    def suggestions(
+        self, *, series_id: int | None = None, status: str | None = None, source: str | None = None,
+        target_lang: str | None = None, limit: int = 500,
+    ) -> list[Suggestion]:
+        """Suggestions grouped for display: by series, pending ones oldest first, decided ones newest first."""
+        where, args = [], []
+        for column, value in (("series_id", series_id), ("status", status), ("source", source), ("target_lang", target_lang)):
+            if value is not None:
+                where.append(f"{column} = ?")
+                args.append(value)
+        order = "id DESC" if status in (SUGGESTION_ACCEPTED, SUGGESTION_REJECTED) else "id"
+        rows = self.query(
+            f"SELECT * FROM suggestions{' WHERE ' + ' AND '.join(where) if where else ''} ORDER BY series_id, {order} LIMIT ?",
+            (*args, limit),
+        )
+        return [_suggestion_from_row(r) for r in rows]
+
+    def suggestion_counts(self) -> list[SuggestionCount]:
+        """How many suggestions each series has in each status: the badge on the nav and the groups of the Review page."""
+        rows = self.query(
+            "SELECT status, series_id, COUNT(*) AS n FROM suggestions GROUP BY status, series_id ORDER BY series_id"
+        )
+        return [SuggestionCount(status=r["status"], series_id=int(r["series_id"]), count=int(r["n"])) for r in rows]
+
+    def suggestion_decide(
+        self, suggestion_id: int, status: str, *, payload: dict[str, Any] | None = None,
+        applied: dict[str, Any] | None = None, auto: bool = False,
+    ) -> Suggestion:
+        """Record a decision. ``payload`` replaces the stored one (accepted after an edit); ``applied`` is what the
+        acceptance changed. Going back to ``pending`` (an undo) forgets both the decision and the auto mark."""
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+            if row is None:
+                raise LookupError(f"no suggestion {suggestion_id}")
+            pending = status == SUGGESTION_PENDING
+            db.execute(
+                "UPDATE suggestions SET status = ?, payload_json = ?, applied_json = ?, auto_accepted = ?, decided_at = ?"
+                " WHERE id = ?",
+                (
+                    status,
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True) if payload is not None else row["payload_json"],
+                    json.dumps(applied or {}, ensure_ascii=False), 0 if pending else int(auto),
+                    0 if pending else time.time(), suggestion_id,
+                ),
+            )
+            saved = db.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+        return _suggestion_from_row(saved)
 
     # -- story memory (P4) ------------------------------------------------------------
     def find_unit(self, series_id: int, season: int, episode: int) -> Unit | None:
@@ -1386,6 +1506,31 @@ class Store:
         """'' follows the global ``auto_request`` setting; 'on' and 'off' override it for this series (FR-15.4)."""
         with self._lock:
             self._db.execute("UPDATE series SET auto_request = ? WHERE id = ?", (value, series_id))
+
+    def set_series_bootstrap_released(self, series_id: int, released: bool) -> None:
+        """**Continue** (FR-15.12): ``auto_request`` stops holding this series back until a glossary is reviewed."""
+        with self._lock:
+            self._db.execute("UPDATE series SET bootstrap_released = ? WHERE id = ?", (int(released), series_id))
+
+    def series_seed(self, owner_key: str, series_id: int | None) -> SeriesSeed:
+        """What the series has had approved: a glossary with something in it (``owner_key`` is the folder-safe
+        series key the glossaries are stored under), character cards, and its suggestions waiting and decided."""
+        glossary = False
+        for row in self.query("SELECT doc_json FROM glossaries WHERE owner_kind = 'series' AND owner_key = ?", (owner_key,)):
+            doc = json.loads(row["doc_json"])
+            if any(doc.get(part) for part in ("terms", "characters", "address_rules", "style")):
+                glossary = True
+        cards = int(self.query(
+            "SELECT COUNT(*) AS n FROM character_cards WHERE owner_kind = 'series' AND owner_key = ?", (owner_key,)
+        )[0]["n"])
+        pending = decided = 0
+        if series_id is not None:
+            for row in self.query("SELECT status, COUNT(*) AS n FROM suggestions WHERE series_id = ? GROUP BY status", (series_id,)):
+                if row["status"] == SUGGESTION_PENDING:
+                    pending += int(row["n"])
+                else:
+                    decided += int(row["n"])
+        return SeriesSeed(glossary=glossary, cards=cards, pending=pending, decided=decided)
 
     def series_by_key(self, key: str) -> Series | None:
         with self._lock:

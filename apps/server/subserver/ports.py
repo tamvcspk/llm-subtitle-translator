@@ -238,6 +238,18 @@ class Series:
     specials_after: str = ""
     created_at: float = 0.0
     auto_request: str = ""
+    bootstrap_released: bool = False  # the admin pressed Continue: ``auto_request`` is no longer held back (FR-15.12)
+
+
+@dataclass(frozen=True)
+class SeriesSeed:
+    """What a series has had approved so far (FR-15.12): whether it has a glossary with anything in it, how many
+    character cards, and how many suggestions wait and were decided."""
+
+    glossary: bool = False
+    cards: int = 0
+    pending: int = 0
+    decided: int = 0
 
 
 @dataclass(frozen=True)
@@ -306,6 +318,42 @@ class GlossaryRevision:
     doc: dict[str, Any]
     at: float = 0.0
     note: str = ""  # who changed it: console | import | correction | restore
+
+
+SUGGESTION_PENDING, SUGGESTION_ACCEPTED, SUGGESTION_REJECTED = "pending", "accepted", "rejected"
+SUGGESTION_STATUSES = (SUGGESTION_PENDING, SUGGESTION_ACCEPTED, SUGGESTION_REJECTED)
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """One thing a generator proposes for the glossary or the character cards of a series (FR-4.4, FR-11.1.5).
+
+    ``source`` says who proposed it (``facts`` | ``memory`` | ``feedback`` | ``research``), ``kind`` what it is
+    (``term`` | ``address_rule`` | ``character``). ``fingerprint`` is the hash of its normalised content: the same
+    content is never stored twice for a series and language, so a rejected one is never proposed again. ``applied``
+    is what accepting changed (the entries it replaced and the ones it wrote) so it can be undone."""
+
+    id: int
+    series_id: int
+    target_lang: str
+    kind: str
+    source: str
+    fingerprint: str
+    payload: dict[str, Any]
+    evidence: list[Any] = field(default_factory=list)  # cues with timecodes, or text a person can check
+    sources: list[str] = field(default_factory=list)  # URLs of a research answer
+    auto_accepted: bool = False
+    status: str = SUGGESTION_PENDING
+    applied: dict[str, Any] = field(default_factory=dict)
+    decided_at: float = 0.0
+    created_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class SuggestionCount:
+    status: str
+    series_id: int
+    count: int
 
 
 @dataclass(frozen=True)

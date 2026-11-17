@@ -3,6 +3,7 @@ import type { StyleDraft } from "../lib/style";
 import { api } from "./client";
 import type {
   AuthMe,
+  BulkAnswer,
   CatalogOverview,
   CatalogStatus,
   CharacterCard,
@@ -29,6 +30,12 @@ import type {
   StyleImpact,
   StyleOverview,
   StylePreview,
+  Suggestion,
+  SuggestionDecision,
+  SuggestionList,
+  SuggestionPayload,
+  SuggestionStatus,
+  SuggestionSummary,
   UnitContextAnswer,
   UnitDetail,
   VersionsAnswer,
@@ -905,6 +912,16 @@ export function useSetAutoRequest(id: number) {
   });
 }
 
+/** **Continue**: let `auto_request` go past the first episodes of a series whose glossary nobody has reviewed (FR-15.12). */
+export function useReleaseBootstrap(id: number) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (released: boolean) =>
+      api<{ ok: boolean; released: boolean }>(`/api/catalog/series/${id}/bootstrap`, { method: "PUT", body: { released } }),
+    onSettled: () => client.invalidateQueries({ queryKey: ["catalog"] }),
+  });
+}
+
 /** Ignore or stop ignoring: a decision, not a request, so it costs nothing and needs no estimate. */
 export function useIgnore() {
   const refresh = useRefreshJobs();
@@ -914,6 +931,120 @@ export function useIgnore() {
         method: "POST",
         body: selector,
       }),
+    onSettled: () => void refresh(),
+  });
+}
+
+// -- Review inbox ---------------------------------------------------------------------------------------------------------
+
+/** How many suggestions wait, for the badge on the nav. Cheap on purpose: it is asked on every page. */
+export function useSuggestionSummary() {
+  return useQuery({
+    queryKey: ["suggestions", "summary"] as const,
+    queryFn: ({ signal }) => api<SuggestionSummary>("/api/suggestions/summary", { signal }),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+}
+
+/** The pending ones, or the decided ones (accepted and rejected, newest first) for the History tab. */
+export function useSuggestions(status: SuggestionStatus | "decided", enabled = true) {
+  return useQuery({
+    queryKey: ["suggestions", "list", status] as const,
+    enabled,
+    queryFn: async ({ signal }): Promise<SuggestionList> => {
+      if (status !== "decided") return api<SuggestionList>(`/api/suggestions?status=${status}`, { signal });
+      const [accepted, rejected] = await Promise.all([
+        api<SuggestionList>("/api/suggestions?status=accepted", { signal }),
+        api<SuggestionList>("/api/suggestions?status=rejected", { signal }),
+      ]);
+      const items: Suggestion[] = [...accepted.items, ...rejected.items].sort((a, b) => b.decided_at - a.decided_at);
+      return { ...accepted, items };
+    },
+    refetchInterval: 30_000,
+  });
+}
+
+/** What accepting this suggestion (as edited, when `payload` is given) would flag stale: a dry run, nothing is written (FR-11.1.3). */
+export function useSuggestionImpact(id: number, payload: SuggestionPayload | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["suggestion-impact", id, payload] as const,
+    queryFn: ({ signal }) =>
+      api<SuggestionDecision>(`/api/suggestions/${id}/accept`, {
+        method: "POST",
+        body: { dry_run: true, ...(payload ? { payload } : {}) },
+        signal,
+      }),
+    enabled,
+    staleTime: 20_000,
+    gcTime: 20_000,
+    retry: false,
+  });
+}
+
+/** What accepting every pending suggestion of one series together would flag stale. */
+export function useBulkImpact(seriesId: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ["suggestion-bulk-impact", seriesId] as const,
+    queryFn: ({ signal }) =>
+      api<BulkAnswer>("/api/suggestions/bulk", { method: "POST", body: { series_id: seriesId, dry_run: true }, signal }),
+    enabled,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/** A decision changes the badge, the lists, and (an accept or an undo) the glossary and every label that says Stale. */
+function useRefreshSuggestions() {
+  const client = useQueryClient();
+  return () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: ["suggestions"] }),
+      client.invalidateQueries({ queryKey: ["suggestion-impact"] }),
+      client.invalidateQueries({ queryKey: ["suggestion-bulk-impact"] }),
+      client.invalidateQueries({ queryKey: ["glossary"] }),
+      client.invalidateQueries({ queryKey: ["style"] }),
+      client.invalidateQueries({ queryKey: ["catalog"] }),
+      client.invalidateQueries({ queryKey: ["library"] }),
+      client.invalidateQueries({ queryKey: ["unit"] }),
+    ]);
+}
+
+/** Accept, or edit then accept (`payload`). The glossary changes; translations made without it are flagged stale, never redone. */
+export function useAcceptSuggestion() {
+  const refresh = useRefreshSuggestions();
+  return useMutation({
+    mutationFn: (args: { id: number; payload?: SuggestionPayload }) =>
+      api<SuggestionDecision>(`/api/suggestions/${args.id}/accept`, { method: "POST", body: args.payload ? { payload: args.payload } : {} }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** Reject: the same content is never proposed again. */
+export function useRejectSuggestion() {
+  const refresh = useRefreshSuggestions();
+  return useMutation({
+    mutationFn: (id: number) => api<SuggestionDecision>(`/api/suggestions/${id}/reject`, { method: "POST", body: {} }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** Put back what an accept replaced; the suggestion returns to the inbox. */
+export function useUndoSuggestion() {
+  const refresh = useRefreshSuggestions();
+  return useMutation({
+    mutationFn: (id: number) => api<SuggestionDecision>(`/api/suggestions/${id}/undo`, { method: "POST", body: {} }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** Accept every pending suggestion of one series; `expect` is the number the admin confirmed. */
+export function useBulkAccept() {
+  const refresh = useRefreshSuggestions();
+  return useMutation({
+    mutationFn: (args: { seriesId: number; expect: number }) =>
+      api<BulkAnswer>("/api/suggestions/bulk", { method: "POST", body: { series_id: args.seriesId, expect: args.expect } }),
     onSettled: () => void refresh(),
   });
 }

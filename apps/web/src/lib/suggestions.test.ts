@@ -1,0 +1,79 @@
+import { describe, expect, it } from "vitest";
+import type { Suggestion } from "../api/types";
+import { describe as describeSuggestion, draftOf, draftProblem, evidenceLines, groupBySeries, impactLine, payloadOf, safeUrl } from "./suggestions";
+
+type Draftable = Pick<Suggestion, "kind" | "payload">;
+
+const term: Draftable = { kind: "term", payload: { source: "Kyber", target: "Đá", aliases: ["kyber crystal"], from: "S01E02", note: "x" } };
+
+describe("describe", () => {
+  it("says a term, a form of address and a character in a line, with the rest as details", () => {
+    expect(describeSuggestion(term)).toEqual({
+      title: "Kyber → Đá",
+      details: ["Also: kyber crystal", "From S01E02", "x"],
+    });
+    expect(describeSuggestion({ kind: "address_rule", payload: { a: "Vi", b: "Jinx", a_to_b: "chị" } })).toEqual({
+      title: "Vi ↔ Jinx",
+      details: ["Vi calls Jinx “chị”"],
+    });
+    expect(describeSuggestion({ kind: "character", payload: { name: "Vi", target: "Vi", gender: "f", card: { name: "Vi", speech: "blunt" } } })).toEqual({
+      title: "Vi",
+      details: ["Gender: f", "Voice: blunt"],
+    });
+  });
+});
+
+describe("evidence", () => {
+  it("puts where a cue is in front of what it says, and takes plain text as it is", () => {
+    expect(evidenceLines(["said so", { episode: "S01E05", cue: 5, timecode: "00:00:08", text: "Hi", unit_id: 9 }])).toEqual([
+      { where: "", text: "said so" },
+      { where: "S01E05 · cue 5 · 00:00:08", text: "Hi", unitId: 9, url: undefined },
+    ]);
+  });
+
+  it("links only web addresses", () => {
+    expect(safeUrl("https://wiki.example/a")).toBe("https://wiki.example/a");
+    expect(safeUrl("javascript:alert(1)")).toBeNull();
+    expect(safeUrl("not a url")).toBeNull();
+  });
+});
+
+describe("editing", () => {
+  it("lays the edit on the proposal and sends back what the sheet has no box for", () => {
+    const draft = { ...draftOf(term), b: " Đá Kyber ", locked: true, note: "" };
+    expect(payloadOf(term, draft)).toEqual({ source: "Kyber", target: "Đá Kyber", aliases: ["kyber crystal"], from: "S01E02", locked: true });
+  });
+
+  it("keeps the rest of a card when only the voice changes, and drops the voice when it is emptied", () => {
+    const character: Draftable = { kind: "character", payload: { name: "Vi", card: { name: "Vi", speech: "blunt", catchphrases: ["hey"] } } };
+    expect(payloadOf(character, { ...draftOf(character), speech: "soft" })).toEqual({
+      name: "Vi",
+      card: { name: "Vi", speech: "soft", catchphrases: ["hey"] },
+    });
+    expect(payloadOf(character, { ...draftOf(character), speech: "" })).toEqual({ name: "Vi", card: { name: "Vi", catchphrases: ["hey"] } });
+  });
+
+  it("says what is missing before the worker would refuse it", () => {
+    expect(draftProblem("term", { ...draftOf(term), b: " " })).toMatch(/both the source/);
+    expect(draftProblem("address_rule", { ...draftOf({ kind: "address_rule", payload: { a: "A", b: "B" } }) })).toMatch(/how at least one/);
+    expect(draftProblem("character", { ...draftOf({ kind: "character", payload: { name: "" } }) })).toMatch(/needs a name/);
+    expect(draftProblem("term", draftOf(term))).toBeNull();
+  });
+});
+
+describe("the lines", () => {
+  it("says the impact in plain words", () => {
+    expect(impactLine(undefined)).toBeNull();
+    expect(impactLine(0)).toBe("No translation is affected.");
+    expect(impactLine(1)).toBe("Accepting flags 1 translation stale. Nothing is redone.");
+    expect(impactLine(2000)).toBe("Accepting flags 2,000 translations stale. Nothing is redone.");
+  });
+
+  it("groups by series in the order they appear", () => {
+    const item = (id: number, series_id: number) => ({ id, series_id, series: `S${series_id}` }) as Suggestion;
+    expect(groupBySeries([item(1, 7), item(2, 9), item(3, 7)]).map((g) => [g.seriesId, g.items.map((i) => i.id)])).toEqual([
+      [7, [1, 3]],
+      [9, [2]],
+    ]);
+  });
+});

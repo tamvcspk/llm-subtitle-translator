@@ -90,6 +90,18 @@ CATALOG_INT_CONFIG_KEYS = {
     "catalog_sync_interval": (300, 0),
     "catalog_shrink_guard": (20, 0),
     "auto_request_daily_cap": (0, 0),
+    # A series with nothing approved yet gets this many first episodes from `auto_request`, then waits for its
+    # glossary to be reviewed (FR-15.12); 0 = no wait.
+    "auto_request_bootstrap": (2, 0),
+}
+# What the machine proposes for the glossary (P13, FR-4.4): one switch per kind of suggestion, `auto_accept_*` means a
+# suggestion of that kind is applied the moment it is proposed (it stays in the review history and can be undone). A
+# `term` is applied only when two independent sources agree on it, whatever the switch says; address rules and
+# characters are the admin's call and stay off until the admin says otherwise. key -> default
+SUGGESTION_BOOL_CONFIG_KEYS = {
+    "auto_accept_terms": True,
+    "auto_accept_address_rules": False,
+    "auto_accept_characters": False,
 }
 # Logging and measurement (P5, FR-19). `log_prompt_bodies` is what is kept of the prompts and answers of model
 # calls: `off`, `errors` (failed calls only), `sample` (failed calls and one call in ten) or `all`.
@@ -152,6 +164,7 @@ DEFAULT_APP_CONFIG = {
     "job_settle_seconds": 600,
     "auto_request": False,
     **{key: default for key, (default, _) in CATALOG_INT_CONFIG_KEYS.items()},
+    **SUGGESTION_BOOL_CONFIG_KEYS,
     "memory_enabled": False,
     "memory_model": "",
     "summarize_model": "",
@@ -264,6 +277,9 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             normalized[key] = default
     normalized["catalog_shrink_guard"] = min(100, normalized["catalog_shrink_guard"])
+    for key in SUGGESTION_BOOL_CONFIG_KEYS:
+        value = normalized.get(key)
+        normalized[key] = value is True or str(value).strip().lower() in ("1", "true", "on")
     for key in MEMORY_BOOL_CONFIG_KEYS:
         normalized[key] = bool(normalized.get(key))
     for key in MEMORY_STRING_CONFIG_KEYS:

@@ -4,8 +4,10 @@ Off by default. When it is on, globally or for one series (``on`` overrides ``of
 other way round), every item Bazarr lists as missing a target language in that scope gets a ``fill`` job with
 ``origin = policy``, unless it is Ignored, was Removed by the admin, already has a job, lies outside
 ``GST_ONLY_PATHS`` or the day's ``auto_request_daily_cap`` is spent (what is over stays Missing and is tried
-again after the next sync). It runs after a catalog sync, never inside one (FR-14.1), and uses the same planning
-as the admin's own requests, so what it did and did not do is readable in the same reasons.
+again after the next sync). A series with nothing approved yet gets only its first ``auto_request_bootstrap``
+episodes until its glossary is reviewed (``bootstrap.py``, FR-15.12). It runs after a catalog sync, never inside one
+(FR-14.1), and uses the same planning as the admin's own requests, so what it did and did not do is readable in the
+same reasons.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import queue_policy as policy
+from .bootstrap import Bootstrap
 from .config import enabled_target_languages
 from .job_requests import JobRequests, Selection
 from .jobs import FILL
@@ -57,24 +60,47 @@ class AutoRequest:
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
         self._clock = clock
         self._last_capped = 0
+        self._last_held: dict[str, int] = {}
+        self._held: dict[str, int] = {}
+        self.bootstrap = Bootstrap(store, settings_source)
 
     def in_scope(self) -> list[CatalogEntry]:
         """The items the policy may request: episodes of series it is on for, and movies when it is on globally."""
         everywhere = bool(self._settings().get("auto_request"))
         targets = {str(t["code"]).lower() for t in enabled_target_languages(self._config())}
         chosen: list[CatalogEntry] = []
+        held: dict[str, int] = {}
         for series in self.store.catalog_entries(KIND_SERIES):
             stored = self.store.series_by_key(series.series_key)
             override = stored.auto_request if stored else ""
             if override == "on" or (override != "off" and everywhere):
-                chosen.extend(e for e in self.store.catalog_entries(KIND_EPISODE, parent_id=series.id)
-                              if targets & set(e.missing))
+                episodes = self.store.catalog_entries(KIND_EPISODE, parent_id=series.id)
+                wanted = [e for e in episodes if targets & set(e.missing)]
+                state = self.bootstrap.state(series, episodes, stored)
+                if state.locked:
+                    # Nothing is approved yet: only the first episodes now, the rest wait for the glossary (FR-15.12).
+                    kept = [e for e in wanted if e.id in state.allowed]
+                    if len(kept) < len(wanted):
+                        held[series.title or series.series_key] = len(wanted) - len(kept)
+                    wanted = kept
+                chosen.extend(wanted)
+        self._held = held
         if everywhere:
             chosen.extend(m for m in self.store.catalog_entries(KIND_MOVIE) if targets & set(m.missing))
         return chosen
 
     def run(self) -> AutoRequested:
+        self._held = {}
         entries = self.in_scope()
+        # Said again only when the numbers change, like the cap: the same "waiting" every few minutes is noise.
+        if self._held != self._last_held:
+            for title, count in self._held.items():
+                self.telemetry.event(
+                    "policy.bootstrap",
+                    reason=f"{title} has no approved glossary yet: {count} episode(s) wait for it to be reviewed (or Continue)",
+                    series=title, held=count,
+                )
+            self._last_held = dict(self._held)
         if not entries:
             return AutoRequested()
         plan = self.requests.plan(Selection(everything=True), FILL, automatic=True, entries=entries, measure=False)
