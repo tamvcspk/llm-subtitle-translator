@@ -266,6 +266,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         service = self.ctx.get("units")
         if service is None or not library_api.handles(parsed.path):
             return False
+        if method == "GET":
+            exported = library_api.download(service, parsed.path, urllib.parse.parse_qs(parsed.query))
+            if exported is not None:
+                status, name, text = exported
+                if status != 200:
+                    self.send_error_json(text, status=status)
+                else:
+                    self.send_text(text, "application/x-yaml; charset=utf-8", filename=name)
+                return True
         result = library_api.handle(service, method, parsed.path, urllib.parse.parse_qs(parsed.query), body)
         if result is None:
             return False
@@ -563,6 +572,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store" if no_store else "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_text(self, text: str, content_type: str, filename: str) -> None:
+        """Text served as a download (the name is the caller's, already reduced to ``[a-z0-9._-]``)."""
+        body = text.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 

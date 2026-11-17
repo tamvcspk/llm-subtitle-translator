@@ -251,6 +251,87 @@ export interface StyleOverview {
   /** What is in force once the language and the preset are laid under the owner's own style. */
   effective: Style;
   presets: Preset[];
+  /** The voice of each character that has one (`PUT …/cards`). */
+  cards: CharacterCard[];
+}
+
+/** The Voice of a character (UX §6.3): how they speak and where their style differs from the series'. */
+export interface CharacterCard {
+  name: string;
+  aliases?: string[];
+  speech?: string;
+  /** Older cards may hold `(to, form)` pairs; the form never writes them (the glossary's Forms of address do). */
+  address?: Array<{ to: string; form: string }>;
+  catchphrases?: string[];
+  samples?: string[];
+  style?: Style;
+  always?: boolean;
+}
+
+// -- glossary (`/api/series/{id}/glossary`, `/api/movies/{id}/glossary`) ------------------------------------------------
+
+/** A hard rule: where `source` shows up, the output says `target`. `from`/`until` are `S01E06` (or `S01E06 00:32:10`). */
+export interface GlossaryTerm {
+  source: string;
+  target: string;
+  aliases?: string[];
+  locked?: boolean;
+  note?: string;
+  from?: string;
+  until?: string;
+}
+
+/** The Name of a character: the translated name, gender and a short description. */
+export interface GlossaryCharacter {
+  name: string;
+  target?: string;
+  gender?: string;
+  description?: string;
+}
+
+/** Who calls whom how, as `self–other`. */
+export interface GlossaryAddress {
+  a: string;
+  b: string;
+  a_to_b?: string;
+  b_to_a?: string;
+  from?: string;
+  until?: string;
+  note?: string;
+}
+
+export interface GlossaryDoc {
+  version?: number;
+  target_lang?: string;
+  style?: string;
+  terms?: GlossaryTerm[];
+  characters?: GlossaryCharacter[];
+  address_rules?: GlossaryAddress[];
+}
+
+export interface GlossaryAnswer {
+  lang: string;
+  exists: boolean;
+  doc: GlossaryDoc;
+  yaml: string;
+  /** How many times it was saved; 0 when there is none. */
+  version: number;
+  stale_units: number;
+}
+
+/** A save, or a dry run of one (`saved: false`): what it flags stale. Nothing is retranslated. */
+export interface GlossarySave extends StyleImpact {
+  version: number | null;
+}
+
+export interface GlossaryRevision {
+  version: number;
+  /** Unix seconds. */
+  at: number;
+  note: "console" | "import" | "correction" | "restore" | "copy" | (string & {});
+  terms: number;
+  characters: number;
+  address_rules: number;
 }
 
 /** What saving would do to the translations made without it. Nothing is retranslated. */

@@ -2,8 +2,10 @@ import { Navigate, Route, Routes } from "react-router";
 import { Episodes } from "./pages/Episodes";
 import { Compare } from "./pages/Compare";
 import { Home } from "./pages/Home";
+import { MovieGlossary } from "./pages/MovieGlossary";
 import { Placeholder } from "./pages/Placeholder";
 import { Series } from "./pages/Series";
+import { SeriesCharacters, SeriesGlossary } from "./pages/series/GlossaryTab";
 import { SeriesStyle } from "./pages/series/StyleTab";
 import { Corrections } from "./pages/unit/Corrections";
 import { UnitStyle } from "./pages/unit/StyleTab";
@@ -25,12 +27,13 @@ export function AppRoutes() {
           <Route index element={<Navigate to="episodes" replace />} />
           <Route path="episodes" element={<Episodes />} />
           <Route path="style" element={<SeriesStyle />} />
-          <Route path="glossary" element={<Placeholder title="Glossary" note="Terms, forms of address and history: later in P12b." />} />
-          <Route path="characters" element={<Placeholder title="Characters" note="Character cards: later in P12b." />} />
+          <Route path="glossary" element={<SeriesGlossary />} />
+          <Route path="characters" element={<SeriesCharacters />} />
           <Route path="context" element={<Placeholder title="Context" note="Story memory, Specials after and Extract facts: later in P12b." />} />
           <Route path="*" element={<Navigate to="episodes" replace />} />
         </Route>
         <Route path="unit/:id/compare/:version" element={<Compare />} />
+        <Route path="unit/:id/glossary" element={<MovieGlossary />} />
         <Route path="unit/:id" element={<Unit />}>
           <Route index element={<Navigate to="subtitles" replace />} />
           <Route path="subtitles" element={<Subtitles />} />

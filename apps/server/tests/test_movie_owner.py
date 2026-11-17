@@ -182,6 +182,26 @@ class MovieRoutingTests(unittest.TestCase):
         self.assertEqual(style("GET", f"/api/movies/{episode}/style")[0], 404)
         self.assertEqual(style("GET", "/api/movies/999/style")[0], 404)
 
+    def test_a_glossary_downloads_as_a_yaml_file_named_after_its_owner(self):
+        env = MovieEnv(self)
+        env.translate(1)
+        movie = env.translate_movie()
+        series = env.service.library.series_list()[0]["id"]
+        env.service.save_movie_glossary(movie, "vi", KYBER)
+
+        status, name, text = library_api.download(env.service, f"/api/movies/{movie}/glossary.yaml", {"lang": ["vi"]})
+        self.assertEqual((status, name), (200, "glossary-heat-vi.yaml"))
+        self.assertIn("Kyber crystal", text)
+        # The series has none yet: an empty file, as the page's own `yaml` is empty.
+        status, name, text = library_api.download(env.service, f"/api/series/{series}/glossary.yaml", {"lang": ["vi"]})
+        self.assertEqual((status, text), (200, ""))
+        self.assertTrue(name.startswith("glossary-") and name.endswith("-vi.yaml"), name)
+
+        self.assertEqual(library_api.download(env.service, f"/api/movies/{movie}/glossary.yaml", {})[0], 400)  # lang
+        self.assertEqual(library_api.download(env.service, "/api/movies/999/glossary.yaml", {"lang": ["vi"]})[0], 404)
+        self.assertEqual(library_api.download(env.service, f"/api/movies/{env.unit(1)}/glossary.yaml", {"lang": ["vi"]})[0], 404)
+        self.assertIsNone(library_api.download(env.service, f"/api/movies/{movie}/glossary", {"lang": ["vi"]}))
+
     def test_the_movie_paths_are_claimed_by_the_routers_that_serve_them(self):
         for path in ("/api/movies/3/glossary", "/api/movies/3/glossary/history", "/api/movies/3/glossary/restore"):
             self.assertTrue(library_api.handles(path), path)

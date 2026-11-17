@@ -136,6 +136,25 @@ ROUTES: list[tuple[str, str, Handler]] = [
 _COMPILED =[(method, re.compile(rf"^{pattern}/?$"), handler) for method, pattern, handler in ROUTES]
 
 
+_EXPORT = re.compile(r"^/api/(series|movies)/(\d+)/glossary\.yaml/?$")
+
+
+def download(service: UnitService, path: str, query: Query) -> tuple[int, str, str] | None:
+    """``GET /api/{series|movies}/{id}/glossary.yaml?lang=``: the glossary as a file a link can fetch (no ``blob:``).
+    Returns ``(status, file name, YAML text)``, or ``(status, "", message)`` for an error; ``None`` when the path is
+    not this route."""
+    match = _EXPORT.match(path)
+    if match is None:
+        return None
+    try:
+        name, text = service.glossary_export(match[1], int(match[2]), _glossary_lang(query))
+    except LookupError as exc:
+        return 404, "", str(exc.args[0]) if exc.args else "not found"
+    except ValueError as exc:
+        return 400, "", str(exc)
+    return 200, name, text
+
+
 def handles(path: str) -> bool:
     return path.startswith(("/api/library/", "/api/units/", "/api/series/", "/api/movies/"))
 

@@ -1,4 +1,18 @@
 # Unreleased
+- **P12b: Glossary and Characters in `apps/web`, and Movie Glossary.** The **Glossary** tab of a series
+  (`#/series/:id/glossary`) edits Terms (source, target, Locked, note, From/Until episode) and Forms of address (A calls B, B
+  calls A, From/Until) as cards; fields the form does not edit (aliases, the characters, `style`) are sent back as they were.
+  "Saving flags N episodes stale." is counted live from a dry run and **Save** asks only when N > 0; a glossary the worker
+  refuses shows the path it names (`terms[0].from: …`) and keeps Save off. Bottom sheets: **History** (Restore asks first),
+  **Copy from another series** (Merge or Replace), **Import YAML** (paste or choose a file, live impact, a broken file is
+  refused with its path, an empty text cannot be imported) and **Export YAML** (a server link plus **Copy YAML**; if the
+  clipboard is blocked the text is selected instead). The **Characters** tab (`#/series/:id/characters`) shows one card per
+  character: **Name** (an entry of the glossary's `characters`) and **Voice** (the character card), forms of address read only
+  with a link to the glossary. Add/Edit writes both halves (two requests, the impact is the sum; a half is written only when it
+  exists or was filled in), Delete removes the voice and then the name. A movie's **Movie Glossary →** link in the Unit header
+  opens `#/unit/:id/glossary` (no From/Until, no Copy). Backend: `GET /api/series/{id}/glossary.yaml?lang=` and
+  `GET /api/movies/{unit_id}/glossary.yaml?lang=` serve the saved glossary as a file download (`Content-Disposition`), so the
+  console never needs a `blob:` link.
 - **P12b: Compare in `apps/web`** (`#/unit/:id/compare/:version`). The current translation against a candidate, cue by cue,
   differing cues only by default ("48 of 342"), a "Pick variant" box on each, and a sticky bar ("Selected 12 from variant, 330 kept
   from current"). **Apply picked cues** records a verdict on every differing cue (picked: variant, the rest: current) and

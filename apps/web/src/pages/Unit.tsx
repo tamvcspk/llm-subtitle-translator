@@ -106,6 +106,15 @@ export function Unit() {
           <IconChevronLeft size={16} /> {back.label}
         </Anchor>
         <Title order={2}>{unitTitle(data)}</Title>
+        {data.series_id === null && target && (
+          <Anchor
+            component={Link}
+            to={`/unit/${data.id}/glossary?lang=${encodeURIComponent(target.lang)}`}
+            style={{ display: "inline-flex", alignItems: "center", minHeight: 44, alignSelf: "flex-start" }}
+          >
+            Movie Glossary →
+          </Anchor>
+        )}
       </Stack>
 
       {data.targets.length > 1 && (

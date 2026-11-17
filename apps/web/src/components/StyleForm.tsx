@@ -20,7 +20,7 @@ import { ConfirmSheet } from "./ConfirmSheet";
 
 export type StyleTarget = StyleOwner | { kind: "episode"; id: number };
 
-function AxisControl({ axis, style, effective, onChange }: { axis: Axis; style: Style; effective: Style; onChange: (style: Style) => void }) {
+export function AxisControl({ axis, style, effective, onChange }: { axis: Axis; style: Style; effective: Style; onChange: (style: Style) => void }) {
   const labelId = `axis-${axis.key}`;
   return (
     <Stack gap={4}>

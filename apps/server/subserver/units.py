@@ -12,6 +12,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -973,6 +974,14 @@ class UnitService:
         if not dry_run:
             saved = self.glossaries.save(owner.kind, owner.key, lang, parsed, note=note)
         return {"ok": True, "saved": not dry_run, "version": saved.version if saved else None, **impact}
+
+    def glossary_export(self, kind: str, owner_id: int, lang: str) -> tuple[str, str]:
+        """``(file name, YAML text)`` of a series' (``kind`` ``series``) or a movie's glossary, for a download link.
+        A glossary that is not stored exports as an empty text, as ``GET …/glossary`` does."""
+        owner = self.library.movie_owner(owner_id) if kind == "movies" else self.library.series_owner(owner_id)
+        slug = re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", owner.title or "").encode("ascii", "ignore").decode().lower()).strip("-")
+        code = re.sub(r"[^A-Za-z0-9_-]+", "", lang) or "xx"
+        return f"glossary-{slug or 'untitled'}-{code}.yaml", self.glossaries.read_text(owner.kind, owner.key, lang)
 
     def owner_glossary_history(self, owner: Owner, lang: str) -> dict[str, Any]:
         """What each save replaced, newest first (the history that stands in for the old backups)."""

@@ -719,6 +719,12 @@ validated (`400` names the offending path, for example `terms[0]: missing requir
 replaces goes to the history. Reply `{"ok", "saved", "version", "stale_now", "stale_after", "would_stale"}`; with
 `dry_run` nothing is stored. Saving the same glossary again changes nothing.
 
+### GET /api/series/{id}/glossary.yaml?lang=
+The saved glossary as a file: `Content-Type: application/x-yaml`, `Content-Disposition: attachment; filename="glossary-<title>-<lang>.yaml"`
+(the title reduced to `a-z0-9-`), so a plain link downloads it (the console never uses `blob:`). A series without a glossary
+in that language gives an empty file. `lang` is required (`400`); `404` for an unknown series. A movie has the same at
+`GET /api/movies/{unit_id}/glossary.yaml?lang=`.
+
 ### GET /api/series/{id}/glossary/history?lang=
 What each save replaced, newest first: `{"lang", "items": [{"version", "at", "note", "terms", "characters", "address_rules"}]}`.
 `note` says what made the replacing save: `console`, `import`, `correction`, `restore` or `copy`. The count kept per

@@ -5,11 +5,16 @@ import type {
   AuthMe,
   CatalogOverview,
   CatalogStatus,
+  CharacterCard,
   CompareAnswer,
   Correction,
   CuesPage,
   DiffAnswer,
   Estimate,
+  GlossaryAnswer,
+  GlossaryDoc,
+  GlossaryRevision,
+  GlossarySave,
   JobsAnswer,
   JobsSelector,
   LibraryUnits,
@@ -390,6 +395,7 @@ function useRefreshStyle() {
   return () =>
     Promise.all([
       client.invalidateQueries({ queryKey: ["style"] }),
+      client.invalidateQueries({ queryKey: ["glossary"] }),
       client.invalidateQueries({ queryKey: ["catalog"] }),
       client.invalidateQueries({ queryKey: ["library"] }),
       client.invalidateQueries({ queryKey: ["unit"] }),
@@ -430,6 +436,124 @@ export interface PreviewRequest {
 export function usePreviewStyle(owner: StyleOwner) {
   return useMutation({
     mutationFn: (request: PreviewRequest) => api<StylePreview>(`${ownerPath(owner)}/style/preview`, { method: "POST", body: request }),
+  });
+}
+
+// -- glossary and characters ---------------------------------------------------------------------------------------
+
+export function useGlossary(owner: StyleOwner | null, lang: string) {
+  return useQuery({
+    queryKey: ["glossary", owner, lang] as const,
+    queryFn: ({ signal }) => api<GlossaryAnswer>(`${ownerPath(owner!)}/glossary?lang=${encodeURIComponent(lang)}`, { signal }),
+    enabled: owner !== null && lang !== "",
+  });
+}
+
+/** A glossary as the form holds it, or as YAML text pasted into Import. */
+export type GlossaryBody = { doc: GlossaryDoc } | { yaml: string };
+
+/** What saving this glossary would flag stale: a dry run that counts, stores nothing and costs no model call (UX §6.2). A glossary the worker refuses is an error that names the path. */
+export function useGlossaryDryRun(owner: StyleOwner, lang: string, body: GlossaryBody | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["glossary-impact", owner, lang, body] as const,
+    queryFn: ({ signal }) =>
+      api<GlossarySave>(`${ownerPath(owner)}/glossary?lang=${encodeURIComponent(lang)}`, {
+        method: "PUT",
+        body: { ...body, dry_run: true },
+        signal,
+      }),
+    enabled: enabled && body !== null,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+export function useSaveGlossary(owner: StyleOwner, lang: string) {
+  const refresh = useRefreshStyle();
+  return useMutation({
+    mutationFn: (body: GlossaryBody) =>
+      api<GlossarySave>(`${ownerPath(owner)}/glossary?lang=${encodeURIComponent(lang)}`, { method: "PUT", body }),
+    onSettled: () => void refresh(),
+  });
+}
+
+export function useGlossaryHistory(owner: StyleOwner, lang: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["glossary", owner, lang, "history"] as const,
+    queryFn: ({ signal }) =>
+      api<{ lang: string; items: GlossaryRevision[] }>(`${ownerPath(owner)}/glossary/history?lang=${encodeURIComponent(lang)}`, { signal }),
+    enabled,
+    gcTime: 0,
+  });
+}
+
+/** Put an earlier state back as a new save; the one it replaces goes to the history, so this can be undone. */
+export function useRestoreGlossary(owner: StyleOwner, lang: string) {
+  const refresh = useRefreshStyle();
+  return useMutation({
+    mutationFn: (version: number) =>
+      api<{ ok: boolean; version: number; restored: number }>(`${ownerPath(owner)}/glossary/restore`, { method: "POST", body: { lang, version } }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** Copy another series' glossary into this one: a copy, not a link (series only; a movie has no copy). */
+export function useCopyGlossary(seriesId: number, lang: string) {
+  const refresh = useRefreshStyle();
+  return useMutation({
+    mutationFn: (args: { from_series: number; merge: boolean }) =>
+      api<{ ok: boolean; version: number; from: string }>(`/api/series/${seriesId}/glossary/copy`, { method: "POST", body: { lang, ...args } }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** What saving a card would flag stale; `replaces` is the name it had when it is renamed. */
+export function useCardImpact(owner: StyleOwner, lang: string, request: { card: CharacterCard; replaces?: string } | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["card-impact", owner, lang, request] as const,
+    queryFn: ({ signal }) =>
+      api<StyleImpact>(`${ownerPath(owner)}/cards?lang=${encodeURIComponent(lang)}`, {
+        method: "PUT",
+        body: { ...request, dry_run: true },
+        signal,
+      }),
+    enabled: enabled && request !== null,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/** Save a character: its Name goes into the glossary and its Voice into its card, one request each (UX §6.3). */
+export function useSaveCharacter(owner: StyleOwner, lang: string) {
+  const refresh = useRefreshStyle();
+  return useMutation({
+    mutationFn: async (parts: { glossary: GlossaryDoc | null; card: { card: CharacterCard; replaces?: string } | null }) => {
+      if (parts.glossary) {
+        await api<GlossarySave>(`${ownerPath(owner)}/glossary?lang=${encodeURIComponent(lang)}`, { method: "PUT", body: { doc: parts.glossary } });
+      }
+      if (parts.card) {
+        await api<StyleImpact>(`${ownerPath(owner)}/cards?lang=${encodeURIComponent(lang)}`, { method: "PUT", body: parts.card });
+      }
+    },
+    onSettled: () => void refresh(),
+  });
+}
+
+/** Delete a character from both places it lives in. */
+export function useDeleteCharacter(owner: StyleOwner, lang: string) {
+  const refresh = useRefreshStyle();
+  return useMutation({
+    mutationFn: async (parts: { glossary: GlossaryDoc | null; card: string | null }) => {
+      if (parts.card !== null) {
+        await api<StyleImpact>(`${ownerPath(owner)}/cards/delete?lang=${encodeURIComponent(lang)}`, { method: "POST", body: { name: parts.card } });
+      }
+      if (parts.glossary) {
+        await api<GlossarySave>(`${ownerPath(owner)}/glossary?lang=${encodeURIComponent(lang)}`, { method: "PUT", body: { doc: parts.glossary } });
+      }
+    },
+    onSettled: () => void refresh(),
   });
 }
 
