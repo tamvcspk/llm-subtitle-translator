@@ -110,7 +110,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 return False
             return True
 
-        # Cookie session (browser). Writes must come from this very host (CSRF on top of SameSite=Strict).
+        # Cookie session (browser). Writes must come from this very host: this is the CSRF guard, and the only one
+        # when CONSOLE_COOKIE_SAMESITE=none lets the cookie travel with a request from another site.
         cookie_token = console_auth.session_token(self.headers.get("Cookie")) if sessions is not None else None
         resolved = sessions.resolve(cookie_token) if sessions is not None else None
         if resolved:
@@ -172,8 +173,16 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def end_headers(self) -> None:
         token = getattr(self, "refreshed_token", None)
         if token:
-            self.send_header("Set-Cookie", console_auth.session_cookie(token, secure=self.is_https()))
+            self.send_header("Set-Cookie", self.session_cookie(token))
         super().end_headers()
+
+    def session_cookie(self, token: str, max_age: int | None = None) -> str:
+        """The session cookie as this deployment wants it (``CONSOLE_COOKIE_SAMESITE``, ``Secure`` behind HTTPS)."""
+        auth = getattr(self.server, "auth", None)
+        extra = {} if max_age is None else {"max_age": max_age}
+        return console_auth.session_cookie(
+            token, secure=self.is_https(), same_site=getattr(auth, "cookie_same_site", "strict"), **extra,
+        )
 
     def is_https(self) -> bool:
         # TLS ends at a reverse proxy; trust its header only to add the Secure flag.
@@ -206,7 +215,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         throttle.success(address)
         token = sessions.create(auth.name)
         self.send_json({"ok": True, "user": auth.name},
-                       headers={"Set-Cookie": console_auth.session_cookie(token, secure=self.is_https())})
+                       headers={"Set-Cookie": self.session_cookie(token)})
 
     def api_change_password(self, body: dict[str, Any]) -> None:
         """POST /api/auth/password: the caller proves the current password; every session then ends."""
@@ -244,7 +253,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if sessions is not None:
             sessions.revoke_all()
             if self.auth_via == "session":  # the person who changed it stays signed in
-                headers["Set-Cookie"] = console_auth.session_cookie(sessions.create(auth.name), secure=self.is_https())
+                headers["Set-Cookie"] = self.session_cookie(sessions.create(auth.name))
         logging.info("web %s - console password changed; all sessions ended", address)
         self.send_json({"ok": True}, headers=headers)
 
@@ -446,7 +455,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 if sessions is not None:
                     sessions.revoke(console_auth.session_token(self.headers.get("Cookie")))
                 self.refreshed_token = None
-                self.send_json({"ok": True}, headers={"Set-Cookie": console_auth.session_cookie("", secure=self.is_https(), max_age=0)})
+                self.send_json({"ok": True}, headers={"Set-Cookie": self.session_cookie("", max_age=0)})
             elif parsed.path == "/api/settings":
                 self.settings_service.save(body)  # live at once: the worker is a subscriber (FR-20.1)
                 self.send_json(self.settings_service.public(self.live_settings()))

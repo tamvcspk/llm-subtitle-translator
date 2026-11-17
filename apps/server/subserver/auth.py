@@ -88,6 +88,8 @@ class ConsoleAuth:
     user: str = field(default="", repr=False)
     password: str = field(default="", repr=False)
     accounts: Store | None = field(default=None, repr=False, compare=False)
+    # `strict` (the default) or `none`: see `session_cookie`. From CONSOLE_COOKIE_SAMESITE, never from the settings table.
+    cookie_same_site: str = "strict"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str], store: Store | None = None) -> "ConsoleAuth":
@@ -95,8 +97,12 @@ class ConsoleAuth:
             return cls(enabled=False)
         user = env.get("CONSOLE_USER") or ""
         password = env.get("CONSOLE_PASSWORD") or ""
+        asked = (env.get("CONSOLE_COOKIE_SAMESITE") or "").strip().lower()
+        same_site = "none" if asked == "none" else "strict"
+        if asked not in {"", "strict", "none"}:
+            logging.warning("CONSOLE_COOKIE_SAMESITE=%r is not 'strict' or 'none'; using 'strict'.", asked)
         if store is None:
-            return cls(enabled=True, user=user, password=password)
+            return cls(enabled=True, user=user, password=password, cookie_same_site=same_site)
         reset = _flag(env.get("CONSOLE_PASSWORD_RESET"))
         existing = store.auth_account()
         if user and password and (existing is None or reset):
@@ -112,7 +118,7 @@ class ConsoleAuth:
                 "CONSOLE_PASSWORD_RESET is set but CONSOLE_USER / CONSOLE_PASSWORD are not both set; "
                 "the stored account was left unchanged."
             )
-        return cls(enabled=True, accounts=store)
+        return cls(enabled=True, accounts=store, cookie_same_site=same_site)
 
     @property
     def name(self) -> str:
@@ -156,7 +162,13 @@ class ConsoleAuth:
                 "CONSOLE_AUTH=off: the web console and API accept requests without authentication. "
                 "Only run this on a trusted network."
             )
-        elif not self.configured:
+        elif self.cookie_same_site == "none":
+            logging.info(
+                "CONSOLE_COOKIE_SAMESITE=none: the session cookie is SameSite=None; Secure when a proxy sends "
+                "X-Forwarded-Proto: https, so the console can run in an iframe of another site. Over plain HTTP the "
+                "browser would refuse such a cookie, so it is SameSite=Lax there."
+            )
+        if self.enabled and not self.configured:
             logging.error(
                 "Console authentication is required but CONSOLE_USER / CONSOLE_PASSWORD are not both set; "
                 "the web console answers 503 until they are set. The queue worker is unaffected."
@@ -381,9 +393,14 @@ def session_token(cookie_header: str | None) -> str | None:
     return morsel.value if morsel else None
 
 
-def session_cookie(token: str, *, secure: bool, max_age: int = SESSION_TTL_SECONDS) -> str:
-    """Set-Cookie value; an empty token with max_age=0 clears the cookie."""
-    parts = [f"{SESSION_COOKIE}={token}", "Path=/", "HttpOnly", "SameSite=Strict", f"Max-Age={max_age}"]
+def session_cookie(token: str, *, secure: bool, max_age: int = SESSION_TTL_SECONDS, same_site: str = "strict") -> str:
+    """Set-Cookie value; an empty token with max_age=0 clears the cookie.
+
+    ``same_site="none"`` lets the console run in an iframe of another site (Organizr on another host, UX 7). A browser
+    only keeps a ``SameSite=None`` cookie that is ``Secure``, so over plain HTTP it falls back to ``Lax`` (which still
+    works when the page and the frame are on one site); writes are guarded by the ``Origin`` check either way."""
+    mode = "None" if same_site == "none" and secure else "Lax" if same_site == "none" else "Strict"
+    parts = [f"{SESSION_COOKIE}={token}", "Path=/", "HttpOnly", f"SameSite={mode}", f"Max-Age={max_age}"]
     if secure:
         parts.append("Secure")
     return "; ".join(parts)

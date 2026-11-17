@@ -10,6 +10,7 @@ Copy `.env.example` to `.env` and edit values for your host.
 | `CONSOLE_PASSWORD` | First run | empty | Initial password. Stored only as a scrypt hash in `app.db`; after that the password is changed in Settings and this variable is ignored. Never stored in `config.json`, never returned by the API. |
 | `CONSOLE_PASSWORD_RESET` | No | empty | Set to `1` together with `CONSOLE_USER` / `CONSOLE_PASSWORD` and restart to overwrite the stored account (forgotten password). Remove it afterwards: while it is set, every restart resets the account again. |
 | `CONSOLE_AUTH` | No | empty | Set to `off` to disable authentication. Any other value keeps it on. |
+| `CONSOLE_COOKIE_SAMESITE` | No | empty (`strict`) | `none` lets the console run in an iframe of another site (see "Console Authentication"). Anything else is `strict`. |
 | `GEMINI_API_KEY` | First run | empty | Primary Gemini API key. **Seeds the stored key on the first run only**; afterwards keys are managed in the web console and this variable is ignored (see [Settings and API keys](#settings-and-api-keys)). |
 | `GEMINI_API_KEY1` | First run | empty | Alias for the primary Gemini key (seed). |
 | `GEMINI_API_KEY2` | First run | empty | Optional second key (seed); used when the first key's quota is exhausted or the first key is refused. |
@@ -68,6 +69,13 @@ Every request needs one of them, except `GET /login` and `POST /api/auth/login`.
   sessions survive a worker restart; changing or resetting the password rotates
   the secret and ends every session. Signing out also blocks that cookie until
   the worker restarts. Writes made with a cookie must carry a matching `Origin`.
+- **In an iframe of Organizr.** `SameSite=Strict` works while Organizr and the console are on the **same site** (the same
+  host, a different port is still the same site). On another host Safari does not send the cookie into the frame and every
+  call answers `401`. Set `CONSOLE_COOKIE_SAMESITE=none` and put the console behind HTTPS with a proxy that sends
+  `X-Forwarded-Proto: https`: the cookie is then `SameSite=None; Secure`. Over plain HTTP a browser refuses
+  `SameSite=None`, so the cookie falls back to `SameSite=Lax` (no better than `Strict` across sites). With `none` the
+  `Origin` check on writes is the only guard against a request from another site; it refuses a write whose `Origin` is not
+  the console's own host. This is read from the environment at start, never from Settings.
 
 Credentials are compared in constant time and are never logged. Bazarr does not call the worker
 (the worker pulls from Bazarr), so Bazarr needs no credentials. Neither the form nor Basic Auth is encrypted; keep

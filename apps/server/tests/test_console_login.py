@@ -181,6 +181,27 @@ class HelperTests(unittest.TestCase):
         self.assertIn("Secure", session_cookie("tok", secure=True))
         self.assertIn("Max-Age=0", session_cookie("", secure=False, max_age=0))
 
+    def test_the_cookie_can_be_asked_to_cross_sites_but_only_where_a_browser_would_keep_it(self):
+        # In an iframe of another site (Organizr on another host) only SameSite=None; Secure is sent back (UX 7).
+        behind_https = session_cookie("tok", secure=True, same_site="none")
+        self.assertIn("SameSite=None", behind_https)
+        self.assertIn("Secure", behind_https)
+        self.assertIn("HttpOnly", behind_https)
+        # Over plain HTTP a browser drops SameSite=None, so the cookie says Lax instead (one site still works).
+        plain = session_cookie("tok", secure=False, same_site="none")
+        self.assertIn("SameSite=Lax", plain)
+        self.assertNotIn("None", plain)
+        self.assertNotIn("Secure", plain)
+        self.assertIn("SameSite=Strict", session_cookie("tok", secure=True, same_site="strict"))
+        self.assertIn("SameSite=Strict", session_cookie("tok", secure=True, same_site="anything else"))
+
+    def test_the_setting_comes_from_the_environment_and_a_wrong_value_is_strict(self):
+        self.assertEqual(ConsoleAuth.from_env({"CONSOLE_USER": USER, "CONSOLE_PASSWORD": PASSWORD}).cookie_same_site, "strict")
+        env = {"CONSOLE_USER": USER, "CONSOLE_PASSWORD": PASSWORD, "CONSOLE_COOKIE_SAMESITE": " None "}
+        self.assertEqual(ConsoleAuth.from_env(env).cookie_same_site, "none")
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(ConsoleAuth.from_env({**env, "CONSOLE_COOKIE_SAMESITE": "lax"}).cookie_same_site, "strict")
+
     def test_session_token_parsing(self):
         self.assertEqual(session_token(f"a=b; {SESSION_COOKIE}=xyz; c=d"), "xyz")
         self.assertIsNone(session_token("a=b"))
@@ -301,6 +322,28 @@ class LoginServerTests(unittest.TestCase):
     def test_secure_flag_is_added_behind_https_proxy(self):
         _, headers, _ = self.login(headers={"X-Forwarded-Proto": "https"})
         self.assertIn("Secure", headers["Set-Cookie"])
+
+    def test_every_cookie_the_server_sets_follows_the_same_site_setting(self):
+        import dataclasses
+
+        self.server.auth = dataclasses.replace(self.server.auth, cookie_same_site="none")
+        https = {"X-Forwarded-Proto": "https"}
+        _, headers, _ = self.login(headers=https)
+        issued = headers["Set-Cookie"]
+        self.assertIn("SameSite=None", issued)
+        self.assertIn("Secure", issued)
+        cookie = issued.split(";", 1)[0]
+        # The guard that stays is the Origin check: a write from another site is refused with the cookie in hand.
+        status, _, _ = self.request(
+            "POST", "/api/queue/stop", {"Cookie": cookie, "Origin": "https://evil.example", "Content-Type": "application/json"}, "{}"
+        )
+        self.assertEqual(status, 403)
+        _, cleared, _ = self.request("POST", "/api/auth/logout", {"Cookie": cookie, "Content-Type": "application/json", **https}, "{}")
+        self.assertIn("SameSite=None", cleared["Set-Cookie"])
+        self.assertIn("Max-Age=0", cleared["Set-Cookie"])
+        # Plain HTTP: a browser would drop SameSite=None, so the cookie asks for Lax.
+        _, plain, _ = self.login()
+        self.assertIn("SameSite=Lax", plain["Set-Cookie"])
 
     def test_wrong_credentials_are_401_without_cookie(self):
         for user, password in [(USER, "nope"), ("nobody", PASSWORD), ("", "")]:

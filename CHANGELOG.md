@@ -1,4 +1,9 @@
 # Unreleased
+- **Console in an iframe of another site: `CONSOLE_COOKIE_SAMESITE`.** The session cookie stays `SameSite=Strict` by default,
+  which works while Organizr and the console share a site. With `CONSOLE_COOKIE_SAMESITE=none` it is `SameSite=None; Secure`
+  behind HTTPS (a proxy that sends `X-Forwarded-Proto: https`) and `SameSite=Lax` over plain HTTP, where a browser would
+  drop `None`. The login, the sliding refresh, the sign-out and a password change all set it the same way. The `Origin`
+  check on writes is then the only CSRF guard; a test shows a write from another site is still refused.
 - **P12b: Backups and Logs in `apps/web`** (`#/backups`, `#/logs`, reached from Settings → Maintenance). Backups: **Create
   backup** (keys are left out unless "Include keys" is ticked), **Import backup…** from a zip (a question first, the file is
   sent as it is, and the answer says the settings you had are kept in the `pre-import` backup), and the list with a download

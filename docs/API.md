@@ -31,7 +31,8 @@ curl -u "$CONSOLE_USER:$CONSOLE_PASSWORD" http://<host>:6789/api/status
 `{"user": "...", "password": "..."}` → `200 {"ok": true, "user": "..."}` and a
 `Set-Cookie: gst_session=...; HttpOnly; SameSite=Strict; Max-Age=604800` (plus
 `Secure` when the request carries `X-Forwarded-Proto: https`). Wrong
-credentials: `401`, no cookie. A session expires after 7 days without use.
+credentials: `401`, no cookie. A session expires after 7 days without use. With `CONSOLE_COOKIE_SAMESITE=none` (a console in
+an iframe of another site) the cookie is `SameSite=None; Secure` behind HTTPS and `SameSite=Lax` over plain HTTP.
 
 ### POST /api/auth/logout
 
