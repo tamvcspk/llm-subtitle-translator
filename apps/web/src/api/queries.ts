@@ -478,6 +478,119 @@ export function usePreviewStyle(owner: StyleOwner) {
   });
 }
 
+// -- settings --------------------------------------------------------------------------------------------------------
+
+/** `GET /api/settings`: every setting by its API name; a key is `**********` with `<field>_configured`, `_last4` and `_status`. */
+export type SettingsAnswer = Record<string, unknown>;
+
+export function useSettings() {
+  return useQuery({
+    queryKey: ["settings"] as const,
+    queryFn: ({ signal }) => api<SettingsAnswer>("/api/settings", { signal }),
+  });
+}
+
+/** Save some settings (a group's own, and a key typed in a box). The answer is the new `GET /api/settings`; it is live at once. */
+export function useSaveSettings(onSaved?: () => void) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => api<SettingsAnswer>("/api/settings", { method: "POST", body }),
+    onSuccess: (answer) => {
+      client.setQueryData(["settings"], answer);
+      onSaved?.(); // the form starts again from the new values: whoever holds "Saved" must not be the form itself
+      // A different provider, address or key changes the list of models, the health of the keys and what the banners say.
+      void client.invalidateQueries({ queryKey: ["models"] });
+      void client.invalidateQueries({ queryKey: keys.status });
+      void client.invalidateQueries({ queryKey: keys.queue });
+    },
+  });
+}
+
+export interface ModelChoice {
+  id: string;
+  name: string;
+}
+
+/** The models the provider in use offers (a bundled list when Gemini cannot be asked). */
+export function useModels(provider: string, baseUrl: string) {
+  return useQuery({
+    queryKey: ["models", provider, baseUrl] as const,
+    queryFn: ({ signal }) => api<{ items: ModelChoice[] }>("/api/gemini-models", { signal }),
+    staleTime: 60_000,
+  });
+}
+
+export interface LanguageChoice {
+  code: string;
+  name: string;
+  language: string;
+}
+
+/** The languages Bazarr supports; empty and an error when Bazarr cannot be reached. */
+export function useLanguages() {
+  return useQuery({
+    queryKey: ["languages"] as const,
+    queryFn: ({ signal }) => api<{ items: LanguageChoice[] }>("/api/languages", { signal }),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+export interface ConnectionResult {
+  ok: boolean;
+  kind: string;
+  message: string;
+  auth_failed?: boolean;
+}
+
+/** Try a key (a typed one, or the stored one when the box is blank) without saving it; the stored key's status follows the answer. */
+export function useTestConnection() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => api<ConnectionResult>("/api/test-connection", { method: "POST", body }),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ["settings"] });
+      void client.invalidateQueries({ queryKey: keys.status });
+    },
+  });
+}
+
+export interface CleanupGroup {
+  name: string;
+  enabled: boolean;
+  window: number | null;
+  files: number;
+  rows: number;
+  bytes: number;
+  error: string;
+}
+
+export interface CleanupAnswer {
+  dry_run: boolean;
+  at: number;
+  groups: CleanupGroup[];
+  total: { files: number; rows: number; bytes: number };
+  media_temp: string[];
+}
+
+/** **Clean up now**: `dry_run: true` only counts; the worker deletes only when the body says `false` in so many words. */
+export function useCleanup() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (dryRun: boolean) => api<CleanupAnswer>("/api/cleanup", { method: "POST", body: { dry_run: dryRun } }),
+    onSuccess: (answer) => {
+      if (!answer.dry_run) void client.invalidateQueries();
+    },
+  });
+}
+
+/** Change the console password: every session ends, and this one is given a fresh cookie. */
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (body: { current: string; new: string }) => api<{ ok: boolean }>("/api/auth/password", { method: "POST", body }),
+  });
+}
+
 // -- story memory of a series -----------------------------------------------------------------------------------------
 
 export function useSeriesMemory(storedId: number | null | undefined) {

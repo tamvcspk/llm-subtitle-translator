@@ -1,4 +1,14 @@
 # Unreleased
+- **P12b: Settings in `apps/web`** (`#/settings`). Seven folding groups (Connections and Translation open), each with its own
+  Save and *Unsaved changes*; a Save sends only the keys of its group and the page shows what the worker answered. Fields
+  follow the types and limits of UX Appendix B: a number below its minimum is refused before it is sent, the two numbers the
+  worker keeps as text stay text, `log_level` and `log_prompt_bodies` are choices, models come from the provider's list (Strong,
+  Research, Memory and Summarize can be emptied), the quota's midnight is a time zone. **Connections:** Bazarr's address, five
+  keys (last four characters and status; paste a new one, or **Test** the stored or the typed one), Gemini or
+  OpenAI-compatible with its Base URL. **Translation** lists the source and target languages (add from Bazarr's list; one of
+  each stays ticked); **Library** has the media roots; **Maintenance** has **Clean up now** (a preview, then Confirm) and the
+  way to Backups and Logs; **Security** changes the password. A half-filled group is kept in `sessionStorage` while the
+  person signs in again (never a typed key) and forgotten once it is saved or put back by hand.
 - **P12b: Activity in `apps/web`** (`#/activity`). Providers (state, usable, failures, reason, until), Model layers (done and
   failed per model, escalated, and how many days back the counts reach), the catalog with **Sync now**, and the jobs in five
   tabs named **Requested · Running · Waiting · Failed · Done** with the real count on each (the list holds the latest 100 and

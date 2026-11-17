@@ -1,0 +1,168 @@
+/** The settings the console edits, by group (UX Appendix B). The names are the API's; the limits are the ones the worker clamps to. */
+
+export type FieldKind = "int" | "float" | "numtext" | "switch" | "choice" | "model" | "zone";
+
+export interface Field {
+  key: string;
+  label: string;
+  kind: FieldKind;
+  hint?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: Array<{ value: string; label: string }>;
+  /** `model`: the box can be emptied; `empty` says what an empty one means. */
+  empty?: string;
+}
+
+export type Values = Record<string, unknown>;
+
+export const TRANSLATION_FIELDS: Field[] = [
+  { key: "gst_model", label: "Default model", kind: "model", hint: "Does the work." },
+  { key: "gst_fallback_model", label: "Strong model", kind: "model", empty: "(none)", hint: "Takes hard jobs, outages and spent quota. Clear it to run on one model." },
+  { key: "research_model", label: "Research model", kind: "model", empty: "(same as Default)", hint: "Nothing calls it yet." },
+  { key: "gst_temperature", label: "Temperature", kind: "numtext", min: 0, max: 2, step: 0.1 },
+  { key: "gst_thinking_budget", label: "Thinking budget", kind: "numtext", min: 0, step: 128 },
+  { key: "gst_no_thinking", label: "No thinking", kind: "switch" },
+  { key: "gst_paid_quota", label: "Paid quota tier", kind: "switch" },
+  { key: "llm_max_input_tokens", label: "Max input tokens", kind: "int", min: 1000 },
+  { key: "llm_max_output_tokens", label: "Max output tokens", kind: "int", min: 256 },
+];
+
+export const LIBRARY_FIELDS: Field[] = [
+  { key: "catalog_sync_interval", label: "Sync every, seconds", kind: "int", min: 0, hint: "0 = only on the Sync now button." },
+  { key: "catalog_shrink_guard", label: "Ignore a read that shrinks by, %", kind: "int", min: 0, max: 100, hint: "0 = no guard." },
+  {
+    key: "auto_request",
+    label: "Auto-request",
+    kind: "switch",
+    hint: "Off by default. Translates missing items of chosen series without asking.",
+  },
+  { key: "auto_request_daily_cap", label: "Auto-request daily cap", kind: "int", min: 0, hint: "0 = no cap." },
+];
+
+export const QUEUE_FIELDS: Field[] = [
+  { key: "job_settle_seconds", label: "Settle window, seconds", kind: "int", min: 0 },
+  { key: "breaker_threshold", label: "Breaker threshold", kind: "int", min: 1 },
+  { key: "max_crashes", label: "Max crashes", kind: "int", min: 1 },
+  { key: "max_calls_per_job", label: "Max calls per job", kind: "int", min: 0, hint: "0 = no cap." },
+  { key: "max_calls_per_day", label: "Max calls per day", kind: "int", min: 0, hint: "0 = no cap." },
+  { key: "transient_retry_seconds", label: "Transient retry, seconds", kind: "int", min: 0 },
+  {
+    key: "quota_reset_tz",
+    label: "Provider quota resets at midnight in",
+    kind: "zone",
+    hint: "This is the provider's midnight (Gemini), not your local time zone.",
+  },
+];
+
+export const STORY_FIELDS: Field[] = [
+  { key: "memory_enabled", label: "Story memory", kind: "switch" },
+  { key: "memory_model", label: "Memory model", kind: "model", empty: "(same as Default)" },
+  { key: "summarize_model", label: "Summarize model", kind: "model", empty: "(same as Memory)" },
+  { key: "memory_gap_wait_seconds", label: "Gap wait, seconds", kind: "int", min: 0, hint: "0 = never wait." },
+  { key: "memory_budget_tokens", label: "Memory budget, tokens", kind: "int", min: 500 },
+  { key: "memory_recent_episodes", label: "Recent episodes", kind: "int", min: 0 },
+  { key: "few_shot_budget_tokens", label: "Few-shot budget, tokens", kind: "int", min: 0, hint: "0 = off." },
+  { key: "glossary_filter_threshold", label: "Filter terms above, terms", kind: "int", min: 0, hint: "0 = never filter." },
+  { key: "edit_coalesce_minutes", label: "Merge cue edits within, minutes", kind: "int", min: 0 },
+];
+
+export const MAINTENANCE_FIELDS: Field[] = [
+  {
+    key: "log_level",
+    label: "Log level",
+    kind: "choice",
+    options: ["DEBUG", "INFO", "WARNING", "ERROR"].map((value) => ({ value, label: value })),
+  },
+  {
+    key: "log_prompt_bodies",
+    label: "Keep prompt bodies",
+    kind: "choice",
+    options: [
+      { value: "all", label: "All" },
+      { value: "sample", label: "Sample" },
+      { value: "errors", label: "Errors only" },
+      { value: "off", label: "Off" },
+    ],
+  },
+  { key: "log_body_max_bytes", label: "Max body size, bytes", kind: "int", min: 1024 },
+  { key: "log_max_mb", label: "Max log size, MB", kind: "int", min: 0, hint: "0 = no limit." },
+  { key: "log_retention_days", label: "Keep logs, days", kind: "int", min: 0, hint: "0 = no limit." },
+  { key: "events_retention_days", label: "Keep events, days", kind: "int", min: 0, hint: "0 = forever." },
+  { key: "llm_cost_in_per_mtok", label: "Cost per million tokens in", kind: "float", min: 0, hint: "Only to estimate cost." },
+  { key: "llm_cost_out_per_mtok", label: "Cost per million tokens out", kind: "float", min: 0 },
+  { key: "retention_done_days", label: "Keep finished jobs, days", kind: "int", min: 0, hint: "0 = keep." },
+  { key: "retention_failed_days", label: "Keep failed jobs, days", kind: "int", min: 0, hint: "0 = keep." },
+  { key: "retention_versions_keep", label: "Keep versions per subtitle", kind: "int", min: 0, hint: "0 = keep all." },
+  { key: "retention_glossary_keep", label: "Keep glossary history", kind: "int", min: 0, hint: "0 = keep all." },
+];
+
+/** The keys of a group, in one place so a Save sends exactly them and nothing of another group. */
+export const keysOf = (fields: Field[]): string[] => fields.map((field) => field.key);
+
+export function pick(settings: Values, keys: readonly string[]): Values {
+  const out: Values = {};
+  for (const key of keys) out[key] = settings[key];
+  return out;
+}
+
+/** A number box that is empty or not a number: what the field's problem is, or `null` when it is fine. */
+export function fieldProblem(field: Field, value: unknown): string | null {
+  if (field.kind !== "int" && field.kind !== "float" && field.kind !== "numtext") return null;
+  const text = typeof value === "string" ? value.trim() : value;
+  if (text === "" || text === null || text === undefined) return "Enter a number";
+  const n = Number(text);
+  if (!Number.isFinite(n)) return "Enter a number";
+  if (field.kind === "int" && !Number.isInteger(n)) return "Use a whole number";
+  if (field.min !== undefined && n < field.min) return `At least ${field.min}`;
+  if (field.max !== undefined && n > field.max) return `At most ${field.max}`;
+  return null;
+}
+
+/** What goes in the body for a field: numbers stay numbers, except the two the worker stores as text. */
+export function toWire(field: Field, value: unknown): unknown {
+  if (field.kind === "numtext") return String(value).trim();
+  if (field.kind === "int") return Math.round(Number(value));
+  if (field.kind === "float") return Number(value);
+  if (field.kind === "model") return typeof value === "string" ? value.trim() : "";
+  return value;
+}
+
+/** Equal by what would be stored: `"0.70"` and `0.7` are the same temperature. */
+export function sameValue(field: Field | undefined, a: unknown, b: unknown): boolean {
+  if (field && (field.kind === "numtext" || field.kind === "int" || field.kind === "float")) {
+    const x = Number(a);
+    const y = Number(b);
+    return Number.isNaN(x) || Number.isNaN(y) ? a === b : x === y;
+  }
+  if (field?.kind === "model") return String(a ?? "").trim() === String(b ?? "").trim();
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+export interface LanguageEntry {
+  code: string;
+  language: string;
+  enabled: boolean;
+}
+
+/** Each kind of key the Connections group shows, with the field the API stores it in and the kind `test-connection` takes. */
+export const KEY_SLOTS: Array<{ field: string; label: string; kind: string }> = [
+  { field: "bazarr_api_key", label: "Bazarr", kind: "bazarr" },
+  { field: "tmdb_api_key", label: "TMDB", kind: "tmdb_api_key" },
+  { field: "gemini_api_key", label: "Gemini 1", kind: "gemini_api_key" },
+  { field: "gemini_api_key2", label: "Gemini 2", kind: "gemini_api_key2" },
+  { field: "openai_compat_api_key", label: "OpenAI-compatible", kind: "openai_compat_api_key" },
+];
