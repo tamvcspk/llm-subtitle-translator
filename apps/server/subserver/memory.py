@@ -260,11 +260,14 @@ class StoryMemory:
         job: dict[str, Any],
         settings: dict[str, Any],
         provider_for: ProviderFor,
+        extracted: list[int] | None = None,
     ) -> MemoryPlan:
         """Make sure every earlier unit has facts, wait out gaps, and build the context for ``unit``.
 
         Raises :class:`ContextGapError` while an earlier unit has no source subtitle and ``gap_wait``
         has not passed (never for an explicit retranslation, which runs with what exists).
+        ``extracted`` collects the ids of the units whose facts were extracted just now, also when the plan then
+        raises: it is what the proposal generators (P14) react to.
         """
         options = self.options(settings)
         series = self.units.get_series(unit.series_id)
@@ -278,6 +281,8 @@ class StoryMemory:
         gap_ids: list[int] = []
         for earlier in self.prior_units(unit, units, series):
             facts, how = self.ensure_facts(earlier, title, settings, provider_for)
+            if how == "extracted" and extracted is not None:
+                extracted.append(earlier.id)
             if facts is None:
                 missing.append(unit_label(earlier))
                 if how == "no-source":
@@ -296,7 +301,9 @@ class StoryMemory:
                     retry_at=retry_at, since=since, missing=gap, missing_ids=gap_ids,
                 )
 
-        own, _ = self.ensure_facts(unit, title, settings, provider_for)
+        own, how = self.ensure_facts(unit, title, settings, provider_for)
+        if how == "extracted" and extracted is not None:
+            extracted.append(unit.id)
         context = self._context(prior, own, series.id, unit.id, options, provider_for)
         self.facts.put_snapshot(context.fingerprint, context.sections)
         return MemoryPlan(context.sections, context.fingerprint, not missing, missing, context.compressed)
@@ -349,6 +356,13 @@ class StoryMemory:
             }
             for u in sorted(units, key=lambda u: (u.season or 0, u.episode or 0, u.id))
         ]
+
+    def story_facts(self, series_id: int) -> list[tuple[Unit, Facts]]:
+        """The stored facts of every unit of the main storyline, in story order (specials are outside it). Reads only:
+        the proposal generators (P14) work from what exists and never extract."""
+        units = self.units.list_units(series_id)
+        facts = self._stored(units)
+        return [(u, facts[u.id]) for u in self._chain(units) if u.id in facts]
 
     def preview(self, unit: Unit, settings: dict[str, Any] | None = None) -> dict[str, Any]:
         """The bundle ``unit`` would get from the facts stored now. Reads only: never extracts or compresses."""

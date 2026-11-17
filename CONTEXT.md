@@ -157,6 +157,11 @@ and applied the same way. It waits as `pending` until the admin accepts it (opti
 rejects it, or `auto_accept_*` applies it. Accepting writes the glossary and flags translations made without
 it stale, never retranslates; the same content is never proposed again once decided (its fingerprint).
 **Review** is the page that lists them, with a badge of the pending ones on the nav.
+The first generator (`proposals.py`, `FactsProposer`, with the pure `subcore.suggest`) reads the stored facts of a series:
+a pair of characters whose relationship the facts show becomes an `address_rule` per stretch of the story (`from`/`until`
+at the cue where it turned), a name in two or more episodes and not in the glossary a `term` (both `facts`), a character in
+two or more episodes a `character` with its card (`memory`). It runs after a job extracted facts, or on request, never
+fails the job, and does not ask again about what the inbox holds in any status.
 
 **Preset**:
 A genre's starting style (sitcom, drama, anime, documentary, kids), stored once and then

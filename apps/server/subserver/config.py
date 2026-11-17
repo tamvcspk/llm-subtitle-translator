@@ -97,11 +97,14 @@ CATALOG_INT_CONFIG_KEYS = {
 # What the machine proposes for the glossary (P13, FR-4.4): one switch per kind of suggestion, `auto_accept_*` means a
 # suggestion of that kind is applied the moment it is proposed (it stays in the review history and can be undone). A
 # `term` is applied only when two independent sources agree on it, whatever the switch says; address rules and
-# characters are the admin's call and stay off until the admin says otherwise. key -> default
+# characters are the admin's call and stay off until the admin says otherwise. `suggest_from_facts` (P14) lets the
+# worker look for such suggestions in the facts of the episodes it has just read (a few cheap calls, never failing the
+# job); off, only the admin's own request does. key -> default
 SUGGESTION_BOOL_CONFIG_KEYS = {
     "auto_accept_terms": True,
     "auto_accept_address_rules": False,
     "auto_accept_characters": False,
+    "suggest_from_facts": True,
 }
 # Logging and measurement (P5, FR-19). `log_prompt_bodies` is what is kept of the prompts and answers of model
 # calls: `off`, `errors` (failed calls only), `sample` (failed calls and one call in ten) or `all`.

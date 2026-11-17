@@ -359,8 +359,15 @@ The machine proposes terms, forms of address and characters; they wait in **Revi
 writes the glossary (see [API](API.md#review-suggestions-for-the-glossary-and-the-character-cards)). Settings → *Story and
 style*, live without a restart:
 
+- `suggest_from_facts` (default **on**): when a translation job has just read the facts of an episode (story memory on), the
+  worker looks in the facts of that series for forms of address, proper names in two or more episodes and characters, and puts
+  them in Review as `pending`. It is at most three cheap calls (the `extract` task: the Memory model, else the Default model;
+  counted in the call records as prompt `suggest-…`), made after the translation is published, and an error in it never fails
+  or delays the job. Anything already in Review (in any status) or in the glossary is not asked about again, so a run over
+  unchanged facts costs nothing. Off, only `POST /api/suggestions/generate` (your own request) does it.
 - `auto_accept_terms` (default **on**): a `term` is applied the moment it is proposed, but only when two independent sources
-  (different hosts) agree on it, so until a generator that cites sources exists every term waits for you.
+  (different hosts) agree on it, so until a generator that cites sources exists every term waits for you. A term found in the
+  facts has no such sources and always waits.
 - `auto_accept_address_rules` (default **off**): who calls whom how is your decision.
 - `auto_accept_characters` (default **off**).
 

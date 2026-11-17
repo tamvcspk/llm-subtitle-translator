@@ -74,6 +74,12 @@ export const STORY_FIELDS: Field[] = [
   { key: "glossary_filter_threshold", label: "Filter terms above, terms", kind: "int", min: 0, hint: "0 = never filter." },
   { key: "edit_coalesce_minutes", label: "Merge cue edits within, minutes", kind: "int", min: 0 },
   {
+    key: "suggest_from_facts",
+    label: "Suggest from new facts",
+    kind: "switch",
+    hint: "After a job reads a new episode, ask the Memory model for terms, forms of address and characters. They wait in Review.",
+  },
+  {
     key: "auto_accept_terms",
     label: "Auto-accept terms",
     kind: "switch",

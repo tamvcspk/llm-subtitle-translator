@@ -26,10 +26,10 @@ def _number(value: str | None, name: str) -> int | None:
         raise ValueError(f"{name} must be a number") from None
 
 
-def _series_id(body: dict[str, Any]) -> int:
+def _series_id(body: dict[str, Any], what: str = "accepting in bulk") -> int:
     value = _number(None if body.get("series_id") is None else str(body["series_id"]), "series_id")
     if value is None:
-        raise ValueError("series_id is required: accepting in bulk is always one series")
+        raise ValueError(f"series_id is required: {what} is always one series")
     return value
 
 
@@ -46,6 +46,10 @@ ROUTES: list[tuple[str, str, Handler]] = [
     # One series at a time, on purpose: the answer to "accept all" is never "accept every series".
     ("POST", r"/api/suggestions/bulk", lambda s, m, q, b: s.bulk(
         _series_id(b), lang=str(b.get("lang") or "") or None, expect=b.get("expect"), dry_run=bool(b.get("dry_run")),
+    )),
+    # Ask the facts generator for proposals (spends model calls unless `estimate_only`; the page puts it behind Estimate).
+    ("POST", r"/api/suggestions/generate", lambda s, m, q, b: s.generate(
+        _series_id(b, "generating"), str(b.get("lang") or ""), estimate_only=bool(b.get("estimate_only")),
     )),
     ("POST", r"/api/suggestions/(\d+)/accept", lambda s, m, q, b: s.accept(
         int(m[1]), payload=b.get("payload"), dry_run=bool(b.get("dry_run")),

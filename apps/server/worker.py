@@ -27,6 +27,7 @@ from subserver.console import ConsoleActions
 from subserver.glossaries import Glossaries
 from subserver.style_service import StyleService
 from subserver.styles import Styles
+from subserver.proposals import FactsProposer
 from subserver.suggestions import SuggestionService
 from subserver.library import Library, enrich_job_identity
 from subserver.memory import StoryMemory
@@ -300,9 +301,15 @@ def main() -> int:
     metadata = TmdbMetadata(http, cache, live_settings)
     memory = StoryMemory(store, store, settings_source=live_settings, media=media)
     library = Library(store, glossaries, versions, memory=memory, styles=styles)
+    suggestion_service = SuggestionService(store, library, settings_source=live_settings, telemetry=telemetry)
+    # What the machine proposes from the facts of the episodes it reads (P14): stored only through the one service.
+    proposer = FactsProposer(
+        memory, suggestion_service, settings_source=live_settings, provider_factory=provider_factory, telemetry=telemetry,
+    )
+    suggestion_service.generator = proposer
     attempt = TranslationAttempt(
         versions=versions, usage=store, provider_factory=provider_factory, library=library, memory=memory,
-        telemetry=telemetry,
+        telemetry=telemetry, proposals=proposer,
     )
     worker = QueueWorker(
         queue_dir=queue_dir, settings=settings, cache=cache, http=http, attempt=attempt,
@@ -322,7 +329,6 @@ def main() -> int:
         library, styles, metadata=metadata, settings_source=live_settings, provider_factory=provider_factory,
         telemetry=telemetry, usage=store,
     )
-    suggestion_service = SuggestionService(store, library, settings_source=live_settings, telemetry=telemetry)
     # The library as Bazarr lists it, what the admin asks for from it, and the policy that asks by itself (P10, ADR-10).
     job_requests = JobRequests(
         store, library, worker.queue, versions, config_source=settings_service.app_config,

@@ -24,6 +24,7 @@ from subcore.providers import (
     RateLimited,
     Unavailable,
 )
+from subcore.suggest import SUGGEST_PROMPT_VERSION
 from subcore.translate import TranslationError, run
 from subcore.translate.engine import TranslationResult
 from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
@@ -34,13 +35,14 @@ from .gather import gather
 from .library import Library
 from .memory import StoryMemory
 from .ports import MissingApiKey, ProviderFactory, Telemetry, Unit
+from .proposals import FactsProposer
 from .store import Store
 from .rules import UnitRules
 from .subtitles import target_output_path
 from .telemetry import Telemetry as TelemetrySink
 from .queue_policy import next_utc_midnight
 from .translation import (
-    ERROR_TAIL_LENGTH, CallBudgetError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, ProviderAuthError,
+    ERROR_TAIL_LENGTH, CallBudgetError, ContextGapError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, ProviderAuthError,
     ProviderUnavailableError, redact,
 )
 from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, VARIANT, TranslationVersions, sha256_bytes
@@ -51,13 +53,24 @@ DEFAULT_JOB_TIMEOUT_SECONDS = 1800  # NFR-2 watchdog
 
 
 
-def prompt_version_of(task: str) -> str:
-    """The version of the prompt a call of this task used, for the call record (FR-19.1)."""
+def prompt_version_of(task: str, kind: str = "") -> str:
+    """The version of the prompt a call of this task used, for the call record (FR-19.1). A proposal generator (P14)
+    runs on the ``extract`` model but has a prompt of its own, told apart by the call's ``kind``."""
+    if kind == "suggest":
+        return f"suggest-{SUGGEST_PROMPT_VERSION}"
     if task == "translate":
         return PROMPT_VERSION
     if task in ("extract", "summarize"):
         return f"memory-{EXTRACT_PROMPT_VERSION}"
     return ""
+
+
+class _AfterRun:
+    """What a job leaves for the proposal generators: the units whose facts it extracted, and the provider it used."""
+
+    def __init__(self) -> None:
+        self.extracted: list[int] = []
+        self.provider_for: Callable[[str], Provider] | None = None
 
 
 def job_timeout_seconds() -> float:
@@ -150,12 +163,14 @@ class TranslationAttempt:
         library: Library | None = None,
         memory: StoryMemory | None = None,
         telemetry: Telemetry | None = None,
+        proposals: FactsProposer | None = None,
     ) -> None:
         self.versions = versions
         self.usage = usage
         self.provider_factory = provider_factory
         self.library = library
         self.memory = memory
+        self.proposals = proposals
         # Without a shared telemetry the attempt still keeps its plain call record (synchronously, as before P5).
         self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)
 
@@ -165,6 +180,30 @@ class TranslationAttempt:
         description: str,
         settings: dict[str, Any],
         on_progress: Callable[[int, int], None] | None = None,
+    ) -> str:
+        after = _AfterRun()
+        try:
+            result = self._run(job, description, settings, on_progress, after)
+        except (ContextGapError, HardJobError):
+            # The provider is well and the facts were paid for: look for proposals in them all the same.
+            self._propose(job, settings, after)
+            raise
+        self._propose(job, settings, after)
+        return result
+
+    def _propose(self, job: dict[str, Any], settings: dict[str, Any], after: "_AfterRun") -> None:
+        """The proposal generators (P14) read the facts this job had just extracted. They run once the translation is
+        settled and never raise (``FactsProposer.after_facts``), so they cannot fail or slow the job beyond their calls."""
+        if self.proposals is not None and after.extracted and after.provider_for is not None:
+            self.proposals.after_facts(after.extracted, str(job.get("target_code") or ""), after.provider_for, settings)
+
+    def _run(
+        self,
+        job: dict[str, Any],
+        description: str,
+        settings: dict[str, Any],
+        on_progress: Callable[[int, int], None] | None,
+        after: "_AfterRun",
     ) -> str:
         source = Path(str(job["subtitle_path"]))
         target_code = str(job.get("target_code") or "vi")
@@ -215,7 +254,8 @@ class TranslationAttempt:
 
         def record(log: CallLog) -> None:
             self.telemetry.llm_call(
-                job_id, log, prompt_version=prompt_version_of(log.task), glossary_hash=rules.hash,
+                job_id, log, prompt_version=prompt_version_of(log.task, getattr(log, "kind", "") or ""),
+                glossary_hash=rules.hash,
                 bundle_hash=current["bundle_hash"] if log.task == "translate" else "",
                 style_hash=rules.style_hash if log.task == "translate" else "",
             )
@@ -242,8 +282,9 @@ class TranslationAttempt:
         # whatever order Bazarr delivered the episodes in (FR-5.3). A gap defers the job (ContextGapError).
         plan = None
         if self.memory is not None and unit is not None and self.memory.enabled_for(unit, settings):
+            after.provider_for = provider_for
             with self._mapped(settings):
-                plan = self.memory.plan(unit, job, settings, provider_for)
+                plan = self.memory.plan(unit, job, settings, provider_for, extracted=after.extracted)
         ctx_hash = context_hash(model, target_code, description, temperature, rules.hash, plan.fingerprint if plan else "")
         published = dict(
             trigger=trigger, source_path=str(source), source_sha256=source_sha,

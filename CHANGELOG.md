@@ -1,4 +1,16 @@
 # Unreleased
+- **P14: proposals from story facts.**
+  - New `subcore.suggest` (pure): from the facts of the episodes in story order it finds the pairs whose relationship the facts
+    show (one `address_rule` candidate per stretch of the story, with `from`/`until` at the cue where it turned, and the cue,
+    its timecode and its text as evidence), the proper names in two or more episodes that the glossary lacks (`term`) and the
+    characters in two or more episodes (`character` with a card). One cheap call per kind turns them into the target
+    language's forms; an unusable answer costs only that kind. Timecodes and cue numbers are never sent to the model.
+  - New `subserver/proposals.py` (`FactsProposer`): gathers the facts, source cues, glossary and what the inbox holds, and hands
+    `Proposal`s to `SuggestionService` (`source` `facts` or `memory`); what the inbox has in any status is not asked about
+    again, so a rejected proposal is not paid for twice. It runs after a job extracted facts (published first, errors swallowed:
+    it never fails or loses a job) and on request: `POST /api/suggestions/generate` (`estimate_only` for the call count).
+  - Setting `suggest_from_facts` (default on). Facts give no research sources, so `auto_accept_terms` never applies them.
+  - The call record of these calls has prompt version `suggest-s1`. `StoryMemory.plan` reports which units it extracted.
 - **P13: suggestions and the Review inbox.**
   - New table `suggestions` (migration 13: `source`, `fingerprint`, `UNIQUE(series_id, target_lang, fingerprint)`) and
     `SuggestionService` (`subserver/suggestions.py`): `propose` (skips what waits, was decided or the glossary already says),

@@ -165,6 +165,18 @@ class SuggestionService:
         self._settings = settings_source or (lambda: {})
         self.telemetry: Telemetry = telemetry or NULL
         self._lock = threading.RLock()  # a glossary is read, changed and written back: one change at a time
+        # The generator the admin can ask for by hand (P14, ``FactsProposer``); wired by the composition root.
+        self.generator: Any = None
+
+    def generate(self, series_id: int, lang: str, *, estimate_only: bool = False) -> dict[str, Any]:
+        """Ask the facts generator for proposals now (``POST /api/suggestions/generate``). ``estimate_only`` says what
+        it would ask without spending a call."""
+        if self.generator is None:
+            raise ValueError("no proposal generator is wired into this worker")
+        if not _LANG.match(lang or ""):
+            raise ValueError(f"invalid language code {lang!r}")
+        self.library.series_owner(series_id)  # LookupError for a series that is not there
+        return self.generator.generate(series_id, lang, estimate_only=estimate_only)
 
     # -- proposing ----------------------------------------------------------------------------------------
     def propose(self, series_id: int, lang: str, proposals: list[Proposal], *, source: str) -> ProposeReport:
