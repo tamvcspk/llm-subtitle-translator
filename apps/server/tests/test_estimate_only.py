@@ -118,6 +118,20 @@ class RetryEstimate(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(ValueError):
                 env.service.estimate_retry(body)
 
+    def test_retry_all_failed_puts_each_back_in_line_and_counts_the_ones_it_left_alone(self):
+        env = Env(self)
+        env.translated(1, 2)
+        first, second = failed_retranslation(env, 1), failed_retranslation(env, 2)
+        env.service.retranslate(env.unit(2), {"lang": "vi"})  # episode 2 is asked for again: `second` has an open twin
+        result = env.service.retry_failed({"all": True})
+        self.assertEqual(result, {"ok": True, "count": 1, "skipped": 1})
+        self.assertEqual((env.jobs.jobs.state_of(first), env.jobs.jobs.state_of(second)), ("queued", "failed"))
+        # Nothing is failed any more that can go back: a second time retries nothing, and says so.
+        self.assertEqual(env.service.retry_failed({"all": True}), {"ok": False, "count": 0, "skipped": 1})
+        self.assertEqual(env.service.retry_failed({"job_ids": []}), {"ok": True, "count": 0, "skipped": 0})
+        with self.assertRaises(ValueError):
+            env.service.retry_failed({"job_ids": ["a"], "all": True})
+
     def test_a_job_whose_source_is_gone_is_left_out_with_the_reason(self):
         env = Env(self)
         env.translated(1)

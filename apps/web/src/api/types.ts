@@ -35,6 +35,60 @@ export interface StatusResponse {
   daily_quota_pause: { retry_at: number } | null;
   providers: ProviderHealth[];
   settings: { key_warnings: KeyWarning[] };
+  /** How the default and the strong model are doing, read from the job rows (`GET /api/status`). */
+  model_layers?: ModelLayers;
+}
+
+export interface ModelLayers {
+  by_model: Record<string, { done: number; failed: number }>;
+  escalated: { total: number; done: number; failed: number; waiting: number };
+  /** How far back the counts reach; `0` means that kind of job is never deleted. */
+  window: { done_days: number; failed_days: number };
+}
+
+/** One job of `GET /api/queue`. Only what a screen reads is typed. */
+export interface QueueJob {
+  job_id: string;
+  /** The series, or the movie; empty for a job made before units existed. */
+  title: string;
+  /** `S01E04`; empty for a movie. */
+  label: string;
+  unit_id?: number;
+  source_code?: string;
+  target_code?: string;
+  subtitle_path?: string;
+  output_path?: string;
+  /** `manual`, `policy`, `retranslate`, `variant`, … */
+  origin?: string;
+  /** `fill` or `replace`. */
+  mode?: string;
+  trigger?: string;
+  stage?: string;
+  progress_done?: number | null;
+  progress_total?: number | null;
+  /** `quota`, `provider`, `context`, `settle` or `rate`; waiting jobs only. */
+  wait_reason?: string | null;
+  /** Unix seconds, waiting jobs only. */
+  retry_at?: number | null;
+  attempts?: number;
+  error?: string;
+  missing_units?: string[];
+  result?: string;
+  /** Unix seconds. */
+  created_at?: number;
+}
+
+/** `GET /api/queue`: the latest 100 jobs of each state, and the real counts. */
+export interface QueueAnswer {
+  counts: QueueCounts;
+  total: number;
+  daily_quota_pause: { retry_at: number } | null;
+  providers: ProviderHealth[];
+  pending: QueueJob[];
+  processing: QueueJob[];
+  deferred: QueueJob[];
+  done: QueueJob[];
+  failed: QueueJob[];
 }
 
 export interface CatalogStatus {

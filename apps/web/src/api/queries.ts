@@ -21,6 +21,7 @@ import type {
   LibraryUnits,
   MemoryPolicy,
   MoviesPage,
+  QueueAnswer,
   SeriesMemory,
   SeriesPage,
   StatusResponse,
@@ -40,6 +41,7 @@ export const keys = {
   status: ["status"] as const,
   catalogStatus: ["catalog", "status"] as const,
   me: ["auth", "me"] as const,
+  queue: ["queue"] as const,
   catalog: ["catalog", "overview"] as const,
   movies: ["catalog", "movies"] as const,
 };
@@ -49,6 +51,27 @@ export function useStatus() {
     queryKey: keys.status,
     queryFn: ({ signal }) => api<StatusResponse>("/api/status", { signal }),
     refetchInterval: 15_000,
+  });
+}
+
+/** The Activity page: the latest 100 jobs of each state, the real counts and the health of each model. */
+export function useQueue() {
+  return useQuery({
+    queryKey: keys.queue,
+    queryFn: ({ signal }) => api<QueueAnswer>("/api/queue", { signal }),
+    refetchInterval: 5_000,
+  });
+}
+
+/** The bundle of a job's latest attempt, read only when its box is open (it holds every cue, so it can be large). */
+export function useJobSpec(jobId: string | null) {
+  return useQuery({
+    queryKey: ["job-spec", jobId] as const,
+    queryFn: ({ signal }) => api<unknown>(`/api/jobs/${encodeURIComponent(jobId ?? "")}/spec`, { signal }),
+    enabled: jobId !== null,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
   });
 }
 
@@ -103,7 +126,8 @@ export function useMovies() {
 /** A button that spends model calls says what it is about: translate these, or retry that failed job. */
 export type CostRequest =
   | { selector: JobsSelector }
-  | { retry: { job_id: string } }
+  | { retry: { job_id: string } | { all: true } }
+  | { prerequisites: { job_id: string } }
   | { retranslate: { unit_id: number; body: RetranslateBody } }
   | { variant: { unit_id: number; body: VariantBody } };
 
@@ -137,6 +161,13 @@ export function useEstimate(request: CostRequest | null) {
       if (request && "retry" in request) {
         return api<JobsAnswer>("/api/queue/retry", { method: "POST", body: { ...request.retry, estimate_only: true }, signal });
       }
+      if (request && "prerequisites" in request) {
+        return api<JobsAnswer>("/api/queue/request-prerequisites", {
+          method: "POST",
+          body: { ...request.prerequisites, estimate_only: true },
+          signal,
+        });
+      }
       if (request && ("retranslate" in request || "variant" in request)) {
         const [path, call] = "retranslate" in request ? ["retranslate", request.retranslate] : ["variant", request.variant];
         const answer = await api<RetranslateAnswer>(`/api/units/${call.unit_id}/${path}`, {
@@ -164,6 +195,7 @@ function useRefreshJobs() {
       client.invalidateQueries({ queryKey: ["catalog"] }),
       client.invalidateQueries({ queryKey: ["library"] }),
       client.invalidateQueries({ queryKey: keys.status }),
+      client.invalidateQueries({ queryKey: keys.queue }),
     ]);
 }
 
@@ -173,9 +205,13 @@ export function useRequestJobs() {
   return useMutation({
     mutationFn: async (request: CostRequest): Promise<{ count: number }> => {
       if ("retry" in request) {
-        const answer = await api<{ ok: boolean }>("/api/queue/retry", { method: "POST", body: request.retry });
-        if (!answer.ok) throw new Error("The job could not be retried: it is not failed any more, or the file already has a job.");
-        return { count: 1 };
+        const answer = await api<{ ok: boolean; count?: number }>("/api/queue/retry", { method: "POST", body: request.retry });
+        if (!answer.ok) throw new Error("Nothing could be retried: the jobs are not failed any more, or their files already have a job.");
+        return { count: answer.count ?? 1 };
+      }
+      if ("prerequisites" in request) {
+        const answer = await api<{ requested: string[] }>("/api/queue/request-prerequisites", { method: "POST", body: request.prerequisites });
+        return { count: answer.requested.length };
       }
       if ("retranslate" in request || "variant" in request) {
         const [path, call] = "retranslate" in request ? ["retranslate", request.retranslate] : ["variant", request.variant];

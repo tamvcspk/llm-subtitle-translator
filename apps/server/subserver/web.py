@@ -467,12 +467,16 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/queue/retry":
                 if body.get("estimate_only") is True:  # what Retry (or Retry All Failed) would cost; retries nothing
                     self.send_json(self.ctx["units"].estimate_retry(body))
+                elif body.get("all") is True or body.get("job_ids") is not None:  # Retry All Failed, or a list of jobs
+                    self.send_json(self.ctx["units"].retry_failed(body))
                 else:
                     self.send_json({"ok": self.ctx["console"].retry(str(body.get("job_id", "")))})
             elif parsed.path == "/api/queue/cancel":
                 self.send_json({"ok": self.ctx["console"].cancel(str(body.get("job_id", "")))})
             elif parsed.path == "/api/queue/request-prerequisites":
-                self.send_json(self.ctx["units"].request_prerequisites(str(body.get("job_id", ""))))
+                self.send_json(self.ctx["units"].request_prerequisites(
+                    str(body.get("job_id", "")), estimate_only=body.get("estimate_only") is True,
+                ))
             elif parsed.path == "/api/queue/stop":
                 outcome = self.ctx["console"].stop(str(body.get("job_id", "")))
                 self.send_json({"ok": outcome is not None, "outcome": outcome})

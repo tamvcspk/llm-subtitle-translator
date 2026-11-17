@@ -1,4 +1,13 @@
 # Unreleased
+- **P12b: Activity in `apps/web`** (`#/activity`). Providers (state, usable, failures, reason, until), Model layers (done and
+  failed per model, escalated, and how many days back the counts reach), the catalog with **Sync now**, and the jobs in five
+  tabs named **Requested · Running · Waiting · Failed · Done** with the real count on each (the list holds the latest 100 and
+  says so). A job is named by its series, episode and language (an older one by its subtitle file) and links to its episode;
+  a running job shows `translating 120/340`, a waiting one what it waits for (`quota`, `provider`, `context (needs S01E04)`,
+  …) and when it tries again, a failed one the last line of its error. **Cancel** and **Stop** act at once; **Retry**,
+  **Retry all failed** and **Request that episode** go through the price box; **Export job spec** is a server link plus Copy.
+  Backend: each job of `GET /api/queue` carries `title` and `label`; `POST /api/queue/retry` takes `job_ids` or `all` to
+  retry for real (`{ok, count, skipped}`); `POST /api/queue/request-prerequisites` takes `estimate_only`.
 - **P12b: Context of a series in `apps/web`, and Story memory in its header.** The header of a series now has **Story memory**
   (Default / On / Off) and **Specials after** (`S02E05`, checked before it is sent), saved together with **Apply**, which
   appears only when one of them changed ("Existing translations are never redone"). The **Context** tab

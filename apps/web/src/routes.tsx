@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from "react-router";
+import { Activity } from "./pages/Activity";
 import { Episodes } from "./pages/Episodes";
 import { Compare } from "./pages/Compare";
 import { Home } from "./pages/Home";
@@ -45,7 +46,7 @@ export function AppRoutes() {
           <Route path="style" element={<UnitStyle />} />
           <Route path="*" element={<Navigate to="subtitles" replace />} />
         </Route>
-        <Route path="activity" element={<Placeholder title="Activity" note="Queue, providers and quota: later in P12b." />} />
+        <Route path="activity" element={<Activity />} />
         <Route path="settings" element={<Placeholder title="Settings" note="Seven groups, saved one by one: later in P12b." />} />
         <Route path="*" element={<Navigate to="/library" replace />} />
       </Route>

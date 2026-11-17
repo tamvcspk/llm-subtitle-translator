@@ -127,6 +127,10 @@ retrying soon). A wait is never a failure. A running job carries `stage`, and
 a crash; a job that crashed `max_crashes` times is `failed` with `error` starting
 `crashed:`.
 
+Each job also has `title` (the series, or the movie's title) and `label` (`S01E04`; empty for a movie), read from its unit
+when the list is built (both empty for a job made before units existed or whose unit is gone; fall back to the file
+name in `subtitle_path`).
+
 The response also has `providers`: one entry per configured model with `model`,
 `state` (`closed`, `open` (breaker), `exhausted` (quota), `invalid` (key or model refused),
 or `half_open`), `reason`, `until` (when it may be tried again, or null), `failures`
@@ -148,6 +152,11 @@ job waits for, when their source subtitle is on disk, at interactive priority. R
 `{"requested": ["<job id>"], "unavailable": ["S01E02"]}`; `unavailable` names the earlier
 episodes that have no source subtitle yet. Asking again makes no second job. Returns
 `400` for a job that is not waiting for earlier episodes.
+
+**Estimate first (P12b, UX 6.4).** With `"estimate_only": true` nothing is queued: the reply is `{"estimate_only": true,
+"estimate": {"jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at"}, "planned_total",
+"planned": [{"title": "S01E01", "lang", "cues", "calls"}], "skipped_total", "skipped_by_reason", "unavailable": ["S01E02"]}`;
+an episode with no source subtitle that can be read is under `unavailable`.
 
 Both `/api/queue` and `/api/status` include `daily_quota_pause`: `null` when
 inactive, or `{"retry_at": 1790355039.786}` while paused (Unix seconds).
@@ -327,6 +336,11 @@ Reply, in the shape of a bulk request's estimate: `{"estimate_only": true, "esti
 named). A job that is not failed (`the job is not failed`), is unknown (`no such job`), whose file already has an open
 job (`already requested`) or whose source cannot be read is under `skipped`, as the real retry would do nothing for it.
 A retranslation of a range that failed costs that range only.
+
+**Retry several (P12b).** Without `estimate_only`, `job_ids` (a list) or `all` (every failed job: Retry All Failed) retries
+each of them the same way and answers `{"ok", "count", "skipped"}`: `count` jobs were put back in line, `skipped` were
+failed no more or had an open job for the same file and were left alone (`ok` is false only when asked for some and none
+could go back). Naming more than one way (`job_id` with `all`, say) is a `400`.
 
 ## POST /api/queue/delete
 

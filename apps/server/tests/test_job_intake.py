@@ -153,6 +153,13 @@ class PrerequisiteTests(unittest.TestCase):
             payload={**env.job(3), "missing_units": ["S01E01", "S01E02"], "missing_unit_ids": [first, second]},
         )
 
+        # The price first: it names what it would cost and what it cannot ask for, and makes no job.
+        price = env.service.request_prerequisites("gap", estimate_only=True)
+        self.assertEqual((price["estimate_only"], price["planned_total"], price["estimate"]["jobs"]), (True, 1, 1))
+        self.assertEqual((price["unavailable"], price["skipped_by_reason"]), (["S01E02"], {"no source subtitle": 1}))
+        self.assertEqual(price["planned"][0]["title"], "S01E01")
+        self.assertEqual(env.jobs.jobs.by_state("queued"), [])
+
         result = env.service.request_prerequisites("gap")
 
         self.assertEqual(len(result["requested"]), 1)

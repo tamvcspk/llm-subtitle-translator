@@ -376,11 +376,12 @@ class UnitService:
         return {"ok": True, "scope": "episode", "ids": ids, "version": published.version, "warnings": warnings}
 
     # -- a job waiting for earlier episodes (FR-15.11) ------------------------------------
-    def request_prerequisites(self, job_id: str) -> dict[str, Any]:
+    def request_prerequisites(self, job_id: str, *, estimate_only: bool = False) -> dict[str, Any]:
         """The "request that episode" button of a job that waits for story facts: queue the earlier episodes it
         waits for, those whose source subtitle is on disk. The others cannot be translated yet and are named, so
         the admin knows what is still missing; the job itself goes on waiting (or runs without them after
-        ``memory_gap_wait_seconds``, FR-5.4)."""
+        ``memory_gap_wait_seconds``, FR-5.4). With ``estimate_only`` nothing is queued: the answer says what asking
+        would cost, in the shape of a bulk request's estimate (UX 6.4)."""
         job = self.jobs.jobs.get(job_id)
         if job is None or job.get("wait_reason") != "context":
             raise ValueError("the job is not waiting for earlier episodes")
@@ -388,12 +389,21 @@ class UnitService:
         language = str(job.get("target_language") or lang)
         requested: list[str] = []
         unavailable: list[str] = []
+        planned: list[dict[str, Any]] = []
         for unit_id in job.get("missing_unit_ids") or []:
             unit = self.catalog.get_unit(int(unit_id))
             if unit is None:
                 continue
             if not unit.source_path or not Path(unit.source_path).is_file():
                 unavailable.append(unit_label(unit))
+                continue
+            if estimate_only:
+                try:
+                    source = srt.parse_file(unit.source_path)
+                except (OSError, srt.SrtError):
+                    unavailable.append(unit_label(unit))
+                    continue
+                planned.append({"title": unit_label(unit), "lang": lang, "cues": len(source), "calls": self.estimator.calls_for(source, None)})
                 continue
             series = self.catalog.get_series(unit.series_id) if unit.series_id is not None else None
             made = self.jobs.enqueue({
@@ -404,6 +414,11 @@ class UnitService:
                 "series_id": series.bazarr_id if series else "", "media_id": unit.bazarr_id, "unit_id": unit.id,
             }, [{"code": lang, "language": language, "enabled": True}])
             requested.extend(made)
+        if estimate_only:
+            estimate = self.estimator.of(len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned))
+            return {"estimate_only": True, "estimate": asdict(estimate), "planned_total": len(planned), "planned": planned,
+                    "skipped_total": len(unavailable), "skipped_by_reason": {"no source subtitle": len(unavailable)} if unavailable else {},
+                    "unavailable": unavailable}
         self.telemetry.event(
             "job.prerequisites_requested", job_id=job_id, reason="the admin asked for the earlier episodes the job waits for",
             requested=requested, unavailable=unavailable,
@@ -501,23 +516,34 @@ class UnitService:
         return {"ok": True, "job_id": job_id, "label": variant["label"]}
 
     # -- what Retry would cost (UX 6.4) ---------------------------------------------------
+    def _retry_ids(self, body: dict[str, Any]) -> list[str]:
+        """The jobs a retry names: exactly one of ``job_id``, ``job_ids`` or ``all`` (every failed job)."""
+        given = [body.get("job_id") not in (None, ""), body.get("job_ids") is not None, body.get("all") is True]
+        if sum(given) != 1:
+            raise ValueError("Name the jobs with exactly one of job_id, job_ids or all")
+        if body.get("all") is True:
+            return [str(job["job_id"]) for job in self.jobs.jobs.by_state(FAILED)]
+        if body.get("job_ids") is not None:
+            ids = body["job_ids"]
+            if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+                raise ValueError("job_ids must be a list of job ids")
+            return ids
+        return [str(body["job_id"])]
+
+    def retry_failed(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Retry All Failed, or a list of failed jobs: put each back in line with a fresh retry cycle. A job that is not
+        failed, or whose file already has an open job, is left alone and counted under ``skipped``."""
+        ids = list(dict.fromkeys(self._retry_ids(body)))
+        retried = sum(1 for job_id in ids if self.jobs.retry(job_id))
+        return {"ok": retried > 0 or not ids, "count": retried, "skipped": len(ids) - retried}
+
     def estimate_retry(self, body: dict[str, Any]) -> dict[str, Any]:
         """The cost of putting failed jobs back in line, before the admin confirms. Name them with exactly one of
         ``job_id``, ``job_ids`` or ``all`` (every failed job: Retry All Failed). A job that is not failed, or whose
         file already has an open job, is listed under ``skipped`` with the reason, as ``retry`` would do nothing for it.
         A retranslation retried over a range costs that range only."""
-        given = [body.get("job_id") not in (None, ""), body.get("job_ids") is not None, body.get("all") is True]
-        if sum(given) != 1:
-            raise ValueError("Name the jobs with exactly one of job_id, job_ids or all")
         store = self.jobs.jobs
-        if body.get("all") is True:
-            ids = [str(job["job_id"]) for job in store.by_state(FAILED)]
-        elif body.get("job_ids") is not None:
-            ids = body["job_ids"]
-            if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
-                raise ValueError("job_ids must be a list of job ids")
-        else:
-            ids = [str(body["job_id"])]
+        ids = self._retry_ids(body)
         planned: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
         for job_id in dict.fromkeys(ids):

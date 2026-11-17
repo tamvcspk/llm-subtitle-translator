@@ -371,9 +371,30 @@ class JobQueue:
             "daily_quota_pause": {"retry_at": pause} if pause is not None else None,
             "providers": self.health_report(),
         }
+        names: dict[int, tuple[str, str]] = {}
         for name in LEGACY_STATES:
-            snapshot[name] = self.jobs.by_state(*FROM_LEGACY[name], limit=limit, newest_first=True)
+            jobs = self.jobs.by_state(*FROM_LEGACY[name], limit=limit, newest_first=True)
+            for job in jobs:
+                job["title"], job["label"] = self._names_of(job, names)
+            snapshot[name] = jobs
         return snapshot
+
+    def _names_of(self, job: dict[str, Any], cache: dict[int, tuple[str, str]]) -> tuple[str, str]:
+        """``(title, label)`` of what a job is for: the series (or movie) and ``S01E04`` (empty for a movie). The payload
+        only carries ids; a job made before units existed has neither, and the reader falls back to the file name."""
+        unit_id = job.get("unit_id")
+        if not isinstance(unit_id, int) or isinstance(unit_id, bool):
+            return "", ""
+        if unit_id not in cache:
+            unit = self.store.get_unit(unit_id)
+            if unit is None:
+                cache[unit_id] = ("", "")
+            elif unit.series_id is None:
+                cache[unit_id] = (unit.title, "")
+            else:
+                series = self.store.get_series(unit.series_id)
+                cache[unit_id] = ((series.title if series else "") or unit.title, f"S{unit.season or 0:02d}E{unit.episode or 0:02d}")
+        return cache[unit_id]
 
     def layer_report(self) -> dict[str, Any]:
         """How the two model layers are doing, from the jobs: is the strong model worth having?
