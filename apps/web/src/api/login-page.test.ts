@@ -5,8 +5,8 @@ import { isSafeReturn } from "./session";
 
 // The sign-in page is a standalone static file (ADR-17): it cannot import this bundle, so its small
 // `returnTarget` is cut out of the HTML here and held to the same rule as `isSafeReturn`.
-// Until the old console is removed (PLAN P12b) the page lives next to it.
-const LOGIN = resolve(process.cwd(), "../server/static/login.html"); // tests run from apps/web
+// The build copies `public/` as it is, so this file is `dist/login.html`.
+const LOGIN = resolve(process.cwd(), "public/login.html"); // tests run from apps/web
 
 function loadReturnTarget(): (saved: unknown) => string {
   const html = readFileSync(LOGIN, "utf-8");

@@ -62,14 +62,10 @@ class ExistingTargetTests(Workdir):
             (self.media / name).write_text("x", encoding="utf-8")
         self.assertIsNone(subtitles.existing_target_subtitle(str(source), "vi", "en"))
 
-    def test_enqueue_and_scan_skip_a_language_that_is_already_there(self):
+    def test_enqueue_skips_a_language_that_is_already_there(self):
         source = self.source()
         (self.media / "Show.S01E01.vi.hi.srt").write_text("x", encoding="utf-8")
         self.assertEqual(self.enqueue(source), [])
-        found = subtitles.scan_source_subtitles(
-            [str(self.media)], [{"code": "en", "language": "English", "enabled": True}], TARGETS
-        )
-        self.assertEqual(found, [])
 
     def test_skip_reason_names_the_present_subtitle_but_never_blocks_a_retranslation(self):
         source = self.source()

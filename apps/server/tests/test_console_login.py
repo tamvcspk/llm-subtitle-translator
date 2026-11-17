@@ -279,6 +279,28 @@ class LoginServerTests(unittest.TestCase):
                 self.assertEqual(headers["Location"], "/login")
                 self.assertNotIn("console", body)
 
+    def test_every_file_of_a_build_needs_a_session_but_the_login_page(self):
+        # A Vite build puts hashed files under /assets and the sign-in page beside index.html (UX 24c).
+        static = Path(self.ctx["static_dir"])
+        (static / "assets").mkdir()
+        (static / "assets" / "index-3f2a9c.js").write_text("console.log('console-bundle')", encoding="utf-8")
+        (static / "assets" / "index-3f2a9c.css").write_text("body{color:red}", encoding="utf-8")
+        (static / "assets" / "font-1.woff2").write_bytes(b"wOF2console-bundle")
+        files = sorted(f"/{path.relative_to(static).as_posix()}" for path in static.rglob("*") if path.is_file() and "logs" not in path.parts)
+        self.assertIn("/assets/index-3f2a9c.js", files)
+        for path in files:
+            for accept in (HTML, {}):
+                with self.subTest(path=path, accept=bool(accept)):
+                    status, _, body = self.request("GET", path, accept)
+                    self.assertIn(status, {302, 401})
+                    self.assertNotIn("console", body)
+        # The sign-in page is open at /login only, and it is the same file.
+        status, _, body = self.request("GET", "/login", HTML)
+        self.assertEqual((status, "login-form" in body), (200, True))
+        # With a session every file is served.
+        cookie = self.cookie()
+        self.assertEqual(self.request("GET", "/assets/index-3f2a9c.js", {"Cookie": cookie})[0], 200)
+
     def test_browser_api_call_is_401_json_without_basic_prompt(self):
         status, headers, body = self.request("GET", "/api/status", {"Sec-Fetch-Mode": "cors"})
         self.assertEqual(status, 401)

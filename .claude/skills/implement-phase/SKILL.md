@@ -20,7 +20,7 @@ The design docs are the contract. `docs/design/` wins over upstream docs; `docs/
 - Provider errors become typed exceptions (`RateLimited`, `QuotaExhausted`, `Unavailable`, `BadOutput`) inside the adapter. Nothing above the provider layer parses error strings.
 - Worker seams from AGENTS.md still hold: `RuntimeContext` for wiring, `queue_policy.py` pure, HTTP reaches the queue only via `ConsoleActions`.
 - Queue file format changes must update `bazarr-postprocess/gst_enqueue.sh` (embedded Python payload) **and** its tests in the same change.
-- Console stays dependency-free vanilla ES modules, no CDN, mobile-usable (ADR-7).
+- The console is the React app in `apps/web` (ADR-17): no CDN, touch-first, hash routes, every button that spends model calls goes through the price box; see AGENTS.md "Frontend". The old `apps/server/static/` no longer exists.
 
 ## 3. Tests first, never the network
 

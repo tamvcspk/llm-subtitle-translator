@@ -49,21 +49,3 @@ class ConsoleActions:
             targets,
         )
 
-    def enqueue_found(self, found: list[dict[str, Any]]) -> list[str]:
-        """Queue what a library scan found: each item with the targets it is still missing."""
-        created: list[str] = []
-        for item in found:
-            created.extend(
-                self.jobs.enqueue(
-                    {
-                        "video_path": item["video_path"],
-                        "subtitle_path": item["subtitle_path"],
-                        "provider": CONSOLE_PROVIDER,
-                        "source_code": item["source_code"],
-                        "source_language": item["source_language"],
-                        "media_type": "movie",
-                    },
-                    item["missing_targets"],
-                )
-            )
-        return created

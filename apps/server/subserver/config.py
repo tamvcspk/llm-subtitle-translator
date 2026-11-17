@@ -132,7 +132,6 @@ DEFAULT_APP_CONFIG = {
     "source_languages": DEFAULT_SOURCE_LANGUAGES,
     "target_languages": DEFAULT_TARGET_LANGUAGES,
     "media_roots": ["/media"],
-    "scan_limit": 200,
     "bazarr_url": "",
     "bazarr_api_key": "",
     "gemini_api_key": "",
@@ -295,10 +294,6 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             normalized[key] = default
     normalized["quota_reset_tz"] = str(normalized.get("quota_reset_tz") or "").strip() or QUOTA_RESET_TZ
-    try:
-        normalized["scan_limit"] = max(1, int(normalized.get("scan_limit", 200)))
-    except (TypeError, ValueError):
-        normalized["scan_limit"] = 200
     return normalized
 
 

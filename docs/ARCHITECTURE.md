@@ -1,9 +1,10 @@
 # Architecture
 
 > Describes the current (inherited) worker. The repository is a uv workspace:
-> worker paths below (`worker.py`, `subserver/`, `static/`, `tests/`) live under
-> `apps/server/`; the new engine package is `packages/subcore/`. The image keeps
-> the old runtime layout (`/app/worker.py`, `/app/subserver`, `/app/static`).
+> worker paths below (`worker.py`, `subserver/`, `tests/`) live under
+> `apps/server/`; the console is `apps/web` and the new engine package is `packages/subcore/`.
+> The image keeps the old runtime layout (`/app/worker.py`, `/app/subserver`) and serves the
+> console build from `/app/static`.
 > Target design: [design/ARCHITECTURE.md](design/ARCHITECTURE.md).
 
 ## Components
@@ -259,22 +260,16 @@ against a fake Bazarr HTTP.
 
 ### Web Console
 
-`static/` contains a dependency-free HTML/CSS/JavaScript UI. It calls the local
-worker API only; it does not talk directly to Bazarr, Gemini, or TMDB.
+The console is the React app in `apps/web` (TypeScript, Vite, Mantine, React Router in hash mode, TanStack Query; ADR-17).
+It calls the local worker API only; it does not talk directly to Bazarr, Gemini, or TMDB. The Dockerfile builds it in a
+Node stage and copies only `dist/` into the final image as `/app/static`, which the worker serves with a fallback to
+`index.html` (routes are `#hash`, so there is none on the server). The sign-in page `login.html` is the one file outside
+the bundle (`apps/web/public/`): it is self-contained and the only static file served without a session.
 
-There is no build step: the browser loads native ES modules from `static/js/`,
-so the worker serves `.js` as `text/javascript` with `Cache-Control: no-cache`.
-
-- `index.html` holds the page shell and the static markup for every view.
-  Settings inputs are named after the `POST /api/settings` fields.
-- `js/main.js` owns hash routing (`#queue/failed`), the shared five-second poll,
-  sidebar badges and health, the quota banner, and the theme toggle.
-- `js/store.js` caches `/api/queue`, `/api/status`, languages, and models, and
-  notifies subscribers so one poll updates every visible part of the page.
-- `js/views/*.js` export one object per view with `title`, `subtitle`, and
-  optional `init()`, `enter(param)`, `leave()`, and `tick()` hooks.
-- `js/ui.js` builds DOM through text nodes only; paths and provider errors are
-  untrusted and must never be written as HTML.
+The screens, their data and their layout are in `docs/design/UX.md`; the code is organised as `api/` (typed calls and
+queries, one `types.ts` kept equal to `docs/API.md`), `lib/` (pure rules, tested without a DOM), `components/` (shared
+pieces: the price box, confirmation sheets, the style form) and `pages/`. A page never builds HTML from text: React
+escapes it, and paths and provider errors are untrusted.
 
 ## Queue Layout
 

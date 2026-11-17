@@ -207,7 +207,6 @@ Saved settings with their defaults (the Settings page shows the same fields; key
     {"code": "zh", "language": "Simplified Chinese", "enabled": true}
   ],
   "media_roots": ["/media"],
-  "scan_limit": 200,
   "bazarr_url": "",
   "gst_model": "gemini-3.1-flash-lite",
   "gst_fallback_model": "gemini-3.5-flash",

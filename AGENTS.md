@@ -20,7 +20,7 @@ This repository is `tamvcspk/llm-subtitle-translator`, a fork of `kingzleshe/gem
 
 ## Development Commands
 
-The repo is a **uv workspace** (virtual root, one `uv.lock`): `apps/server` (`llm-subtitle-server`: `worker.py`, `subserver/`, `static/`, `tests/`, not packaged) and `packages/subcore` (`subcore` engine library, `src/` layout). Install with `uv sync --locked --all-packages`; add deps with `uv add --package <member> <dep>`. Tests use stdlib `unittest`, not pytest; each member's tests run in a separate process. CI (`.github/workflows/ci.yml`) runs:
+The repo is a **uv workspace** (virtual root, one `uv.lock`): `apps/server` (`llm-subtitle-server`: `worker.py`, `subserver/`, `tests/`, not packaged) and `packages/subcore` (`subcore` engine library, `src/` layout). Install with `uv sync --locked --all-packages`; add deps with `uv add --package <member> <dep>`. Tests use stdlib `unittest`, not pytest; each member's tests run in a separate process. CI (`.github/workflows/ci.yml`) runs:
 
 ```bash
 uv run --locked python -m unittest discover -s apps/server/tests -t apps/server -v
@@ -42,9 +42,9 @@ Local console preview on Windows: `scripts/start-local.ps1 [-Demo] [-NoWorker]` 
 
 `subcore` has a declarative CLI for judging translation quality without the worker (it knows no DB, queue or HTTP): `uv run subcore translate file.srt --glossary g.yaml` (key from `GEMINI_API_KEY`, or `--api-key-file`; `--provider fake` for a dry run), plus `bundle` (write the bundle of a translation), `render-prompt` (print the requests, no call), `validate` (review a translation against its source) and `compare` (two bundles, or one against a golden set). Every translating command works from a bundle (`--bundle`); flags win over it.
 
-## Frontend (in progress: PLAN P12b, ADR-17)
+## Frontend (PLAN P12b, ADR-17)
 
-The console is moving from vanilla JS (`apps/server/static/`) to a React app in `apps/web`: TypeScript (strict), Vite, Mantine, React Router in hash mode, TanStack Query, Vitest. `apps/web` has its frame and shell (nav, banners, status strip, session overlay) but the screens are placeholders and nothing serves it yet: `apps/server/static/` is still the live console, so change it as before for anything people use today. Build the screens of `apps/web` in the order of PLAN P12b; the target layout, screens and data sources are in `docs/design/UX.md`. Answers of the API are typed in `apps/web/src/api/types.ts`: add a field there when a screen reads it, and keep it equal to `docs/API.md`.
+The console is the React app in `apps/web`: TypeScript (strict), Vite, Mantine, React Router in hash mode, TanStack Query, Vitest. The old vanilla-JS console (`apps/server/static/`) is gone; the image serves the build as `/app/static`. Every screen of PLAN P12b exists; the layout, screens and data sources are in `docs/design/UX.md`. Answers of the API are typed in `apps/web/src/api/types.ts`: add a field there when a screen reads it, and keep it equal to `docs/API.md`. A setting a screen edits goes in `apps/web/src/lib/settings.ts` (name, kind, limits as in UX Appendix B); a form that keeps a draft uses `lib/draft.ts` (never for a secret).
 
 Commands (from `apps/web`; Node 24, see `.nvmrc`):
 
@@ -56,9 +56,9 @@ npm run dev           # Vite on :5173, proxies /api and /login to the worker (GS
 
 On Windows run `npm test` from a shell whose path has an upper-case drive letter (`C:/Src/...`); with `c:\...` Vitest loads two copies of itself and every suite fails with "failed to find the current suite". Add dependencies with `npm install --save-exact`.
 
-- **Delivery:** the Dockerfile becomes multi-stage. A Node stage (pinned version, `npm ci` with the lockfile, `npm run build`) produces `dist/`; the final stage stays `python:3.14-slim` + uv and only receives `dist/` as `/app/static`. The final image must never contain Node, `node_modules` or the UI sources. One container, one process, port `6789`.
+- **Delivery:** the Dockerfile is multi-stage. A Node stage (pinned version, `npm ci` with the lockfile, `npm run build`) produces `dist/`; the final stage stays `python:3.14-slim` + uv and only receives `dist/` as `/app/static`. The final image must never contain Node, `node_modules` or the UI sources. One container, one process, port `6789`.
 - **`apps/web` is not a uv workspace member** (it has its own `package.json` and lockfile). Its commands are above; the `web` job in `.github/workflows/ci.yml` runs them and `docker-image.yml` watches `apps/web/**`. JS tests use their own runner; the "stdlib `unittest`, not pytest" rule is for Python.
-- **Login stays a standalone static page** (`GET /login`, outside the React bundle) so the auth middleware's only exception does not widen; every other file of the build requires a session.
+- **Login stays a standalone static page** (`GET /login`, `apps/web/public/login.html`, outside the React bundle, self-contained) so the auth middleware's only exception does not widen; every other file of the build requires a session (`test_console_login.py` checks a build-shaped folder file by file). The session cookie is `SameSite=Strict`; `CONSOLE_COOKIE_SAMESITE=none` is for an Organizr on another host (docs/CONFIGURATION.md).
 - The UI calls only `/api/*` (`docs/API.md`), routes with `#hash` (it runs in an iframe of Organizr on an iPad), is English-only, touch-first (targets ≥ 44 px, no hover-only controls), portrait first (about 820 px, iPad held upright; landscape ≥ 1024 px is secondary and only widens tables and grids, which fold into cards below 1024 px) and has no CDN dependency (fonts and icons are bundled).
 - Rules the UI must keep (UX.md §3, §6): every button that spends model calls goes through an Estimate/Confirm dialog (Try 20 lines is the one exception and shows its cost on the button); the number of translations a Style or Glossary save would flag stale is shown live from `dry_run`, not behind a Check button; downloads use server-served links plus a Copy button, never `blob:`.
 
@@ -70,7 +70,7 @@ The end-to-end flow spans three independent pieces (Bazarr pushes nothing, ADR-1
 
 1. The worker **pulls** the library from Bazarr's API into the catalog cache (`catalog.py`, `MediaLibrary.catalog()`), and makes jobs only when the admin requests translations in Library (`job_requests.py`) or the `auto_request` policy asks (`auto_request.py`).
 2. `apps/server/worker.py` + `subserver/` consume the queue one job at a time, translate in-process with `subcore`, write the target `.srt` beside the media, and ask Bazarr to rescan.
-3. `apps/server/static/` is a dependency-free web console that talks only to the worker's own API. **Decided 2026-11-16 (ADR-17, SPEC #26, PLAN P12b): it is being replaced by a React (Vite + Mantine) app in `apps/web`; until P12b lands, `static/` stays the live console.** See "Frontend" below.
+3. `apps/web` is the web console (React, Vite, Mantine; ADR-17): it talks only to the worker's own API, and the worker serves its build. See "Frontend" above.
 
 `packages/subcore` must stay free of Bazarr, queue, and HTTP knowledge (ADR-2); the worker depends on it, never the reverse. Roadmap phases (P0–P16, including P0b–P0d), their checklists, and status are in `PLAN.md`; tick items there as work lands.
 

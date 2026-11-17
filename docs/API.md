@@ -65,7 +65,6 @@ Returns queue counts, current settings, Bazarr URL, and Bazarr ping status.
       {"code": "zh", "language": "Simplified Chinese", "enabled": true}
     ],
     "media_roots": ["/media"],
-    "scan_limit": 200,
     "bazarr_url": "http://bazarr:6767",
     "bazarr_api_key": "**********",
     "bazarr_api_key_configured": true,
@@ -277,26 +276,12 @@ keys beyond these four fields.
     {"code": "zh", "language": "Simplified Chinese", "enabled": true},
     {"code": "en", "language": "English", "enabled": true}
   ],
-  "media_roots": ["/media"],
-  "scan_limit": 200
+  "media_roots": ["/media"]
 }
 ```
 
-## GET /api/wanted
-
-Reads Bazarr wanted series and movies, then returns items that can be translated
-from an existing configured source subtitle.
-
-## GET /api/scan
-
-Scans configured media roots for local source subtitle files with missing target
-outputs.
-
-Optional query:
-
-```text
-/api/scan?limit=500
-```
+The wanted list, the media scan and `scan_limit` (`GET /api/wanted`, `GET /api/scan`, `POST /api/enqueue-scan`) are gone
+(P12b): the Library (`/api/catalog`) replaces them. A `scan_limit` in an old backup or request is ignored.
 
 ## POST /api/enqueue
 
@@ -314,10 +299,6 @@ Creates jobs for one item.
   "target_codes": ["zh", "en"]
 }
 ```
-
-## POST /api/enqueue-scan
-
-Scans media roots and enqueues all missing target jobs found by that scan.
 
 ## POST /api/queue/retry
 

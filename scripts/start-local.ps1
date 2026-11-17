@@ -50,8 +50,12 @@ $env:TMDB_CACHE_PATH = Join-Path $stateDir 'cache\tmdb_cache.json'
 # The console requires Basic Auth. Local preview binds to 127.0.0.1, so skip auth
 # unless CONSOLE_USER / CONSOLE_PASSWORD are already set in this shell.
 if (-not ($env:CONSOLE_USER -and $env:CONSOLE_PASSWORD)) { $env:CONSOLE_AUTH = 'off' }
-$appRoot = Join-Path $projectRoot 'apps\worker'
-$env:STATIC_DIR = Join-Path $appRoot 'static'
+$appRoot = Join-Path $projectRoot 'apps\server'
+# The console is the React build of apps/web (plus its sign-in page). `npm run dev` there is the faster way to work on it.
+$env:STATIC_DIR = Join-Path $projectRoot 'apps\web\dist'
+if (-not (Test-Path -LiteralPath (Join-Path $env:STATIC_DIR 'index.html'))) {
+    throw "The console is not built: $env:STATIC_DIR has no index.html. Run 'npm ci && npm run build' in apps\web first."
+}
 
 $arguments = @((Join-Path $appRoot 'worker.py'), '--host', '127.0.0.1', '--port', $Port)
 if ($NoWorker) { $arguments += '--no-worker' }

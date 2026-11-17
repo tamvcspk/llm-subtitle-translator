@@ -18,13 +18,11 @@ from . import auth as console_auth
 from . import catalog_api, keys_api, library_api, style_api
 from .auth import ConsoleAuth
 from .backups import backup_file_path, create_backup, list_backups, restore_backup_archive
-from .bazarr import list_wanted_items
 from .config import KEY_SLOTS, PROVIDER_OPENAI_COMPAT, SECRET_MASK, supported_languages
 from .connection_tests import test_connection
 from .gemini import gemini_models, openai_models
 from .http import describe_http_error
 from .logs import clear_logs, read_log_snapshot
-from .subtitles import scan_source_subtitles
 from .telemetry import events_page
 
 
@@ -369,35 +367,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/languages":
                 settings = self.live_settings()
                 self.send_json({"items": supported_languages(self.ctx["http"], settings["bazarr_url"], settings["bazarr_api_key"])})
-            elif parsed.path == "/api/scan":
-                config = self.settings_service.app_config()
-                params = urllib.parse.parse_qs(parsed.query)
-                limit = int(params.get("limit", [config["scan_limit"]])[0])
-                self.send_json(
-                    {
-                        "items": scan_source_subtitles(
-                            config["media_roots"],
-                            config["source_languages"],
-                            config["target_languages"],
-                            limit=limit,
-                        )
-                    }
-                )
-            elif parsed.path == "/api/wanted":
-                config = self.settings_service.app_config()
-                settings = self.live_settings()
-                self.send_json(
-                    {
-                        "items": list_wanted_items(
-                            self.ctx["http"],
-                            settings["bazarr_url"],
-                            settings["bazarr_api_key"],
-                            config["source_languages"],
-                            config["target_languages"],
-                            limit=int(config["scan_limit"]),
-                        )
-                    }
-                )
             elif parsed.path == "/api/logs":
                 self.send_json(read_log_snapshot(self.ctx["log_dir"]))
             elif parsed.path == "/api/events":
@@ -462,16 +431,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/enqueue":
                 config = self.settings_service.app_config()
                 created = self.ctx["console"].enqueue_subtitle(body, config["target_languages"])
-                self.send_json({"created": created, "count": len(created)})
-            elif parsed.path == "/api/enqueue-scan":
-                config = self.settings_service.app_config()
-                items = scan_source_subtitles(
-                    config["media_roots"],
-                    config["source_languages"],
-                    config["target_languages"],
-                    limit=int(config["scan_limit"]),
-                )
-                created = self.ctx["console"].enqueue_found(items)
                 self.send_json({"created": created, "count": len(created)})
             elif parsed.path == "/api/queue/retry":
                 if body.get("estimate_only") is True:  # what Retry (or Retry All Failed) would cost; retries nothing

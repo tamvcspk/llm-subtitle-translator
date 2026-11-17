@@ -186,33 +186,6 @@ class TestWorkerIntegrationsTests(unittest.TestCase):
         self.assertEqual(handler.wfile.getvalue(), b"export {};")
 
 
-    def test_scan_source_subtitles_finds_missing_targets(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "Show").mkdir()
-            (root / "Show" / "Episode.ja.srt").write_text("hello", encoding="utf-8")
-            (root / "Show" / "Episode.zh.srt").write_text("existing", encoding="utf-8")
-
-            items = gst_subtitles.scan_source_subtitles(
-                roots=[str(root)],
-                source_languages=[
-                    {"code": "en", "language": "English", "enabled": True},
-                    {"code": "ja", "language": "Japanese", "enabled": True},
-                ],
-                target_languages=[
-                    {"code": "zh", "language": "Simplified Chinese", "enabled": True},
-                    {"code": "zt", "language": "Traditional Chinese", "enabled": True},
-                ],
-                limit=10,
-            )
-
-            self.assertEqual(len(items), 1)
-            self.assertEqual(items[0]["subtitle_path"], str(root / "Show" / "Episode.ja.srt"))
-            self.assertEqual(items[0]["source_code"], "ja")
-            self.assertEqual(items[0]["source_language"], "Japanese")
-            self.assertEqual(items[0]["missing_targets"], [{"code": "zt", "language": "Traditional Chinese", "enabled": True}])
-
-
     def test_movie_description_prefers_tmdb_id_from_path(self):
         http = FakeHTTP({
             (

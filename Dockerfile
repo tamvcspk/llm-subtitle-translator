@@ -42,9 +42,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY apps/server/worker.py /app/worker.py
 COPY apps/server/subserver /app/subserver
-COPY apps/server/static /app/static
-# The React console, built beside the old one. It replaces /app/static when the screens of the main path are done
-# (PLAN P12b); until then it is only built here, so a broken build fails the image.
-COPY --from=web /web/dist /app/static-next
+# The console: the React build (and, beside it, the standalone sign-in page from apps/web/public). Only dist/ comes over.
+COPY --from=web /web/dist /app/static
 
 CMD ["python", "/app/worker.py"]

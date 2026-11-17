@@ -22,7 +22,7 @@ Focus on files the fork still shares with upstream (upstream path → fork path)
 | `subserver/bazarr.py`, `subserver/tmdb.py` | `apps/server/subserver/…` |
 | `subserver/queue*.py` | `apps/server/subserver/…` |
 | `bazarr-postprocess/gst_enqueue.sh` | same |
-| `worker.py`, `static/`, `tests/` | `apps/server/…` |
+| `worker.py`, `tests/` | `apps/server/…` (upstream's `static/` console has no counterpart: the console is `apps/web`, so skip such changes) |
 
 ```bash
 git log --oneline --no-merges main..upstream-sync -- subserver/bazarr.py subserver/tmdb.py 'subserver/queue*.py' bazarr-postprocess/
@@ -42,7 +42,7 @@ git cherry-pick -x <sha>
 Git's rename detection usually maps `subserver/x.py` → `apps/server/subserver/x.py`. If it does not (conflict "deleted in HEAD"), apply with a path prefix instead:
 
 ```bash
-git format-patch -1 <sha> --stdout | git apply --3way --directory=apps/server --include='subserver/*' --include='worker.py' --include='static/*' --include='tests/*'
+git format-patch -1 <sha> --stdout | git apply --3way --directory=apps/server --include='subserver/*' --include='worker.py' --include='tests/*'
 git format-patch -1 <sha> --stdout | git apply --3way --include='bazarr-postprocess/*'
 ```
 

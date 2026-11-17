@@ -17,7 +17,7 @@ project of its own) and one `uv.lock`:
 
 | Member | Path | Notes |
 |---|---|---|
-| `llm-subtitle-server` | `apps/server/` | `worker.py`, `subserver/`, `static/`, `tests/`. Not packaged (`package = false`). |
+| `llm-subtitle-server` | `apps/server/` | `worker.py`, `subserver/`, `tests/`. Not packaged (`package = false`). The console it serves is `apps/web` (its own `package.json`, not a uv member). |
 | `subcore` | `packages/subcore/` | Translation engine library (`src/` layout), installed editable. |
 
 Add a dependency to one member with `uv add --package <member> <dep>`.
@@ -51,9 +51,10 @@ uv run python apps/server/worker.py --host 127.0.0.1 --port 6789
 ```
 
 The worker expects the media and Bazarr config paths from your environment to be
-valid; set `STATIC_DIR=apps/server/static` when running outside the image. For
+valid; set `STATIC_DIR=apps/web/dist` (after `npm ci && npm run build` in `apps/web`) when running outside the image;
+for work on the console itself run `npm run dev` in `apps/web`, which proxies `/api` and `/login` to the worker. For
 isolated UI work, use `--no-worker` so it does not consume queue jobs, or use
-`scripts/start-local.ps1 [-Demo] [-NoWorker]` on Windows:
+`scripts/start-local.ps1 [-Demo] [-NoWorker]` on Windows (it needs the build):
 
 ```bash
 uv run python apps/server/worker.py --no-worker --host 127.0.0.1 --port 6789

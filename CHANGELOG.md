@@ -1,4 +1,11 @@
 # Unreleased
+- **The console is now the React app; the old vanilla-JS console is removed (P12b).** The Docker image serves the build of
+  `apps/web` as `/app/static` (it no longer carries `apps/server/static/`, nor a `static-next` copy). `login.html` moved to
+  `apps/web/public/` and stays the one self-contained page served without a session; a test now walks a build-shaped folder
+  file by file and checks every other file answers `302`/`401` without one. Removed with the old pages: `GET /api/wanted`,
+  `GET /api/scan`, `POST /api/enqueue-scan` and the `scan_limit` setting (an old backup that still holds it restores, the key
+  is ignored), plus the code only they used (`list_wanted_items`, `scan_source_subtitles`, `ConsoleActions.enqueue_found`).
+  `scripts/start-local.ps1` runs the build in `apps/web/dist` (it was still pointing at `apps/worker`).
 - **Console in an iframe of another site: `CONSOLE_COOKIE_SAMESITE`.** The session cookie stays `SameSite=Strict` by default,
   which works while Organizr and the console share a site. With `CONSOLE_COOKIE_SAMESITE=none` it is `SameSite=None; Secure`
   behind HTTPS (a proxy that sends `X-Forwarded-Proto: https`) and `SameSite=Lax` over plain HTTP, where a browser would
