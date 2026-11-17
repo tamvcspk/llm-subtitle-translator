@@ -10,5 +10,12 @@ export const theme = createTheme({
     Button: { defaultProps: { size: "md" } },
     TextInput: { defaultProps: { size: "md" } },
     Select: { defaultProps: { size: "md" } },
+    // A segment's text sat at the top of its pill: centre it in a touch-sized box (44 px) for every segmented control.
+    SegmentedControl: {
+      styles: {
+        label: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: 44 },
+        control: { display: "flex" },
+      },
+    },
   },
 });
