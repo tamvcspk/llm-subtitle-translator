@@ -1,10 +1,11 @@
 import { Navigate, Route, Routes } from "react-router";
 import { Activity } from "./pages/Activity";
+import { Backups } from "./pages/Backups";
+import { Logs } from "./pages/Logs";
 import { Episodes } from "./pages/Episodes";
 import { Compare } from "./pages/Compare";
 import { Home } from "./pages/Home";
 import { MovieGlossary } from "./pages/MovieGlossary";
-import { Placeholder } from "./pages/Placeholder";
 import { Series } from "./pages/Series";
 import { Settings } from "./pages/Settings";
 import { SeriesContextTab } from "./pages/series/ContextTab";
@@ -49,8 +50,8 @@ export function AppRoutes() {
         </Route>
         <Route path="activity" element={<Activity />} />
         <Route path="settings" element={<Settings />} />
-        <Route path="backups" element={<Placeholder title="Backups" note="Create, import and download: later in P12b." />} />
-        <Route path="logs" element={<Placeholder title="Logs" note="The worker's log: later in P12b." />} />
+        <Route path="backups" element={<Backups />} />
+        <Route path="logs" element={<Logs />} />
         <Route path="*" element={<Navigate to="/library" replace />} />
       </Route>
     </Routes>

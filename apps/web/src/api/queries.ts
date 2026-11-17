@@ -591,6 +591,71 @@ export function useChangePassword() {
   });
 }
 
+// -- backups and logs -----------------------------------------------------------------------------------------------
+
+export interface BackupFile {
+  name: string;
+  size: number;
+  /** Unix seconds. */
+  created_at: number;
+}
+
+export function useBackups() {
+  return useQuery({
+    queryKey: ["backups"] as const,
+    queryFn: ({ signal }) => api<{ items: BackupFile[] }>("/api/backups", { signal }),
+  });
+}
+
+/** A backup of the settings; the keys go in only when asked for. */
+export function useCreateBackup() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (includeKeys: boolean) => api<{ backup: BackupFile }>("/api/backups", { method: "POST", body: { include_keys: includeKeys } }),
+    onSettled: () => void client.invalidateQueries({ queryKey: ["backups"] }),
+  });
+}
+
+export interface ImportAnswer {
+  ok: boolean;
+  imported: string[];
+  pre_import_backup: BackupFile;
+}
+
+/** Restore a backup zip: the worker keeps one of the current settings first, and the running worker adopts the new ones at once. */
+export function useImportBackup() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => api<ImportAnswer>("/api/backups/import", { method: "POST", body: file }),
+    onSettled: () => void client.invalidateQueries(),
+  });
+}
+
+export interface LogEntry {
+  /** `2026-11-17T21:58:01Z` (UTC); empty for a line before the first header. */
+  timestamp: string;
+  level: string;
+  message: string;
+  /** A trace that belongs to the line, if any. */
+  details: string;
+}
+
+export function useLogs() {
+  return useQuery({
+    queryKey: ["logs"] as const,
+    queryFn: ({ signal }) => api<{ entries: LogEntry[]; truncated: boolean }>("/api/logs", { signal }),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useClearLogs() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<{ ok: boolean }>("/api/logs/clear", { method: "POST", body: {} }),
+    onSettled: () => void client.invalidateQueries({ queryKey: ["logs"] }),
+  });
+}
+
 // -- story memory of a series -----------------------------------------------------------------------------------------
 
 export function useSeriesMemory(storedId: number | null | undefined) {

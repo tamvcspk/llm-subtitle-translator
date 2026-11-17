@@ -32,11 +32,14 @@ async function errorMessage(response: Response): Promise<string> {
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, signal } = options;
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  // A file (a backup to import) goes as it is; everything else is JSON.
+  const raw = typeof Blob !== "undefined" && body instanceof Blob;
+  if (raw) headers["Content-Type"] = (body as Blob).type || "application/octet-stream";
+  else if (body !== undefined) headers["Content-Type"] = "application/json";
   const response = await fetch(path, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : raw ? (body as Blob) : JSON.stringify(body),
     credentials: "same-origin",
     signal,
   });

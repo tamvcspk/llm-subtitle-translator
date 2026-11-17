@@ -1,4 +1,10 @@
 # Unreleased
+- **P12b: Backups and Logs in `apps/web`** (`#/backups`, `#/logs`, reached from Settings → Maintenance). Backups: **Create
+  backup** (keys are left out unless "Include keys" is ticked), **Import backup…** from a zip (a question first, the file is
+  sent as it is, and the answer says the settings you had are kept in the `pre-import` backup), and the list with a download
+  link the server serves. Logs: the tail of the worker's log, filtered by level (this level and worse) and by a search of the
+  line and its trace, refreshed every ten seconds, with **Clear logs** behind a confirmation. With these every screen of the
+  P12b order exists in `apps/web`.
 - **P12b: Settings in `apps/web`** (`#/settings`). Seven folding groups (Connections and Translation open), each with its own
   Save and *Unsaved changes*; a Save sends only the keys of its group and the page shows what the worker answered. Fields
   follow the types and limits of UX Appendix B: a number below its minimum is refused before it is sent, the two numbers the
