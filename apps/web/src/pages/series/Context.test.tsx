@@ -28,6 +28,16 @@ function memory(overrides: Record<string, unknown> = {}, units = [unit(501, true
   return { series: { id: 9, title: "Arcane" }, policy: "", specials_after: "", global_enabled: true, units, ...overrides };
 }
 
+/** A background task of this series, running unless `over` says otherwise. */
+const task = (over: Record<string, unknown> = {}) => ({
+  id: "abc123abc123", kind: "extract-facts", title: "Extract facts · Arcane (2 episodes)", series_id: 9, state: "running",
+  done: 1, total: 2, message: "Reading S01E04", result: null, error: "", created_at: 1, started_at: 2, finished_at: null,
+  cancel_requested: false, ...over,
+});
+
+/** What starting an extraction answers: the task that was made. */
+const extract = () => ({ "/api/units/504/context/extract": { body: { ok: true, task: task({ state: "queued", done: 0, total: 0, message: "" }) } } });
+
 function serveMemory(initial = memory(), extra: Record<string, unknown> = {}) {
   serve({
     ...base,
@@ -100,10 +110,9 @@ describe("Series Context tab", () => {
     expect(screen.getByRole("button", { name: "Extract facts (2 episodes)" })).toBeEnabled();
   });
 
-  it("asks the price of Extract facts, and reads every missing episode with one request from the last of them", async () => {
-    serveMemory(memory(), {
-      "/api/units/504/context/extract": { body: { ok: true, extracted: ["S01E02", "S01E04"], results: { S01E02: "extracted", S01E04: "extracted" } } },
-    });
+  it("asks the price of Extract facts, starts it as a background task and follows it until it is stored", async () => {
+    const finished = task({ state: "done", done: 2, message: "", finished_at: 9, result: { extracted: ["S01E02", "S01E04"], results: { S01E02: "extracted", S01E04: "extracted" } } });
+    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [finished] } } });
     show("/series/1/context");
     await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
     const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
@@ -113,13 +122,62 @@ describe("Series Context tab", () => {
     await userEvent.click(within(sheet).getByRole("button", { name: "Confirm" }));
     expect(await within(sheet).findByText("The facts are stored.")).toBeInTheDocument();
     expect(within(sheet).getByText("S01E02 read · S01E04 read")).toBeInTheDocument();
-    expect(sent("/api/units/504/context/extract")).toHaveLength(1);
+    expect(sent("/api/units/504/context/extract")).toEqual([{ unit_ids: [502, 504], background: true }]);
+    expect(within(sheet).getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 
-  it("says which episode failed and shows a refusal of the provider", async () => {
-    serveMemory(memory(), {
-      "/api/units/504/context/extract": { body: { ok: true, extracted: [], results: { S01E02: "failed", S01E04: "no-source" } } },
-    });
+  it("shows how far a running task is, and Run in background closes the box while it goes on", async () => {
+    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [task()] } } });
+    show("/series/1/context");
+    await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
+    const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Confirm" }));
+    expect(await within(sheet).findByText("Reading S01E04 · 1 of 2")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Run in background" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // the series' own card still shows it, with Stop
+    const card = screen.getByRole("region", { name: "Story memory" });
+    expect(await within(card).findByText("Reading S01E04 · 1 of 2")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /^Stop / })).toBeInTheDocument();
+  });
+
+  it("Run in background in the price box starts the task and closes the box at once", async () => {
+    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [task()] } } });
+    show("/series/1/context");
+    await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
+    const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Run in background" }));
+    await waitFor(() => expect(sent("/api/units/504/context/extract")).toEqual([{ unit_ids: [502, 504], background: true }]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("reads only the episodes that were ticked, and only ones that can be read can be ticked", async () => {
+    serveMemory(memory(), extract());
+    show("/series/1/context");
+    expect(await screen.findByRole("checkbox", { name: "Read the facts of S01E01" })).toBeDisabled(); // it has its facts
+    expect(screen.getByRole("checkbox", { name: "Read the facts of S01E03" })).toBeDisabled(); // it has no source subtitle
+    expect(screen.queryByRole("button", { name: /Extract ticked/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Read the facts of S01E04" }));
+    await userEvent.click(screen.getByRole("button", { name: "Extract ticked (1)" }));
+    const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
+    expect(within(sheet).getByText("Model calls (est.)").nextSibling).toHaveTextContent("1");
+    await userEvent.click(within(sheet).getByRole("button", { name: "Run in background" }));
+    await waitFor(() => expect(sent("/api/units/504/context/extract")).toEqual([{ unit_ids: [504], background: true }]));
+  });
+
+  it("clears the ticks", async () => {
+    serveMemory(memory(), extract());
+    show("/series/1/context");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Read the facts of S01E02" }));
+    expect(screen.getByRole("button", { name: "Extract ticked (1)" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Clear ticks" }));
+    expect(screen.queryByRole("button", { name: /Extract ticked/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Read the facts of S01E02" })).not.toBeChecked();
+  });
+
+  it("says which episode failed", async () => {
+    const finished = task({ state: "done", done: 2, finished_at: 9, result: { extracted: [], results: { S01E02: "failed", S01E04: "no-source" } } });
+    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [finished] } } });
     show("/series/1/context");
     await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
     await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Confirm" }));
@@ -127,7 +185,50 @@ describe("Series Context tab", () => {
     expect(screen.getByText("S01E02 failed · S01E04 no source subtitle")).toBeInTheDocument();
   });
 
-  it("shows the error of a provider that refuses and keeps the box open to cancel", async () => {
+  it("shows why a task failed (the provider refused) in the box", async () => {
+    const refused = task({ state: "failed", done: 0, error: "The provider could not finish (QuotaExhausted: spent)", finished_at: 9 });
+    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [refused] } } });
+    show("/series/1/context");
+    await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText("The provider could not finish (QuotaExhausted: spent)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+  });
+
+  it("opens the facts of an episode and says what they hold", async () => {
+    const facts = {
+      label: "S01E01", has_source: true, stored: true,
+      facts: {
+        characters: [{ name: "Lois", aliases: ["Mom"], gender: "f", age_hint: "40s", role: "the mother" }],
+        relationship_events: [{ a: "Lois", b: "Hal", relation: "romantic", intimacy: 4, hierarchy: "equal", cue: 12, evidence: "I love you", confidence: 0.9, detail: "husband and wife" }],
+        terms: [{ source: "Marlin Academy", kind: "place" }],
+        summary: "Malcolm is tested.",
+      },
+    };
+    serveMemory(memory(), { "/api/units/501/facts": { body: facts } });
+    show("/series/1/context");
+    expect(screen.queryByRole("button", { name: "Show the facts of S01E02" })).not.toBeInTheDocument(); // nothing read yet
+    await userEvent.click(await screen.findByRole("button", { name: "Show the facts of S01E01" }));
+    const panel = await screen.findByLabelText("Facts of S01E01");
+    expect(within(panel).getByText("Malcolm is tested.")).toBeInTheDocument();
+    expect(within(panel).getByText("Lois")).toBeInTheDocument();
+    expect(within(panel).getByText(/also Mom/)).toBeInTheDocument();
+    expect(within(panel).getByText("Lois – Hal")).toBeInTheDocument();
+    expect(within(panel).getByText(/husband and wife/)).toBeInTheDocument();
+    expect(within(panel).getByText(/“I love you”/)).toBeInTheDocument();
+    expect(within(panel).getByText("Marlin Academy · place")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Hide the facts of S01E01" }));
+    expect(screen.getByRole("button", { name: "Show the facts of S01E01" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows an error of the worker where the facts would be", async () => {
+    serveMemory(memory(), { "/api/units/501/facts": { status: 400, body: { error: "boom" } } });
+    show("/series/1/context");
+    await userEvent.click(await screen.findByRole("button", { name: "Show the facts of S01E01" }));
+    expect(await screen.findByText("boom")).toBeInTheDocument();
+  });
+
+  it("shows the error of a provider that refuses at once and keeps the box open to cancel", async () => {
     serveMemory(memory(), { "/api/units/504/context/extract": { status: 400, body: { error: "QuotaExhausted: spent" } } });
     show("/series/1/context");
     await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));

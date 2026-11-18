@@ -480,6 +480,58 @@ export interface ExtractAnswer {
   results: Record<string, string>;
 }
 
+/** A long request of the admin that runs after the HTTP answer (`/api/tasks`): in memory only, so a restart forgets it. */
+export interface BackgroundTask {
+  id: string;
+  /** `extract-facts` or `suggest`. */
+  kind: string;
+  title: string;
+  series_id: number | null;
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
+  done: number;
+  total: number;
+  /** What it is on now (an episode label), or how it ended. */
+  message: string;
+  /** What the finished work reports: for `extract-facts` the same `extracted` and `results` as {@link ExtractAnswer}. */
+  result: Record<string, unknown> | null;
+  error: string;
+  /** Unix seconds. */
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  cancel_requested: boolean;
+}
+
+/** `POST …/context/extract` with `background: true`. */
+export interface TaskStarted {
+  ok: boolean;
+  task: BackgroundTask;
+}
+
+/** `GET /api/units/{id}/facts`: what the stored facts of an episode say. Read only, never a model call. */
+export interface UnitFacts {
+  label: string;
+  has_source: boolean;
+  /** False until the facts were read; `facts` is then `null`. */
+  stored: boolean;
+  facts: {
+    characters: Array<{ name: string; aliases: string[]; gender: string; age_hint: string; role: string }>;
+    relationship_events: Array<{
+      a: string;
+      b: string;
+      relation: string;
+      intimacy: number;
+      hierarchy: string;
+      cue: number;
+      evidence: string;
+      confidence: number;
+      detail: string;
+    }>;
+    terms: Array<{ source: string; kind: string }>;
+    summary: string;
+  } | null;
+}
+
 export interface Version {
   version: number;
   /** `auto`, `retranslate`, `variant`, `cue_edit`, `revert`, `external`, `remove`. */

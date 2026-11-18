@@ -387,14 +387,39 @@ class StoryMemory:
             "own_has_source": self.has_source(unit),
         }
 
-    def refresh(self, unit: Unit, settings: dict[str, Any], provider_for: ProviderFor) -> dict[str, Any]:
-        """Extract the facts of ``unit`` and of every earlier unit that has a source (spends model calls)."""
+    def refresh(
+        self, unit: Unit, settings: dict[str, Any], provider_for: ProviderFor,
+        *, only: list[int] | None = None, progress: Callable[[int, int, str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Extract the facts of ``unit`` and of every earlier unit that has a source (spends model calls).
+
+        ``only`` names exactly the units to read (of this series, in story order) instead: the admin picked those, so
+        nothing else is read. ``progress(done, total, label)`` is told before each unit, which is where a caller that
+        was asked to stop gets to stop (a unit already read stays stored)."""
         series = self.units.get_series(unit.series_id)
         title = series.title
         self.refresh_catalog(unit, series, unit.source_code)
         units = self.units.list_units(series.id)
+        if only is None:
+            targets = [*self.prior_units(unit, units, series), self.units.get_unit(unit.id) or unit]
+        else:
+            wanted = set(only)
+            targets = sorted((u for u in units if u.id in wanted), key=lambda u: (u.season or 0, u.episode or 0, u.id))
         results: dict[str, str] = {}
-        for target in [*self.prior_units(unit, units, series), self.units.get_unit(unit.id) or unit]:
+        for done, target in enumerate(targets):
+            if progress is not None:
+                progress(done, len(targets), unit_label(target))
             _, how = self.ensure_facts(target, title, settings, provider_for)
             results[unit_label(target)] = how
+        if progress is not None:
+            progress(len(targets), len(targets), "")
         return {"extracted": [k for k, v in results.items() if v == "extracted"], "results": results}
+
+    def own_facts(self, unit: Unit) -> dict[str, Any]:
+        """What the stored facts of one unit say (reads only), for the console to show: the characters, who stands
+        how to whom, the terms and the summary. ``stored`` is false when nothing was read yet."""
+        row = self.facts.latest_facts([unit.id], EXTRACT_PROMPT_VERSION).get(unit.id)
+        return {
+            "label": unit_label(unit), "has_source": self.has_source(unit), "stored": row is not None,
+            "facts": row.facts.to_dict() if row else None,
+        }

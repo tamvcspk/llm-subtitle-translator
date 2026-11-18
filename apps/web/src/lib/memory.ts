@@ -1,4 +1,4 @@
-import type { MemoryPolicy, MemoryUnit, SeriesMemory } from "../api/types";
+import type { BackgroundTask, MemoryPolicy, MemoryUnit, SeriesMemory } from "../api/types";
 
 export const POLICY_CHOICES: Array<{ value: "default" | "on" | "off"; label: string }> = [
   { value: "default", label: "Default" },
@@ -26,12 +26,28 @@ export function missingFacts(units: MemoryUnit[]): MemoryUnit[] {
   return units.filter((unit) => unit.has_source && !unit.has_facts);
 }
 
-/**
- * One request reads the facts of an episode and of every earlier one that lacks them, so the last episode in story order
- * that still lacks facts covers all the missing ones. `null` when there is nothing to read.
- */
-export function extractTarget(units: MemoryUnit[]): MemoryUnit | null {
-  return missingFacts(units).at(-1) ?? null;
+/** What an `extract-facts` task reports per episode (`cached`, `extracted`, ...); nothing while it has not finished. */
+export function taskResults(task: Pick<BackgroundTask, "result">): Record<string, string> {
+  const results = task.result?.results;
+  if (results === null || typeof results !== "object" || Array.isArray(results)) return {};
+  return Object.fromEntries(Object.entries(results).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
+/** "Reading S01E02 · 1 of 3": where a task is, in words a person can read at a glance (the worker words the first part). */
+export function progressLine(task: Pick<BackgroundTask, "state" | "done" | "total" | "message">): string {
+  const of = task.total > 0 ? ` · ${task.done} of ${task.total}` : "";
+  switch (task.state) {
+    case "queued":
+      return "Waiting for the task before it";
+    case "running":
+      return task.total > 0 ? `${task.message || "Working"}${of}` : "Starting";
+    case "done":
+      return `Done${of}`;
+    case "cancelled":
+      return `Stopped${of}`;
+    case "failed":
+      return `Failed${of}`;
+  }
 }
 
 const RESULT_TEXT: Record<string, string> = {

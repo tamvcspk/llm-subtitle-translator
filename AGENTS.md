@@ -92,6 +92,8 @@ Seams to respect when adding code:
 
 - Proposals from facts (P14): `subcore.suggest` is pure (candidates from facts and cues, then one `extract`-task call per kind that returns target-language forms; no timecode goes to the model) and `subserver/proposals.py` (`FactsProposer`, `SuggestionService.generator`) feeds the result to `SuggestionService.propose` (`facts`: address rules and terms; `memory`: characters) and never applies anything itself. `TranslationAttempt` calls `after_facts` once the job is settled, with the units `StoryMemory.plan(extracted=…)` collected; it must never raise into the job. A proposal from facts has no `sources`, so `auto_accept_terms` cannot apply it. What the inbox holds in any status is filtered before the model is asked.
 
+- Background tasks (P14 follow-up): `BackgroundTasks` (`background.py`, in `RuntimeContext.tasks`, routes in the pure `tasks_api.py`) runs the admin's own long requests (`Extract facts`, `POST /api/suggestions/generate` with `background: true`) one at a time after the HTTP answer. It is not the job queue: in memory only, no recovery, no retry; a task stops only between its items (`progress` raises `Cancelled`), so what it stored stays. A translation, retry or retranslation is a job and never a task. A box that spends model calls offers **Run in background** next to Confirm.
+
 Invariants:
 
 - A unit never sees the facts of a later unit (story order is Bazarr's `(season, episode)`; season 0 sits outside the chain). Facts come from source subtitles, never from translations. A stale translation is flagged, never retranslated automatically.

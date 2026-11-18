@@ -690,11 +690,40 @@ only be shortened, not condensed by the model (that needs a call). `policy` is t
 series switch (`""` follows the global `memory_enabled`, `"on"`, `"off"`).
 
 ### POST /api/units/{id}/context/extract
-Reads the facts of this episode and of every earlier episode that has a source
-subtitle and no facts yet (**spends model calls**, one per episode, using
-`memory_model`). Reply `{"ok": true, "extracted": ["S01E01"], "results": {"S01E01": "extracted"}}`;
-a result is `cached`, `extracted`, `stored`, `no-source` or `failed`. A provider failure
-(quota, outage, missing key) is a `400` naming the error type.
+Reads facts (**spends model calls**, one per episode, using `memory_model`). Body, all optional:
+`{"unit_ids": [502, 504], "background": true}`.
+
+- Without `unit_ids` it reads this episode and every earlier episode that has a source subtitle and no facts yet.
+  With `unit_ids` it reads exactly those episodes (all of this series, a whole-number list that is not empty; `400`
+  otherwise), in story order, and nothing before them. An episode whose facts are already stored costs no call.
+- Without `background` the request is held until every episode is read. Reply
+  `{"ok": true, "extracted": ["S01E01"], "results": {"S01E01": "extracted"}}`; a result is `cached`,
+  `extracted`, `stored`, `no-source` or `failed`. A provider failure (quota, outage, missing key) is a `400` naming the
+  error type.
+- With `"background": true` it answers at once with `{"ok": true, "task": {…}}` (see **Background tasks**) and the
+  reading goes on after the answer; the finished task's `result` is the same `{"extracted", "results"}`, and a provider
+  failure is the task's `error`. What was read before a stop or a failure stays stored.
+
+### GET /api/units/{id}/facts
+What the stored facts of this episode say, for the console to show (reads only, never a model call):
+`{"label": "S01E02", "has_source": true, "stored": true, "facts": {"characters": [{"name", "aliases", "gender", "age_hint", "role"}], "relationship_events": [{"a", "b", "relation", "intimacy", "hierarchy", "cue", "evidence", "confidence", "detail"}], "terms": [{"source", "kind"}], "summary"}}`.
+`stored` is `false` and `facts` is `null` until the facts were read. `400` for a movie, `404` for an unknown unit.
+
+## Background tasks: `/api/tasks`
+A long request of the admin (reading the facts of many episodes, looking for proposals) can run after its HTTP answer,
+so a box that spends model calls can be closed while the work goes on. A task is **not** a job: it lives in the worker's
+memory only (a restart forgets the list; what it stored stays), runs one at a time in the order it came, and keeps the
+latest 30 finished ones.
+
+| Route | What it does |
+|---|---|
+| `GET /api/tasks` | `{"items": [task, …]}`: running, then queued, then finished (newest first). |
+| `GET /api/tasks/{id}` | One task, or `404` when it is long gone. |
+| `POST /api/tasks/{id}/cancel` | A queued task never starts; a running one stops before its next item (what it read stays stored). Reply: the task. A finished task is returned as it is. |
+
+A task is `{"id", "kind", "title", "series_id", "state", "done", "total", "message", "result", "error", "created_at", "started_at", "finished_at", "cancel_requested"}`.
+`kind` is `extract-facts` or `suggest`; `state` is `queued`, `running`, `done`, `failed` or `cancelled`; `message` says what
+it is on (`Reading S01E02`); `error` is the redacted reason of a failed task; `result` is what the work reports.
 
 ### GET /api/series/{id}/memory
 `{"series", "policy", "specials_after", "global_enabled", "units": [{"id", "label", "season", "episode", "has_source", "has_facts", "facts_hash"}]}`,
@@ -874,7 +903,7 @@ A suggestion is
 | `POST /api/suggestions/{id}/reject` | Reject: the row stays and the same content is never proposed again. Reply `{"ok", "suggestion"}`. |
 | `POST /api/suggestions/{id}/undo` | Put back exactly what accepting replaced (the entry it overwrote, the character's earlier card or none) and return the suggestion to `pending`. `400` when the glossary or the card was changed after the accept: a later edit is never overwritten. `"dry_run": true` counts the translations undoing would flag stale. |
 | `POST /api/suggestions/bulk` | Accept every pending suggestion of **one** series: `{"series_id", "lang"?, "expect", "dry_run"?}`. `expect` is the number the admin confirmed; if the inbox has changed (`400` "the list changed"), nothing is applied, and a real request without it is refused. `dry_run` returns `{"ok", "saved": false, "count", "stale_now", "stale_after", "would_stale"}` for all of them together. A real request returns `{"ok", "saved", "count", "failed": [{"id", "error"}], "series", "would_stale"}`; one that cannot be applied stays pending and does not stop the rest. |
-| `POST /api/suggestions/generate` | Ask the facts generator (P14) for proposals of **one** series and language now: `{"series_id", "lang", "estimate_only"?}`. It reads the stored facts of the series (it never extracts any), leaves out what the glossary or the inbox already has (any status), and asks the Memory model: one call each for forms of address, terms and characters, at most three. `estimate_only` spends nothing: `{"ok", "estimate_only": true, "episodes", "address_rules", "terms", "characters", "calls"}`. A real run returns the same numbers plus `"added"`, `"auto_accepted"`, `"errors"` (a kind whose answer was unusable; the others are still stored) and `"outcomes"` (the `propose` report per source). The proposals have `source` `facts` (`address_rule`, `term`) or `memory` (`character`, with a card when the lines show how they speak), `pending`, with `evidence` of `{"episode", "cue", "timecode", "text", "unit_id", "note"}`; an address rule carries `from`/`until` where the relationship changed. `400` without `series_id` or `lang`, or when the provider cannot answer; `404` for an unknown series. |
+| `POST /api/suggestions/generate` | Ask the facts generator (P14) for proposals of **one** series and language now: `{"series_id", "lang", "estimate_only"?, "background"?}`. With `"background": true` (not with `estimate_only`) it answers at once with `{"ok": true, "task": {…}}` (kind `suggest`, see `/api/tasks`) and the report is the task's `result`. It reads the stored facts of the series (it never extracts any), leaves out what the glossary or the inbox already has (any status), and asks the Memory model: one call each for forms of address, terms and characters, at most three. `estimate_only` spends nothing: `{"ok", "estimate_only": true, "episodes", "address_rules", "terms", "characters", "calls"}`. A real run returns the same numbers plus `"added"`, `"auto_accepted"`, `"errors"` (a kind whose answer was unusable; the others are still stored) and `"outcomes"` (the `propose` report per source). The proposals have `source` `facts` (`address_rule`, `term`) or `memory` (`character`, with a card when the lines show how they speak), `pending`, with `evidence` of `{"episode", "cue", "timecode", "text", "unit_id", "note"}`; an address rule carries `from`/`until` where the relationship changed. `400` without `series_id` or `lang`, or when the provider cannot answer; `404` for an unknown series. |
 
 The worker makes the same proposals by itself after a job has extracted facts (`suggest_from_facts`, default on; it never
 fails the job).

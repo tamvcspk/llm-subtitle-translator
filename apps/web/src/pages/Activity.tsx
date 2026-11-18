@@ -1,10 +1,11 @@
 import { Alert, Anchor, Button, Card, Group, Loader, Stack, Tabs, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useCatalogStatus, useQueue, useStatus, useStopJob, useSyncCatalog } from "../api/queries";
+import { useCatalogStatus, useQueue, useStatus, useStopJob, useSyncCatalog, useTasks } from "../api/queries";
 import type { QueueAnswer, QueueJob } from "../api/types";
 import { EstimateSheet, type EstimateRequest } from "../components/EstimateSheet";
 import { JobSpecSheet } from "../components/JobSpecSheet";
+import { TaskRow } from "../components/TaskRow";
 import {
   firstTab,
   isJobTab,
@@ -47,6 +48,30 @@ function Providers({ queue }: { queue: QueueAnswer }) {
         <Text size="xs" c="dimmed">
           Calls left today are shown in the price box.
         </Text>
+      </Stack>
+    </Card>
+  );
+}
+
+/** The admin's own long requests (Extract facts, Look for proposals): what runs after a box was closed. Quiet when there are none. */
+function BackgroundWork() {
+  const tasks = useTasks();
+  const items = tasks.data?.items ?? [];
+  if (items.length === 0) return null;
+  return (
+    <Card withBorder padding="md" radius="md" component="section" aria-label="Background work">
+      <Stack gap="sm">
+        <Title order={4}>Background work</Title>
+        <Text size="xs" c="dimmed">
+          Your own requests, one at a time. A restart forgets this list; what was read stays stored.
+        </Text>
+        <Stack gap="md" component="ul" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          {items.map((task) => (
+            <li key={task.id}>
+              <TaskRow task={task} />
+            </li>
+          ))}
+        </Stack>
       </Stack>
     </Card>
   );
@@ -287,6 +312,7 @@ export function Activity() {
       <Title order={2}>Activity</Title>
       {queue.isPending && <Loader size="sm" aria-label="Loading activity" />}
       {queue.isError && <Alert color="red">{queue.error.message}</Alert>}
+      <BackgroundWork />
       {queue.data && <Providers queue={queue.data} />}
       {queue.data && <Layers />}
       <Catalog />

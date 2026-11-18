@@ -6,6 +6,7 @@ import json
 import unittest
 
 from subcore.providers import Unavailable
+from subcore.suggest import SUGGEST_PROMPT_VERSION
 
 from subserver import suggestion_api
 from subserver.ports import SUGGESTION_PENDING, SUGGESTION_REJECTED
@@ -195,7 +196,7 @@ class RunTests(unittest.TestCase):
     def test_its_calls_carry_a_prompt_version_of_their_own_in_the_call_record(self):
         from subserver.translation_attempt import prompt_version_of
 
-        self.assertEqual(prompt_version_of("extract", "suggest"), "suggest-s1")
+        self.assertEqual(prompt_version_of("extract", "suggest"), f"suggest-{SUGGEST_PROMPT_VERSION}")
         self.assertEqual(prompt_version_of("extract", "extract"), prompt_version_of("extract"))  # facts keep theirs
 
     def test_an_answer_that_is_not_json_costs_only_its_own_kind_of_proposal(self):

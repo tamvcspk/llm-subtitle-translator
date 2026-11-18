@@ -95,6 +95,31 @@ describe("Activity", () => {
     expect(within(card).getByText("Escalated 35: done 29 · failed 2 · waiting 4")).toBeInTheDocument();
   });
 
+  it("lists the background work with its progress and stops one on request", async () => {
+    const task = {
+      id: "abc123abc123", kind: "extract-facts", title: "Extract facts · Arcane (3 episodes)", series_id: 9, state: "running",
+      done: 1, total: 3, message: "Reading S01E02", result: null, error: "", created_at: 1, started_at: 2, finished_at: null, cancel_requested: false,
+    };
+    const failed = { ...task, id: "def456def456", title: "Look for proposals · Arcane", state: "failed", error: "QuotaExhausted: spent", finished_at: 5 };
+    serve(activity({ "/api/tasks": { body: { items: [task, failed] } }, "/api/tasks/abc123abc123/cancel": { body: { ...task, cancel_requested: true } } }));
+    show("/activity");
+    const card = await screen.findByRole("region", { name: "Background work" });
+    expect(within(card).getByText("Extract facts · Arcane (3 episodes)")).toBeInTheDocument();
+    expect(within(card).getByText("Reading S01E02 · 1 of 3")).toBeInTheDocument();
+    expect(within(card).getByText("Failed · 1 of 3")).toBeInTheDocument();
+    expect(within(card).getByText("QuotaExhausted: spent")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Stop Look for proposals · Arcane" })).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Stop Extract facts · Arcane (3 episodes)" }));
+    await waitFor(() => expect(sent("/api/tasks/abc123abc123/cancel")).toHaveLength(1));
+  });
+
+  it("has no card for background work when there is none, or when the worker does not know it", async () => {
+    serve(activity());
+    show("/activity");
+    await screen.findByRole("region", { name: "Providers" });
+    expect(screen.queryByRole("region", { name: "Background work" })).not.toBeInTheDocument();
+  });
+
   it("shows the catalog and syncs it on request", async () => {
     serve(activity({ "/api/catalog/sync": { body: { ok: true } } }));
     show("/activity");

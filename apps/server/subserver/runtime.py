@@ -28,6 +28,7 @@ class RuntimeContext:
     catalog: Any = None  # CatalogActions: the Library page's use cases, behind /api/catalog and /api/jobs (P10, FR-14, FR-15)
     style: Any = None  # StyleService: a series' style, presets, character cards and the trial of a style (P12, FR-18)
     suggestions: Any = None  # SuggestionService: the Review inbox behind /api/suggestions (P13, FR-4.4, FR-11.1)
+    tasks: Any = None  # BackgroundTasks: the admin's long requests that run after the answer, behind /api/tasks (P14)
 
     def as_handler_context(self) -> dict[str, Any]:
         return self.__dict__.copy()

@@ -18,6 +18,7 @@ A proposal never claims more than the facts say, and nothing here applies anythi
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
@@ -41,16 +42,19 @@ __all__ = [
     "address_items",
     "character_drafts",
     "character_items",
+    "is_group",
     "term_drafts",
     "term_items",
 ]
 
 # Bump when a prompt below changes: it is on the call record, so a change can be told apart.
-SUGGEST_PROMPT_VERSION = "s1"
+# s2: an address rule says why (`why`), the two directions must agree, and an unclear hierarchy gets the neutral form.
+SUGGEST_PROMPT_VERSION = "s2"
 
 MIN_CONFIDENCE = 0.5  # a doubtful reading of the dialogue is not worth a person's attention
 MIN_UNITS = 2  # a name or a character must show in this many episodes (FR-6.2)
 MAX_STATES_PER_PAIR = 4  # the latest ones: a pair that flips more often than this is noise
+STAGE_MIN_CONFIDENCE = 0.7  # a stage after the first that rests on one reading needs at least this much confidence
 MAX_EVIDENCE = 3
 _QUOTE = 200
 
@@ -165,13 +169,25 @@ def _names(episodes: Sequence[Episode]) -> _Names:
     for episode in episodes:
         taken: set[str] = set()
         for character in episode.facts.characters:
-            names.add(character, taken)
+            if not is_group(character.name):
+                names.add(character, taken)
     return names
 
 
 def _person(names: _Names, name: str) -> Character:
     canonical = names.find(name) or name
     return names.characters.get(canonical.casefold()) or Character(canonical)
+
+
+# "Malcolm, Reese and Dewey" is three people the extraction put in one slot. A rule or a card for it would name nobody
+# (the worker could never match it against a line), so such an entry is left out, never split: which of the three a
+# relationship is about cannot be told from the name.
+_GROUP = re.compile(r"[,;/+&]|\s(?:and|và)\s", re.IGNORECASE)
+
+
+def is_group(name: str) -> bool:
+    """Does this name stand for several people (a list, "A and B")?"""
+    return bool(_GROUP.search(name))
 
 
 # -- forms of address ----------------------------------------------------------------------------------------------
@@ -197,6 +213,8 @@ def address_items(episodes: Sequence[Episode], cues_of: CuesOf, *, glossary: Glo
         for event in episode.facts.relationship_events:  # sorted by cue
             if event.confidence < MIN_CONFIDENCE or event.relation == "stranger":
                 continue
+            if is_group(event.a) or is_group(event.b):
+                continue
             a, b = _person(names, event.a), _person(names, event.b)
             if a.name.casefold() == b.name.casefold():
                 continue
@@ -216,7 +234,7 @@ def address_items(episodes: Sequence[Episode], cues_of: CuesOf, *, glossary: Glo
                 current.seen.append((episode, event))
                 continue
             states.append(_State(event.relation, event.hierarchy, event.intimacy, event.detail, (episode, event), [(episode, event)]))
-        states = states[-MAX_STATES_PER_PAIR:]
+        states = _settled(states)[-MAX_STATES_PER_PAIR:]
         a, b = _person(names, events[0][1].a), _person(names, events[0][1].b)
         starts = [None] + [_start_of(s.first[0], s.first[1].cue, cues_of) for s in states[1:]]
         for n, state in enumerate(states):
@@ -229,6 +247,21 @@ def address_items(episodes: Sequence[Episode], cues_of: CuesOf, *, glossary: Glo
                 starts[n], starts[n + 1] if n + 1 < len(states) else None, evidence,
             ))
     return items
+
+
+def _settled(states: list[_State]) -> list[_State]:
+    """Drop the stages that rest on one doubtful reading. Each episode is read alone, so a pair that is "friends" in two
+    episodes, "rivals" in the third and "friends" again is one stage with a misread in the middle, not three: a new
+    stage after the first needs a second reading or a confident one. Neighbours left with the same standing are one."""
+    kept: list[_State] = []
+    for n, state in enumerate(states):
+        if n and len(state.seen) == 1 and state.first[1].confidence < STAGE_MIN_CONFIDENCE:
+            continue
+        if kept and (kept[-1].relation, kept[-1].hierarchy) == (state.relation, state.hierarchy):
+            kept[-1].seen.extend(state.seen)
+            continue
+        kept.append(state)
+    return kept
 
 
 def _flipped(event: RelationshipEvent) -> RelationshipEvent:
@@ -295,13 +328,15 @@ def character_items(
     units: dict[str, list[str]] = {}
     for episode in episodes:
         for character in episode.facts.characters:
+            if is_group(character.name):
+                continue
             canonical = (names.find(character.name) or character.name).casefold()
             if episode.label not in units.setdefault(canonical, []):
                 units[canonical].append(episode.label)
     events: dict[str, list[tuple[Episode, RelationshipEvent, str]]] = {}
     for episode in episodes:
         for event in episode.facts.relationship_events:
-            if event.confidence < MIN_CONFIDENCE:
+            if event.confidence < MIN_CONFIDENCE or is_group(event.a) or is_group(event.b):
                 continue
             a, b = _person(names, event.a), _person(names, event.b)
             events.setdefault(a.name.casefold(), []).append((episode, event, b.name))
@@ -333,8 +368,11 @@ Each item is one pair of characters (A and B) during one stretch of the story. G
 then the word used for the listener. In Vietnamese, "anh–em" means the speaker says "anh" of themself and "em" of the
 listener. Choose what a native speaker would use for exactly this relationship, ages, genders and seniority.
 Use only what the item says; do not invent. If the language has no such forms, or plain names are what people would
-say, answer an empty string for that direction. {answer}
-Shape: {{"rules": [{{"i": <item number>, "a_to_b": "...", "b_to_a": "..."}}]}}"""
+say, answer an empty string for that direction. The two directions must fit together (if A calls B "chị", B is a woman
+older than A, and B does not call A "chị" back). When the item does not make age or seniority clear, choose the neutral form for the
+relationship rather than guess a hierarchy. `why` is one short sentence naming what in the item decided the answer
+(for example "Lois is Craig's boss"), so a reviewer can check it. {answer}
+Shape: {{"rules": [{{"i": <item number>, "a_to_b": "...", "b_to_a": "...", "why": "..."}}]}}"""
 
 _TERM_SYSTEM = """\
 You translate proper names and invented terms of a story for subtitles in the language with code `{lang}`. Each item
@@ -429,7 +467,7 @@ def address_drafts(provider: Provider, items: Sequence[AddressItem], *, lang: st
     ]
     answers = _by_item(
         _ask(provider, _ADDRESS_SYSTEM.format(lang=lang, answer=_AN_ANSWER), lines, "rules",
-             _schema("rules", {"a_to_b": "string", "b_to_a": "string"}), len(items)),
+             _schema("rules", {"a_to_b": "string", "b_to_a": "string", "why": "string"}), len(items)),
         len(items),
     )
     drafts = []
@@ -449,7 +487,9 @@ def address_drafts(provider: Provider, items: Sequence[AddressItem], *, lang: st
             payload["from"] = str(item.start)
         if item.until:
             payload["until"] = str(item.until)
-        payload["note"] = f"{item.relation}: {item.detail}" if item.detail else item.relation
+        note = f"{item.relation}: {item.detail}" if item.detail else item.relation
+        why = _text(answer.get("why"), 100)
+        payload["note"] = f"{note}. {why}" if why else note
         drafts.append(Draft("address_rule", payload, item.evidence))
     return drafts
 

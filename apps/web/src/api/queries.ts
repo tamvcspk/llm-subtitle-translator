@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import type { StyleDraft } from "../lib/style";
 import { api } from "./client";
 import type {
   AuthMe,
+  BackgroundTask,
   BulkAnswer,
   CatalogOverview,
   CatalogStatus,
@@ -12,7 +14,6 @@ import type {
   CuesPage,
   DiffAnswer,
   Estimate,
-  ExtractAnswer,
   GlossaryAnswer,
   GlossaryDoc,
   GlossaryRevision,
@@ -36,8 +37,10 @@ import type {
   SuggestionPayload,
   SuggestionStatus,
   SuggestionSummary,
+  TaskStarted,
   UnitContextAnswer,
   UnitDetail,
+  UnitFacts,
   VersionsAnswer,
 } from "./types";
 
@@ -49,6 +52,7 @@ export const keys = {
   catalogStatus: ["catalog", "status"] as const,
   me: ["auth", "me"] as const,
   queue: ["queue"] as const,
+  tasks: ["tasks"] as const,
   catalog: ["catalog", "overview"] as const,
   movies: ["catalog", "movies"] as const,
 };
@@ -696,12 +700,66 @@ export function useSaveMemory(storedId: number) {
   });
 }
 
-/** Read the facts of this episode and of every earlier one that has a source and none yet. Spends one model call each. */
+/**
+ * Read the facts of these episodes (one model call each) in the background: the answer is the task, which Activity and
+ * the box that asked follow. `anchor` is any episode of the series (the request is made through it).
+ */
 export function useExtractFacts() {
-  const refresh = useRefreshMemory();
+  const client = useQueryClient();
   return useMutation({
-    mutationFn: (unitId: number) => api<ExtractAnswer>(`/api/units/${unitId}/context/extract`, { method: "POST", body: {} }),
-    onSettled: () => void refresh(),
+    mutationFn: (request: { anchor: number; unitIds: number[] }) =>
+      api<TaskStarted>(`/api/units/${request.anchor}/context/extract`, {
+        method: "POST",
+        body: { unit_ids: request.unitIds, background: true },
+      }),
+    onSettled: () => void client.invalidateQueries({ queryKey: keys.tasks }),
+  });
+}
+
+/** What the stored facts of an episode say, read when its row is opened. */
+export function useUnitFacts(unitId: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ["unit-facts", unitId] as const,
+    queryFn: ({ signal }) => api<UnitFacts>(`/api/units/${unitId}/facts`, { signal }),
+    enabled,
+  });
+}
+
+const ACTIVE_TASK = (task: BackgroundTask) => task.state === "queued" || task.state === "running";
+
+/**
+ * The admin's long requests, newest state first. It looks again every 2 s while one is active (to show progress) and
+ * every 15 s otherwise. When a task that was active is finished, whatever it stored (facts, proposals) is read again.
+ */
+export function useTasks() {
+  const client = useQueryClient();
+  const query = useQuery({
+    queryKey: keys.tasks,
+    queryFn: ({ signal }) => api<{ items: BackgroundTask[] }>("/api/tasks", { signal }),
+    refetchInterval: (current) => (current.state.data?.items.some(ACTIVE_TASK) ? 2_000 : 15_000),
+    retry: false,
+  });
+  const active = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const items = query.data?.items;
+    if (!items) return;
+    const finished = items.some((task) => active.current.has(task.id) && !ACTIVE_TASK(task));
+    active.current = new Set(items.filter(ACTIVE_TASK).map((task) => task.id));
+    if (finished) {
+      for (const queryKey of [["memory"], ["unit-facts"], ["suggestions"], ["catalog"], ["library"], ["unit"]]) {
+        void client.invalidateQueries({ queryKey });
+      }
+    }
+  }, [query.data, client]);
+  return query;
+}
+
+/** Stop a task: a queued one never starts, a running one stops before its next item (what it stored stays). */
+export function useCancelTask() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (taskId: string) => api<BackgroundTask>(`/api/tasks/${taskId}/cancel`, { method: "POST", body: {} }),
+    onSettled: () => void client.invalidateQueries({ queryKey: keys.tasks }),
   });
 }
 

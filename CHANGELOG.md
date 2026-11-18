@@ -1,4 +1,20 @@
 # Unreleased
+- **P14 follow-ups (from the first trial on the dev server).**
+  - **Extract facts for the episodes you pick.** The Context tab has a tick box on each episode that has a source subtitle and no
+    facts, **Extract ticked (N)** and **Clear ticks**; `POST /api/units/{id}/context/extract` takes `unit_ids` and reads exactly
+    those episodes (before, it always read every missing episode up to the one asked).
+  - **Run in background.** Extract facts (and `POST /api/suggestions/generate`) take `background: true`: the answer is a task
+    (`subserver/background.py`, `/api/tasks`), one at a time, in memory only. The price box has **Confirm** (stay and watch the
+    progress) and **Run in background** (close at once); Activity has a **Background work** card with progress, the reason a task
+    failed and **Stop** (a running task stops before its next episode; what it read stays stored). Translation, retry and
+    retranslation already queue jobs and answer at once, so their boxes did not wait.
+  - **See the facts of an episode.** `GET /api/units/{id}/facts` and a **Show** button on each episode of the Context tab:
+    summary, characters, relationships (with the model's quote and cue), terms.
+  - **Better proposals.** A name that lists several people ("Malcolm, Reese and Dewey") is no longer a character, a card or one
+    side of an address rule. A pair's relationship only changes stage on a second reading or a confident one (≥ 0.7), so one
+    misread episode between two equal ones no longer makes two periods. Address rules say why in their note (`why`), the two
+    directions must agree, and an unclear hierarchy gets the neutral form (prompt `suggest-s2`; the extraction prompt `x3` is
+    unchanged, so no facts are read again).
 - **Fixes found while preparing the P14 trial (from a first look at the console with real data).**
   - Context tab of a series said "No episodes yet" when its subtitles had been translated before (no job, so no unit).
     `UnitService.adopt_catalog_episodes` now makes a unit for every episode the catalog lists, with the source subtitle it
@@ -18,7 +34,7 @@
     again, so a rejected proposal is not paid for twice. It runs after a job extracted facts (published first, errors swallowed:
     it never fails or loses a job) and on request: `POST /api/suggestions/generate` (`estimate_only` for the call count).
   - Setting `suggest_from_facts` (default on). Facts give no research sources, so `auto_accept_terms` never applies them.
-  - The call record of these calls has prompt version `suggest-s1`. `StoryMemory.plan` reports which units it extracted.
+  - The call record of these calls has prompt version `suggest-s1` (`s2` after the follow-ups above). `StoryMemory.plan` reports which units it extracted.
 - **P13: suggestions and the Review inbox.**
   - New table `suggestions` (migration 13: `source`, `fingerprint`, `UNIQUE(series_id, target_lang, fingerprint)`) and
     `SuggestionService` (`subserver/suggestions.py`): `propose` (skips what waits, was decided or the glossary already says),

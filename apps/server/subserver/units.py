@@ -25,6 +25,7 @@ from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
 
 from subcore.providers import ProviderError
 
+from .background import BackgroundTasks
 from .catalog import pick_source
 from .config import DEFAULT_MODEL, model_for_task
 from .estimates import Estimator
@@ -94,7 +95,9 @@ class UnitService:
         telemetry: Telemetry | None = None,
         estimator: Estimator | None = None,
         source_languages: Callable[[], list[dict[str, Any]]] | None = None,
+        tasks: BackgroundTasks | None = None,
     ) -> None:
+        self.tasks = tasks  # the admin's long requests that run after the HTTP answer (Extract facts)
         self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)
         self._source_languages = source_languages  # the enabled source languages, to pick a source subtitle from the catalog
         self.library = library
@@ -933,14 +936,59 @@ class UnitService:
         self.catalog.set_series_memory(series_id, memory=policy, specials_after=anchor)
         return self.series_memory(series_id)
 
-    def refresh_context(self, unit_id: int) -> dict[str, Any]:
-        """Extract facts now for this episode and the earlier ones that have a source subtitle (spends calls)."""
+    def unit_facts(self, unit_id: int) -> dict[str, Any]:
+        """What the facts stored for this episode say (reads only, no model call), for the Context tab to show."""
         unit = self.unit(unit_id)
         if unit.series_id is None or self.memory is None:
             raise ValueError("story memory applies to episodes of a series only")
+        return self.memory.own_facts(unit)
+
+    def refresh_context(self, unit_id: int, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Extract facts for this episode and the earlier ones that have a source subtitle (spends calls).
+
+        ``unit_ids`` names exactly the episodes to read instead (of this series; nothing else is read).
+        ``background`` returns at once with a task that Activity follows, instead of holding the request until
+        every episode is read."""
+        body = body or {}
+        unit = self.unit(unit_id)
+        if unit.series_id is None or self.memory is None:
+            raise ValueError("story memory applies to episodes of a series only")
+        only = self._picked_units(unit, body.get("unit_ids"))
+        if body.get("background") is not True:
+            return self._extract(unit, only, None)
+        if self.tasks is None:
+            raise ValueError("background work is not available in this worker")
+        series = self.catalog.get_series(unit.series_id)
+        count = len(only) if only is not None else None
+        title = f"Extract facts · {series.title if series else 'series'}" + (f" ({count} episode{'s' if count != 1 else ''})" if count else "")
+        task = self.tasks.submit(
+            "extract-facts", title, lambda progress: self._extract(unit, only, progress), series_id=unit.series_id,
+        )
+        return {"ok": True, "task": task}
+
+    def _picked_units(self, unit: Unit, raw: Any) -> list[int] | None:
+        """The episodes the admin ticked: whole numbers, all of this series. ``None`` when nothing was picked."""
+        if raw is None:
+            return None
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("unit_ids must be a list of episode ids")
+        ids: list[int] = []
+        for value in raw:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("unit_ids must be a list of episode ids")
+            ids.append(value)
+        own = {u.id for u in self.catalog.list_units(unit.series_id)}
+        stray = [i for i in ids if i not in own]
+        if stray:
+            raise ValueError(f"episode {stray[0]} does not belong to this series")
+        return list(dict.fromkeys(ids))
+
+    def _extract(self, unit: Unit, only: list[int] | None, progress: Callable[..., None] | None) -> dict[str, Any]:
         settings = self._settings()
         model = str(settings.get("gst_model") or DEFAULT_MODEL)
         providers: dict[str, Any] = {}
+        # The provider waits out rate limits until this deadline; ten minutes for each episode that was asked for.
+        budget = 600 * (len(only) if only else 10)
 
         def provider_for(task: str):
             name = model if task == "translate" else model_for_task(settings, task, model)
@@ -951,11 +999,12 @@ class UnitService:
                     self.telemetry.llm_call(
                         "console-context", log, prompt_version=f"memory-{EXTRACT_PROMPT_VERSION}",
                     )
-                providers[name] = self._provider_factory(settings, name, deadline=time.monotonic() + 600, on_call=record)
+                providers[name] = self._provider_factory(settings, name, deadline=time.monotonic() + budget, on_call=record)
             return providers[name]
 
         try:
-            result = self.memory.refresh(unit, settings, provider_for)
+            say = None if progress is None else (lambda done, total, label: progress(done, total, f"Reading {label}" if label else ""))
+            result = self.memory.refresh(unit, settings, provider_for, only=only, progress=say)
         except MissingApiKey as exc:
             raise ValueError(str(exc)) from None
         except ProviderError as exc:

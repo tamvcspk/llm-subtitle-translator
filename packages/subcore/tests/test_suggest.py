@@ -7,7 +7,8 @@ from subcore.glossary import Glossary, loads
 from subcore.memory import Character, Facts, FactTerm, RelationshipEvent
 from subcore.providers import FakeProvider
 from subcore.suggest import (
-    Episode, SuggestError, address_drafts, address_items, character_drafts, character_items, term_drafts, term_items,
+    Episode, SuggestError, address_drafts, address_items, character_drafts, character_items, is_group, term_drafts,
+    term_items,
 )
 
 from .helpers import make_cues
@@ -86,6 +87,42 @@ class AddressItemTests(unittest.TestCase):
         self.assertEqual((item.a.name, len(item.evidence)), ("Alice", 2))
 
 
+class DoubtTests(unittest.TestCase):
+    """What the first run on real episodes got wrong (PLAN P14, follow-up 5)."""
+
+    def test_a_name_that_lists_several_people_is_not_a_person(self):
+        group = "Malcolm, Reese and Dewey"
+        episodes = [
+            episode(1, characters=("Alice", group), events=[event("Alice", group, "family", 1), event("Alice", "Bob", "friend", 2)]),
+            episode(2, characters=("Alice", group)),
+        ]
+        (item,) = address_items(episodes, cues_of)
+        self.assertEqual((item.a.name, item.b.name), ("Alice", "Bob"))  # the pair with the group is left out, not split
+        self.assertEqual([i.character.name for i in character_items(episodes, cues_of)], ["Alice"])
+        for name in ("Hal and Lois", "Reese & Dewey", "Lois/Hal", "Hal và Lois"):
+            self.assertTrue(is_group(name), name)
+        for name in ("Andy", "Randall", "Lois", "Dr. Smith"):
+            self.assertFalse(is_group(name), name)
+
+    def test_one_doubtful_reading_is_not_a_new_stage(self):
+        flip = [
+            episode(1, events=[event("Alice", "Bob", "friend", 1)]),
+            episode(2, events=[event("Alice", "Bob", "rival", 1, confidence=0.55)]),
+            episode(3, events=[event("Alice", "Bob", "friend", 1)]),
+        ]
+        (item,) = address_items(flip, cues_of)  # friends, a misread, friends again: one stage
+        self.assertEqual((item.relation, item.start, item.until, len(item.evidence)), ("friend", None, None, 2))
+
+    def test_a_confident_or_repeated_change_is_still_a_stage(self):
+        confident = [episode(1, events=[event("Alice", "Bob", "friend", 1)]), episode(2, events=[event("Alice", "Bob", "rival", 1, confidence=0.9)])]
+        self.assertEqual([i.relation for i in address_items(confident, cues_of)], ["friend", "rival"])
+        repeated = [
+            episode(1, events=[event("Alice", "Bob", "friend", 1)]),
+            episode(2, events=[event("Alice", "Bob", "rival", 1, confidence=0.55), event("Alice", "Bob", "rival", 5, confidence=0.55)]),
+        ]
+        self.assertEqual([i.relation for i in address_items(repeated, cues_of)], ["friend", "rival"])
+
+
 class TermAndCharacterItemTests(unittest.TestCase):
     def test_a_term_needs_two_episodes_and_no_glossary_entry_and_is_not_a_character(self):
         episodes = [
@@ -132,6 +169,13 @@ class FormsTests(unittest.TestCase):
         self.assertNotIn("-->", call.user)
         self.assertEqual((call.task, call.meta["kind"]), ("extract", "suggest"))
         self.assertIn("`vi`", call.system)
+
+    def test_the_reason_the_model_gives_goes_into_the_note_for_the_reviewer(self):
+        provider = FakeProvider(handler=lambda req, n: {"rules": [{"i": 0, "a_to_b": "em–anh", "why": "Alice is his wife"}]})
+        (draft,) = address_drafts(provider, self.item(), lang="vi")
+        self.assertEqual(draft.payload["note"], "romantic: husband and wife. Alice is his wife")
+        (call,) = provider.calls
+        self.assertIn("why", call.system)
 
     def test_a_state_after_the_first_carries_its_window(self):
         items = address_items([
