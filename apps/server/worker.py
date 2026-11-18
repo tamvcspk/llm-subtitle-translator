@@ -19,7 +19,7 @@ from subserver.catalog_actions import CatalogActions
 from subserver.catalog_view import CatalogView
 from subserver.logs import configure_logging
 from subserver.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
-from subserver.config import provider_name
+from subserver.config import enabled_source_languages, provider_name
 from subserver.intake import import_queue_tree
 from subserver.job_requests import JobRequests
 from subserver.queue import JobQueue, skip_reason
@@ -323,7 +323,7 @@ def main() -> int:
     units = UnitService(
         library, glossaries, versions, worker.queue, refresh_bazarr=media.refresh,
         memory=memory, settings_source=live_settings, usage=store, provider_factory=provider_factory,
-        telemetry=telemetry,
+        telemetry=telemetry, source_languages=lambda: enabled_source_languages(settings_service.app_config()),
     )
     style_service = StyleService(
         library, styles, metadata=metadata, settings_source=live_settings, provider_factory=provider_factory,

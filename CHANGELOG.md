@@ -1,4 +1,12 @@
 # Unreleased
+- **Fixes found while preparing the P14 trial (from a first look at the console with real data).**
+  - Context tab of a series said "No episodes yet" when its subtitles had been translated before (no job, so no unit).
+    `UnitService.adopt_catalog_episodes` now makes a unit for every episode the catalog lists, with the source subtitle it
+    picks, whenever the Context data is read (idempotent; `source_languages` is wired by `worker.py`).
+  - An episode whose target subtitle was made elsewhere (`external`) now has **Retranslate** (through Estimate; the old file
+    is kept as a version first) instead of a bare View link.
+  - Settings → Connections: a stored key now shows in its box (`••••8a56 · type to replace`) and a key that works has a check
+    beside its name instead of the word "ok".
 - **P14: proposals from story facts.**
   - New `subcore.suggest` (pure): from the facts of the episodes in story order it finds the pairs whose relationship the facts
     show (one `address_rule` candidate per stretch of the story, with `from`/`until` at the cue where it turned, and the cue,

@@ -173,6 +173,9 @@ function actionsOf(
     case "edited":
       return history ? [{ kind: "link", label: "History", to: history }] : [];
     case "external":
+      // A subtitle this worker did not make (translated before, or by someone else). Replacing it is the admin's call and
+      // goes through Estimate; the old file is kept as a version first. Without a source there is nothing to translate from.
+      if (item.has_source) return [{ kind: "estimate", label: "Retranslate", request: ask(`Retranslate · ${code}`, { ...only, mode: "replace" }) }];
       return item.unit_id === null ? [] : [{ kind: "link", label: "View", to: `/unit/${item.unit_id}` }];
   }
 }

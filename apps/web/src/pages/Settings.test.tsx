@@ -258,9 +258,15 @@ describe("Settings: Connections", () => {
   it("says what each stored key may say about itself, and never its value", async () => {
     serve(worker());
     show("/settings");
-    expect(await screen.findByText("••••9a1f · ok")).toBeInTheDocument();
+    // A key that works has a check beside its name, not the word "ok"; any other state is spelled out.
+    expect(await screen.findByText("••••9a1f")).toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: "Key works" })).toHaveLength(2); // Bazarr and TMDB
+    expect(screen.queryByText("••••9a1f · ok")).not.toBeInTheDocument();
     expect(screen.getByText("••••88c0 · exhausted")).toBeInTheDocument();
     expect(screen.getAllByText("(not set)")).toHaveLength(2);
+    // The boxes of stored keys say so, so a blank box is not read as "no key".
+    expect(screen.getByLabelText("New key for Bazarr")).toHaveAttribute("placeholder", "••••9a1f · type to replace");
+    expect(screen.getByLabelText("New key for Gemini 2")).toHaveAttribute("placeholder", "New key");
     expect(screen.queryByText("**********")).not.toBeInTheDocument();
   });
 

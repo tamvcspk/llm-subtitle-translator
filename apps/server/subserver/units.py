@@ -25,12 +25,13 @@ from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
 
 from subcore.providers import ProviderError
 
+from .catalog import pick_source
 from .config import DEFAULT_MODEL, model_for_task
 from .estimates import Estimator
 from .glossaries import Glossaries
 from .jobs import FAILED, VARIANT, variant_key
 from .library import Library, Owner
-from .ports import CURRENT, PRUNED, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit
+from .ports import CURRENT, KIND_EPISODE, KIND_SERIES, PRUNED, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit
 from .store import Store
 from .queue import JobQueue
 from .memory import MEMORY_MODES, StoryMemory, parse_anchor, unit_label
@@ -92,8 +93,10 @@ class UnitService:
         usage: Store | None = None,
         telemetry: Telemetry | None = None,
         estimator: Estimator | None = None,
+        source_languages: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
         self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)
+        self._source_languages = source_languages  # the enabled source languages, to pick a source subtitle from the catalog
         self.library = library
         self.catalog = library.catalog
         self.version_repo = versions.repo
@@ -875,11 +878,37 @@ class UnitService:
             "now": now,
         }
 
+    def adopt_catalog_episodes(self, series_id: int) -> int:
+        """Make a unit for every episode of the series the catalog lists, with the source subtitle it picks, so the
+        episodes of a series whose subtitles were translated before (or by someone else) still show in Context and can
+        have their facts read. A unit is otherwise made only when the admin acts on an item or a job runs. Idempotent;
+        returns how many units it made or gave a source."""
+        if self._source_languages is None:
+            return 0
+        series = self.catalog.get_series(series_id)
+        entry = self.catalog.catalog_lookup(KIND_SERIES, series.bazarr_id) if series and series.bazarr_id else None
+        if entry is None:
+            return 0
+        sources = self._source_languages()
+        changed = 0
+        for episode in self.catalog.catalog_entries(KIND_EPISODE, parent_id=entry.id):
+            if episode.season is None or episode.episode is None:
+                continue
+            unit = self.library.unit_of(episode)
+            picked = pick_source(episode, sources)
+            if unit is not None and (unit.source_path or picked is None):
+                continue
+            path, code, language = (picked[0].path, str(picked[1]["code"]), str(picked[1]["language"])) if picked else ("", "", "")
+            self.library.register_entry(episode, entry, source_path=path, source_code=code, source_language=language)
+            changed += 1
+        return changed
+
     def series_memory(self, series_id: int) -> dict[str, Any]:
         series = self.catalog.get_series(series_id)
         if series is None or self.memory is None:
             raise LookupError(f"no series {series_id}")
         settings = self._settings()
+        self.adopt_catalog_episodes(series_id)
         return {
             "series": {"id": series.id, "title": series.title},
             "policy": series.memory,

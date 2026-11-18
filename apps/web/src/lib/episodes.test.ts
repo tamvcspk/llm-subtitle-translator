@@ -72,7 +72,8 @@ describe("the one button of a row", () => {
     expect(one({ content: "translated" })).toEqual(["Improve"]);
     expect(one({ content: "translated", stale: true })).toEqual(["Retranslate"]);
     expect(one({ content: "edited" })).toEqual(["History"]);
-    expect(one({ content: "external" })).toEqual(["View"]);
+    expect(one({ content: "external" })).toEqual(["Retranslate"]); // a subtitle made elsewhere can be replaced (the old file is kept)
+    expect(one({ content: "external" }, { has_source: false })).not.toContain("Retranslate");
     expect(one({ removed: true })).toEqual(["History", "Translate again"]);
     expect(one({ ignored: true })).toEqual(["Stop ignoring"]);
   });

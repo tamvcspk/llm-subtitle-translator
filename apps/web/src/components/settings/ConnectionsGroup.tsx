@@ -1,4 +1,5 @@
 import { Button, Group, PasswordInput, SegmentedControl, Stack, Text, TextInput } from "@mantine/core";
+import { IconCircleCheck } from "@tabler/icons-react";
 import { useCallback, useMemo, useState } from "react";
 import { useSaveSettings, useTestConnection, type SettingsAnswer } from "../../api/queries";
 import { useDraft } from "../../lib/draft";
@@ -8,12 +9,16 @@ import { GroupFrame } from "./GroupFrame";
 const KEYS = ["bazarr_url", "llm_provider", "llm_base_url"];
 const text = (value: unknown) => (typeof value === "string" ? value : "");
 
-/** `••••9a1f · ok`, or `(not set)`: what a stored key may say about itself (never its value). */
-function keyState(settings: SettingsAnswer, field: string): string {
+/** `••••9a1f`, or `(not set)`: what a stored key may say about itself (never its value). */
+function keyMask(settings: SettingsAnswer, field: string): string {
   if (settings[`${field}_configured`] !== true) return "(not set)";
   const last4 = text(settings[`${field}_last4`]);
-  const status = text(settings[`${field}_status`]);
-  return [last4 ? `••••${last4}` : "set", status].filter(Boolean).join(" · ");
+  return last4 ? `••••${last4}` : "set";
+}
+
+/** A key that works shows a check beside its name; any other state is spelled out next to the mask. */
+function keyStatus(settings: SettingsAnswer, field: string): string {
+  return settings[`${field}_configured`] === true ? text(settings[`${field}_status`]) : "";
 }
 
 function KeyRow({
@@ -31,18 +36,25 @@ function KeyRow({
 }) {
   const test = useTestConnection();
   const result = test.data;
+  const mask = keyMask(settings, slot.field);
+  const status = keyStatus(settings, slot.field);
+  const stored = settings[`${slot.field}_configured`] === true;
   return (
     <Stack gap={4}>
       <Group justify="space-between" wrap="wrap" gap="xs">
-        <Text fw={500}>{slot.label}</Text>
-        <Text size="sm" c={text(settings[`${slot.field}_status`]) === "invalid" ? "red" : "dimmed"}>
-          {keyState(settings, slot.field)}
+        <Group gap={6} wrap="nowrap">
+          <Text fw={500}>{slot.label}</Text>
+          {status === "ok" && <IconCircleCheck size={18} color="var(--mantine-color-teal-6)" role="img" aria-label="Key works" />}
+        </Group>
+        <Text size="sm" c={status === "invalid" ? "red" : "dimmed"}>
+          {status && status !== "ok" ? `${mask} · ${status}` : mask}
         </Text>
       </Group>
       <Group align="flex-end" wrap="nowrap" gap="xs">
         <PasswordInput
           aria-label={`New key for ${slot.label}`}
-          placeholder="New key"
+          // The box shows that a key is already stored (the mask is not the key and is never sent): type to replace it.
+          placeholder={stored ? `${mask} · type to replace` : "New key"}
           autoComplete="off"
           value={typed}
           onChange={(event) => onType(event.currentTarget.value)}
