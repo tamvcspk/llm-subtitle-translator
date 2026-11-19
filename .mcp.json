@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@playwright/mcp@0.0.84",
+        "--browser",
+        "msedge",
+        "--viewport-size",
+        "820x1180",
+        "--isolated",
+        "--caps",
+        "vision,devtools",
+        "--console-level",
+        "info",
+        "--file-paths",
+        "absolute",
+        "--output-dir",
+        "local-state/pw",
+        "--timeout-action",
+        "10000"
+      ]
+    }
+  }
+}
