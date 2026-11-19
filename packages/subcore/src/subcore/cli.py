@@ -36,6 +36,9 @@ from .translate.review import review
 
 _LANG_SUFFIX_RE = re.compile(r"\.[A-Za-z]{2,3}$")
 _DEFAULT_TARGET = "vi"
+# The variable each provider reads its key from unless ``--api-key-env`` names another. A key of one provider is never
+# offered to another provider's server (R11-1): openai_compat does not fall back to the Gemini variable.
+_DEFAULT_KEY_ENV = {"gemini": "GEMINI_API_KEY", "openai_compat": "OPENAI_COMPAT_API_KEY"}
 
 
 def default_output_path(src: Path, target: str, source_lang: str | None) -> Path:
@@ -65,6 +68,30 @@ def resolve_api_key(flag: str | None, env_name: str, key_file: str | None, envir
     return ""
 
 
+class _Fail(Exception):
+    """A user-facing failure: printed, exit code 2."""
+
+
+def _key_env(args: argparse.Namespace) -> str:
+    return getattr(args, "api_key_env", None) or _DEFAULT_KEY_ENV.get(getattr(args, "provider", ""), "GEMINI_API_KEY")
+
+
+def _api_key(args: argparse.Namespace, also=()) -> str:
+    try:
+        return resolve_api_key(args.api_key, _key_env(args), args.api_key_file, also=also)
+    except (OSError, ValueError) as exc:  # a missing or unreadable key file: say so, without a traceback
+        raise _Fail(f"--api-key-file: the key file cannot be read ({_describe(exc)})") from None
+
+
+def _describe(exc: Exception) -> str:
+    """One line for an input error. An OS error says what went wrong, not the whole traceback."""
+    if isinstance(exc, OSError) and exc.strerror:
+        return exc.strerror
+    if isinstance(exc, UnicodeDecodeError):
+        return "it is not UTF-8 text"
+    return str(exc)
+
+
 # ---------------------------------------------------------------- inputs
 
 
@@ -73,12 +100,19 @@ def _load_bundle(path: str | None) -> TranslationBundle | None:
         return None
     try:
         return TranslationBundle.from_json(Path(path).read_text(encoding="utf-8-sig"))
-    except (OSError, BundleError) as exc:
+    except BundleError as exc:
         raise _Fail(f"bundle {path}: {exc}") from None
+    except (OSError, ValueError) as exc:  # unreadable, or not UTF-8
+        raise _Fail(f"bundle {path}: {_describe(exc)}") from None
 
 
-class _Fail(Exception):
-    """A user-facing failure: printed, exit code 2."""
+def _load_glossary(path: str) -> glossary_mod.Glossary:
+    try:
+        return glossary_mod.load(path)
+    except glossary_mod.GlossaryError as exc:
+        raise _Fail(str(exc)) from None
+    except (OSError, ValueError) as exc:
+        raise _Fail(f"glossary {path}: {_describe(exc)}") from None
 
 
 def _inputs(args: argparse.Namespace, cues: list[srt.Cue] | None):
@@ -119,6 +153,8 @@ def _inputs(args: argparse.Namespace, cues: list[srt.Cue] | None):
 
     # Flags that were given win over the bundle (FR-21.3).
     if args.target is not None:
+        if args.target.lower() != ctx.target_lang.lower():
+            ctx.target_name = None  # the bundle's display name described the old language (R11-2)
         ctx.target_lang = args.target
     if args.source is not None:
         ctx.source_lang = args.source
@@ -130,10 +166,7 @@ def _inputs(args: argparse.Namespace, cues: list[srt.Cue] | None):
         ctx.season = args.season if args.season is not None else ctx.season
         ctx.episode = args.episode if args.episode is not None else ctx.episode
     if args.glossary:
-        try:
-            ctx.glossary = glossary_mod.load(args.glossary)
-        except (OSError, glossary_mod.GlossaryError) as exc:
-            raise _Fail(str(exc)) from None
+        ctx.glossary = _load_glossary(args.glossary)
     if args.glossary or args.season is not None or args.episode is not None:
         ctx.active_rules = None  # recomputed for the new glossary and episode
     if args.temperature is not None:
@@ -145,45 +178,36 @@ def _inputs(args: argparse.Namespace, cues: list[srt.Cue] | None):
     return cues if cues is not None else list(base.cues), ctx, options, only, keep, model, max_output
 
 
-def _bundle_for(args: argparse.Namespace, cues: list[srt.Cue] | None, provider: Provider | None = None) -> TranslationBundle:
-    """Flag > bundle > provider for the model name and the output limit (FR-21.3)."""
+def _bundle_for(args: argparse.Namespace, cues: list[srt.Cue] | None) -> TranslationBundle:
+    """The bundle the flags and ``--bundle`` describe. The model and the output limit are what the user or the bundle
+    set, and empty otherwise: the provider that runs it supplies them, so the bundle keeps its hash (R11-3, FR-21.3)."""
     cues, ctx, options, only, keep, model, max_output = _inputs(args, cues)
-    if provider is not None:
-        model = model or str(getattr(provider, "model", "") or "")
-        max_output = max_output or provider.caps.max_output_tokens
     return make_bundle(cues, ctx, options, only=only, keep=keep, model=model, max_output_tokens=max_output)
 
 
-def _bundle_model(args: argparse.Namespace) -> str | None:
-    """The model a ``--bundle`` was made with, so running it again calls that model unless ``--model`` says otherwise."""
-    path = getattr(args, "bundle", None)
-    if not path or isinstance(path, list):
-        return None
-    base = _load_bundle(path)
-    return (base.params.model or None) if base else None
-
-
-def _build_provider(args: argparse.Namespace, bundle_model: str | None = None) -> Provider:
+def _build_provider(args: argparse.Namespace, bundle_model: str | None = None, target: str | None = None) -> Provider:
+    """The provider for a run. ``bundle_model`` is the model the bundle carries (``--model`` wins over it); ``target``
+    is the bundle's language, which the ``fake`` provider writes in front of every line."""
     model = getattr(args, "model", None) or bundle_model
     if args.provider == "fake":
-        return FakeProvider(prefix=f"[{args.target or _DEFAULT_TARGET}] ")
+        return FakeProvider(prefix=f"[{target or args.target or _DEFAULT_TARGET}] ")
     if args.provider == "openai_compat":
         from .providers.openai_compat import OpenAICompatProvider
 
         if not args.base_url or not model:
             raise SystemExit("error: --provider openai_compat needs --base-url and --model")
         # A local server (Ollama, LM Studio) needs no key: the variable may be unset.
-        key = resolve_api_key(args.api_key, args.api_key_env, args.api_key_file)
+        key = _api_key(args)
         try:
             return OpenAICompatProvider(args.base_url, key, model)
         except ValueError as exc:
             raise SystemExit(f"error: {exc}") from None
     from .providers.gemini import DEFAULT_MODEL, GeminiProvider
 
-    key = resolve_api_key(args.api_key, args.api_key_env, args.api_key_file, also=("GOOGLE_API_KEY",))
+    key = _api_key(args, also=("GOOGLE_API_KEY",))
     if not key:
         raise SystemExit(
-            f"error: set the {args.api_key_env} environment variable, pass --api-key-file, "
+            f"error: set the {_key_env(args)} environment variable, pass --api-key-file, "
             "or use --provider fake"
         )
     return GeminiProvider(key, model or DEFAULT_MODEL)
@@ -192,8 +216,10 @@ def _build_provider(args: argparse.Namespace, bundle_model: str | None = None) -
 def _read_srt(path: str) -> list[srt.Cue]:
     try:
         return srt.parse_file(Path(path))
-    except (OSError, srt.SrtError) as exc:
+    except srt.SrtError as exc:
         raise _Fail(str(exc)) from None
+    except (OSError, ValueError) as exc:
+        raise _Fail(f"{path}: {_describe(exc)}") from None
 
 
 def _report(bundle: TranslationBundle, result: TranslationResult, findings) -> dict:
@@ -222,15 +248,17 @@ def _report(bundle: TranslationBundle, result: TranslationResult, findings) -> d
 def _cmd_translate(args: argparse.Namespace) -> int:
     src = Path(args.file)
     cues = _read_srt(args.file)
-    planned = _bundle_for(args, cues)  # names the output (and checks the glossary) before anything costs money
-    out = Path(args.out) if args.out else default_output_path(src, planned.target_lang, planned.source_lang or None)
+    bundle = _bundle_for(args, cues)  # names the output (and checks the glossary) before anything costs money
+    out = Path(args.out) if args.out else default_output_path(src, bundle.target_lang, bundle.source_lang or None)
     report_path = Path(args.report) if args.report else out.with_name(out.stem + ".report.json")
-    for existing in (out, report_path):
-        if existing.exists() and not args.force:
-            print(f"error: {existing} already exists (use --force to overwrite)", file=sys.stderr)
-            return 2
-    provider = _build_provider(args, _bundle_model(args))
-    bundle = _bundle_for(args, cues, provider)
+    if out.exists() and not args.force:
+        print(f"error: {out} already exists (use --force to overwrite)", file=sys.stderr)
+        return 2
+    # The default report belongs to a run and replaces the last one; one named with --report is the user's own file.
+    if args.report and report_path.exists() and not args.force:
+        print(f"error: {report_path} already exists (use --force to overwrite)", file=sys.stderr)
+        return 2
+    provider = _build_provider(args, bundle.params.model or None, bundle.target_lang)
 
     def progress(done: int, total: int) -> None:
         print(f"\r{done}/{total} cues", end="", file=sys.stderr, flush=True)
@@ -245,16 +273,26 @@ def _cmd_translate(args: argparse.Namespace) -> int:
         return 1
     print(file=sys.stderr)
 
-    srt.write_atomic(out, srt.serialize(result.cues))
-    findings = review(list(bundle.cues), result.cues, bundle.glossary)
-    report_path.write_text(json.dumps(_report(bundle, result, findings), ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        srt.write_atomic(out, srt.serialize(result.cues))
+    except OSError as exc:
+        print(f"error: the translation could not be written to {out}: {_describe(exc)}", file=sys.stderr)
+        return 1
     for warning in result.warnings:
         print(f"warning: {warning}", file=sys.stderr)
     print(
         f"wrote {out} ({len(result.cues)} cues, {len(result.calls)} call(s), "
-        f"{result.tokens_in} tokens in / {result.tokens_out} out); report {report_path}",
+        f"{result.tokens_in} tokens in / {result.tokens_out} out)",
         file=sys.stderr,
     )
+    findings = review(list(bundle.cues), result.cues, bundle.glossary)
+    try:
+        srt.write_atomic(report_path, json.dumps(_report(bundle, result, findings), ensure_ascii=False, indent=2))
+    except OSError as exc:
+        print(f"error: the subtitle was written, but the report {report_path} could not be: {_describe(exc)}",
+              file=sys.stderr)
+        return 1
+    print(f"report {report_path}", file=sys.stderr)
     return 0
 
 
@@ -265,7 +303,10 @@ def _cmd_bundle(args: argparse.Namespace) -> int:
     if out.exists() and not args.force:
         print(f"error: {out} already exists (use --force to overwrite)", file=sys.stderr)
         return 2
-    srt.write_atomic(out, bundle.to_json())
+    try:
+        srt.write_atomic(out, bundle.to_json())
+    except OSError as exc:
+        raise _Fail(f"{out}: {_describe(exc)}") from None
     print(f"wrote {out} (bundle {bundle.bundle_hash()[:12]}, {len(bundle.cues)} cues)", file=sys.stderr)
     return 0
 
@@ -273,7 +314,7 @@ def _cmd_bundle(args: argparse.Namespace) -> int:
 def _cmd_render(args: argparse.Namespace) -> int:
     cues = _read_srt(args.file) if args.file else None
     bundle = _bundle_for(args, cues)
-    requests = render_requests(bundle)
+    requests = render_requests(bundle)  # no provider: an unset output limit is planned with the default one
     if not requests:
         print("(nothing to translate)")
         return 0
@@ -290,14 +331,18 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
+    """Review a translation the way the worker does: with the glossary narrowed to the episode (R11-4). A ``--bundle``
+    brings its own, already narrowed; ``--glossary`` is narrowed here by ``--season``/``--episode``, or by the bundle's."""
     source = _read_srt(args.source)
     target = _read_srt(args.translation)
-    gloss = None
+    base = _load_bundle(args.bundle)
+    gloss = base.glossary if base is not None and not base.glossary.is_empty() else None
     if args.glossary:
-        try:
-            gloss = glossary_mod.load(args.glossary)
-        except (OSError, glossary_mod.GlossaryError) as exc:
-            raise _Fail(str(exc)) from None
+        season = args.season if args.season is not None else (base.season if base is not None else None)
+        episode = args.episode if args.episode is not None else (base.episode if base is not None else None)
+        gloss = _load_glossary(args.glossary).for_episode(season, episode)
+    elif (args.season is not None or args.episode is not None) and base is not None:
+        raise _Fail("the bundle's glossary is already narrowed to its own episode; pass --glossary to narrow another")
     findings = review(source, target, gloss)
     if args.format == "json":
         print(json.dumps([f.to_dict() for f in findings], ensure_ascii=False, indent=2))
@@ -320,22 +365,36 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     bundle_paths = args.bundle or []
     if not (1 <= len(bundle_paths) <= 2) or (len(bundle_paths) == 1 and golden is None):
         raise _Fail("compare needs two --bundle, or one --bundle with --golden")
-    summaries = []
-    results = []
+    # Everything that can fail without a call (a bad bundle, a missing key) fails here, before the first paid run.
+    plan = []
     for number, path in enumerate(bundle_paths, start=1):
         args.bundle = path
-        provider = _build_provider(args, _bundle_model(args))
-        bundle = _bundle_for(args, cues, provider)
-        result = run(bundle, provider)
-        findings = review(list(bundle.cues), result.cues, bundle.glossary)
+        bundle = _bundle_for(args, cues)
+        provider = _build_provider(args, bundle.params.model or None, bundle.target_lang)
         name = Path(path).stem if len(bundle_paths) > 1 else "result"
-        summaries.append(compare_mod.summarize(
-            f"{number}:{name}", result, findings, bundle_hash=bundle.bundle_hash(), golden=golden,
-        ))
+        plan.append((f"{number}:{name}", bundle, provider))
+    if args.provider != "fake":
+        print(f"note: this makes {len(plan)} translation(s) of {len(cues)} cues, each billed by the provider",
+              file=sys.stderr)
+    summaries, results, failures = [], [], []
+    for label, bundle, provider in plan:
+        try:
+            result = run(bundle, provider)
+        except TranslationError as exc:
+            failures.append(f"{label}: {exc}")
+            continue
+        except ProviderError as exc:
+            failures.append(f"{label}: provider failed: {type(exc).__name__}: {exc}")
+            continue
+        findings = review(list(bundle.cues), result.cues, bundle.glossary)
+        summaries.append(compare_mod.summarize(label, result, findings, bundle_hash=bundle.bundle_hash(), golden=golden))
         results.append(result)
-    changed = compare_mod.changed_cues(results[0], results[1]) if len(results) == 2 else None
-    print(compare_mod.format_table(summaries, changed))
-    return 0
+    if summaries:  # what was paid for is shown even when the other side failed
+        changed = compare_mod.changed_cues(results[0], results[1]) if len(results) == 2 else None
+        print(compare_mod.format_table(summaries, changed))
+    for failure in failures:
+        print(f"error: {failure}", file=sys.stderr)
+    return 1 if failures else 0
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
@@ -365,8 +424,11 @@ def _cmd_memory(args: argparse.Namespace) -> int:
     for path in map(Path, args.files):
         try:
             cues = srt.parse_file(path)
-        except (OSError, srt.SrtError) as exc:
+        except srt.SrtError as exc:
             print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except (OSError, ValueError) as exc:
+            print(f"error: {path}: {_describe(exc)}", file=sys.stderr)
             return 2
         try:
             result = extract_facts(provider, cues, title=args.title or "", source_lang=args.source)
@@ -409,8 +471,11 @@ def _cmd_memory(args: argparse.Namespace) -> int:
 def _cmd_check_glossary(args: argparse.Namespace) -> int:
     try:
         g = glossary_mod.load(args.file)
-    except (OSError, glossary_mod.GlossaryError) as exc:
+    except glossary_mod.GlossaryError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as exc:
+        print(f"error: {args.file}: {_describe(exc)}", file=sys.stderr)
         return 2
     print(
         f"ok: {len(g.terms)} terms ({len(g.locked_terms())} locked), "
@@ -438,12 +503,18 @@ def _context_flags(p: argparse.ArgumentParser, bundle_flag: bool = True) -> None
     p.add_argument("--max-output-tokens", type=int, help="override the output limit used for planning")
 
 
+_KEY_ENV_HELP = (
+    "environment variable holding the API key (default: GEMINI_API_KEY for gemini, OPENAI_COMPAT_API_KEY for "
+    "openai_compat; a key of one provider is never sent to another)"
+)
+
+
 def _provider_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--provider", choices=["gemini", "openai_compat", "fake"], default="gemini")
     p.add_argument("--base-url", help="openai_compat only: e.g. http://localhost:11434/v1 or https://openrouter.ai/api/v1")
     p.add_argument("--api-key", help="API key on the command line (prefer the env var or --api-key-file: flags show in ps)")
     p.add_argument("--api-key-file", help="file whose first non-empty line is the API key")
-    p.add_argument("--api-key-env", default="GEMINI_API_KEY", help="environment variable holding the API key")
+    p.add_argument("--api-key-env", help=_KEY_ENV_HELP)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -456,7 +527,7 @@ def build_parser() -> argparse.ArgumentParser:
     _provider_flags(t)
     t.add_argument("--out", help="output path (default: <name>.<target>.srt beside the input)")
     t.add_argument("--force", action="store_true", help="overwrite the output file if it exists")
-    t.add_argument("--report", help="report JSON path (default: <output>.report.json)")
+    t.add_argument("--report", help="report JSON path (default: <output>.report.json, replaced on every run)")
     t.set_defaults(func=_cmd_translate)
 
     b = sub.add_parser("bundle", help="write the bundle of a translation without calling a model")
@@ -476,6 +547,9 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("source", help="source .srt")
     v.add_argument("translation", help="translated .srt")
     v.add_argument("--glossary", help="glossary YAML: locked terms are checked")
+    v.add_argument("--bundle", help="a bundle JSON: its glossary (already narrowed to its episode) is used")
+    v.add_argument("--season", type=int, help="narrow --glossary to this episode, as the worker does")
+    v.add_argument("--episode", type=int)
     v.add_argument("--format", choices=["text", "json"], default="text")
     v.set_defaults(func=_cmd_validate)
 
@@ -496,7 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--base-url", help="openai_compat only: e.g. http://localhost:11434/v1")
     m.add_argument("--api-key", help="API key on the command line (prefer the env var or --api-key-file)")
     m.add_argument("--api-key-file", help="file whose first non-empty line is the API key")
-    m.add_argument("--api-key-env", default="GEMINI_API_KEY", help="environment variable holding the API key")
+    m.add_argument("--api-key-env", help=_KEY_ENV_HELP)
     m.add_argument("--title", help="series title (sent to the model as context)")
     m.add_argument("--source", help="source language code, e.g. en")
     m.add_argument("--save", help="also write the facts of every file to this JSON file")

@@ -167,17 +167,33 @@ class CliGuardTests(CliTestBase):
         self.assertEqual(code, 2)
         self.assertIn("already exists", err)
 
-    def test_an_existing_report_is_not_overwritten_without_force(self):
+    def test_an_old_report_alone_does_not_block_a_run_and_is_replaced(self):
+        """R11-8: only the subtitle needs --force; the report of the last run is replaced, atomically."""
         report = self.dir / "Movie.vi.report.json"
-        report.write_text("keep me", encoding="utf-8")
+        report.write_text("stale", encoding="utf-8")
         code, _, err = run_cli("translate", str(self.src), "--provider", "fake", "--source", "en")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["cues"], 5)
+
+    def test_a_report_named_with_report_is_the_users_file_and_needs_force(self):
+        mine = self.dir / "mine.json"
+        mine.write_text("keep me", encoding="utf-8")
+        code, _, err = run_cli("translate", str(self.src), "--provider", "fake", "--source", "en",
+                               "--report", str(mine))
         self.assertEqual(code, 2)
-        self.assertIn("report.json", err)
-        self.assertEqual(report.read_text(encoding="utf-8"), "keep me")
+        self.assertIn("mine.json", err)
+        self.assertEqual(mine.read_text(encoding="utf-8"), "keep me")
         self.assertFalse((self.dir / "Movie.vi.srt").exists())
-        code, _, _ = run_cli("translate", str(self.src), "--provider", "fake", "--source", "en", "--force")
+        code, _, _ = run_cli("translate", str(self.src), "--provider", "fake", "--source", "en",
+                             "--report", str(mine), "--force")
         self.assertEqual(code, 0)
-        self.assertNotEqual(report.read_text(encoding="utf-8"), "keep me")
+
+    def test_a_report_that_cannot_be_written_is_said_after_the_subtitle_is_safe(self):
+        with mock.patch.object(cli.srt, "write_atomic", side_effect=[None, PermissionError(13, "Permission denied")]):
+            code, _, err = run_cli("translate", str(self.src), "--provider", "fake", "--source", "en")
+        self.assertEqual(code, 1)
+        self.assertIn("the subtitle was written, but the report", err)
+        self.assertNotIn("Traceback", err)
 
     def test_a_bundle_cannot_be_moved_to_another_episode_by_a_flag(self):
         """Its glossary is already narrowed to its own episode; narrowing it again would lose terms silently."""
@@ -191,15 +207,16 @@ class CliGuardTests(CliTestBase):
         b_path = self.path("b.json")
         run_cli("bundle", str(self.src), "--model", "gemini-from-the-bundle", "-o", b_path)
         args = cli.build_parser().parse_args(["translate", str(self.src), "--bundle", b_path])
-        self.assertEqual(cli._bundle_model(args), "gemini-from-the-bundle")
+        model = cli._bundle_for(args, None).params.model
+        self.assertEqual(model, "gemini-from-the-bundle")
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k"}, clear=True), \
                 mock.patch("subcore.providers.gemini.GeminiProvider") as gemini:
-            cli._build_provider(args, cli._bundle_model(args))
+            cli._build_provider(args, model)
         self.assertEqual(gemini.call_args.args, ("k", "gemini-from-the-bundle"))
         args.model = "flag-wins"
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k"}, clear=True), \
                 mock.patch("subcore.providers.gemini.GeminiProvider") as gemini:
-            cli._build_provider(args, cli._bundle_model(args))
+            cli._build_provider(args, cli._bundle_for(args, None).params.model)
         self.assertEqual(gemini.call_args.args, ("k", "flag-wins"))
 
     def test_a_damaged_bundle_file_is_a_clean_error(self):

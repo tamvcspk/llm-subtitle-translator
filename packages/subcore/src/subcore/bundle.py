@@ -17,11 +17,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import srt
+from . import matching, srt
 from .glossary import AddressRule, ActiveRule, Glossary, dumps as dump_glossary, loads as load_glossary
 from .style import CharacterCard, Style, StyleError
 
@@ -35,14 +34,69 @@ class BundleError(ValueError):
     """The bundle is not one this build can read."""
 
 
+def _optional_int(value: Any, name: str, minimum: int) -> int | None:
+    """``None`` stays unset; anything else must be a whole number (JSON ``2``, not ``"2"``, ``2.5`` or ``true``)."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise BundleError(f"{name} must be a whole number, got {value!r}")
+    if value < minimum:
+        raise BundleError(f"{name} must be at least {minimum}, got {value}")
+    return value
+
+
+def _cue_number(value: Any, name: str) -> int:
+    number = _optional_int(value, name, 1)
+    if number is None:
+        raise BundleError(f"{name} holds a cue number that is null")
+    return number
+
+
+def _params_of(raw: Any) -> "Params":
+    """Read the ``params`` object with its types checked, so a bundle edited by hand fails here, before any call is
+    paid for, and not in the middle of a run."""
+    if raw is None:
+        return Params()
+    if not isinstance(raw, dict):
+        raise BundleError("params is a JSON object")
+    defaults = Params()
+    values: dict[str, Any] = {}
+    for name in ("model", "prompt_version"):
+        value = raw.get(name, getattr(defaults, name))
+        if not isinstance(value, str):
+            raise BundleError(f"params.{name} must be text, got {value!r}")
+        values[name] = value
+    temperature = raw.get("temperature", defaults.temperature)
+    if temperature is not None:
+        if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or temperature < 0:
+            raise BundleError(f"params.temperature must be a number, 0 or more, got {temperature!r}")
+        temperature = float(temperature)
+    values["temperature"] = temperature
+    factor = raw.get("output_factor", defaults.output_factor)
+    if isinstance(factor, bool) or not isinstance(factor, (int, float)) or factor <= 0:
+        raise BundleError(f"params.output_factor must be a number above 0, got {factor!r}")
+    values["output_factor"] = float(factor)
+    for name, minimum in (
+        ("max_output_tokens", 0), ("min_part_cues", 1), ("repair_rounds", 0), ("context_window", 0),
+        ("max_split_depth", 0), ("glossary_filter_threshold", 0),
+    ):
+        number = _optional_int(raw.get(name, getattr(defaults, name)), f"params.{name}", minimum)
+        values[name] = getattr(defaults, name) if number is None else number
+    return Params(**values)
+
+
 @dataclass(frozen=True)
 class Params:
-    """Model and planning parameters. They change the requests, so they are part of the hash."""
+    """Model and planning parameters. They change the requests, so they are part of the hash.
+
+    ``model`` empty and ``max_output_tokens`` 0 mean "not decided": whoever runs the bundle uses its provider's model
+    and output limit. They are then left out of the serialised bundle and of its hash (D6), so a bundle written without
+    a provider keeps the same hash when it is run, whatever the provider turns out to be."""
 
     model: str = ""
     prompt_version: str = ""
     temperature: float | None = None
-    max_output_tokens: int = 65_536
+    max_output_tokens: int = 0
     output_factor: float = 1.3
     min_part_cues: int = 100
     repair_rounds: int = 2
@@ -82,20 +136,23 @@ class TranslationBundle:
 
     # -- serialisation -----------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "prompt_version": self.params.prompt_version,
+            "temperature": self.params.temperature,
+            "output_factor": self.params.output_factor,
+            "min_part_cues": self.params.min_part_cues,
+            "repair_rounds": self.params.repair_rounds,
+            "context_window": self.params.context_window,
+            "max_split_depth": self.params.max_split_depth,
+            "glossary_filter_threshold": self.params.glossary_filter_threshold,
+        }
+        if self.params.model:  # not decided yet: no key, so the hash does not depend on a value nobody chose
+            params["model"] = self.params.model
+        if self.params.max_output_tokens:
+            params["max_output_tokens"] = self.params.max_output_tokens
         return {
             "bundle_version": BUNDLE_VERSION,
-            "params": {
-                "model": self.params.model,
-                "prompt_version": self.params.prompt_version,
-                "temperature": self.params.temperature,
-                "max_output_tokens": self.params.max_output_tokens,
-                "output_factor": self.params.output_factor,
-                "min_part_cues": self.params.min_part_cues,
-                "repair_rounds": self.params.repair_rounds,
-                "context_window": self.params.context_window,
-                "max_split_depth": self.params.max_split_depth,
-                "glossary_filter_threshold": self.params.glossary_filter_threshold,
-            },
+            "params": params,
             "language": {"target": self.target_lang, "target_name": self.target_name, "source": self.source_lang},
             "episode": {
                 "title": self.title, "overview": self.overview, "season": self.season, "episode": self.episode,
@@ -147,11 +204,13 @@ class TranslationBundle:
         if version > BUNDLE_VERSION:
             raise BundleError(f"bundle_version {version} is newer than this build reads ({BUNDLE_VERSION})")
 
-        params = dict(data.get("params") or {})
-        known = {f for f in Params.__dataclass_fields__}
-        p = Params(**{k: v for k, v in params.items() if k in known})
+        p = _params_of(data.get("params"))
         language = data.get("language") or {}
         episode = data.get("episode") or {}
+        if not isinstance(language, dict) or not isinstance(episode, dict):
+            raise BundleError("language and episode are JSON objects")
+        season = _optional_int(episode.get("season"), "episode.season", 0)
+        episode_no = _optional_int(episode.get("episode"), "episode.episode", 0)
         try:
             cues = tuple(
                 srt.Cue(
@@ -175,11 +234,14 @@ class TranslationBundle:
                     a=str(r.get("a", "")), b=str(r.get("b", "")), a_to_b=str(r.get("a_to_b", "")),
                     b_to_a=str(r.get("b_to_a", "")), note=str(r.get("note", "")),
                 ),
-                from_cue=r.get("from_cue"), until_cue=r.get("until_cue"),
+                from_cue=_optional_int(r.get("from_cue"), f"active_rules[{n}].from_cue", 0),
+                until_cue=_optional_int(r.get("until_cue"), f"active_rules[{n}].until_cue", 0),
             )
-            for r in data.get("active_rules") or []
+            for n, r in enumerate(data.get("active_rules") or [])
         )
         requested = data.get("requested")
+        if requested is not None and not isinstance(requested, list):
+            raise BundleError("requested is a list of cue numbers, or null")
         keep = {int(k["i"]): str(k["text"]) for k in data.get("keep") or []}
         try:  # bundles of version 1 have neither
             style = Style.from_doc(data.get("style"), "style")
@@ -193,15 +255,15 @@ class TranslationBundle:
             source_lang=str(language.get("source") or ""),
             title=str(episode.get("title") or ""),
             overview=str(episode.get("overview") or ""),
-            season=episode.get("season"),
-            episode=episode.get("episode"),
+            season=season,
+            episode=episode_no,
             glossary=glossary,
             active_rules=active,
             style=style,
             voices=voices,
             sections=tuple((str(s["title"]), str(s["body"])) for s in data.get("sections") or []),
             few_shot=tuple((str(s["source"]), str(s["target"])) for s in data.get("few_shot") or []),
-            requested=None if requested is None else tuple(int(n) for n in requested),
+            requested=None if requested is None else tuple(_cue_number(n, "requested") for n in requested),
             keep=keep,
             params=p,
             bundle_version=version,
@@ -228,10 +290,6 @@ class CueMatch:
     cues: tuple[int, ...]
 
 
-def _word(needle: str, haystack: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", haystack, re.IGNORECASE) is not None
-
-
 def matches(bundle: TranslationBundle, first: int, last: int) -> list[CueMatch]:
     """Glossary entries that touch cues ``first``..``last`` (1-based, inclusive). Pure; the bundle is not changed.
 
@@ -242,11 +300,11 @@ def matches(bundle: TranslationBundle, first: int, last: int) -> list[CueMatch]:
     window = [n for n in range(first, last + 1) if 1 <= n <= len(bundle.cues)]
     out: list[CueMatch] = []
     for term in bundle.glossary.terms:
-        hits = tuple(n for n in window if any(_word(s, bundle.cues[n - 1].text) for s in term.sources))
+        hits = tuple(n for n in window if matching.contains_any(bundle.cues[n - 1].text, term.sources))
         if hits:
             out.append(CueMatch("term", f"{term.source} → {term.target}", hits))
     for character in bundle.glossary.characters:
-        hits = tuple(n for n in window if _word(character.name, bundle.cues[n - 1].text))
+        hits = tuple(n for n in window if matching.contains(bundle.cues[n - 1].text, character.name))
         if hits:
             out.append(CueMatch("character", character.name, hits))
     for ar in bundle.active_rules:

@@ -1,4 +1,30 @@
 # Unreleased
+- **Review wave W2: the CLI and the bundle, then one matcher (R11-1 to R11-9, R12-2, R12-4, R12-10).** `subcore` only; the
+  worker's behaviour changes in one place (below).
+  - **A Gemini key is no longer sent to another host (R11-1).** `--api-key-env` defaults per provider: `GEMINI_API_KEY` for
+    `gemini`, `OPENAI_COMPAT_API_KEY` for `openai_compat`. If you ran `--provider openai_compat` on the Gemini variable, set the
+    new one (or `--api-key-env`).
+  - **A bundle keeps its hash when it is run (R11-3, D6).** A bundle written without a provider no longer records `model: ""` and
+    `max_output_tokens: 65536`; it leaves them out, and so does its hash, until you set them (`--model`, `--max-output-tokens`).
+    The provider that runs it supplies them, so the file's hash, the report's and the run's are the same, and a provider with a
+    small output limit plans smaller parts instead of being told 65536. Bundles the worker writes always carry both: no hash
+    changes. A hand-written bundle with `"repair_rounds": "2"` or `"from_cue": "5"` is refused at load with the field named, not
+    in the middle of a paid run (R11-7).
+  - **`--target` over a bundle** drops the bundle's display name of the old language (R11-2); the `fake` provider writes the
+    bundle's language (R11-9); the bundle is read once per run (R11-9).
+  - **`validate`** takes `--bundle` or `--season/--episode`, so a term that starts at S02E05 is not demanded of S01E01 (R11-4).
+  - **`compare`** builds both providers before the first paid run, says it will bill, shows the first result when the second side
+    fails and exits 1 (R11-5). Bad key file, non-UTF-8 bundle or glossary: `error: …`, exit 2, no traceback, no key path (R11-6).
+  - **Reports (R11-8):** only the subtitle needs `--force`; the report of a run is replaced atomically; a report that cannot be
+    written says the subtitle is safe. A report named with `--report` still needs `--force`.
+  - **One matcher, `subcore.matching` (R12-2, R12-10).** Names in Chinese, Japanese, Korean and Thai are found inside a line
+    (`田中さん`), and a name of four letters or more is found with up to two letters of ending (`Hobbit` in `Hobbits`). A short
+    name stays strict (`Tom` is not `Tommy`). The glossary filter of a big glossary, character cards, the locked-term check and
+    the console's matches use it. **Effect on the worker:** a series with more than 50 terms now lists these extra terms in the
+    prompts, and a locked term is demanded in more lines; `PROMPT_VERSION` is unchanged, so no translation turns stale.
+  - **`render-prompt` shows what is sent (R12-4)**: both go through `engine.compose_request`. The first request of each part
+    already used the whole source as its context, so no difference was found; a test now locks it for several parts, a filtered
+    glossary and a kept cue.
 - **Review wave W1: hashes and "how many will go stale" (R12-1, R12-3, R12-6, R12-7, R12-8).**
   - **The language is no longer in the rules hash (R12-1, D1).** The store writes `target_lang` into every glossary it saves,
     and the hash covered it, so a glossary imported from a YAML without that line changed the hash of every translation of the

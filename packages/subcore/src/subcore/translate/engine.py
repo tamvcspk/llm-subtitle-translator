@@ -17,7 +17,7 @@ from typing import Callable, Iterable, Sequence
 from .. import srt
 from ..bundle import Params, TranslationBundle
 from ..glossary import Glossary
-from ..providers.base import BadOutput, Blocked, LLMRequest, Provider
+from ..providers.base import BadOutput, Blocked, Capabilities, LLMRequest, Provider
 from . import alignment, planner
 from .prompt import PROMPT_VERSION, RESPONSE_SCHEMA, PromptContext, build_user, render_system
 from .validate import check_cue, parse_reply
@@ -29,6 +29,7 @@ __all__ = [
     "TranslationError",
     "ValidationIssue",
     "RenderedRequest",
+    "compose_request",
     "make_bundle",
     "options_of",
     "render_requests",
@@ -146,6 +147,9 @@ def make_bundle(
 ) -> TranslationBundle:
     """Resolve a caller's context into a bundle. Pure: nothing is read or called here.
 
+    ``model`` empty and ``max_output_tokens`` unset (``None`` or 0) stay unset in the bundle; the provider that runs it
+    supplies them (:func:`run`), and its hash does not depend on them.
+
     The glossary is narrowed to the episode and the episode's address rules are placed on cues; the result is what
     the prompt and the planner will see, and nothing else.
     """
@@ -158,10 +162,6 @@ def make_bundle(
         active = tuple(ctx.active_rules)
     else:
         active = tuple(glossary.active_address_rules(ctx.season, ctx.episode, list(cues)))
-    if max_output_tokens is None:
-        from ..providers.base import Capabilities
-
-        max_output_tokens = Capabilities().max_output_tokens
     total = len(cues)
     return TranslationBundle(
         cues=tuple(cues),
@@ -184,7 +184,7 @@ def make_bundle(
             model=model,
             prompt_version=PROMPT_VERSION,
             temperature=options.temperature,
-            max_output_tokens=int(max_output_tokens),
+            max_output_tokens=int(max_output_tokens or 0),  # 0: decided at run time by the provider that runs it
             output_factor=options.output_factor,
             min_part_cues=options.min_part_cues,
             repair_rounds=options.repair_rounds,
@@ -226,13 +226,14 @@ class _Run:
         self.part_no = 0  # which part of the episode is being worked on (0-based), for the call record
         self.blocked = 0  # calls the provider refused for their content (FR-17.2)
         self.total = len(self.targets)
+        self.max_output = _output_limit(bundle, provider)
 
     # -- one model call ---------------------------------------------------
     def _call(self, kind: str, targets: list[int], context: dict[int, str], notes: dict[int, str]):
-        reference = {n: text for n, text in self.keep.items() if n in context}
+        system, user = compose_request(self.bundle, context, targets, notes)
         req = LLMRequest(
-            system=render_system(self.bundle, context.values()),  # per request: a big glossary is filtered to its lines
-            user=build_user(context, targets, notes, reference),
+            system=system,
+            user=user,
             response_schema=RESPONSE_SCHEMA if self.provider.caps.structured_output else None,
             temperature=self.bundle.params.temperature,
             task="translate",
@@ -329,7 +330,7 @@ class _Run:
         if depth < self.options.max_split_depth and len(hard) > 1:
             force = min(len(hard), max(2, parts_used * 2))
             subparts = planner.plan_parts(
-                self.cues, hard, self.bundle.params.max_output_tokens,
+                self.cues, hard, self.max_output,
                 output_factor=self.options.output_factor, min_part_cues=self.options.min_part_cues,
                 force_parts=force,
             )
@@ -339,30 +340,51 @@ class _Run:
         raise TranslationError({n: failing[n] for n in hard})
 
 
-def _parts(bundle: TranslationBundle, targets: list[int], options: TranslateOptions) -> list[list[int]]:
+def compose_request(
+    bundle: TranslationBundle, context: dict[int, str], targets: Sequence[int], notes: dict[int, str] | None = None,
+) -> tuple[str, str]:
+    """The (system, user) text of one request: the only place a request is put together, for ``run`` and for
+    ``render_requests`` alike (R12-4). ``context`` is the source lines the request shows; a glossary above the filter
+    threshold lists only the terms those lines mention, and finished cues outside the request go in as reference."""
+    reference = {n: text for n, text in bundle.keep.items() if n in context}
+    return render_system(bundle, context.values()), build_user(context, list(targets), notes, reference)
+
+
+def _output_limit(bundle: TranslationBundle, provider: Provider | None) -> int:
+    """The bundle's own output limit, else the provider's, else the default of a provider that says nothing."""
+    if bundle.params.max_output_tokens:
+        return bundle.params.max_output_tokens
+    return (provider.caps if provider is not None else Capabilities()).max_output_tokens
+
+
+def _parts(
+    bundle: TranslationBundle, targets: list[int], options: TranslateOptions, max_output_tokens: int,
+) -> list[list[int]]:
     if not targets:
         return []
     return planner.plan_parts(
         list(bundle.cues),
         targets,
-        bundle.params.max_output_tokens,
+        max_output_tokens,
         output_factor=options.output_factor,
         min_part_cues=options.min_part_cues,
     )
 
 
-def render_requests(bundle: TranslationBundle) -> list[RenderedRequest]:
-    """The first request of each part, rendered exactly as ``run`` would send it. Calls no provider (FR-21.3)."""
+def render_requests(bundle: TranslationBundle, provider: Provider | None = None) -> list[RenderedRequest]:
+    """The first request of each part, rendered exactly as ``run`` would send it. Calls no provider (FR-21.3).
+
+    A bundle that leaves the output limit unset is planned with ``provider``'s limit when one is given (no call is
+    made; only its capabilities are read) and with the default limit otherwise."""
     options = options_of(bundle)
     source = {n: c.text for n, c in enumerate(bundle.cues, start=1) if c.text.strip()}
     keep = dict(bundle.keep)
     wanted = None if bundle.requested is None else set(bundle.requested)
     targets = [n for n in sorted(source) if n not in keep and (wanted is None or n in wanted)]
-    system = render_system(bundle, source.values())
     out = []
-    for number, part in enumerate(_parts(bundle, targets, options)):
-        reference = {n: text for n, text in keep.items() if n in source}
-        out.append(RenderedRequest(number, tuple(part), system, build_user(source, part, {}, reference)))
+    for number, part in enumerate(_parts(bundle, targets, options, _output_limit(bundle, provider))):
+        system, user = compose_request(bundle, source, part)
+        out.append(RenderedRequest(number, tuple(part), system, user))
     return out
 
 
@@ -378,7 +400,7 @@ def run(
     """
     engine = _Run(provider, bundle, on_progress)
     if engine.targets:
-        parts = _parts(bundle, engine.targets, engine.options)
+        parts = _parts(bundle, engine.targets, engine.options, engine.max_output)
         try:
             for number, part in enumerate(parts):
                 engine.part_no = number

@@ -42,7 +42,7 @@ from typing import Any
 
 import yaml
 
-from . import srt
+from . import matching, srt
 
 __all__ = [
     "Glossary",
@@ -432,15 +432,11 @@ def merge(*glossaries: Glossary) -> Glossary:
 # ---------------------------------------------------------------- checks
 
 
-def _contains_word(haystack: str, needle: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", haystack, re.IGNORECASE) is not None
-
-
 def locked_violations(glossary: Glossary, source: str, translated: str) -> list[Term]:
     """Locked terms present in ``source`` whose ``target`` is missing from ``translated`` (FR-4.2)."""
     out = []
     folded = translated.casefold()
     for term in glossary.locked_terms():
-        if any(_contains_word(source, s) for s in term.sources) and term.target.casefold() not in folded:
+        if matching.contains_any(source, term.sources) and term.target.casefold() not in folded:
             out.append(term)
     return out

@@ -15,6 +15,7 @@ Roadmap: `PLAN.md`, design: `docs/design/ARCHITECTURE.md`.
 | `style` | a style as data (axes, subtitle limits, notes), `resolve_style` to lay layers on each other, character cards, genre presets, `render_style`/`render_voices` for the prompt |
 | `fewshot` | `select`: the closest corrected lines of a series to the text being translated, within a token budget (lexical, no embeddings) |
 | `translate` | engine: `make_bundle` → `run` (planner, prompt renderer, validate → repair → split), `render_requests`, `review` (shared with the worker) |
+| `matching` | the one test of "does this line mention that name" (CJK and Korean anywhere in the text, other names as whole words with up to two letters of ending); the glossary filter, character cards, locked terms and the console all ask it |
 | `compare` | side-by-side numbers for two configurations or a golden set |
 | `glossary` | YAML load/merge/dump/validate, `from_doc`/`to_doc` (the document the worker stores), locked terms, timed address rules |
 | `cli` | manual translation and debugging |
@@ -37,9 +38,16 @@ uv run subcore compare Movie.en.srt --bundle a.json --golden reviewed.vi.srt
 uv run subcore check-glossary glossary.yaml
 ```
 
-The API key comes from `--api-key`, then the environment variable (`--api-key-env`, default `GEMINI_API_KEY`),
-then `--api-key-file` (first non-empty line). An existing output file is never overwritten unless you pass
-`--force`. Any OpenAI-compatible server works with `--provider openai_compat --base-url ... --model ...`.
+The API key comes from `--api-key`, then the environment variable (`--api-key-env`; default `GEMINI_API_KEY` for
+`gemini` and `OPENAI_COMPAT_API_KEY` for `openai_compat`, so a Gemini key is never sent to another host), then
+`--api-key-file` (first non-empty line). An existing subtitle is never overwritten unless you pass `--force`; the report
+of a run (`<output>.report.json`) is replaced each time, one named with `--report` needs `--force` like the subtitle.
+Any OpenAI-compatible server works with `--provider openai_compat --base-url ... --model ...`.
+
+A bundle written by `subcore bundle` leaves the model and the output limit unset unless `--model` or
+`--max-output-tokens` says otherwise: the provider that runs it supplies them, and the hash is the same before and after
+the run. `validate` narrows `--glossary` with `--season`/`--episode` (or takes a `--bundle`'s own glossary), as the worker does.
+`compare` builds every provider before it pays for the first run and prints what it got even if the other side fails.
 
 `subcore` never imports the worker, SQLite or the HTTP server (`tests/test_boundary.py`). The worker's job spec
 (`GET /api/jobs/{id}/spec`) is a bundle this CLI runs unchanged.

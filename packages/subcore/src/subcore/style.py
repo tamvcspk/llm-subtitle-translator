@@ -14,9 +14,10 @@ database; the engine only ever sees the result in a bundle.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field, fields
 from typing import Any, Iterable, Mapping
+
+from . import matching
 
 __all__ = [
     "AXES",
@@ -307,16 +308,12 @@ class CharacterCard:
         return out
 
 
-def _word(needle: str, haystack: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", haystack, re.IGNORECASE) is not None
-
-
 def cards_present(cards: Iterable[CharacterCard], texts: Iterable[str]) -> list[CharacterCard]:
     """The cards that belong in the prompt of an episode: characters the dialogue names, and ``always`` ones.
 
     A source subtitle has no speaker labels, so "present" can only mean "named in the dialogue" (FR-18.3)."""
-    haystack = "\n".join(texts)
-    return [c for c in cards if c.always or any(_word(n, haystack) for n in c.names)]
+    haystack = matching.joined(texts)
+    return [c for c in cards if c.always or matching.contains_any(haystack, c.names)]
 
 
 # ---------------------------------------------------------------- rendering

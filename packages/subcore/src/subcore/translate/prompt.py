@@ -12,10 +12,10 @@ gemini-srt-translator (MIT, Copyright (c) 2024 Matheus Castro); see NOTICE.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterable
 
+from .. import matching
 from ..glossary import ActiveRule, Glossary, Term
 from ..style import CharacterCard, Style, render_style, render_voices
 
@@ -117,10 +117,8 @@ class PromptContext:
     voices: list[CharacterCard] = field(default_factory=list)
 
 
-def _mentioned(term: Term, texts: list[str]) -> bool:
-    return any(
-        re.search(rf"(?<!\w){re.escape(source)}(?!\w)", text, re.IGNORECASE) for source in term.sources for text in texts
-    )
+def _mentioned(term: Term, haystack: str) -> bool:
+    return matching.contains_any(haystack, term.sources)
 
 
 def _glossary_section(glossary: Glossary, active: list[ActiveRule], terms: tuple[Term, ...] | None = None) -> str:
@@ -181,8 +179,8 @@ def render_system(bundle: "TranslationBundle", texts: Iterable[str] | None = Non
         shown = None
         threshold = bundle.params.glossary_filter_threshold
         if texts is not None and threshold > 0 and len(bundle.glossary.terms) > threshold:
-            lines = list(texts)
-            shown = tuple(t for t in bundle.glossary.terms if _mentioned(t, lines))
+            haystack = matching.joined(texts)
+            shown = tuple(t for t in bundle.glossary.terms if _mentioned(t, haystack))
         sections.append(("Glossary", _glossary_section(bundle.glossary, list(bundle.active_rules), shown)))
     style = render_style(bundle.style)
     if style:
