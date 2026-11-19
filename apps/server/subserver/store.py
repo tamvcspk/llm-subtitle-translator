@@ -1620,6 +1620,16 @@ class Store:
                     decided += int(row["n"])
         return SeriesSeed(glossary=glossary, cards=cards, pending=pending, decided=decided)
 
+    def translated_episodes(self, series_key: str) -> frozenset[tuple[int | None, int | None]]:
+        """``(season, episode)`` of the episodes of a series that have a translation this worker made and that is in force.
+        The bootstrap counts them among a series' first episodes, so it does not walk on through the whole series."""
+        rows = self.query(
+            "SELECT DISTINCT u.season, u.episode FROM units u JOIN series s ON s.id = u.series_id"
+            " JOIN translations t ON t.unit_id = u.id WHERE s.key = ? AND t.status = 'current' AND t.origin = 'machine'",
+            (series_key,),
+        )
+        return frozenset((r["season"], r["episode"]) for r in rows)
+
     def series_by_key(self, key: str) -> Series | None:
         with self._lock:
             row = self._db.execute("SELECT * FROM series WHERE key = ?", (key,)).fetchone()
@@ -1637,42 +1647,47 @@ class Store:
         old catalog or the new one, never half."""
         added = updated = 0
         with self.transaction() as db:
+            # One read of what is stored, then a write only for a row that is new or differs (R10-9): a sync that finds
+            # nothing new used to SELECT and UPDATE every row of the library every few minutes.
+            stored = {(r["kind"], r["bazarr_id"]): r for r in db.execute("SELECT * FROM catalog_items")}
+            seen: set[int] = set()
             parents: dict[str, int] = {}
             for entry in sorted(entries, key=lambda e: e.kind != "series"):  # a series row before its episodes
                 parent_id = parents.get(entry.parent_bazarr_id) if entry.parent_bazarr_id else None
                 if entry.parent_bazarr_id and parent_id is None:
-                    found = db.execute(
-                        "SELECT id FROM catalog_items WHERE kind = 'series' AND bazarr_id = ?", (entry.parent_bazarr_id,)
-                    ).fetchone()
+                    found = stored.get(("series", entry.parent_bazarr_id))
                     parent_id = int(found["id"]) if found else None
                 fields = (
                     parent_id, entry.series_key, entry.season, entry.episode, entry.title, entry.video_path,
                     entry.tvdb_id, json.dumps([asdict(s) for s in entry.subtitles], ensure_ascii=False),
-                    json.dumps(list(entry.missing)), at,
+                    json.dumps(list(entry.missing)),
                 )
-                row = db.execute(
-                    "SELECT id FROM catalog_items WHERE kind = ? AND bazarr_id = ?", (entry.kind, entry.bazarr_id)
-                ).fetchone()
+                row = stored.get((entry.kind, entry.bazarr_id))
                 if row is None:
                     cursor = db.execute(
                         "INSERT INTO catalog_items (kind, bazarr_id, parent_id, series_key, season, episode, title,"
                         " video_path, tvdb_id, subtitles_json, missing_json, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (entry.kind, entry.bazarr_id, *fields),
+                        (entry.kind, entry.bazarr_id, *fields, at),
                     )
                     item_id, added = int(cursor.lastrowid), added + 1
                 else:
                     item_id, updated = int(row["id"]), updated + 1
-                    db.execute(
-                        "UPDATE catalog_items SET parent_id = ?, series_key = ?, season = ?, episode = ?, title = ?,"
-                        " video_path = ?, tvdb_id = ?, subtitles_json = ?, missing_json = ?, synced_at = ?, gone_at = NULL"
-                        " WHERE id = ?", (*fields, item_id),
-                    )
+                    unchanged = row["gone_at"] is None and tuple(row[c] for c in (
+                        "parent_id", "series_key", "season", "episode", "title", "video_path", "tvdb_id", "subtitles_json",
+                        "missing_json",
+                    )) == fields
+                    if not unchanged:
+                        db.execute(
+                            "UPDATE catalog_items SET parent_id = ?, series_key = ?, season = ?, episode = ?, title = ?,"
+                            " video_path = ?, tvdb_id = ?, subtitles_json = ?, missing_json = ?, synced_at = ?, gone_at = NULL"
+                            " WHERE id = ?", (*fields, at, item_id),
+                        )
+                seen.add(item_id)
                 if entry.kind == "series":
                     parents[entry.bazarr_id] = item_id
-            gone = db.execute(
-                "UPDATE catalog_items SET gone_at = ? WHERE synced_at < ? AND gone_at IS NULL", (at, at)
-            ).rowcount
-        return CatalogApplied(added=added, updated=updated, gone=gone)
+            vanished = [(at, int(r["id"])) for r in stored.values() if r["gone_at"] is None and int(r["id"]) not in seen]
+            db.executemany("UPDATE catalog_items SET gone_at = ? WHERE id = ?", vanished)
+        return CatalogApplied(added=added, updated=updated, gone=len(vanished))
 
     def catalog_entry(self, item_id: int) -> CatalogEntry | None:
         with self._lock:

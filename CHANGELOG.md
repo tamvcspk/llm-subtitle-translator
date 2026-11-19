@@ -1,4 +1,29 @@
 # Unreleased
+- **Review wave W4: who may make a job, and how the catalog is read (R10-1, R10-3, R10-4, R10-6 to R10-9, R14-2, R14-3).**
+  - **The policy leaves a failed or cancelled request alone (R10-1, D4).** A job made by `auto_request` that failed was put
+    back in line at every sync (attempts reset, raised to the interactive class, quota spent, `auto_request_daily_cap`
+    ignored), and one the admin cancelled was made again. Now the policy never retries or repeats a request whose last
+    finished job failed or was cancelled; the Library shows `Failed` and waits for the admin, whose own request retries it.
+    The cancel is remembered until clean-up deletes the finished job.
+  - **`capped` is what the cap held back (R10-4)**, not what `enqueue` skipped for another reason.
+  - **Sync now answers at once (R10-7).** `POST /api/catalog/sync` only wakes the background loop and returns the status with
+    `"requested": true` (it no longer returns `auto_requested`); the read and the policy run in that loop, and two passes of
+    the policy can no longer overlap and add up past the cap.
+  - **A real shrink can be accepted (R10-6, D3).** When the guard set a read aside the status carries `shrink: {listed,
+    dropped}`; Activity shows **Accept smaller library**, which says how many items go and sends `accept_shrink: true` for
+    that one read.
+  - **`POST /api/enqueue` is gone (R10-8)**: it skipped Ignored, the estimate, `GST_ONLY_PATHS` and the duplicate check, and
+    brought back a subtitle the admin removed. The Library's request is the one way (`POST /api/jobs`).
+  - **`auto_request_bootstrap` counts episodes that still need a translation (R14-2).** With episodes 1-2 already subtitled
+    elsewhere and an empty glossary, nothing was ever requested; now the first N missing ones are, and episodes the worker
+    already translated keep their place so the wait does not walk through the series.
+  - **Reading never writes (R14-3).** `GET /api/series/{id}/memory`, polled by the page, used to create a unit for every
+    catalog episode. The Context tab now `POST`s `…/memory/adopt` once when it opens.
+  - **Bazarr lists are read to the end (R10-3).** A short page in the middle of a list (a proxy or server cap) no longer
+    cuts it when Bazarr gave a `total`; what was cut used to be marked gone.
+  - **Less work per cycle (R10-9).** A sync that finds nothing new writes no row (`synced_at` of an item is now when it last
+    changed), the policy off everywhere does not walk the library, and a series page reads its units and jobs once instead of
+    per item and language.
 - **Review wave W3: who a suggestion is, and a generator that does not lose or repeat its calls (R13-1 to R13-6, R12-5).**
   Schema 14 (migration at start-up, idempotent).
   - **Two sources are two sites (R13-1).** `auto_accept_terms` counted `fandom.com/wiki/Foo` and `fandom.com/wiki/Bar`, or

@@ -195,7 +195,14 @@ def _pages(http: HTTPClient, url: str, headers: dict[str, str], page_size: int) 
                 yield item
         total = response.get("total") if isinstance(response, dict) else None
         start += len(data)
-        if len(data) < page_size or (isinstance(total, int) and start >= total):
+        if not data:
+            return
+        if isinstance(total, int) and not isinstance(total, bool):
+            # Bazarr says how many there are: a short page in the middle (a server or proxy cap) is not the end, or the
+            # list would be cut and what was cut would later be marked gone (R10-3).
+            if start >= total:
+                return
+        elif len(data) < page_size:  # no total to go by: a short page is the only sign of the end
             return
 
 

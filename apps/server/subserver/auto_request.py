@@ -11,6 +11,7 @@ same reasons.
 """
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -59,6 +60,7 @@ class AutoRequest:
         self._config = config_source
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
         self._clock = clock
+        self._running = threading.Lock()
         self._last_capped = 0
         self._last_held: dict[str, int] = {}
         self._held: dict[str, int] = {}
@@ -67,16 +69,20 @@ class AutoRequest:
     def in_scope(self) -> list[CatalogEntry]:
         """The items the policy may request: episodes of series it is on for, and movies when it is on globally."""
         everywhere = bool(self._settings().get("auto_request"))
+        stored_series = {s.key: s for s in self.store.list_series()}  # one query, not one per series
+        if not everywhere and not any(s.auto_request == "on" for s in stored_series.values()):
+            self._held = {}
+            return []  # the policy is off everywhere: nothing to look at, however big the library (R10-9)
         targets = {str(t["code"]).lower() for t in enabled_target_languages(self._config())}
         chosen: list[CatalogEntry] = []
         held: dict[str, int] = {}
         for series in self.store.catalog_entries(KIND_SERIES):
-            stored = self.store.series_by_key(series.series_key)
+            stored = stored_series.get(series.series_key)
             override = stored.auto_request if stored else ""
             if override == "on" or (override != "off" and everywhere):
                 episodes = self.store.catalog_entries(KIND_EPISODE, parent_id=series.id)
                 wanted = [e for e in episodes if targets & set(e.missing)]
-                state = self.bootstrap.state(series, episodes, stored)
+                state = self.bootstrap.state(series, episodes, stored, targets)
                 if state.locked:
                     # Nothing is approved yet: only the first episodes now, the rest wait for the glossary (FR-15.12).
                     kept = [e for e in wanted if e.id in state.allowed]
@@ -90,6 +96,16 @@ class AutoRequest:
         return chosen
 
     def run(self) -> AutoRequested:
+        """One pass of the policy. Never two at once: two passes would read ``policy_jobs_since`` together and add up
+        past ``auto_request_daily_cap``, so a pass that finds another running does nothing (R10-7)."""
+        if not self._running.acquire(blocking=False):
+            return AutoRequested()
+        try:
+            return self._run()
+        finally:
+            self._running.release()
+
+    def _run(self) -> AutoRequested:
         self._held = {}
         entries = self.in_scope()
         # Said again only when the numbers change, like the cap: the same "waiting" every few minutes is noise.
@@ -110,8 +126,7 @@ class AutoRequest:
             used = self.store.policy_jobs_since(policy.next_utc_midnight(self._clock()) - 86_400)
             limit = max(0, cap - used)
         made = self.requests.create(plan, origin="policy", prio=policy.AUTO, limit=limit)
-        capped = max(0, len(plan.planned) - len(made.created) - made.merged) if limit is not None else 0
-        result = AutoRequested(created=len(made.created), capped=capped, considered=len(entries))
+        result = AutoRequested(created=len(made.created), capped=made.capped, considered=len(entries))
         if result.created:
             self.telemetry.event(
                 "policy.requested", reason=f"auto_request asked for {result.created} translation(s) of items Bazarr lists as missing",

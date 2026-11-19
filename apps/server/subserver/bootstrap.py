@@ -13,7 +13,7 @@ An admin's own request is never held back: only the policy waits. ``auto_request
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -66,15 +66,26 @@ class Bootstrap:
         except (TypeError, ValueError):
             return 0
 
-    def state(self, series: CatalogEntry, episodes: list[CatalogEntry], stored: Series | None = None) -> BootstrapState:
-        """The state of one catalog series; ``episodes`` are the ones the catalog lists for it."""
+    def state(
+        self, series: CatalogEntry, episodes: list[CatalogEntry], stored: Series | None = None,
+        targets: Collection[str] | None = None,
+    ) -> BootstrapState:
+        """The state of one catalog series; ``episodes`` are the ones the catalog lists for it. With ``targets`` (the
+        enabled target languages) the first episodes are the first that still *need* a translation, plus the ones this
+        worker already translated (they keep their place, so the wait does not move on by itself): an episode that
+        already has a subtitle from elsewhere is not one of them (R14-2)."""
         limit = self.limit()
         stored = stored if stored is not None else self.store.series_by_key(series.series_key)
         seed = self.store.series_seed(safe_name(series.series_key), stored.id if stored else None)
         released = bool(stored and stored.bootstrap_released)
         if not is_locked(limit=limit, released=released, seed=seed):
             return BootstrapState(limit=limit, pending=seed.pending, released=released)
-        first = story_order([e for e in episodes if e.id is not None])[:limit]
+        pool = [e for e in episodes if e.id is not None]
+        if targets is not None:
+            wanted = {code.lower() for code in targets}
+            ours = self.store.translated_episodes(series.series_key)
+            pool = [e for e in pool if wanted & set(e.missing) or (e.season, e.episode) in ours]
+        first = story_order(pool)[:limit]
         return BootstrapState(
             locked=True, limit=limit, allowed=frozenset(e.id for e in first if e.id is not None), pending=seed.pending,
         )

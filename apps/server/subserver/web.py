@@ -460,10 +460,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/settings":
                 self.settings_service.save(body)  # live at once: the worker is a subscriber (FR-20.1)
                 self.send_json(self.settings_service.public(self.live_settings()))
-            elif parsed.path == "/api/enqueue":
-                config = self.settings_service.app_config()
-                created = self.ctx["console"].enqueue_subtitle(body, config["target_languages"])
-                self.send_json({"created": created, "count": len(created)})
             elif parsed.path == "/api/queue/retry":
                 if body.get("estimate_only") is True:  # what Retry (or Retry All Failed) would cost; retries nothing
                     self.send_json(self.ctx["units"].estimate_retry(body))

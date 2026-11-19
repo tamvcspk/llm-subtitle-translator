@@ -75,6 +75,39 @@ class CatalogSync:
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
         self._clock = clock
         self._lock = threading.Lock()
+        # Sync now (R10-7): the HTTP handler only asks; the background loop reads. ``_asked`` wakes it at once.
+        self._asked = threading.Event()
+        self._accept_lock = threading.Lock()
+        self._accept_shrink = False
+        # ``(items listed, items fewer than before)`` of the last read the guard set aside; None otherwise. In memory
+        # only: after a restart the next read says it again.
+        self.shrink: tuple[int, int] | None = None
+
+    # -- "Sync now" asks, the background loop reads (R10-7) ------------------------------------------------------
+    def request(self, *, accept_shrink: bool = False) -> CatalogState:
+        """Ask for a read now and answer at once with the state as it is: the read itself (and the policy after it) is
+        done by the background loop, never in the thread of an HTTP request. ``accept_shrink`` lets that one read
+        through the shrink guard (D3): the admin saw how many items would go and confirmed."""
+        if accept_shrink:
+            with self._accept_lock:
+                self._accept_shrink = True
+        self._asked.set()
+        return self.store.catalog_state()
+
+    @property
+    def asked(self) -> bool:
+        return self._asked.is_set()
+
+    def take_request(self) -> bool:
+        """For the loop: was a read asked for since it last looked? (Clears the ask.)"""
+        if self._asked.is_set():
+            self._asked.clear()
+            return True
+        return False
+
+    def idle(self, seconds: float) -> None:
+        """For the loop: wait, but wake as soon as a read is asked for."""
+        self._asked.wait(seconds)
 
     def interval(self) -> int:
         try:
@@ -107,13 +140,16 @@ class CatalogSync:
         if not self._lock.acquire(blocking=False):
             return self.store.catalog_state()
         try:
-            return self._run()
+            with self._accept_lock:
+                accept, self._accept_shrink = self._accept_shrink, False
+            return self._run(accept_shrink=accept)
         finally:
             self._lock.release()
 
-    def _run(self) -> CatalogState:
+    def _run(self, *, accept_shrink: bool = False) -> CatalogState:
         now = self._clock()
         before = self.store.catalog_state()
+        self.shrink = None
         try:
             entries = with_keys(list(self.media.catalog()))
         except MediaLibraryError as exc:  # the adapter says it in words that carry no address and no key
@@ -124,12 +160,14 @@ class CatalogSync:
         if not entries and previous > 0:
             return self._kept(before, now, "Bazarr answered with an empty library; the catalog stays as it was.")
         guard = self._guard()
-        if guard and previous > 0 and len(entries) < previous * (100 - guard) / 100:
-            return self._kept(
+        if guard and not accept_shrink and previous > 0 and len(entries) < previous * (100 - guard) / 100:
+            state = self._kept(
                 before, now,
                 f"Bazarr listed {len(entries)} items, {previous - len(entries)} fewer than the {previous} before "
                 f"(more than {guard}%): the answer is set aside and the catalog stays as it was.",
             )
+            self.shrink = (len(entries), previous - len(entries))  # the console offers to accept this read (D3)
+            return state
         applied = self.store.catalog_apply(entries, now)
         state = CatalogState(synced_at=now, attempted_at=now, status=STATUS_OK, warning="", items=len(entries))
         self.store.save_catalog_state(state)

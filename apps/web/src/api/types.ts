@@ -98,6 +98,8 @@ export interface CatalogStatus {
   status: "ok" | "kept" | "";
   warning: string;
   items: number;
+  /** Set when the last read was set aside only because it listed far fewer items than before: it can be accepted. */
+  shrink?: { listed: number; dropped: number } | null;
 }
 
 export interface AuthMe {

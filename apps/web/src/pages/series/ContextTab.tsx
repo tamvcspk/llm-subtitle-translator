@@ -1,7 +1,7 @@
 import { Alert, Anchor, Button, Card, Checkbox, Collapse, Drawer, Group, Loader, Stack, Text, Title } from "@mantine/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router";
-import { useExtractFacts, useSeriesMemory, useTasks, useUnitFacts } from "../../api/queries";
+import { useAdoptEpisodes, useExtractFacts, useSeriesMemory, useTasks, useUnitFacts } from "../../api/queries";
 import type { MemoryUnit, UnitFacts } from "../../api/types";
 import { FactsView } from "../../components/FactsView";
 import { TaskRow } from "../../components/TaskRow";
@@ -165,6 +165,10 @@ export function SeriesContextTab() {
   const { page, lang } = useOutletContext<SeriesContext>();
   const storedId = page.series.series_id;
   const memory = useSeriesMemory(storedId);
+  const { mutate: adopt } = useAdoptEpisodes(storedId);
+  useEffect(() => {
+    if (typeof storedId === "number") adopt();
+  }, [storedId, adopt]);
   const tasks = useTasks();
   const [asking, setAsking] = useState<number[] | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());

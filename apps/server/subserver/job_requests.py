@@ -24,7 +24,7 @@ from .catalog import pick_source
 from .config import enabled_source_languages, enabled_target_languages
 from .console import CONSOLE_PROVIDER
 from .estimates import Estimate, Estimator
-from .jobs import FILL, REPLACE, job_key
+from .jobs import CANCELLED, FAILED, FILL, REPLACE, job_key
 from .library import Library
 from .ports import KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, Telemetry
 from .queue import JobQueue, outside_allowed_paths
@@ -44,6 +44,8 @@ REASONS = {
     "not-missing": "Bazarr does not list this language as missing",
     "removed": "the admin removed this subtitle; only a manual request brings it back",
     "outside-paths": "outside GST_ONLY_PATHS",
+    "failed": "an earlier job for this item failed; only a manual request tries again",
+    "cancelled": "the admin cancelled the job for this item; only a manual request asks again",
 }
 
 
@@ -120,6 +122,7 @@ class Requested:
     created: tuple[str, ...] = ()
     merged: int = 0  # asked again for something already open: lifted, not duplicated
     skipped: tuple[PlannedJob, ...] = ()
+    capped: int = 0  # planned jobs left unmade because ``limit`` was reached (and only for that reason)
 
 
 class JobRequests:
@@ -256,6 +259,10 @@ class JobRequests:
                 return no("not-missing", **found)
             if self.versions.latest_status(output) == "removed":
                 return no("removed", **found)
+            # What failed, or what the admin cancelled, waits for the admin: the policy never asks for it again (D4).
+            ended = self.queue.jobs.last_ended_state(job_key(subtitle.path, output, lang), unit_id, lang)
+            if ended in (FAILED, CANCELLED):
+                return no(ended, **found)
         if mode == FILL:
             listed = any(s.code == lang.lower() and not s.forced for s in entry.subtitles)
             if listed or Path(output).exists() or existing_target_subtitle(subtitle.path, lang, source_code):
@@ -299,10 +306,11 @@ class JobRequests:
     ) -> Requested:
         """Make a job for each planned item (at most ``limit``; the rest stay as they were)."""
         created: list[str] = []
-        merged = 0
+        merged = capped = 0
         skipped = list(plan.skipped)
-        for job in plan.planned:
+        for n, job in enumerate(plan.planned):
             if limit is not None and len(created) + merged >= limit:
+                capped = len(plan.planned) - n  # what the limit kept back, not what enqueue skipped for another reason
                 break
             made = self._make(job, plan.mode, origin, prio)
             if made is None:
@@ -316,7 +324,7 @@ class JobRequests:
                 "request.created", reason=f"{len(created)} job(s) were requested ({origin}), {merged} merged into jobs already open",
                 origin=origin, mode=plan.mode, jobs=len(created), merged=merged,
             )
-        return Requested(tuple(created), merged, tuple(skipped))
+        return Requested(tuple(created), merged, tuple(skipped), capped)
 
     def _make(self, job: PlannedJob, mode: str, origin: str, prio: int) -> tuple[str, bool] | None:
         """``(job id, merged)``, or None when nothing was made. ``merged`` is a replace request that turned a job

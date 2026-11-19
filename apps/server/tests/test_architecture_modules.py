@@ -31,33 +31,13 @@ class ConsoleActionsTests(unittest.TestCase):
         actions.delete("failed", "job")
         jobs.delete.assert_called_once_with("failed", "job")
 
-    def test_enqueue_delegates_job_and_targets(self):
-        jobs = Mock()
-        jobs.enqueue.return_value = ["a"]
-        self.assertEqual(ConsoleActions(jobs).enqueue({"job_id": "a"}, [{"code": "zh"}]), ["a"])
-        jobs.enqueue.assert_called_once_with({"job_id": "a"}, [{"code": "zh"}])
-
-    def test_a_picked_subtitle_becomes_one_job_per_configured_target(self):
-        jobs = Mock()
-        jobs.enqueue.return_value = ["a", "b"]
-        targets = [{"code": "vi"}, {"code": "de"}]
-        got = ConsoleActions(jobs).enqueue_subtitle({"video_path": "/m/v.mkv", "subtitle_path": "/m/v.en.srt"}, targets)
-        self.assertEqual(got, ["a", "b"])
-        base, passed = jobs.enqueue.call_args.args
-        self.assertEqual(passed, targets)
-        self.assertEqual(base, {
-            "video_path": "/m/v.mkv", "subtitle_path": "/m/v.en.srt", "provider": "gemini-console",
-            "source_code": "en", "source_language": "English", "series_id": "", "media_id": "", "media_type": "movie",
-        })
-
-    def test_the_request_may_name_the_target_codes_and_old_field_names(self):
-        jobs = Mock()
-        ConsoleActions(jobs).enqueue_subtitle(
-            {"target_codes": ["de"], "language": "fr", "type": "series", "provider": "x"}, [{"code": "vi"}, {"code": "de"}]
-        )
-        base, passed = jobs.enqueue.call_args.args
-        self.assertEqual(passed, [{"code": "de"}])
-        self.assertEqual((base["source_code"], base["media_type"], base["provider"]), ("fr", "series", "x"))
+    def test_the_console_has_no_door_that_makes_jobs_without_the_request_planner(self):
+        """R10-8: jobs come from ``JobRequests`` (Ignored, estimate, ``GST_ONLY_PATHS``, unit id) or the policy, never
+        straight from a request body."""
+        self.assertFalse(hasattr(ConsoleActions(Mock()), "enqueue"))
+        self.assertFalse(hasattr(ConsoleActions(Mock()), "enqueue_subtitle"))
+        web = (Path(__file__).resolve().parents[1] / "subserver" / "web.py").read_text(encoding="utf-8")
+        self.assertNotIn('"/api/enqueue"', web)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ worked out for one series (or the movies) at a time.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,17 @@ def display_text(label: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+_UNSET: Any = object()
+
+
+@dataclass
+class JobIndex:
+    """The newest open job and the newest finished job of each ``(unit id, language)``, read for a whole page."""
+
+    open: dict[tuple[int, str], dict[str, Any]] = field(default_factory=dict)
+    ended: dict[tuple[int, str], dict[str, Any]] = field(default_factory=dict)
+
+
 class CatalogView:
     def __init__(
         self,
@@ -82,8 +94,16 @@ class CatalogView:
         }
 
     # -- the labels ----------------------------------------------------------------------------------------------------
+    def job_index(self, units: list[Unit]) -> "JobIndex":
+        """The jobs of these units read once, for a page that labels every (item, language) of them (R10-9)."""
+        index = JobIndex()
+        for job in self.queue.jobs.for_units(u.id for u in units):
+            slot = (int(job["_unit_id"]), str(job["_lang"]))
+            (index.open if job["state"] in OPEN_STATES else index.ended)[slot] = job
+        return index
+
     def label(self, entry: CatalogEntry, lang: str, unit: Unit | None, ignored: set[tuple[int, str]],
-              sources: list[dict[str, Any]]) -> dict[str, Any]:
+              sources: list[dict[str, Any]], jobs: "JobIndex | None" = None) -> dict[str, Any]:
         lang = lang.lower()
         picked = pick_source(entry, sources)
         derived = target_output_path(picked[0].path, lang, str(picked[1]["code"])) if picked else ""
@@ -102,7 +122,7 @@ class CatalogView:
         else:
             removed = bool(derived) and self.versions.latest_status(derived) == "removed"
             content = "missing" if (lang in entry.missing or removed) else "outside"
-        job, wait, info = self._job(entry, unit, lang, picked[0].path if picked else "", derived)
+        job, wait, info = self._job(entry, unit, lang, picked[0].path if picked else "", derived, jobs)
         return {
             "lang": lang, "content": content, "removed": removed, "stale": stale, "job": job, "wait": wait,
             "ignored": unit is not None and (unit.id, lang) in ignored, "job_info": info,
@@ -126,14 +146,20 @@ class CatalogView:
             "missing_units": [str(m) for m in job.get("missing_units") or []] if job["state"] == WAITING else [],
         }
 
-    def _job(self, entry: CatalogEntry, unit: Unit | None, lang: str, source: str,
-             output: str) -> tuple[str, str, dict[str, Any] | None]:
+    def _job(self, entry: CatalogEntry, unit: Unit | None, lang: str, source: str, output: str,
+             index: "JobIndex | None" = None) -> tuple[str, str, dict[str, Any] | None]:
         """``(axis value, wait reason, job info)``: requested | running | waiting | failed, or '' when no job says
-        anything (``info`` is then None)."""
+        anything (``info`` is then None). With an ``index`` of the page's units a unit's jobs are looked up there, with no
+        query; an item without a unit still asks by key."""
         jobs = self.queue.jobs
-        open_job = jobs.open_for(job_key(source, output, lang)) if source and output else None
-        if open_job is None and unit is not None:
-            open_job = jobs.open_for_unit(unit.id, lang)
+        if index is not None and unit is not None:
+            open_job = index.open.get((unit.id, lang))
+            last = index.ended.get((unit.id, lang))
+        else:
+            open_job = jobs.open_for(job_key(source, output, lang)) if source and output else None
+            if open_job is None and unit is not None:
+                open_job = jobs.open_for_unit(unit.id, lang)
+            last = None
         if open_job is not None:
             state = open_job["state"]
             info = self._job_info(open_job)
@@ -144,7 +170,9 @@ class CatalogView:
             return "requested", "", info
         # "Failed" is read by (unit, language), the same way ``_failed_units`` counts it for the overview, so the number
         # on a Home row and the labels of its page cannot disagree after a rename gives the request a new key.
-        if unit is not None:
+        if index is not None and unit is not None:
+            pass  # ``last`` came from the index
+        elif unit is not None:
             last = jobs.latest_for_unit(unit.id, lang, FAILED, DONE, SKIPPED, CANCELLED)
         else:
             last = jobs.latest_for(job_key(source, output, lang), FAILED, DONE, SKIPPED, CANCELLED) if source and output else None
@@ -156,12 +184,14 @@ class CatalogView:
         return [str(t["code"]).lower() for t in enabled_target_languages(self._config())]
 
     def item(self, entry: CatalogEntry, series: CatalogEntry | None, langs: list[str],
-             ignored: set[tuple[int, str]], sources: list[dict[str, Any]], *, hold: bool = False) -> dict[str, Any]:
-        """``hold``: the policy would ask for this item but waits for the series' glossary to be reviewed."""
-        unit = self.library.unit_of(entry)
+             ignored: set[tuple[int, str]], sources: list[dict[str, Any]], *, hold: bool = False,
+             jobs: "JobIndex | None" = None, unit: Unit | None | object = _UNSET) -> dict[str, Any]:
+        """``hold``: the policy would ask for this item but waits for the series' glossary to be reviewed. ``jobs``
+        and ``unit`` (None when the item has none) are what a page already read for the item (see ``job_index``)."""
+        unit = self.library.unit_of(entry) if unit is _UNSET else unit
         labels = []
         for lang in langs:
-            label = self.label(entry, lang, unit, ignored, sources)
+            label = self.label(entry, lang, unit, ignored, sources, jobs)
             waiting = hold and label["content"] == "missing" and not label["job"] and not label["ignored"] and not label["removed"]
             label["reason"] = "bootstrap" if waiting else ""
             label["text"] = display_text(label)
@@ -257,9 +287,16 @@ class CatalogView:
                   if e.gone_at is None or self.library.unit_of(e) is not None]
         override = stored.auto_request if stored else ""
         policy_on = override == "on" or (override != "off" and bool(self._settings().get("auto_request")))
-        state = self.bootstrap.state(series, [e for e in listed if e.gone_at is None], stored)
+        state = self.bootstrap.state(series, [e for e in listed if e.gone_at is None], stored, langs)
         held = policy_on and state.locked
-        items = [self.item(e, series, langs, ignored, sources, hold=held and e.id not in state.allowed) for e in listed]
+        # The page's units and jobs are read once, not asked for per item and language (R10-9).
+        units = {(u.season, u.episode): u for u in self.store.list_units(stored.id)} if stored else {}
+        index = self.job_index(list(units.values()))
+        items = [
+            self.item(e, series, langs, ignored, sources, hold=held and e.id not in state.allowed, jobs=index,
+                      unit=units.get((e.season, e.episode)))
+            for e in listed
+        ]
         return {
             "status": self.status(), "languages": langs,
             "series": {"id": series.id, "title": series.title, "key": series.series_key,

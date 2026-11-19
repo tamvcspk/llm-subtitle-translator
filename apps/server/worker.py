@@ -202,14 +202,16 @@ CATALOG_CHECK_SECONDS = 15
 
 def run_catalog_sync(sync: CatalogSync, auto: AutoRequest, check_seconds: float = CATALOG_CHECK_SECONDS) -> None:
     """Keep the catalog as young as ``catalog_sync_interval`` says, and let the policy act after each read (ADR-10).
-    One failing cycle never stops the loop."""
+    One failing cycle never stops the loop. This loop is the only caller of ``sync_and_request``: "Sync now" in the
+    console only asks (``CatalogSync.request``) and this loop reads, so the policy never runs twice at once and an HTTP
+    request never waits for Bazarr (R10-7)."""
     while True:
         try:
-            if sync.due():
+            if sync.take_request() or sync.due():
                 sync_and_request(sync, auto)
         except Exception:  # noqa: BLE001
             logging.exception("Catalog sync cycle failed")
-        time.sleep(check_seconds)
+        sync.idle(check_seconds)
 
 
 def backup_maintenance_once(

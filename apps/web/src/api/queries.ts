@@ -103,12 +103,21 @@ export function useMe() {
   });
 }
 
-/** **Sync now**: read Bazarr again, then everything that shows the library is out of date. */
+/**
+ * **Sync now**: ask the worker to read Bazarr again; it answers at once and reads in the background, so the library
+ * is shown out of date now and again a few seconds later. `acceptShrink` lets that one read through the shrink guard
+ * (the admin confirmed how many items it drops).
+ */
 export function useSyncCatalog() {
   const client = useQueryClient();
+  const refresh = () => client.invalidateQueries({ queryKey: ["catalog"] });
   return useMutation({
-    mutationFn: () => api<unknown>("/api/catalog/sync", { method: "POST", body: {} }),
-    onSettled: () => client.invalidateQueries({ queryKey: ["catalog"] }),
+    mutationFn: (options?: { acceptShrink?: boolean }) =>
+      api<unknown>("/api/catalog/sync", { method: "POST", body: options?.acceptShrink ? { accept_shrink: true } : {} }),
+    onSettled: () => {
+      void refresh();
+      window.setTimeout(() => void refresh(), 4_000);
+    },
   });
 }
 
@@ -676,6 +685,20 @@ export function useSeriesMemory(storedId: number | null | undefined) {
     queryFn: ({ signal }) => api<SeriesMemory>(`/api/series/${storedId}/memory`, { signal }),
     enabled: typeof storedId === "number",
     refetchInterval: 30_000,
+  });
+}
+
+/**
+ * Opening the Context tab: the worker gives the catalog's episodes the units the tab lists. It is a POST because reading
+ * the memory of a series (polled every 30 s) never writes; the list is read again only when something was made.
+ */
+export function useAdoptEpisodes(storedId: number | null | undefined) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<{ ok: boolean; adopted: number }>(`/api/series/${storedId}/memory/adopt`, { method: "POST", body: {} }),
+    onSuccess: (result) => {
+      if (result.adopted > 0) void client.invalidateQueries({ queryKey: ["memory"] });
+    },
   });
 }
 

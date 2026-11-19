@@ -706,7 +706,10 @@ class OverviewAndApi(CatalogCase):
     def test_the_routes_map_to_the_use_cases_and_say_404_and_400(self):
         env = self.env()
         env.episode(1)
-        self.assertEqual(handle(env.actions, "POST", "/api/catalog/sync")[0], 200)
+        status, asked = handle(env.actions, "POST", "/api/catalog/sync")
+        self.assertEqual((status, asked["requested"]), (200, True))  # it asks; the background loop reads
+        self.assertTrue(env.sync.take_request())
+        env.sync.run()
         self.assertEqual(handle(env.actions, "GET", "/api/catalog/status")[1]["items"], 2)
         self.assertEqual(handle(env.actions, "GET", "/api/catalog")[1]["series"][0]["episodes"], 1)
         self.assertEqual(handle(env.actions, "GET", "/api/catalog/series/99999")[0], 404)

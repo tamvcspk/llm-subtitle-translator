@@ -283,22 +283,14 @@ keys beyond these four fields.
 The wanted list, the media scan and `scan_limit` (`GET /api/wanted`, `GET /api/scan`, `POST /api/enqueue-scan`) are gone
 (P12b): the Library (`/api/catalog`) replaces them. A `scan_limit` in an old backup or request is ignored.
 
-## POST /api/enqueue
+`POST /api/enqueue` is gone too (review W4, R10-8): it made a job straight from a body, skipping Ignored items, the
+estimate, `GST_ONLY_PATHS` and the unit id that stops a duplicate. Ask for translations with `POST /api/jobs` (Library).
 
-Creates jobs for one item.
+## POST /api/series/{id}/memory/adopt
 
-```json
-{
-  "video_path": "/media/Show/Episode.mkv",
-  "subtitle_path": "/media/Show/Episode.ja.srt",
-  "source_code": "ja",
-  "source_language": "Japanese",
-  "media_type": "series",
-  "series_id": "144",
-  "media_id": "14672",
-  "target_codes": ["zh", "en"]
-}
-```
+The Context tab of a series calls it once when it opens: the episodes the catalog lists for that series get the units
+the tab shows (idempotent). `{"ok": true, "adopted": <units made>}`. `GET /api/series/{id}/memory`, which the page polls,
+never writes.
 
 ## POST /api/queue/retry
 
@@ -511,10 +503,10 @@ glossary review`.
 | Method and path | Answer |
 |---|---|
 | `GET /api/catalog` | `{"status", "languages", "series": [{"id", "title", "key", "episodes", "missing": {"vi": 3}, "open_jobs": {"requested": 1}, "failed": {"vi": 2}, "ignored": {"vi": 1}, "auto_request", "series_id"}], "movies": {"count", "missing", "failed", "ignored"}}`. Counts come from the catalog, the jobs and the decisions in a few queries (no per-item work). `failed` and `ignored` are per target language and equal what the `Failed` and `Ignored` labels of the series page (or the movies page) add up to: `failed` counts units with no open job whose newest finished job for that language is `failed` (so a failure asked for again, or followed by a success, is not counted); `ignored` counts the "do not translate" decisions. They feed the Failed and Ignored chips of Home. |
-| `GET /api/catalog/status` | `{"synced_at", "attempted_at", "status": "ok" \| "kept" \| "", "warning", "items", "listed", "auto_request", "auto_request_daily_cap"}`. `synced_at` is the last accepted read; `status: "kept"` means the last read was set aside and `warning` says why (Bazarr unreachable, empty, or shrunk by more than `catalog_shrink_guard`). |
+| `GET /api/catalog/status` | `{"synced_at", "attempted_at", "status": "ok" \| "kept" \| "", "warning", "items", "listed", "auto_request", "auto_request_daily_cap"}`. `synced_at` is the last accepted read; `status: "kept"` means the last read was set aside and `warning` says why (Bazarr unreachable, empty, or shrunk by more than `catalog_shrink_guard`). `shrink` is `{"listed", "dropped"}` when the guard was the reason (otherwise null; kept in memory, so it is empty again after a restart until the next read): the console offers to accept that read. |
 | `GET /api/catalog/series/{id}` | `{"status", "languages", "series": {"id", "title", "key", "auto_request", "series_id", "gone", "bootstrap": {"locked", "limit", "pending", "released", "held"}}, "items": [{"id", "kind", "bazarr_id", "title", "season", "episode", "unit_id", "source", "has_source", "gone", "targets": [<target>]}]}`. `unit_id` is set once the worker keeps a unit for the item (it opens the Episode page). |
 | `GET /api/catalog/movies` | The same `items` for movies. |
-| `POST /api/catalog/sync` | **Sync now**: reads Bazarr, and if the answer was accepted lets the `auto_request` policy act. Returns the status plus `"auto_requested": {"created", "capped", "considered"}` (null when the read was set aside). A read never creates a job by itself. |
+| `POST /api/catalog/sync` | **Sync now**: asks the background loop to read Bazarr at once (within a few seconds) and answers immediately with the status plus `"requested": true`; the read, and the `auto_request` policy after an accepted one, run in that loop, never in the request. Poll `GET /api/catalog/status` for the result. Body `{"accept_shrink": true}` lets that one read past the shrink guard when the status said `shrink` (the admin confirmed how many items go). A read never creates a job by itself. |
 | `PUT /api/catalog/series/{id}/policy` | `{"auto_request": "" \| "on" \| "off"}`: follow the global `auto_request` setting, force it on, or off for this series. |
 | `PUT /api/catalog/series/{id}/bootstrap` | **Continue** (FR-15.12): `{"released": true}` (the default) lets `auto_request` go past the first `auto_request_bootstrap` episodes of a series whose glossary nobody has reviewed; `false` holds it again. Nothing is requested at once: the rest is asked for after the next sync. `series.bootstrap` of the series page says where it stands: `locked` (the policy is on for it and holding episodes back), `limit`, `pending` (suggestions waiting for review), `released`, `held` (labels with `reason: "bootstrap"`). |
 | `POST /api/catalog/ignore` · `POST /api/catalog/unignore` | Select as for `POST /api/jobs` (`items`, `series`/`season`, or `all`), optional `languages`. Records or removes the decision "do not translate this language of this item": neither a sync nor the policy creates a job for it. Returns `{"ok", "changed", "ignored"}`. |

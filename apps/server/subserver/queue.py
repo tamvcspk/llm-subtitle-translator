@@ -252,10 +252,17 @@ class JobQueue:
                 self.jobs.lift(same["job_id"], prio)
                 skipped("the same request is already waiting or running", target_code, same["job_id"])
                 continue
-            failed = self.jobs.latest_for(key, FAILED)
-            if failed is not None and self.retry(failed["job_id"]):
-                created.append(failed["job_id"])
-                continue
+            if origin == "policy":
+                # The policy never revives or repeats what failed or what the admin cancelled: only the admin retries (D4).
+                ended = self.jobs.last_ended_state(key, base_job.get("unit_id") or None, target_code)
+                if ended in (FAILED, CANCELLED):
+                    skipped(f"an earlier job for this file {ended}; only the admin asks again", target_code, key)
+                    continue
+            else:
+                failed = self.jobs.latest_for(key, FAILED)
+                if failed is not None and self.retry(failed["job_id"]):
+                    created.append(failed["job_id"])
+                    continue
             job = {
                 **base_job, "created_at": int(time.time()), "source_code": source_code, "source_language": source_language,
                 "target_code": target_code, "target_language": str(target["language"]), "output_path": output_path,

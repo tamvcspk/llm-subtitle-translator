@@ -160,6 +160,34 @@ class JobStore:
         )
         return view(rows[0]) if rows else None
 
+    def for_units(self, unit_ids: Iterable[int], kind: str = PUBLISH) -> list[dict[str, Any]]:
+        """For each (unit, language) of these units: its newest open job and its newest finished one (at most two
+        rows each), in a few queries. A page of the Library reads this once instead of asking per item (R10-9)."""
+        ids = sorted({int(i) for i in unit_ids})
+        out: list[dict[str, Any]] = []
+        for start in range(0, len(ids), 400):
+            chunk = ids[start:start + 400]
+            marks = ",".join("?" * len(chunk))
+            open_marks = ",".join("?" * len(OPEN_STATES))
+            rows = self.store.query(
+                "SELECT * FROM (SELECT *, row_number() OVER (PARTITION BY unit_id, target_lang,"
+                f" state IN ({open_marks}) ORDER BY id DESC) AS rn FROM jobs WHERE kind = ? AND unit_id IN ({marks}))"
+                " WHERE rn = 1", (*OPEN_STATES, kind, *chunk),
+            )
+            out.extend({**view(row), "_unit_id": row["unit_id"], "_lang": row["target_lang"]} for row in rows)
+        return out
+
+    def last_ended_state(self, key: str, unit_id: int | None, target_lang: str, kind: str = PUBLISH) -> str | None:
+        """The state of the newest finished job (done, skipped, failed or cancelled) of this request, found by its key or,
+        when files were renamed, by its unit and language; None when it never ended. The policy reads it to leave a
+        request alone that failed or that the admin cancelled (R10-1, D4)."""
+        rows = self.store.query(
+            "SELECT state FROM jobs WHERE kind = ? AND state IN (?, ?, ?, ?)"
+            " AND (key = ? OR (unit_id = ? AND target_lang = ?)) ORDER BY id DESC LIMIT 1",
+            (kind, *ENDED_STATES, key, unit_id, target_lang),
+        )
+        return rows[0]["state"] if rows else None
+
     def has_open_twin(self, job_id: str) -> bool:
         """Whether another job holds the same ``(key, kind)`` open: the reason ``retry`` would do nothing."""
         rows = self.store.query(

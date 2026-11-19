@@ -9,7 +9,7 @@ from dataclasses import asdict
 from typing import Any
 
 from . import queue_policy as policy
-from .auto_request import AutoRequest, sync_and_request
+from .auto_request import AutoRequest
 from .catalog import CatalogSync
 from .catalog_view import CatalogView
 from .job_requests import JobRequests, PlannedJob, RequestPlan, Selection
@@ -50,16 +50,27 @@ class CatalogActions:
         self.view = view
 
     # -- reading ---------------------------------------------------------------------------------------------------
-    def status(self) -> dict[str, Any]: return self.view.status()
+    def status(self) -> dict[str, Any]:
+        """The catalog's state, with ``shrink`` (``{"listed", "dropped"}``) when the last read was set aside only because
+        it listed far fewer items than before: the console offers to accept that read (D3)."""
+        shrink = self.sync.shrink
+        return {**self.view.status(), "shrink": {"listed": shrink[0], "dropped": shrink[1]} if shrink else None}
+
     def overview(self) -> dict[str, Any]: return self.view.overview()
     def series_page(self, catalog_id: int) -> dict[str, Any]: return self.view.series_page(catalog_id)
     def movies_page(self) -> dict[str, Any]: return self.view.movies_page()
 
     # -- acting ----------------------------------------------------------------------------------------------------
-    def sync_now(self) -> dict[str, Any]:
-        """"Đồng bộ ngay": read the library now; the policy acts after it when the answer was applied."""
-        _, auto = sync_and_request(self.sync, self.auto)
-        return {**self.view.status(), "auto_requested": asdict(auto) if auto is not None else None}
+    def sync_now(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """**Sync now**: ask the background loop to read the library at once and answer with the state as it is
+        (``requested: true``); the read, and the policy after an accepted one, happen in that loop, so this request never
+        waits for Bazarr and the policy never runs twice at once (R10-7). ``accept_shrink: true`` lets that one read past
+        the shrink guard (D3); the console asks the admin first, saying how many items the read would drop."""
+        accept = (body or {}).get("accept_shrink", False)
+        if not isinstance(accept, bool):
+            raise ValueError("accept_shrink must be true or false")
+        self.sync.request(accept_shrink=accept)
+        return {**self.status(), "requested": True}
 
     def request(self, body: dict[str, Any]) -> dict[str, Any]:
         """Ask for translations (FR-15.5). With ``estimate_only`` nothing is made: the plan and what it would cost

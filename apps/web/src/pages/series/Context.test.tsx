@@ -42,6 +42,7 @@ function serveMemory(initial = memory(), extra: Record<string, unknown> = {}) {
   serve({
     ...base,
     "/api/series/9/memory": (body: Record<string, unknown> | null) => ({ body: body === null ? initial : { ...initial, ...body } }),
+    "/api/series/9/memory/adopt": { body: { ok: true, adopted: 0 } },
     ...extra,
   });
 }
@@ -97,6 +98,14 @@ describe("Series header: Story memory and Specials after", () => {
 });
 
 describe("Series Context tab", () => {
+  it("asks the worker once for the units of the catalog's episodes when it opens, and reads the list again only if some were made", async () => {
+    serveMemory(memory(), { "/api/series/9/memory/adopt": { body: { ok: true, adopted: 2 } } });
+    show("/series/1/context");
+    await screen.findByRole("list", { name: "Episodes" });
+    await waitFor(() => expect(sent("/api/series/9/memory/adopt")).toHaveLength(1));
+    await waitFor(() => expect(sent("/api/series/9/memory").length).toBeGreaterThanOrEqual(2)); // 2 made: read again
+  });
+
   it("lists the episodes in story order with their source and facts, and counts the ones without facts", async () => {
     serveMemory();
     show("/series/1/context");

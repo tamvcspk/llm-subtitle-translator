@@ -94,6 +94,7 @@ ROUTES: list[tuple[str, str, Handler]] = [
     ("POST", r"/api/units/(\d+)/context/extract", lambda s, m, q, b: s.refresh_context(int(m[1]), b)),
     ("GET", r"/api/series/(\d+)/memory", lambda s, m, q, b: s.series_memory(int(m[1]))),
     ("PUT", r"/api/series/(\d+)/memory", lambda s, m, q, b: s.set_series_memory(int(m[1]), b)),
+    ("POST", r"/api/series/(\d+)/memory/adopt", lambda s, m, q, b: s.adopt_episodes(int(m[1]))),
     ("GET", r"/api/series/(\d+)/glossary", lambda s, m, q, b: s.glossary(int(m[1]), _glossary_lang(q))),
     (
         "PUT",

@@ -1,4 +1,4 @@
-import { Alert, Anchor, Button, Card, Group, Loader, Stack, Tabs, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Button, Card, Group, Loader, Modal, Stack, Tabs, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useCatalogStatus, useQueue, useStatus, useStopJob, useSyncCatalog, useTasks } from "../api/queries";
@@ -113,9 +113,33 @@ function Layers() {
 function Catalog() {
   const catalog = useCatalogStatus();
   const sync = useSyncCatalog();
+  const [accepting, setAccepting] = useState(false);
   const data = catalog.data;
   return (
     <Card withBorder padding="md" radius="md" component="section" aria-label="Catalog">
+      <Modal opened={accepting} onClose={() => setAccepting(false)} title="Accept a smaller library?" centered>
+        <Stack gap="sm">
+          <Text>
+            The last read of Bazarr listed {data?.shrink?.listed.toLocaleString()} items,{" "}
+            {data?.shrink?.dropped.toLocaleString()} fewer than before. If that is real, the worker will stop listing the
+            missing ones (their subtitles and translations stay on disk). Nothing is deleted and nothing is translated.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setAccepting(false)}>
+              Cancel
+            </Button>
+            <Button
+              loading={sync.isPending}
+              onClick={() => {
+                sync.mutate({ acceptShrink: true });
+                setAccepting(false);
+              }}
+            >
+              Read again and accept
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
       <Group justify="space-between" wrap="wrap" gap="sm">
         <Stack gap={0}>
           <Title order={4}>Catalog</Title>
@@ -134,9 +158,16 @@ function Catalog() {
             <Loader size="sm" aria-label="Loading catalog" />
           )}
         </Stack>
-        <Button variant="default" loading={sync.isPending} onClick={() => sync.mutate()}>
-          Sync now
-        </Button>
+        <Group gap="sm">
+          {data?.shrink && (
+            <Button variant="default" onClick={() => setAccepting(true)}>
+              Accept smaller library
+            </Button>
+          )}
+          <Button variant="default" loading={sync.isPending} onClick={() => sync.mutate(undefined)}>
+            Sync now
+          </Button>
+        </Group>
       </Group>
       {sync.isError && (
         <Alert color="red" mt="sm">

@@ -918,12 +918,20 @@ class UnitService:
             changed += 1
         return changed
 
+    def adopt_episodes(self, series_id: int) -> dict[str, Any]:
+        """``POST /api/series/{id}/memory/adopt``: the admin opened the Context tab of this series, so its episodes get
+        the units that tab lists (see ``adopt_catalog_episodes``). Idempotent; ``adopted`` is how many it made."""
+        if self.catalog.get_series(series_id) is None or self.memory is None:
+            raise LookupError(f"no series {series_id}")
+        return {"ok": True, "adopted": self.adopt_catalog_episodes(series_id)}
+
     def series_memory(self, series_id: int) -> dict[str, Any]:
         series = self.catalog.get_series(series_id)
         if series is None or self.memory is None:
             raise LookupError(f"no series {series_id}")
         settings = self._settings()
-        self.adopt_catalog_episodes(series_id)
+        # A read: it makes no unit. The Context tab asks for the units of the catalog's episodes with ``adopt_episodes``
+        # when it opens (a POST), so a poll of this answer never writes (R14-3).
         return {
             "series": {"id": series.id, "title": series.title},
             "policy": series.memory,

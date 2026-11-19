@@ -129,6 +129,30 @@ describe("Activity", () => {
     await waitFor(() => expect(sent("/api/catalog/sync")).toHaveLength(1));
   });
 
+  it("offers to accept a read the shrink guard set aside, saying how many items it drops, and only sends it after Confirm", async () => {
+    serve(activity({
+      "/api/catalog/status": {
+        body: { synced_at: 1, attempted_at: 2, status: "kept", warning: "set aside", items: 10, shrink: { listed: 7, dropped: 3 } },
+      },
+      "/api/catalog/sync": { body: { ok: true } },
+    }));
+    show("/activity");
+    const card = await screen.findByRole("region", { name: "Catalog" });
+    await userEvent.click(await within(card).findByRole("button", { name: "Accept smaller library" }));
+    expect(await screen.findByText(/listed 7 items, 3 fewer than before/)).toBeInTheDocument();
+    expect(sent("/api/catalog/sync")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Read again and accept" }));
+    await waitFor(() => expect(sent("/api/catalog/sync")).toEqual([{ accept_shrink: true }]));
+  });
+
+  it("has no such button when the catalog was not kept because of a shrink", async () => {
+    serve(activity());
+    show("/activity");
+    const card = await screen.findByRole("region", { name: "Catalog" });
+    await within(card).findByText(/items/);
+    expect(within(card).queryByRole("button", { name: "Accept smaller library" })).not.toBeInTheDocument();
+  });
+
   it("labels the tabs with the real counts and opens on what is running", async () => {
     serve(activity());
     show("/activity");
