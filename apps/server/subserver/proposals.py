@@ -9,18 +9,24 @@ and applies proposals. A generator has no review logic of its own.
   (FR-18.3). All of them wait as ``pending``; a facts proposal never carries ``sources``, so ``auto_accept_terms``
   (which needs two independent research sources) can never apply one by itself (FR-4.4).
 * What the inbox already holds, in any status, is not asked about again: a candidate with a known identity costs no
-  model call, so a rejected proposal is not paid for twice and a run over unchanged facts is free.
+  model call, so a rejected proposal is not paid for twice and a run over unchanged facts is free. A candidate the
+  model had nothing usable for is remembered for ``SKIP_DAYS`` (and for the prompt version it was asked under); both
+  are taken out before each kind's limit, so they cannot crowd out the candidates behind them (R13-5).
+* Each kind (address rules, terms, characters) is stored as soon as it comes back, before the next is asked: a provider
+  error in a later step propagates typed (the queue maps it) and loses nothing already paid for (R13-4). A run is safe to
+  repeat. A character proposal reads the facts only up to the episode where it qualified (R13-2, ``subcore.suggest``).
 * It reads facts, never extracts them, and the hook (:meth:`FactsProposer.after_facts`) swallows every error: a
   generator that fails must never make a translation job slow or fail.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from subcore import srt
 from subcore.glossary import Glossary
@@ -33,11 +39,13 @@ from subcore.suggest import (
 from .config import DEFAULT_MODEL, model_for_task
 from .memory import StoryMemory, unit_label
 from .ports import MissingApiKey, ProviderFactory, Telemetry
-from .suggestions import Proposal, SuggestionService, _identity
+from .suggestion_keys import identity_key
+from .suggestions import Proposal, SuggestionService, normalise
 from .telemetry import NULL
 from .translation import redact
 
 ADDRESS_PER_RUN = 40  # pair states asked about in one call; the rest wait for the next run
+SKIP_DAYS = 7  # a candidate the model could not answer is left out of the runs of this many days (R13-5)
 ProviderFor = Callable[[str], Provider]
 
 
@@ -60,11 +68,6 @@ class Scan:
             "episodes": self.episodes, "address_rules": len(self.address), "terms": len(self.terms),
             "characters": len(self.characters), "calls": self.calls,
         }
-
-
-def _pair_key(a: str, b: str, start: str) -> tuple[str, str, str]:
-    low, high = sorted((a.casefold(), b.casefold()))
-    return (low, high, start)
 
 
 class FactsProposer:
@@ -101,67 +104,93 @@ class FactsProposer:
                     cache[label] = []
             return cache[label]
 
-        glossary: Glossary = self.suggestions.library.glossaries.load(owner.kind, owner.key, lang)
-        known = self._known(series_id, lang)
-        address = [
-            item for item in address_items(episodes, cues_of, glossary=glossary) if item.key not in known["address_rule"]
-        ][:ADDRESS_PER_RUN]
-        terms = [item for item in term_items(episodes, cues_of, glossary=glossary) if item.key not in known["term"]]
-        characters = [
-            item for item in character_items(episodes, cues_of, glossary=glossary) if item.key not in known["character"]
-        ]
+        library = self.suggestions.library
+        glossary: Glossary = library.glossaries.load(owner.kind, owner.key, lang)
+        cards = library.styles.cards(owner.kind, owner.key) if library.styles else []
+        held = self._held(series_id, lang)  # taken out BEFORE each kind's limit, or they would crowd out the rest
+        address = address_items(episodes, cues_of, glossary=glossary, exclude=held["address_rule"])[:ADDRESS_PER_RUN]
+        terms = term_items(episodes, cues_of, glossary=glossary, exclude=held["term"])
+        characters = character_items(
+            episodes, cues_of, glossary=glossary, exclude=held["character"],
+            cards=[name for card in cards for name in card.names],
+        )
         return Scan(len(episodes), {unit_label(u): u.id for u, _ in stored}, address, terms, characters)
 
-    def _known(self, series_id: int, lang: str) -> dict[str, set[tuple[str, ...]]]:
-        """The identities the inbox holds for this series and language, whatever their status."""
-        known: dict[str, set[tuple[str, ...]]] = {"address_rule": set(), "term": set(), "character": set()}
-        for row in self.suggestions.store.suggestions(series_id=series_id, target_lang=lang, limit=10_000):
+    def _held(self, series_id: int, lang: str) -> dict[str, set[tuple[str, ...]]]:
+        """What a run must not ask about for this series and language: every identity the inbox holds, whatever its
+        status, and every candidate the model recently had no answer for (R13-5)."""
+        store = self.suggestions.store
+        keys = {row.identity or identity_key(row.kind, row.payload) for row in store.suggestions(series_id=series_id, target_lang=lang, limit=10_000)}
+        keys |= store.suggestion_skips(series_id, lang, SUGGEST_PROMPT_VERSION, time.time() - SKIP_DAYS * 86400)
+        held: dict[str, set[tuple[str, ...]]] = {"address_rule": set(), "term": set(), "character": set()}
+        for key in keys:
             try:
-                identity = _identity(row.kind, row.payload)
-            except (KeyError, TypeError):
+                kind, *parts = json.loads(key)
+            except ValueError:
                 continue
-            if row.kind == "address_rule":
-                identity = _pair_key(row.payload["a"], row.payload["b"], identity[2])
-            known.setdefault(row.kind, set()).add(identity)
-        return known
+            held.setdefault(kind, set()).add(tuple(parts))
+        return held
 
     def estimate(self, series_id: int, lang: str) -> dict[str, Any]:
         return {"ok": True, "estimate_only": True, **self.scan(series_id, lang).to_json()}
 
     # -- running --------------------------------------------------------------------------------------------------
-    def run(self, series_id: int, lang: str, provider_for: ProviderFor) -> dict[str, Any]:
-        """Ask the model about the candidates and put what it answers in the inbox. Provider errors propagate; an
-        answer the model garbles costs only that kind of proposal."""
+    def run(
+        self, series_id: int, lang: str, provider_for: ProviderFor, report: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Ask the model about the candidates and put what it answers in the inbox, one kind at a time: what a kind
+        brought is stored before the next kind is asked, so a provider error in a later step (it propagates, typed)
+        never loses what an earlier step was paid for, and a run again asks only about what is left (R13-4). An answer
+        the model garbles costs only that kind of proposal. ``report`` (when given) is filled in as the run goes."""
         scan = self.scan(series_id, lang)
         owner = self.suggestions.library.series_owner(series_id)
-        report: dict[str, Any] = {"ok": True, **scan.to_json(), "errors": [], "added": 0, "auto_accepted": 0}
+        report = report if report is not None else {}
+        report.update({"ok": True, **scan.to_json(), "errors": [], "added": 0, "auto_accepted": 0})
         if not scan.calls:
             return report
         provider = provider_for("extract")
         title = owner.title
-        steps: list[tuple[str, str, Callable[[], list[Draft]]]] = []
+        steps: list[tuple[str, str, str, Sequence[Any], Callable[[], list[Draft]]]] = []
         if scan.address:
-            steps.append(("facts", "address rules", lambda: address_drafts(provider, scan.address, lang=lang)))
+            steps.append(("facts", "address rules", "address_rule", scan.address, lambda: address_drafts(provider, scan.address, lang=lang)))
         if scan.terms:
-            steps.append(("facts", "terms", lambda: term_drafts(provider, scan.terms, lang=lang, title=title)))
+            steps.append(("facts", "terms", "term", scan.terms, lambda: term_drafts(provider, scan.terms, lang=lang, title=title)))
         if scan.characters:
-            steps.append(("memory", "characters", lambda: character_drafts(provider, scan.characters, lang=lang, title=title)))
-        by_source: dict[str, list[Proposal]] = {"facts": [], "memory": []}
-        for source, name, ask in steps:
+            steps.append((
+                "memory", "characters", "character", scan.characters,
+                lambda: character_drafts(provider, scan.characters, lang=lang, title=title),
+            ))
+        store = self.suggestions.store
+        for source, name, kind, items, ask in steps:
             try:
                 drafts = ask()
-            except SuggestError as exc:
+            except SuggestError as exc:  # nothing useful came back: not a reason to remember the candidates as unanswerable
                 report["errors"].append(f"{name}: {exc}")
                 continue
-            by_source[source] += [
-                Proposal(d.kind, d.payload, evidence=tuple(self._linked(e, scan) for e in d.evidence)) for d in drafts
-            ]
-        for source, proposals in by_source.items():
-            if proposals:
-                outcome = self.suggestions.propose(series_id, lang, proposals, source=source)
+            usable: list[Draft] = []
+            for draft in drafts:
+                try:
+                    normalise(draft.kind, draft.payload)
+                except ValueError:
+                    continue
+                usable.append(draft)
+            answered = {identity_key(d.kind, d.payload) for d in usable}
+            if usable:
+                outcome = self.suggestions.propose(
+                    series_id, lang,
+                    [Proposal(d.kind, d.payload, evidence=tuple(self._linked(e, scan) for e in d.evidence)) for d in usable],
+                    source=source,
+                )
                 report["added"] += outcome.added
                 report["auto_accepted"] += outcome.auto_accepted
-                report.setdefault("outcomes", {})[source] = outcome.to_json()
+                counts = report.setdefault("outcomes", {}).setdefault(source, {})
+                for field_name, value in outcome.to_json().items():
+                    counts[field_name] = (counts.get(field_name, [] if isinstance(value, list) else 0)) + value
+            # What the model answered nothing usable for is remembered, or it would head the list of every run (R13-5).
+            store.suggestion_skip(
+                series_id, lang, [k for k in (json.dumps([kind, *item.key], ensure_ascii=False) for item in items) if k not in answered],
+                SUGGEST_PROMPT_VERSION,
+            )
         self.telemetry.event(
             "suggestions.generated",
             reason=f"{scan.calls} model call(s) over the facts of {scan.episodes} episode(s) of {title} for {lang}",
@@ -195,12 +224,14 @@ class FactsProposer:
                 providers[name] = self._provider_factory(settings, name, deadline=deadline, on_call=record)
             return providers[name]
 
+        report: dict[str, Any] = {}
         try:
-            return self.run(series_id, lang, provider_for)
+            return self.run(series_id, lang, provider_for, report)
         except MissingApiKey as exc:
             raise ValueError(str(exc)) from None
         except ProviderError as exc:
-            raise ValueError(redact(f"The provider could not finish ({type(exc).__name__}: {exc})", settings)) from None
+            kept = f" {report['added']} proposal(s) found before it are in the inbox." if report.get("added") else ""
+            raise ValueError(redact(f"The provider could not finish ({type(exc).__name__}: {exc}).{kept}", settings)) from None
 
     # -- the hook of a translation job ----------------------------------------------------------------------
     def after_facts(self, unit_ids: list[int], lang: str, provider_for: ProviderFor, settings: dict[str, Any]) -> None:

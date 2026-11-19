@@ -4,8 +4,10 @@ Every generator (facts, story memory, the feedback loop, research) hands the ser
 service is the one place that stores them, decides which are new, applies the ones that are accepted and undoes them.
 A source has no review logic of its own: ``source`` is only a label on the row.
 
-* **Fingerprint.** The hash of ``(series, language, kind, normalised content)``. A series keeps one row per
-  fingerprint, so what was rejected is never proposed again and what was accepted is skipped (FR-11.1.4).
+* **Fingerprint and identity.** The fingerprint is the hash of ``(series, language, kind, normalised content)``. The
+  *identity* (``suggestion_keys``) is only what the glossary keys the entry by (a term's source, a pair of characters,
+  a character's name), blind to the wording a model gave it. A series keeps one decision per identity, so what was
+  rejected is never proposed again however it is worded and what was accepted is skipped (FR-11.1.4).
 * **Accepting** writes the entry into the glossary in the database (a character also writes its card, in the same
   transaction) through the same documents the Glossary page saves, and says how many translations that makes stale
   (``rules.py`` hashes, the same ``impact_units`` the Glossary page uses). It never retranslates (FR-5.6).
@@ -36,6 +38,7 @@ from .ports import (
     SUGGESTION_ACCEPTED, SUGGESTION_PENDING, SUGGESTION_REJECTED, SUGGESTION_STATUSES, Suggestion, Telemetry,
 )
 from .store import Store
+from .suggestion_keys import identity_key
 from .telemetry import NULL
 
 SOURCES = ("facts", "memory", "feedback", "research")
@@ -117,16 +120,34 @@ def fingerprint(series_id: int, lang: str, kind: str, payload: dict[str, Any]) -
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+_SECOND_LEVEL = frozenset({"co", "com", "org", "net", "gov", "edu", "ac", "or", "ne", "go"})  # as in ``bbc.co.uk``
+
+
+def source_host(source: Any) -> str:
+    """The site a research source belongs to: the registered domain of its host, so ``www.``, a language subdomain
+    (``fr.wikipedia.org``), a path, a port, a scheme and its absence all name the same place. Text that is not a URL
+    is its own place (folded). Empty for nothing."""
+    text = " ".join(str(source or "").split())
+    if not text:
+        return ""
+    try:
+        host = (urlparse(text if "//" in text else "//" + text).hostname or "").strip(".").lower()
+    except ValueError:
+        host = ""
+    if not host or " " in text and "//" not in text:  # prose, not an address
+        return text.casefold()
+    labels = host.split(".")
+    if len(labels) <= 2 or all(label.isdigit() for label in labels):  # a bare name, a domain, an IPv4 address
+        return host
+    if len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
 def independent_sources(sources: Any) -> int:
-    """How many different places a research answer came from: a URL counts by its host (``www.`` is not another one)."""
-    seen: set[str] = set()
-    for item in sources or ():
-        text = item.strip() if isinstance(item, str) else ""
-        if not text:
-            continue
-        host = urlparse(text).netloc.lower().removeprefix("www.") if "//" in text else text.casefold()
-        seen.add(host or text.casefold())
-    return len(seen)
+    """How many different sites a research answer came from (FR-4.4): two pages of one site, ``www.`` or another
+    language edition of it are one source, not two."""
+    return len({host for host in (source_host(item) for item in (sources or ()) if isinstance(item, str)) if host})
 
 
 def _identity(kind: str, entry: dict[str, Any]) -> tuple[str, ...]:
@@ -212,7 +233,9 @@ class SuggestionService:
                 invalid.append(f"proposal {number}: {exc}")
                 continue
             digest = fingerprint(series_id, lang, proposal.kind, payload)
-            known = self.store.suggestion_by_fingerprint(series_id, lang, digest)
+            key = identity_key(proposal.kind, payload)
+            # What the series decided about this entry holds however the model worded it this time (R13-6).
+            known = self.store.suggestion_by_identity(series_id, lang, key) or self.store.suggestion_by_fingerprint(series_id, lang, digest)
             if known is not None:
                 counts[{SUGGESTION_PENDING: "pending_already", SUGGESTION_ACCEPTED: "accepted_before"}.get(known.status, "rejected_before")] += 1
                 continue
@@ -223,6 +246,7 @@ class SuggestionService:
                     continue
                 stored = self.store.suggestion_add(
                     series_id, lang, proposal.kind, source, digest, payload, list(proposal.evidence), list(proposal.sources),
+                    identity=key,
                 )
             if stored is None:  # raced with another proposal of the same content
                 counts["pending_already"] += 1
@@ -452,6 +476,8 @@ class SuggestionService:
             entry = {k: v for k, v in payload.items() if k != "card"}
             existing = list(doc.get(section) or [])
             before = [e for e in existing if _identity(kind, e) == _identity(kind, entry)]
+            if kind == "character" and len(before) == 1:  # the fields the proposal says; what the admin wrote stays (R13-3)
+                entry = {**before[0], **entry}
             record: dict[str, Any] = {"section": section, "before": before, "after": entry}
             if before == [entry]:
                 record["noop"] = True
@@ -460,8 +486,11 @@ class SuggestionService:
             card_doc = payload.get("card")
             if card_doc is not None:
                 prior = cards.get(str(entry["name"]).casefold())
+                if prior is not None:  # a card the admin already has keeps its other fields (and its own spelling of the name)
+                    card_doc = CharacterCard.from_doc({**prior.to_doc(), **card_doc, "name": prior.name}, "card").to_doc()
                 part: dict[str, Any] = {
-                    "name": entry["name"], "before": prior.to_doc() if prior else None, "after": card_doc,
+                    "name": prior.name if prior else entry["name"], "before": prior.to_doc() if prior else None,
+                    "after": card_doc,
                 }
                 if prior is not None and prior.to_doc() == card_doc:
                     part["noop"] = True

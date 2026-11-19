@@ -902,8 +902,13 @@ A suggestion is
   timecode, `{"episode", "cue", "timecode", "text", "unit_id"}`, or a line of text); `sources` are the URLs of a research answer.
 - `status` is `pending`, `accepted` or `rejected`. `auto_accepted` marks one applied by `auto_accept_*`; `undoable` is true
   for an accepted one that changed the glossary; `edited` for one accepted after the admin changed it.
-- Content is identified by a fingerprint (series, language, kind, the content without case or spacing): the same content is
-  never stored twice, so a rejected suggestion is not proposed again and an accepted one is skipped.
+- A suggestion is identified by what it is about, not by how it is worded: a term by its source (and `from`), an address
+  rule by the pair of characters (whichever is named first) and `from`, a character by its name, all without case or
+  spacing. A series keeps one decision per identity and language, so a rejected suggestion is not proposed again when a model
+  words it differently, and an accepted one is skipped. A character's accepted voice is merged into the card the admin
+  already has (the fields it says replace theirs; the others stay) and Undo puts the old card back exactly. For
+  `auto_accept_terms` two `sources` count as independent only when they are different sites (the registered domain: `www.`,
+  a language edition or another page of one site is the same source).
 
 | Method and path | Answer |
 |---|---|

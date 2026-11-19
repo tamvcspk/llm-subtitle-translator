@@ -29,6 +29,7 @@ from .ports import (
     SeriesSeed, StoredGlossary, StyleRow, Suggestion, SuggestionCount, TokenTotals, TranslationVersion, Unit,
     SUGGESTION_ACCEPTED, SUGGESTION_PENDING, SUGGESTION_REJECTED,
 )
+from .suggestion_keys import identity_key
 
 _MIGRATIONS: tuple[str, ...] = (
     """
@@ -427,6 +428,22 @@ _MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX suggestions_status ON suggestions (status, series_id);
     ALTER TABLE series ADD COLUMN bootstrap_released INTEGER NOT NULL DEFAULT 0;
     """,
+    # Migration 14 (review wave W3, R13-6, R13-5): ``identity`` is what a suggestion is about (its kind, name or pair,
+    # and where it starts), blind to the wording a model gave it; the start-up fills it for every older row, decided
+    # ones included, so a rejection still holds. The fingerprint stays. ``suggestion_skips`` remembers a candidate the
+    # model could not answer, for a while, so it does not head the list of every run.
+    """
+    ALTER TABLE suggestions ADD COLUMN identity TEXT NOT NULL DEFAULT '';
+    CREATE INDEX suggestions_identity ON suggestions (series_id, target_lang, identity);
+    CREATE TABLE suggestion_skips (
+        series_id INTEGER NOT NULL REFERENCES series(id),
+        target_lang TEXT NOT NULL,
+        identity TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        at REAL NOT NULL,
+        PRIMARY KEY (series_id, target_lang, identity)
+    );
+    """,
 )
 
 
@@ -525,7 +542,7 @@ def _suggestion_from_row(row: sqlite3.Row) -> Suggestion:
         source=row["source"], fingerprint=row["fingerprint"], payload=json.loads(row["payload_json"]),
         evidence=json.loads(row["evidence_json"] or "[]"), sources=json.loads(row["sources_json"] or "[]"),
         auto_accepted=bool(row["auto_accepted"]), status=row["status"], applied=json.loads(row["applied_json"] or "{}"),
-        decided_at=row["decided_at"], created_at=row["created_at"],
+        decided_at=row["decided_at"], created_at=row["created_at"], identity=row["identity"],
     )
 
 
@@ -551,6 +568,7 @@ class Store:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA foreign_keys=ON")
         self._migrate()
+        self._fill_suggestion_identities()
         self._restrict_files()
 
     def close(self) -> None:
@@ -602,6 +620,27 @@ class Store:
                 except BaseException:
                     self._db.execute("ROLLBACK")
                     raise
+
+    def _fill_suggestion_identities(self) -> None:
+        """Give every suggestion from before migration 14 its identity (idempotent: rows that have one are left alone)."""
+        with self._lock:
+            rows = self._db.execute("SELECT id, kind, payload_json FROM suggestions WHERE identity = ''").fetchall()
+            if not rows:
+                return
+            self._db.execute("BEGIN")
+            try:
+                for row in rows:
+                    try:
+                        payload = json.loads(row["payload_json"])
+                    except ValueError:
+                        continue
+                    key = identity_key(row["kind"], payload) if isinstance(payload, dict) else ""
+                    if key:
+                        self._db.execute("UPDATE suggestions SET identity = ? WHERE id = ?", (key, row["id"]))
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
 
     @property
     def schema_version(self) -> int:
@@ -1356,6 +1395,14 @@ class Store:
             "SELECT id FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?",
             (owner_kind, owner_key, replaces or name),
         ).fetchone()
+        # Names are unique whatever their case: a rename onto another card is refused, not left to the constraint.
+        clash = db.execute(
+            "SELECT name FROM character_cards WHERE owner_kind = ? AND owner_key = ? AND name = ?"
+            + (" AND id <> ?" if old is not None else ""),
+            (owner_kind, owner_key, name, *((old["id"],) if old is not None else ())),
+        ).fetchone()
+        if clash is not None:
+            raise ValueError(f"there is already a card for {clash['name']!r}; rename or delete that one first")
         if old is None:
             db.execute(
                 "INSERT INTO character_cards (owner_kind, owner_key, name, doc_json, version, updated_at)"
@@ -1409,18 +1456,24 @@ class Store:
     # -- suggestions (P13, FR-4.4, FR-11.1) ---------------------------------------------------------------
     def suggestion_add(
         self, series_id: int, target_lang: str, kind: str, source: str, fingerprint: str, payload: dict[str, Any],
-        evidence: list[Any], sources: list[str],
+        evidence: list[Any], sources: list[str], *, identity: str = "",
     ) -> Suggestion | None:
-        """Store a pending suggestion; ``None`` when the series already has one with that fingerprint in that language
-        (pending, accepted or rejected: a rejected one is exactly what must not come back)."""
+        """Store a pending suggestion; ``None`` when the series already has one with that fingerprint, or about the same
+        thing (``identity``), in that language (pending, accepted or rejected: a rejected one is exactly what must not
+        come back, however the model worded it this time)."""
         with self.transaction() as db:
+            if identity and db.execute(
+                "SELECT 1 FROM suggestions WHERE series_id = ? AND target_lang = ? AND identity = ?",
+                (series_id, target_lang, identity),
+            ).fetchone():
+                return None
             cursor = db.execute(
                 "INSERT INTO suggestions (series_id, target_lang, kind, source, fingerprint, payload_json, evidence_json,"
-                " sources_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " sources_json, created_at, identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT (series_id, target_lang, fingerprint) DO NOTHING",
                 (
                     series_id, target_lang, kind, source, fingerprint, json.dumps(payload, ensure_ascii=False, sort_keys=True),
-                    json.dumps(evidence, ensure_ascii=False), json.dumps(sources, ensure_ascii=False), time.time(),
+                    json.dumps(evidence, ensure_ascii=False), json.dumps(sources, ensure_ascii=False), time.time(), identity,
                 ),
             )
             if cursor.rowcount == 0:
@@ -1438,6 +1491,41 @@ class Store:
             (series_id, target_lang, fingerprint),
         )
         return _suggestion_from_row(rows[0]) if rows else None
+
+    def suggestion_by_identity(self, series_id: int, target_lang: str, identity: str) -> Suggestion | None:
+        """The newest suggestion of the series about this identity, whatever its status and wording."""
+        if not identity:
+            return None
+        rows = self.query(
+            "SELECT * FROM suggestions WHERE series_id = ? AND target_lang = ? AND identity = ? ORDER BY id DESC LIMIT 1",
+            (series_id, target_lang, identity),
+        )
+        return _suggestion_from_row(rows[0]) if rows else None
+
+    def suggestion_skip(
+        self, series_id: int, target_lang: str, identities: Iterable[str], prompt_version: str, at: float | None = None,
+    ) -> None:
+        """Remember candidates the model had no answer for (R13-5), so the next run asks about others."""
+        now = time.time() if at is None else at
+        rows = [(series_id, target_lang, key, prompt_version, now) for key in identities if key]
+        if not rows:
+            return
+        with self.transaction() as db:
+            db.executemany(
+                "INSERT INTO suggestion_skips (series_id, target_lang, identity, prompt_version, at) VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT (series_id, target_lang, identity) DO UPDATE SET"
+                " prompt_version = excluded.prompt_version, at = excluded.at",
+                rows,
+            )
+
+    def suggestion_skips(self, series_id: int, target_lang: str, prompt_version: str, since: float) -> frozenset[str]:
+        """The identities skipped since ``since`` under this prompt version (an older skip, or one made under another
+        prompt, lets the candidate be asked about again)."""
+        rows = self.query(
+            "SELECT identity FROM suggestion_skips WHERE series_id = ? AND target_lang = ? AND prompt_version = ? AND at >= ?",
+            (series_id, target_lang, prompt_version, since),
+        )
+        return frozenset(r["identity"] for r in rows)
 
     def suggestions(
         self, *, series_id: int | None = None, status: str | None = None, source: str | None = None,

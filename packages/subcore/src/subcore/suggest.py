@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Collection, Sequence
 
 import json_repair
 
@@ -49,7 +49,8 @@ __all__ = [
 
 # Bump when a prompt below changes: it is on the call record, so a change can be told apart.
 # s2: an address rule says why (`why`), the two directions must agree, and an unclear hierarchy gets the neutral form.
-SUGGEST_PROMPT_VERSION = "s2"
+# s3: a character is read only up to the episode where it qualified (no `appears_in`, no facts of later episodes).
+SUGGEST_PROMPT_VERSION = "s3"
 
 MIN_CONFIDENCE = 0.5  # a doubtful reading of the dialogue is not worth a person's attention
 MIN_UNITS = 2  # a name or a character must show in this many episodes (FR-6.2)
@@ -63,6 +64,11 @@ CuesOf = Callable[[str], Sequence[srt.Cue]]  # an episode label -> its source cu
 
 class SuggestError(ValueError):
     """The model's answer could not be used."""
+
+
+def _fold(value: Any) -> str:
+    """Case and spacing folded: how two candidates are told to be the same (the server folds a stored proposal alike)."""
+    return " ".join(str(value).split()).casefold()
 
 
 @dataclass(frozen=True)
@@ -98,7 +104,7 @@ class AddressItem:
 
     @property
     def key(self) -> tuple[str, str, str]:
-        return (self.a.name.casefold(), self.b.name.casefold(), str(self.start or ""))
+        return (_fold(self.a.name), _fold(self.b.name), _fold(self.start or ""))
 
 
 @dataclass(frozen=True)
@@ -110,7 +116,7 @@ class TermItem:
 
     @property
     def key(self) -> tuple[str, ...]:
-        return (self.source.casefold(), "")
+        return (_fold(self.source), "")
 
 
 @dataclass(frozen=True)
@@ -122,7 +128,7 @@ class CharacterItem:
 
     @property
     def key(self) -> tuple[str, ...]:
-        return (self.character.name.casefold(),)
+        return (_fold(self.character.name),)
 
 
 # -- evidence ------------------------------------------------------------------------------------------------
@@ -203,9 +209,13 @@ class _State:
     seen: list[tuple[Episode, RelationshipEvent]] = field(default_factory=list)
 
 
-def address_items(episodes: Sequence[Episode], cues_of: CuesOf, *, glossary: Glossary | None = None) -> list[AddressItem]:
+def address_items(
+    episodes: Sequence[Episode], cues_of: CuesOf, *, glossary: Glossary | None = None,
+    exclude: Collection[tuple[str, ...]] = (),
+) -> list[AddressItem]:
     """One item per state of every pair whose relationship the facts show. Pairs the glossary already has a rule for
-    are left alone: the admin's rule wins (FR-4.3) and a proposal would only argue with it."""
+    are left alone: the admin's rule wins (FR-4.3) and a proposal would only argue with it. ``exclude`` are the keys
+    of states not to ask about."""
     names = _names(episodes)
     held = {frozenset((r.a.casefold(), r.b.casefold())) for r in (glossary.address_rules if glossary else ())}
     pairs: dict[tuple[str, str], list[tuple[Episode, RelationshipEvent]]] = {}
@@ -242,10 +252,12 @@ def address_items(episodes: Sequence[Episode], cues_of: CuesOf, *, glossary: Glo
                 _cue_evidence(e.label, ev.cue, ev.evidence, cues_of, f"{ev.relation}, {ev.hierarchy.replace('_', ' ')}")
                 for e, ev in state.seen[:MAX_EVIDENCE]
             )
-            items.append(AddressItem(
+            item = AddressItem(
                 a, b, state.relation, state.hierarchy, state.intimacy, state.detail,
                 starts[n], starts[n + 1] if n + 1 < len(states) else None, evidence,
-            ))
+            )
+            if item.key not in exclude:
+                items.append(item)
     return items
 
 
@@ -277,9 +289,11 @@ def _flipped(event: RelationshipEvent) -> RelationshipEvent:
 
 def term_items(
     episodes: Sequence[Episode], cues_of: CuesOf, *, glossary: Glossary | None = None, limit: int = 30,
+    exclude: Collection[tuple[str, ...]] = (),
 ) -> list[TermItem]:
     """Names and terms that show in ``MIN_UNITS`` or more episodes and are not in the glossary, most widespread first.
-    A character's own name is not a term."""
+    A character's own name is not a term. ``exclude`` are keys not to ask about; they go before ``limit`` applies, so
+    what was already decided or could not be answered never crowds out the rest."""
     names = _names(episodes)
     have = {s.casefold() for t in (glossary.terms if glossary else ()) for s in t.sources}
     found: dict[str, dict[str, Any]] = {}
@@ -293,6 +307,8 @@ def term_items(
     items = []
     for key, slot in found.items():
         if len(slot["units"]) < MIN_UNITS or key in have or names.find(slot["source"]) is not None:
+            continue
+        if (_fold(slot["source"]), "") in exclude:
             continue
         items.append((slot, tuple(slot["units"])))
     items.sort(key=lambda pair: (-len(pair[1]), pair[0]["source"].casefold()))
@@ -321,10 +337,18 @@ def _term_evidence(source: str, units: Sequence[str], cues_of: CuesOf) -> tuple[
 
 def character_items(
     episodes: Sequence[Episode], cues_of: CuesOf, *, glossary: Glossary | None = None, limit: int = 20,
+    cards: Collection[str] = (), exclude: Collection[tuple[str, ...]] = (),
 ) -> list[CharacterItem]:
-    """Characters that show in ``MIN_UNITS`` or more episodes and have no entry in the glossary."""
+    """Characters that show in ``MIN_UNITS`` or more episodes and have neither an entry in the glossary nor a card.
+
+    A card applies to every episode, so a proposal is drawn only from what the story had shown by the episode where
+    the character qualified (the ``MIN_UNITS``-th one they are in): their role, age, relations and evidence never come
+    from a later episode (R13-2; a unit never sees the facts of a later one). ``cards`` are the casefolded names and
+    aliases of the cards the admin already has; ``exclude`` are keys not to ask about (they are dropped before
+    ``limit`` applies, so they cannot crowd out the rest)."""
     names = _names(episodes)
-    have = {c.name.casefold() for c in (glossary.characters if glossary else ())}
+    have = {c.name.casefold() for c in (glossary.characters if glossary else ())} | {c.casefold() for c in cards}
+    order = {episode.label: n for n, episode in enumerate(episodes)}
     units: dict[str, list[str]] = {}
     for episode in episodes:
         for character in episode.facts.characters:
@@ -333,28 +357,40 @@ def character_items(
             canonical = (names.find(character.name) or character.name).casefold()
             if episode.label not in units.setdefault(canonical, []):
                 units[canonical].append(episode.label)
-    events: dict[str, list[tuple[Episode, RelationshipEvent, str]]] = {}
-    for episode in episodes:
+    events: dict[str, list[tuple[int, Episode, RelationshipEvent, str]]] = {}
+    for n, episode in enumerate(episodes):
         for event in episode.facts.relationship_events:
             if event.confidence < MIN_CONFIDENCE or is_group(event.a) or is_group(event.b):
                 continue
             a, b = _person(names, event.a), _person(names, event.b)
-            events.setdefault(a.name.casefold(), []).append((episode, event, b.name))
-            events.setdefault(b.name.casefold(), []).append((episode, event, a.name))
-    out: list[CharacterItem] = []
+            events.setdefault(a.name.casefold(), []).append((n, episode, event, b.name))
+            events.setdefault(b.name.casefold(), []).append((n, episode, event, a.name))
+    scoped: dict[int, _Names] = {}
+    ranked: list[tuple[int, CharacterItem]] = []
     for key, labels in units.items():
         person = names.characters.get(key)
-        if person is None or len(labels) < MIN_UNITS or key in have or person.name.casefold() in have:
+        if person is None or len(labels) < MIN_UNITS or (_fold(person.name),) in exclude:
             continue
-        mine = events.get(key, [])
+        if key in have or person.name.casefold() in have or any(a.casefold() in have for a in person.aliases):
+            continue
+        through = order[labels[MIN_UNITS - 1]]  # labels follow the story order
+        if through not in scoped:
+            scoped[through] = _names(episodes[: through + 1])
+        at = scoped[through]
+        then = at.characters.get((at.find(person.name) or person.name).casefold())
+        known = Character(
+            person.name, person.aliases, then.gender if then else "", then.age_hint if then else "",
+            then.role if then else "",
+        )
+        mine = [(e, ev, other) for n, e, ev, other in events.get(key, []) if n <= through]
         relations = tuple(dict.fromkeys(f"{ev.relation} with {other}" for _, ev, other in mine))[-4:]
         evidence = tuple(
             _cue_evidence(e.label, ev.cue, ev.evidence, cues_of, f"{ev.relation} with {other}")
             for e, ev, other in mine[-MAX_EVIDENCE:]
         )
-        out.append(CharacterItem(person, tuple(labels), relations, evidence))
-    out.sort(key=lambda item: (-len(item.units), item.character.name.casefold()))
-    return out[:limit]
+        ranked.append((len(labels), CharacterItem(known, tuple(labels[:MIN_UNITS]), relations, evidence)))
+    ranked.sort(key=lambda pair: (-pair[0], pair[1].character.name.casefold()))
+    return [item for _, item in ranked[:limit]]
 
 
 # -- the model --------------------------------------------------------------------------------------------------------
@@ -526,8 +562,7 @@ def character_drafts(provider: Provider, items: Sequence[CharacterItem], *, lang
     lines = [
         {
             "i": n, "title": title, **_person_line(item.character), "aliases": list(item.character.aliases),
-            "appears_in": len(item.units), "relations": list(item.relations),
-            "lines": _lines(item.evidence),
+            "relations": list(item.relations), "lines": _lines(item.evidence),
         }
         for n, item in enumerate(items)
     ]

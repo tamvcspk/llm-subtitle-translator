@@ -66,10 +66,12 @@ class ProposeTests(unittest.TestCase):
         self.assertEqual((again.added, again.pending_already), (0, 1))
         self.assertEqual(len(env.pending()), 1)
 
-    def test_a_different_target_for_the_same_source_is_a_different_suggestion(self):
+    def test_a_different_wording_of_the_same_source_is_the_same_suggestion(self):
+        """R13-6: what a series decided holds for the entry, however the model words it next time."""
         env = Env(self)
         env.propose(term())
-        self.assertEqual(env.propose(term(target="đá Kyber")).added, 1)
+        again = env.propose(term(target="đá Kyber"))
+        self.assertEqual((again.added, again.pending_already), (0, 1))
 
     def test_what_the_glossary_already_says_is_not_proposed(self):
         env = Env(self)

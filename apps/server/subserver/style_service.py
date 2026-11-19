@@ -213,7 +213,11 @@ class StyleService:
         except StyleError as exc:
             raise ValueError(str(exc)) from None
         replaces = str(body.get("replaces") or "") or None
-        cards = [c for c in self.styles.cards(owner.kind, owner.key) if c.name.casefold() not in {card.name.casefold(), (replaces or "").casefold()}]
+        existing = self.styles.cards(owner.kind, owner.key)
+        if card.name.casefold() != (replaces or card.name).casefold() and any(c.name.casefold() == card.name.casefold() for c in existing):
+            # a rename onto another card: say so before counting an impact that would never happen (R12-5)
+            raise ValueError(f"there is already a card for {card.name!r}; rename or delete that one first")
+        cards = [c for c in existing if c.name.casefold() not in {card.name.casefold(), (replaces or "").casefold()}]
         impact = self.library.impact_units(
             owner.units, None,
             layers=lambda unit: replace(self.library.style_layers(unit), cards=tuple([*cards, card])),

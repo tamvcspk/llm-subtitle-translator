@@ -155,7 +155,8 @@ Something a generator proposes for the glossary or the character cards of a seri
 `source` (`facts`, `memory`, `feedback`, `research`) is only a label: every source is stored, decided
 and applied the same way. It waits as `pending` until the admin accepts it (optionally after editing it),
 rejects it, or `auto_accept_*` applies it. Accepting writes the glossary and flags translations made without
-it stale, never retranslates; the same content is never proposed again once decided (its fingerprint).
+it stale, never retranslates; the same entry is never proposed again once decided (its *identity*: the term's source,
+the pair of an address rule, the character's name, however the model words it).
 **Review** is the page that lists them, with a badge of the pending ones on the nav.
 The first generator (`proposals.py`, `FactsProposer`, with the pure `subcore.suggest`) reads the stored facts of a series:
 a pair of characters whose relationship the facts show becomes an `address_rule` per stretch of the story (`from`/`until`

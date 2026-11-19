@@ -1,4 +1,27 @@
 # Unreleased
+- **Review wave W3: who a suggestion is, and a generator that does not lose or repeat its calls (R13-1 to R13-6, R12-5).**
+  Schema 14 (migration at start-up, idempotent).
+  - **Two sources are two sites (R13-1).** `auto_accept_terms` counted `fandom.com/wiki/Foo` and `fandom.com/wiki/Bar`, or
+    `en.` and `fr.wikipedia.org`, as independent, so one site could apply a term by itself. Sources now count by registered
+    domain (`suggestions.source_host`: scheme, `www.`, port, path and language subdomain do not make another one).
+  - **A decision holds however the model words it (R13-6, D2).** A suggestion has an *identity* (term source, pair of
+    characters either way round, character name; `from` included): rejected proposals no longer come back with a different
+    `note` or `target`. Filled for every older row at start-up, decided ones included; the fingerprint stays. **Visible change:**
+    a second proposal about an entry that is already pending is reported as `pending_already`, not stored beside it.
+  - **Accepting a character no longer replaces the admin's card (R13-3).** The voice is merged field by field into the card
+    and the glossary entry that exist (the fields the proposal says win, the rest stays, the card keeps its spelling of the
+    name), and Undo restores them exactly. A character that already has a card is not proposed at all.
+  - **A card is not read from the future (R13-2).** A character's role, age, relations and evidence come only from the facts
+    up to the episode where it qualified (its second one), since a card applies to every episode. `SUGGEST_PROMPT_VERSION` is
+    `s3` (the model no longer gets `appears_in`).
+  - **A failed step keeps the paid ones (R13-4).** Address rules, terms and characters are stored one kind at a time; a
+    provider error in a later step propagates typed and the earlier proposals are in the inbox ("N proposal(s) found before it
+    are in the inbox"). Running again asks only about what is left.
+  - **Candidates that cannot be answered stop heading the list (R13-5).** What the inbox holds and what the model had no usable
+    answer for (kept 7 days in `suggestion_skips`, per prompt version) is taken out before each kind's limit, so it no longer
+    starves the candidates behind it or gets asked after every job.
+  - **A rename onto another card is refused (R12-5)** with the card's name (`400`), before its impact is counted and before
+    half of a character is written; it used to be a `500` that rolled back the glossary half too.
 - **Review wave W2: the CLI and the bundle, then one matcher (R11-1 to R11-9, R12-2, R12-4, R12-10).** `subcore` only; the
   worker's behaviour changes in one place (below).
   - **A Gemini key is no longer sent to another host (R11-1).** `--api-key-env` defaults per provider: `GEMINI_API_KEY` for

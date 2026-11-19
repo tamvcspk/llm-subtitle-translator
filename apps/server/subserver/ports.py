@@ -347,6 +347,7 @@ class Suggestion:
     applied: dict[str, Any] = field(default_factory=dict)
     decided_at: float = 0.0
     created_at: float = 0.0
+    identity: str = ""  # what the glossary keys the entry by (``suggestion_keys``); a decision holds for it, however worded
 
 
 @dataclass(frozen=True)
