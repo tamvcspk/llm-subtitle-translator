@@ -163,7 +163,14 @@ episode. Terms and address rules carry `from`/`until` windows. The result goes t
 the prompt, and its hash is stored as the version's `glossary_hash`: when the hash
 computed now differs, the translation is *stale* (flagged only). Hand-edited cues
 (`cue_edit`) are outside the hash; they are locked output, and so are the few-shot
-examples made from them.
+examples made from them. The glossary's `target_lang` is outside it too (a version is
+already keyed by its language, and the store writes that field into a glossary on its
+first save). `Library.impact_units` is the one place that counts how many translations a
+change to the rules would make stale; every save, restore, copy, adoption or deletion that
+changes a hash asks it first and answers with `stale_now`, `stale_after`, `would_stale`
+(`dry_run` only counts). A glossary change counts one language; a style, a card, a preset
+or an episode's style counts every language. `UnitRules.for_window` numbers rules built
+on a whole source for a part of it (the trial of a style).
 
 `units.py` (`UnitService`) implements the console actions: cue view, corrections,
 retranslation, versions, diff, revert, glossary read/write. `library_api.py` routes

@@ -400,6 +400,9 @@ export interface GlossarySave extends StyleImpact {
   version: number | null;
 }
 
+/** A restore or a copy of a glossary, or a dry run of one (`saved: false`, `version: null`): what it flags stale. Nothing is retranslated. */
+export type GlossaryChange = GlossarySave;
+
 export interface GlossaryRevision {
   version: number;
   /** Unix seconds. */

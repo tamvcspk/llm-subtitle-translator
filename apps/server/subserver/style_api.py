@@ -44,7 +44,7 @@ ROUTES: list[tuple[str, str, Handler]] = [
     ("GET", r"/api/style/presets",lambda s, m, q, b: s.presets()),
     ("PUT", r"/api/style/presets/([a-z0-9-]+)", lambda s, m, q, b: s.save_preset(m[1], b)),
     ("POST", r"/api/style/presets/([a-z0-9-]+)/clone", lambda s, m, q, b: s.clone_preset(m[1], b)),
-    ("POST", r"/api/style/presets/([a-z0-9-]+)/delete", lambda s, m, q, b: s.delete_preset(m[1])),
+    ("POST", r"/api/style/presets/([a-z0-9-]+)/delete", lambda s, m, q, b: s.delete_preset(m[1], b)),
     ("GET", r"/api/units/(\d+)/style", lambda s, m, q, b: s.unit_style(int(m[1]))),
     ("PUT", r"/api/units/(\d+)/style", lambda s, m, q, b: s.save_unit_style(int(m[1]), b)),
 ]

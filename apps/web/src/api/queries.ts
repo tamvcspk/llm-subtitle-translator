@@ -17,6 +17,7 @@ import type {
   GlossaryAnswer,
   GlossaryDoc,
   GlossaryRevision,
+  GlossaryChange,
   GlossarySave,
   JobsAnswer,
   JobsSelector,
@@ -812,13 +813,48 @@ export function useGlossaryHistory(owner: StyleOwner, lang: string, enabled: boo
   });
 }
 
+/** What restoring a version would flag stale: a dry run that counts, restores nothing and costs no model call. */
+export function useRestoreImpact(owner: StyleOwner, lang: string, version: number | null) {
+  return useQuery({
+    queryKey: ["glossary-restore-impact", owner, lang, version] as const,
+    queryFn: ({ signal }) =>
+      api<GlossaryChange>(`${ownerPath(owner)}/glossary/restore`, { method: "POST", body: { lang, version, dry_run: true }, signal }),
+    enabled: version !== null,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
 /** Put an earlier state back as a new save; the one it replaces goes to the history, so this can be undone. */
 export function useRestoreGlossary(owner: StyleOwner, lang: string) {
   const refresh = useRefreshStyle();
   return useMutation({
     mutationFn: (version: number) =>
-      api<{ ok: boolean; version: number; restored: number }>(`${ownerPath(owner)}/glossary/restore`, { method: "POST", body: { lang, version } }),
+      api<GlossaryChange & { restored: number }>(`${ownerPath(owner)}/glossary/restore`, { method: "POST", body: { lang, version } }),
     onSettled: () => void refresh(),
+  });
+}
+
+export interface CopyArgs {
+  from_series: number;
+  merge: boolean;
+}
+
+/** What copying another series' glossary would flag stale: a dry run that counts, copies nothing and costs no model call. */
+export function useCopyImpact(seriesId: number, lang: string, args: CopyArgs | null) {
+  return useQuery({
+    queryKey: ["glossary-copy-impact", seriesId, lang, args] as const,
+    queryFn: ({ signal }) =>
+      api<GlossaryChange & { from: string }>(`/api/series/${seriesId}/glossary/copy`, {
+        method: "POST",
+        body: { lang, ...args, dry_run: true },
+        signal,
+      }),
+    enabled: args !== null,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
   });
 }
 
@@ -826,8 +862,8 @@ export function useRestoreGlossary(owner: StyleOwner, lang: string) {
 export function useCopyGlossary(seriesId: number, lang: string) {
   const refresh = useRefreshStyle();
   return useMutation({
-    mutationFn: (args: { from_series: number; merge: boolean }) =>
-      api<{ ok: boolean; version: number; from: string }>(`/api/series/${seriesId}/glossary/copy`, { method: "POST", body: { lang, ...args } }),
+    mutationFn: (args: CopyArgs) =>
+      api<GlossaryChange & { from: string }>(`/api/series/${seriesId}/glossary/copy`, { method: "POST", body: { lang, ...args } }),
     onSettled: () => void refresh(),
   });
 }

@@ -171,7 +171,9 @@ describe("Series Glossary tab", () => {
             ],
           },
         },
-        "/api/series/9/glossary/restore": { body: { ok: true, version: 5, restored: 3 } },
+        "/api/series/9/glossary/restore": (body: Record<string, unknown> | null) => ({
+          body: { ok: true, saved: body?.dry_run !== true, version: body?.dry_run ? null : 5, restored: 3, stale_now: 0, stale_after: 2, would_stale: 2 },
+        }),
       }),
     );
     show("/series/1/glossary");
@@ -184,13 +186,23 @@ describe("Series Glossary tab", () => {
 
     await userEvent.click(within(list).getByRole("button", { name: "Restore v3" }));
     expect(await screen.findByText(/The glossary goes back to v3 as a new version/)).toBeInTheDocument();
-    expect(sent("/api/series/9/glossary/restore")).toEqual([]);
+    // What it flags is counted live, by a dry run, before the button can be pressed.
+    expect(await screen.findByText("Restoring flags 2 episodes stale.")).toBeInTheDocument();
+    expect(sent("/api/series/9/glossary/restore")).toEqual([{ lang: "vi", version: 3, dry_run: true }]);
     await userEvent.click(screen.getByRole("button", { name: "Restore" }));
-    await waitFor(() => expect(sent("/api/series/9/glossary/restore")).toEqual([{ lang: "vi", version: 3 }]));
+    await waitFor(() =>
+      expect(sent("/api/series/9/glossary/restore")).toEqual([{ lang: "vi", version: 3, dry_run: true }, { lang: "vi", version: 3 }]),
+    );
   });
 
   it("copies the glossary of another series, merging by default", async () => {
-    serve(glossary({ "/api/series/9/glossary/copy": { body: { ok: true, version: 5, from: "Cyberpunk" } } }));
+    serve(
+      glossary({
+        "/api/series/9/glossary/copy": (body: Record<string, unknown> | null) => ({
+          body: { ok: true, saved: body?.dry_run !== true, version: body?.dry_run ? null : 5, from: "Cyberpunk", stale_now: 0, stale_after: 1, would_stale: 1 },
+        }),
+      }),
+    );
     show("/series/1/glossary");
     await userEvent.click(await screen.findByRole("button", { name: "Copy from another series" }));
     const sheet = await screen.findByRole("dialog");
@@ -199,8 +211,14 @@ describe("Series Glossary tab", () => {
     await userEvent.click(await screen.findByRole("option", { name: "Cyberpunk", hidden: true }));
     expect(screen.queryByRole("option", { name: "Arcane", hidden: true })).not.toBeInTheDocument();
     expect(within(sheet).getByRole("radio", { name: /Merge/ })).toBeChecked();
+    expect(await within(sheet).findByText("Copying flags 1 episode stale.")).toBeInTheDocument();
     await userEvent.click(within(sheet).getByRole("button", { name: "Copy" }));
-    await waitFor(() => expect(sent("/api/series/9/glossary/copy")).toEqual([{ lang: "vi", from_series: 12, merge: true }]));
+    await waitFor(() =>
+      expect(sent("/api/series/9/glossary/copy")).toEqual([
+        { lang: "vi", from_series: 12, merge: true, dry_run: true },
+        { lang: "vi", from_series: 12, merge: true },
+      ]),
+    );
   });
 
   it("says when the other series has no glossary", async () => {
@@ -210,8 +228,9 @@ describe("Series Glossary tab", () => {
     const sheet = await screen.findByRole("dialog");
     await userEvent.click(await within(sheet).findByRole("combobox", { name: "From" }));
     await userEvent.click(await screen.findByRole("option", { name: "Cyberpunk", hidden: true }));
-    await userEvent.click(within(sheet).getByRole("button", { name: "Copy" }));
+    // The dry run is refused the same way, and the copy cannot be pressed.
     expect(await within(sheet).findByText("the other series has no glossary in this language")).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "Copy" })).toBeDisabled();
   });
 
   it("exports through a link the server serves and a Copy button, never a blob", async () => {

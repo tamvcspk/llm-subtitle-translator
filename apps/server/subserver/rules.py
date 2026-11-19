@@ -56,6 +56,25 @@ class UnitRules:
     voices: list[CharacterCard] = field(default_factory=list)  # the cards of the characters the dialogue names
     style_hash: str = ""  # of the effective style and voices: what a call record says about the style
 
+    def for_window(self, window: list[int]) -> UnitRules:
+        """The same rules for a part of the episode that is sent on its own, numbered again from 1 (the trial of a
+        style): ``window`` lists the original ordinals in order. The rules were built on the whole source, so a timed
+        address rule and a cue edit keep their place; only their ordinals move. The hash is the whole episode's."""
+
+        def moved(ordinal: int | None) -> int | None:
+            # The new ordinal of the first cue of the window at or after ``ordinal`` (past the end when none is).
+            return None if ordinal is None else 1 + sum(1 for n in window if n < ordinal)
+
+        active = []
+        for item in self.active_rules:
+            first, last = moved(item.from_cue), moved(item.until_cue)
+            if (last is not None and last <= (first or 1)) or (first is not None and first > len(window)):
+                continue  # the rule ends before the window starts, or starts after it ends
+            active.append(replace(item, from_cue=first, until_cue=last))
+        position = {original: new for new, original in enumerate(window, start=1)}
+        locked = {position[n]: text for n, text in self.locked.items() if n in position}
+        return replace(self, active_rules=active, locked=locked)
+
 
 def _term(payload: dict[str, Any]) -> g.Term:
     aliases = payload.get("aliases") or []
@@ -147,7 +166,10 @@ def build_rules(
 
     merged = replace(scoped, terms=tuple(terms), address_rules=tuple(rules))
     sections = [("Corrections for this episode", "\n".join(f"- {text}" for text in notes))] if notes else []
-    payload: list[Any] = [g.dumps(scoped), fingerprint]
+    # The language is not part of the rules: a translation is already keyed by its language, and a stored glossary
+    # gets ``target_lang`` written into it on its first save (``Glossaries._normalised``). Hashing it made every
+    # translation of a series stale after an upgrade although nobody changed a rule (R12-1, ADR-14: old hashes hold).
+    payload: list[Any] = [g.dumps(replace(scoped, target_lang="")), fingerprint]
     stored = styles.fingerprint()
     if stored:  # absent without style, so the hash of an episode that has none is what it was before P12
         payload.append(stored)

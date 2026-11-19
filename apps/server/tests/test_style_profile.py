@@ -449,7 +449,8 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(env.styles.preset("my-sitcom").style.tone, "wry")
         with self.assertRaisesRegex(ValueError, "built-in"):
             env.style.delete_preset("sitcom")
-        self.assertEqual(env.style.delete_preset("my-sitcom"), {"ok": True})
+        deleted = env.style.delete_preset("my-sitcom")
+        self.assertEqual((deleted["ok"], deleted["saved"], deleted["would_stale"], deleted["owners"]), (True, True, 0, 0))
         with self.assertRaises(ValueError):
             env.style.clone_preset("sitcom", {"name": "Sitcom"})  # the name is taken
 

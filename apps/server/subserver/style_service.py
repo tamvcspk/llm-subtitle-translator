@@ -114,7 +114,7 @@ class StyleService:
         return self.save_owner_style(self.library.movie_owner(unit_id), body)
 
     def save_owner_style(self, owner: Owner, body: dict[str, Any]) -> dict[str, Any]:
-        lang = str(body.get("lang") or "vi")
+        # The style is the owner's, not one language's: the count is over every language it has translations in.
         preset_id = str(body.get("preset") or "")
         style_doc = body.get("style") or {}
         if not isinstance(style_doc, dict):
@@ -123,7 +123,7 @@ class StyleService:
         if preset_id and self.styles.preset(preset_id) is None:
             raise LookupError(f"no preset {preset_id!r}")
         impact = self.library.impact_units(
-            owner.units, lang, layers=lambda unit: self._layers_with(unit, preset_id, style),
+            owner.units, None, layers=lambda unit: self._layers_with(unit, preset_id, style),
         )
         if not body.get("dry_run"):
             self.styles.save_owner_style(owner.kind, owner.key, preset_id, style.to_doc())
@@ -147,9 +147,29 @@ class StyleService:
         return {"items": [_preset_json(p) for p in self.styles.presets()]}
 
     def save_preset(self, preset_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Edit a preset. Every series and movie that uses it has its translations flagged stale, so the answer says
+        how many (in every language) and ``dry_run`` only counts them (FR-18.6)."""
         if self.styles.preset(preset_id) is None:
             raise LookupError(f"no preset {preset_id!r}")
-        return _preset_json(self._store_preset(preset_id, body))
+        style_doc = body.get("style") or {}
+        if not isinstance(style_doc, dict):
+            raise ValueError("style must be an object")
+        genres = body.get("genres") or []
+        if not isinstance(genres, list):
+            raise ValueError("genres must be a list")
+        style = _style(style_doc)
+        impact = self.library.preset_impact(preset_id, style)
+        if body.get("dry_run"):
+            return {"ok": True, "saved": False, **impact}
+        try:
+            saved = self.styles.save_preset(preset_id, str(body.get("name") or preset_id), style_doc, [str(g) for g in genres])
+        except StyleError as exc:
+            raise ValueError(str(exc)) from None
+        self.telemetry.event(
+            "style.preset_saved", preset=preset_id, stale=impact["would_stale"], owners=impact["owners"],
+            reason="the admin edited a preset; translations of the series that use it are flagged stale, not redone",
+        )
+        return {**_preset_json(saved), "ok": True, "saved": True, **impact}
 
     def clone_preset(self, preset_id: str, body: dict[str, Any]) -> dict[str, Any]:
         name = str(body.get("name") or "").strip()
@@ -157,22 +177,24 @@ class StyleService:
             raise ValueError("name is required")
         return _preset_json(self.styles.clone_preset(preset_id, name))
 
-    def delete_preset(self, preset_id: str) -> dict[str, Any]:
+    def delete_preset(self, preset_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Delete a preset the admin made; a series that named it loses the layer, so the answer counts what that
+        makes stale and ``dry_run`` only counts."""
+        existing = self.styles.preset(preset_id)
+        if existing is None:
+            raise LookupError(f"no preset {preset_id!r}")
+        if existing.builtin:
+            raise ValueError("a built-in preset cannot be deleted; edit it instead")
+        impact = self.library.preset_impact(preset_id, None)
+        if (body or {}).get("dry_run"):
+            return {"ok": True, "saved": False, **impact}
         if not self.styles.delete_preset(preset_id):
             raise LookupError(f"no preset {preset_id!r}")
-        return {"ok": True}
-
-    def _store_preset(self, preset_id: str, body: dict[str, Any]) -> PresetView:
-        style_doc = body.get("style") or {}
-        if not isinstance(style_doc, dict):
-            raise ValueError("style must be an object")
-        genres = body.get("genres") or []
-        if not isinstance(genres, list):
-            raise ValueError("genres must be a list")
-        try:
-            return self.styles.save_preset(preset_id, str(body.get("name") or preset_id), style_doc, [str(g) for g in genres])
-        except StyleError as exc:
-            raise ValueError(str(exc)) from None
+        self.telemetry.event(
+            "style.preset_deleted", preset=preset_id, stale=impact["would_stale"], owners=impact["owners"],
+            reason="the admin deleted a preset; the series that used it lose that layer and are flagged stale, not redone",
+        )
+        return {"ok": True, "saved": True, **impact}
 
     # -- character cards -----------------------------------------------------------------------------
     def save_card(self, series_id: int, body: dict[str, Any]) -> dict[str, Any]:
@@ -183,7 +205,6 @@ class StyleService:
         return self.save_owner_card(self.library.movie_owner(unit_id), body)
 
     def save_owner_card(self, owner: Owner, body: dict[str, Any]) -> dict[str, Any]:
-        lang = str(body.get("lang") or "vi")
         doc = body.get("card")
         if not isinstance(doc, dict):
             raise ValueError("card must be an object")
@@ -194,7 +215,7 @@ class StyleService:
         replaces = str(body.get("replaces") or "") or None
         cards = [c for c in self.styles.cards(owner.kind, owner.key) if c.name.casefold() not in {card.name.casefold(), (replaces or "").casefold()}]
         impact = self.library.impact_units(
-            owner.units, lang,
+            owner.units, None,
             layers=lambda unit: replace(self.library.style_layers(unit), cards=tuple([*cards, card])),
         )
         if not body.get("dry_run"):
@@ -210,7 +231,7 @@ class StyleService:
     def delete_owner_card(self, owner: Owner, name: str, lang: str) -> dict[str, Any]:
         remaining = tuple(c for c in self.styles.cards(owner.kind, owner.key) if c.name.casefold() != name.casefold())
         impact = self.library.impact_units(
-            owner.units, lang, layers=lambda unit: replace(self.library.style_layers(unit), cards=remaining),
+            owner.units, None, layers=lambda unit: replace(self.library.style_layers(unit), cards=remaining),
         )
         if not self.styles.delete_card(owner.kind, owner.key, name):
             raise LookupError(f"no card for {name!r}")
@@ -258,16 +279,10 @@ class StyleService:
         if not isinstance(style_doc, dict):
             raise ValueError("style must be an object")
         style = _style(style_doc)
-        # What saving would flag: this one episode, in the language asked for (default: the one it has). ``dry_run``
-        # only counts, as every other save of a style does.
-        outputs = [o.target_lang for o in self.catalog.outputs(unit.id)]
-        lang = str(body.get("lang") or (outputs[0] if outputs else ""))
-        if not lang:
-            # No default language to guess: counting for the wrong one would say "no translation is affected" and skip
-            # the confirmation the admin needs.
-            raise ValueError("lang is required: this episode has no translation to take it from")
+        # What saving would flag: this one episode, in every language it is translated into (the episode's style is
+        # laid under all of them). ``dry_run`` only counts, as every other save of a style does.
         impact = self.library.impact_units(
-            [unit], lang, layers=lambda u: replace(self.library.style_layers(u), unit=style),
+            [unit], None, layers=lambda u: replace(self.library.style_layers(u), unit=style),
         )
         if body.get("dry_run"):
             return {"ok": True, "saved": False, "style": style.to_doc(), **impact}
@@ -308,7 +323,9 @@ class StyleService:
         if draft is not None and not isinstance(draft, dict):
             raise ValueError("style must be an object")
         layers = self._layers_with(unit, None if preset is None else str(preset), None if draft is None else _style(draft))
-        rules = self.library.unit_rules(unit, lang, cues=trimmed, styles=layers)
+        # The rules are built on the whole source, as a real job builds them, so a timed address rule, a cue edit and
+        # the characters a card is for are the ones the episode has; only then are they numbered for the window.
+        rules = self.library.unit_rules(unit, lang, cues=cues, styles=layers).for_window(window)
 
         settings = self._settings()
         model = str(settings.get("gst_model") or DEFAULT_MODEL)

@@ -1,4 +1,20 @@
 # Unreleased
+- **Review wave W1: hashes and "how many will go stale" (R12-1, R12-3, R12-6, R12-7, R12-8).**
+  - **The language is no longer in the rules hash (R12-1, D1).** The store writes `target_lang` into every glossary it saves,
+    and the hash covered it, so a glossary imported from a YAML without that line changed the hash of every translation of the
+    series. The hash now ignores `target_lang`; an episode with an empty glossary hashes as it did since P3 (a pinned test).
+    **One-time effect:** translations made on the dev server between P12 and this change carry the old hash and show as stale
+    once; retranslate them or leave them. Nothing is retranslated by itself.
+  - **One place counts what a change flags (R12-6, R12-7).** `Library.impact_units` is the only count. Editing or deleting a
+    preset, restoring or copying a glossary now say how many translations they flag, and take `dry_run`
+    (`PUT /api/style/presets/{id}`, `POST …/presets/{id}/delete`, `POST …/glossary/restore`, `POST …/glossary/copy`). A style,
+    a card, a preset and an episode's style apply to every language, so their count is over every language (before, the
+    episode's style counted only its first language). The Glossary History and Copy sheets show the count live before Restore and
+    Copy can be pressed.
+  - **An adopted variant is not stale at once (R12-8).** A variant is made with its own style layers; adopting it stamps the
+    version with the hash of the rules now stored, so "Use this version" no longer shows Stale.
+  - **The trial of a style builds the rules a job builds (R12-3).** The rules come from the whole source and are then numbered
+    for the sample window, so an address correction from cue 240 or a cue edit lands on the right line.
 - **P14 follow-ups (from the first trial on the dev server).**
   - **Extract facts for the episodes you pick.** The Context tab has a tick box on each episode that has a source subtitle and no
     facts, **Extract ticked (N)** and **Clear ticks**; `POST /api/units/{id}/context/extract` takes `unit_ids` and reads exactly

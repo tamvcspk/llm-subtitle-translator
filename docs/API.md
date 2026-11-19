@@ -760,13 +760,16 @@ What each save replaced, newest first: `{"lang", "items": [{"version", "at", "no
 series and language is `retention_glossary_keep`.
 
 ### POST /api/series/{id}/glossary/restore
-Body `{"lang": "vi", "version": 3}`. Puts an earlier state back as a new save (the one it replaces goes to the history, so
-a restore can be undone). `404` for a version that is not in the history.
+Body `{"lang": "vi", "version": 3, "dry_run": false}`. Puts an earlier state back as a new save (the one it replaces goes
+to the history, so a restore can be undone). Reply `{"ok", "saved", "version", "restored", "stale_now", "stale_after",
+"would_stale"}`; with `dry_run` nothing is restored, `version` is `null` and the counts say what the restore would flag.
+`404` for a version that is not in the history.
 
 ### POST /api/series/{id}/glossary/copy
 Body `{"lang": "vi", "from_series": 12, "merge": true}`. Copies the other series' glossary into this one: a copy, not a
 link. With `merge` this series keeps its own entries on conflicts; without it the glossary is replaced. Reply
-`{"ok", "version", "from"}`; `404` when the other series has no glossary in that language.
+`{"ok", "saved", "version", "from", "stale_now", "stale_after", "would_stale"}`; with `"dry_run": true` nothing is copied
+and `version` is `null`. `404` when the other series has no glossary in that language.
 
 ## Style, character cards and presets
 
@@ -776,8 +779,11 @@ language, the series' preset, the series, the episode, and a character's card. T
 "localization": "literal|balanced|adapt", "dialect": "north|south|neutral", "honorifics": "keep|translate",
 "max_cps": 17, "max_line_length": 42, "max_lines": 2, "allow_condense": true, "notes": "text"}`; an unknown or
 invalid field is a `400` naming it. Changing a style, a preset a series uses, or a card flags the translations made
-without it as `stale`; nothing is retranslated. Every save route takes `dry_run` and then only counts
-`{"stale_now", "stale_after", "would_stale"}`.
+without it as `stale`; nothing is retranslated. Every route that can change the rules (a save, a restore or copy of a
+glossary, an edit or delete of a preset, adopting a variant with its style) takes `dry_run` and then only counts
+`{"stale_now", "stale_after", "would_stale"}`; the real call answers with the same three. A style, a preset and a card
+apply to **every language** of the translations they reach, so their count is over all languages (a `lang` is accepted
+and does not narrow it); a glossary is written in one language, so its count is for that `lang`.
 
 ### GET /api/series/{id}/style?lang=
 `{"series", "lang", "preset", "style", "effective", "presets": [...], "cards": [...]}`. `effective` is what is in force
@@ -826,7 +832,7 @@ for the movie's one unit. A unit id that is missing or belongs to an episode is 
 | Method and path | Same as |
 |---|---|
 | `GET /api/movies/{unit_id}/glossary?lang=` · `PUT …` | `GET`/`PUT /api/series/{id}/glossary` |
-| `GET /api/movies/{unit_id}/glossary/history?lang=` · `POST …/glossary/restore` | the series' history and restore |
+| `GET /api/movies/{unit_id}/glossary/history?lang=` · `POST …/glossary/restore` | the series' history and restore (with `dry_run`) |
 | `GET /api/movies/{unit_id}/style?lang=` · `PUT …` | the series' style; the reply names the movie under `"movie": {"id", "title"}` instead of `"series"` |
 | `POST /api/movies/{unit_id}/style/preview` | "Thử style" on the movie's own source subtitle (`unit_id` in the body, if given, must be the movie's); spends model calls, writes nothing |
 | `PUT /api/movies/{unit_id}/cards?lang=` · `POST …/cards/delete` | the series' cards |
@@ -839,20 +845,24 @@ unit itself (the "episode" override) stays at `GET`/`PUT /api/units/{id}/style`.
 kids) are stored once and belong to the admin from then on.
 
 ### PUT /api/style/presets/{id}
-Body `{"name", "genres": ["Comedy"], "style": {...}}`. Edits a preset (`404` for an unknown one). Series that use it are
-flagged stale.
+Body `{"name", "genres": ["Comedy"], "style": {...}, "dry_run": false}`. Edits a preset (`404` for an unknown one). Series
+and movies that use it are flagged stale. Reply: the preset (`id`, `name`, `genres`, `style`, `builtin`) plus `{"ok",
+"saved", "stale_now", "stale_after", "would_stale", "owners"}` (`owners` is how many series and movies use it); with
+`dry_run` only `{"ok", "saved": false, ...counts}` and nothing is stored.
 
 ### POST /api/style/presets/{id}/clone
 Body `{"name": "My sitcom"}`. A copy under a new id (`my-sitcom`) to edit; `400` when the id is taken.
 
 ### POST /api/style/presets/{id}/delete
-Deletes a preset the admin made (`400` for a built-in one: edit it instead).
+Deletes a preset the admin made (`400` for a built-in one: edit it instead). A series that named it loses the layer, so
+the reply counts what that flags: `{"ok", "saved", "stale_now", "stale_after", "would_stale", "owners"}`. Body
+`{"dry_run": true}` only counts and deletes nothing.
 
 ### GET /api/units/{id}/style · PUT /api/units/{id}/style
 `{"style": {...}}`: the episode's own override, the layer above the series'. An empty style removes it. `PUT` takes
-`{"style": {...}, "lang"?, "dry_run"?}` (P12b; `lang` defaults to the first target the unit has) and answers `{"ok", "saved",
-"style", "stale_now", "stale_after", "would_stale"}`, counted for this one episode; with `"dry_run": true` it only counts
-and stores nothing.
+`{"style": {...}, "dry_run"?}` and answers `{"ok", "saved", "style", "stale_now", "stale_after", "would_stale"}`, counted
+for this one episode in **every language** it is translated into (a `lang` in the body is ignored); with `"dry_run": true`
+it only counts and stores nothing.
 
 ### POST /api/units/{id}/variant
 Body `{"lang": "vi", "label": "warmer", "preset": "", "style": {...}}`. Queues a **variant** job (kind `variant`,

@@ -1017,7 +1017,7 @@ class Store:
                 self._db.execute("ROLLBACK")
                 raise
 
-    _VERSION_FIELDS = frozenset({"status", "publishing", "stored_path", "sha256", "edited_at"})
+    _VERSION_FIELDS = frozenset({"status", "publishing", "stored_path", "sha256", "edited_at", "glossary_hash"})
 
     def set_version(self, output_path: str, version: int, **fields: Any) -> None:
         unknown = set(fields) - self._VERSION_FIELDS

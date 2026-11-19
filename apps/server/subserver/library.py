@@ -420,15 +420,22 @@ class Library:
         return self.impact_units(self.catalog.list_units(series_id), lang, glossary=glossary, layers=layers)
 
     def impact_units(
-        self, units: Iterable[Unit], lang: str, *, glossary: g.Glossary | None = None,
+        self, units: Iterable[Unit], lang: str | None, *, glossary: g.Glossary | None = None,
         layers: Callable[[Unit], StyleLayers] | None = None,
     ) -> dict[str, int]:
-        """The same count for any set of units: a series' episodes, or the one unit of a movie."""
+        """The same count for any set of units: a series' episodes, or the one unit of a movie.
+
+        This is the one place that says how many translations a change to the rules would make stale; every save,
+        restore, copy, adoption or deletion that changes a rules hash asks it first (FR-5.6, FR-18.6). A glossary is
+        written in one language, so a ``glossary`` candidate needs that ``lang``. A style, a preset and a card apply to
+        every language of the units, so they pass ``lang=None`` and count the translations in all of them."""
+        if glossary is not None and not lang:
+            raise ValueError("a glossary is per language: say which one")
         series_cache: dict = {}
         now = after = would = 0
         for unit in units:
             for out in self.catalog.outputs(unit.id):
-                if out.target_lang != lang:
+                if lang and out.target_lang != lang:
                     continue
                 before = self.target_info(unit, out, cache=series_cache)["status"]
                 later = self.target_info(
@@ -439,3 +446,29 @@ class Library:
                 after += later == "stale"
                 would += before != "stale" and later == "stale"
         return {"stale_now": now, "stale_after": after, "would_stale": would}
+
+    def owners_using_preset(self, preset_id: str) -> list[Owner]:
+        """The series and movies whose own style names this preset (the ones an edit or a delete of it reaches)."""
+        if self.styles is None:
+            return []
+        found: list[Owner] = []
+        for series in self.catalog.list_series():
+            if self.styles.owner_style(SERIES, series.key)[0] == preset_id:
+                found.append(Owner(SERIES, series.key, series.id, series.title, tuple(self.catalog.list_units(series.id))))
+        for unit in self.catalog.list_units(movies=True):
+            if unit.movie_key and self.styles.owner_style(MOVIES, str(unit.movie_key))[0] == preset_id:
+                found.append(Owner(MOVIES, str(unit.movie_key), unit.id, unit.title, (unit,)))
+        return found
+
+    def preset_impact(self, preset_id: str, candidate: Style | None) -> dict[str, int]:
+        """What editing a preset (``candidate`` is its new style) or deleting it (``None``: the layer goes) would make
+        stale, summed over every series and movie that uses it, in every language. Nothing is saved."""
+        total = {"stale_now": 0, "stale_after": 0, "would_stale": 0, "owners": 0}
+        for owner in self.owners_using_preset(preset_id):
+            counted = self.impact_units(
+                owner.units, None, layers=lambda unit: replace(self.style_layers(unit), preset=candidate),
+            )
+            for name, value in counted.items():
+                total[name] += value
+            total["owners"] += 1
+        return total

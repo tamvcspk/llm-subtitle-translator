@@ -133,21 +133,32 @@ class Glossaries:
     def history(self, kind: str, key: str, lang: str, *, limit: int = 50) -> list[GlossaryRevision]:
         return self.store.glossary_history(_kind(kind), safe_name(key), _clean_lang(lang), limit=limit)
 
-    def restore(self, kind: str, key: str, lang: str, version: int) -> StoredGlossary:
-        """Put an earlier state back as a new save (the state it replaces goes to the history, so a restore can be undone)."""
+    def _revision(self, kind: str, key: str, lang: str, version: int) -> GlossaryRevision:
         for revision in self.history(kind, key, lang, limit=1000):
             if revision.version == version:
-                return self.save_doc(kind, key, lang, revision.doc, note="restore")
+                return revision
         raise LookupError(f"no earlier version {version} of this glossary")
+
+    def restored(self, kind: str, key: str, lang: str, version: int) -> g.Glossary:
+        """What the glossary would be after :meth:`restore` of ``version`` (nothing is saved): the caller can count
+        what that would make stale before it does it."""
+        return g.from_doc(self._revision(kind, key, lang, version).doc)
+
+    def restore(self, kind: str, key: str, lang: str, version: int) -> StoredGlossary:
+        """Put an earlier state back as a new save (the state it replaces goes to the history, so a restore can be undone)."""
+        return self.save_doc(kind, key, lang, self._revision(kind, key, lang, version).doc, note="restore")
+
+    def copied(self, source: tuple[str, str], target: tuple[str, str], lang: str, *, merge: bool) -> g.Glossary:
+        """What the target's glossary would be after :meth:`copy` (nothing is saved)."""
+        copied = self.load(*source, lang)
+        if copied.is_empty():
+            raise LookupError("the other series has no glossary in this language")
+        return g.merge(copied, self.load(*target, lang)) if merge else copied
 
     def copy(self, source: tuple[str, str], target: tuple[str, str], lang: str, *, merge: bool) -> StoredGlossary:
         """Copy the glossary of another series into this one (Non-goals: no link, a copy). ``merge`` keeps what the
         target already has and lets its own entries win on conflicts; otherwise the target is replaced."""
-        copied = self.load(*source, lang)
-        if copied.is_empty():
-            raise LookupError("the other series has no glossary in this language")
-        result = g.merge(copied, self.load(*target, lang)) if merge else copied
-        return self.save(*target, lang, result, note="copy")
+        return self.save(*target, lang, self.copied(source, target, lang, merge=merge), note="copy")
 
     def prune_history(self, keep: int, *, dry_run: bool = False) -> Reclaimed:
         """Keep the ``keep`` newest earlier states of each glossary (FR-13.1); the current glossary is never touched."""

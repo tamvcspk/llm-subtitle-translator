@@ -4,9 +4,11 @@ import { useRef, useState, type ReactNode } from "react";
 import {
   useCatalog,
   useCopyGlossary,
+  useCopyImpact,
   useGlossaryDryRun,
   useGlossaryHistory,
   useRestoreGlossary,
+  useRestoreImpact,
   useSaveGlossary,
   type StyleOwner,
 } from "../api/queries";
@@ -34,6 +36,7 @@ export function HistorySheet({ owner, lang, opened, onClose, current }: SheetPro
   const history = useGlossaryHistory(owner, lang, opened);
   const restore = useRestoreGlossary(owner, lang);
   const [asking, setAsking] = useState<number | null>(null);
+  const impact = useRestoreImpact(owner, lang, asking);
 
   const close = () => {
     setAsking(null);
@@ -42,18 +45,25 @@ export function HistorySheet({ owner, lang, opened, onClose, current }: SheetPro
   };
 
   if (asking !== null) {
+    const sentence = glossaryImpact(impact.data, "Restoring", noun(owner));
     return (
       <Sheet opened={opened} onClose={close} title={`Restore v${asking}?`}>
         <Text>
-          The glossary goes back to v{asking} as a new version. The current one stays in History. Translations made without these entries are
-          flagged stale. Nothing is retranslated.
+          The glossary goes back to v{asking} as a new version. The current one stays in History. Nothing is retranslated.
+        </Text>
+        <Text role="status" size="sm" c={impact.isError ? "red" : "dimmed"}>
+          {impact.isError ? impact.error.message : impact.isFetching || sentence === null ? "Checking…" : sentence}
         </Text>
         {restore.isError && <Alert color="red">{restore.error.message}</Alert>}
         <Group justify="space-between">
           <Button variant="default" onClick={() => setAsking(null)}>
             Cancel
           </Button>
-          <Button loading={restore.isPending} onClick={() => restore.mutate(asking, { onSuccess: close })}>
+          <Button
+            disabled={impact.isFetching || impact.isError}
+            loading={restore.isPending}
+            onClick={() => restore.mutate(asking, { onSuccess: close })}
+          >
             Restore
           </Button>
         </Group>
@@ -106,6 +116,9 @@ export function CopySheet({ owner, lang, opened, onClose }: SheetProps) {
   const copy = useCopyGlossary(owner.id, lang);
   const [from, setFrom] = useState<string | null>(null);
   const [mode, setMode] = useState("merge");
+  const args = from === null ? null : { from_series: Number(from), merge: mode === "merge" };
+  const impact = useCopyImpact(owner.id, lang, args);
+  const sentence = glossaryImpact(impact.data, "Copying", noun(owner));
   // `from_series` is the worker's own series id; the catalog lists the ones it keeps.
   const others = (catalog.data?.series ?? []).filter((series) => series.series_id !== null && series.series_id !== owner.id);
 
@@ -131,17 +144,22 @@ export function CopySheet({ owner, lang, opened, onClose }: SheetProps) {
         </Stack>
       </Radio.Group>
       <Text size="sm" c="dimmed">
-        The current glossary stays in History. Translations made without the copied entries are flagged stale. Nothing is retranslated.
+        The current glossary stays in History. Nothing is retranslated.
       </Text>
+      {from !== null && (
+        <Text role="status" size="sm" c={impact.isError ? "red" : "dimmed"}>
+          {impact.isError ? impact.error.message : impact.isFetching || sentence === null ? "Checking…" : sentence}
+        </Text>
+      )}
       {copy.isError && <Alert color="red">{copy.error.message}</Alert>}
       <Group justify="space-between">
         <Button variant="default" onClick={close}>
           Cancel
         </Button>
         <Button
-          disabled={from === null}
+          disabled={args === null || impact.isFetching || impact.isError}
           loading={copy.isPending}
-          onClick={() => copy.mutate({ from_series: Number(from), merge: mode === "merge" }, { onSuccess: close })}
+          onClick={() => args && copy.mutate(args, { onSuccess: close })}
         >
           Copy
         </Button>

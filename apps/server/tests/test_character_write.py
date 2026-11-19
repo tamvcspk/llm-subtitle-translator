@@ -60,14 +60,15 @@ class CharacterWriteTests(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(ValueError):
                 self.save(body)
 
-    def test_an_episode_style_without_a_language_is_not_counted_for_a_guessed_one(self):
-        # An episode with no translation has no language to take: counting for a made-up one would say "no translation
-        # is affected" and skip the confirmation.
+    def test_an_episode_style_counts_every_language_so_it_never_guesses_one(self):
+        # It used to count one language, taken from the first translation (P12b), and refused when there was none. The
+        # episode's style is laid under every language, so the count is over all of them (R12-7): an episode with no
+        # translation truly flags nothing, and no language has to be named.
         unit = self.env.store.upsert_unit(series_id=self.series, season=1, episode=9, title="Untranslated")
-        with self.assertRaises(ValueError):
-            self.env.style.save_unit_style(unit, {"style": {"tone": "x"}, "dry_run": True})
-        counted = self.env.style.save_unit_style(unit, {"style": {"tone": "x"}, "dry_run": True, "lang": "fr"})
-        self.assertEqual((counted["ok"], counted["saved"]), (True, False))
+        counted = self.env.style.save_unit_style(unit, {"style": {"tone": "x"}, "dry_run": True})
+        self.assertEqual((counted["ok"], counted["saved"], counted["would_stale"]), (True, False, 0))
+        narrowed = self.env.style.save_unit_style(unit, {"style": {"tone": "x"}, "dry_run": True, "lang": "fr"})
+        self.assertEqual(narrowed["would_stale"], 0)  # a lang is accepted and changes nothing
 
     def test_the_routes_serve_a_series_and_a_movie_and_answer_400_and_404(self):
         def put(path, body, query=None):

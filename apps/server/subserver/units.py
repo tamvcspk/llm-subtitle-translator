@@ -734,6 +734,7 @@ class UnitService:
         out = self.output(unit, lang)
         if not apply_style:
             published = self.versions.adopt(out.output_path, version)
+            self._stamp_adopted_variant(unit, out, version)
             self._bazarr_refresh(unit)
             return {"ok": True, "version": published.version, "adopted": version}
         preset, style = self._variant_style(out, version)
@@ -747,12 +748,23 @@ class UnitService:
             return {"ok": True, "dry_run": True, "adopted": None, "style": saved_style, **impact}
         published = self.versions.adopt(out.output_path, version)
         self.library.styles.save_owner_style(kind, key, preset, style.to_doc())
+        self._stamp_adopted_variant(unit, out, version)  # after the style is saved: the rules are the ones now stored
         self.telemetry.event(
             "style.saved", unit_id=unit.id, preset=preset or None, stale=impact["would_stale"],
             reason="the admin used a variant and kept its style for the whole series; translations made without it are flagged stale, not redone",
         )
         self._bazarr_refresh(unit)
         return {"ok": True, "version": published.version, "adopted": version, "style": saved_style, **impact}
+
+    def _stamp_adopted_variant(self, unit: Unit, out: Output, version: int) -> None:
+        """A variant is made with its own style layers (no episode override, its own series style), so it carries a
+        rules hash no stored layer has. Once the admin adopts it, the rules in force are the stored ones, and the
+        version is stamped with their hash: the choice the admin just made is not shown as stale (R12-8)."""
+        row = self.version_repo.get_version(out.output_path, version)
+        if row is not None and isinstance(row.params, dict) and row.params.get("variant"):
+            self.version_repo.set_version(
+                out.output_path, version, glossary_hash=self.library.unit_rules(unit, out.target_lang).hash,
+            )
 
     def _owner_units(self, unit: Unit) -> list[Unit]:
         return self.catalog.list_units(unit.series_id) if unit.series_id is not None else [unit]
@@ -1030,8 +1042,8 @@ class UnitService:
     def glossary_history(self, series_id: int, lang: str) -> dict[str, Any]:
         return self.owner_glossary_history(self.library.series_owner(series_id), lang)
 
-    def restore_glossary(self, series_id: int, lang: str, version: int) -> dict[str, Any]:
-        return self.restore_owner_glossary(self.library.series_owner(series_id), lang, version)
+    def restore_glossary(self, series_id: int, lang: str, version: int, *, dry_run: bool = False) -> dict[str, Any]:
+        return self.restore_owner_glossary(self.library.series_owner(series_id), lang, version, dry_run=dry_run)
 
     # The same four for a movie, by the movie's unit id (P12b): the glossary of `movies/<movie_key>`.
     def movie_glossary(self, unit_id: int, lang: str) -> dict[str, Any]:
@@ -1046,8 +1058,8 @@ class UnitService:
     def movie_glossary_history(self, unit_id: int, lang: str) -> dict[str, Any]:
         return self.owner_glossary_history(self.library.movie_owner(unit_id), lang)
 
-    def restore_movie_glossary(self, unit_id: int, lang: str, version: int) -> dict[str, Any]:
-        return self.restore_owner_glossary(self.library.movie_owner(unit_id), lang, version)
+    def restore_movie_glossary(self, unit_id: int, lang: str, version: int, *, dry_run: bool = False) -> dict[str, Any]:
+        return self.restore_owner_glossary(self.library.movie_owner(unit_id), lang, version, dry_run=dry_run)
 
     def owner_glossary(self, owner: Owner, lang: str) -> dict[str, Any]:
         """The glossary as a document (for the form) and as YAML (to export), with the number of stale translations."""
@@ -1098,14 +1110,31 @@ class UnitService:
             ],
         }
 
-    def restore_owner_glossary(self, owner: Owner, lang: str, version: int) -> dict[str, Any]:
-        restored = self.glossaries.restore(owner.kind, owner.key, lang, int(version))
-        return {"ok": True, "version": restored.version, "restored": int(version)}
+    def restore_owner_glossary(self, owner: Owner, lang: str, version: int, *, dry_run: bool = False) -> dict[str, Any]:
+        """Put an earlier glossary back. It changes the rules like any other save, so the answer counts the
+        translations it makes stale and ``dry_run`` only counts them."""
+        version = int(version)
+        impact = self.library.impact_units(
+            owner.units, lang, glossary=self.glossaries.restored(owner.kind, owner.key, lang, version),
+        )
+        if dry_run:
+            return {"ok": True, "saved": False, "version": None, "restored": version, **impact}
+        restored = self.glossaries.restore(owner.kind, owner.key, lang, version)
+        return {"ok": True, "saved": True, "version": restored.version, "restored": version, **impact}
 
-    def copy_glossary(self, series_id: int, lang: str, source_series_id: int, *, merge: bool) -> dict[str, Any]:
-        """Copy another series' glossary into this one: a copy, not a link (Non-goals, v0.12)."""
+    def copy_glossary(
+        self, series_id: int, lang: str, source_series_id: int, *, merge: bool, dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Copy another series' glossary into this one: a copy, not a link (Non-goals, v0.12). The answer counts the
+        translations of this series the copy makes stale; ``dry_run`` only counts them."""
         series, source = self._series(series_id), self._series(source_series_id)
         if series.id == source.id:
             raise ValueError("choose another series to copy from")
+        owner = self.library.series_owner(series.id)
+        candidate = self.glossaries.copied(("series", source.key), ("series", series.key), lang, merge=merge)
+        impact = self.library.impact_units(owner.units, lang, glossary=candidate)
+        origin = source.title or source.key
+        if dry_run:
+            return {"ok": True, "saved": False, "version": None, "from": origin, **impact}
         result = self.glossaries.copy(("series", source.key), ("series", series.key), lang, merge=merge)
-        return {"ok": True, "version": result.version, "from": source.title or source.key}
+        return {"ok": True, "saved": True, "version": result.version, "from": origin, **impact}

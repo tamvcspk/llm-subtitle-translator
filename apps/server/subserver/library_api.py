@@ -107,13 +107,16 @@ ROUTES: list[tuple[str, str, Handler]] = [
     (
         "POST",
         r"/api/series/(\d+)/glossary/restore",
-        lambda s, m, q, b: s.restore_glossary(int(m[1]), _glossary_lang(q, b), _body_int(b, "version")),
+        lambda s, m, q, b: s.restore_glossary(
+            int(m[1]), _glossary_lang(q, b), _body_int(b, "version"), dry_run=bool(b.get("dry_run")),
+        ),
     ),
     (
         "POST",
         r"/api/series/(\d+)/glossary/copy",
         lambda s, m, q, b: s.copy_glossary(
             int(m[1]), _glossary_lang(q, b), _body_int(b, "from_series"), merge=bool(b.get("merge")),
+            dry_run=bool(b.get("dry_run")),
         ),
     ),
     # A movie's own glossary, by the movie's unit id (P12b). No copy: a glossary is copied between series.
@@ -130,7 +133,9 @@ ROUTES: list[tuple[str, str, Handler]] = [
     (
         "POST",
         r"/api/movies/(\d+)/glossary/restore",
-        lambda s, m, q, b: s.restore_movie_glossary(int(m[1]), _glossary_lang(q, b), _body_int(b, "version")),
+        lambda s, m, q, b: s.restore_movie_glossary(
+            int(m[1]), _glossary_lang(q, b), _body_int(b, "version"), dry_run=bool(b.get("dry_run")),
+        ),
     ),
 ]
 
