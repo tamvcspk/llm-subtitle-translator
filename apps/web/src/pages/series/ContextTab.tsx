@@ -1,61 +1,52 @@
 import { Alert, Anchor, Button, Card, Checkbox, Collapse, Drawer, Group, Loader, Stack, Text, Title } from "@mantine/core";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router";
-import { useAdoptEpisodes, useExtractFacts, useSeriesMemory, useTasks, useUnitFacts } from "../../api/queries";
+import { useAdoptEpisodes, useExtractFacts, useExtractJobs, useSeriesMemory, useStopJobs, useUnitFacts } from "../../api/queries";
 import type { MemoryUnit, UnitFacts } from "../../api/types";
 import { FactsView } from "../../components/FactsView";
-import { TaskRow } from "../../components/TaskRow";
-import { memoryIsOn, missingFacts, resultLine, taskResults } from "../../lib/memory";
+import { memoryIsOn, missingFacts, readingLine, skippedLine } from "../../lib/memory";
 import type { SeriesContext } from "../Series";
 
 /**
- * The price of Extract facts (UX §6.4): one call per episode asked for, counted here from the list. The work runs in the
- * background: **Confirm** stays to watch it, **Run in background** closes the box and Activity keeps showing it.
+ * The price of Extract facts (UX §6.4): one call per episode asked for, counted here from the list. **Confirm** queues one
+ * job per episode; the queue reads them under the day's quota, so the box closes at once and Activity shows the work.
  */
 function ExtractSheet({ opened, ids, onClose }: { opened: boolean; ids: number[]; onClose: () => void }) {
   const extract = useExtractFacts();
-  const tasks = useTasks();
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const task = taskId === null ? undefined : tasks.data?.items.find((item) => item.id === taskId);
-  const active = task !== undefined && (task.state === "queued" || task.state === "running");
+  const answer = extract.data;
 
   const close = () => {
     extract.reset();
-    setTaskId(null);
     onClose();
   };
-  const start = (thenClose: boolean) => {
+  const confirm = () => {
     const anchor = ids.at(-1);
     if (anchor === undefined) return;
-    extract.mutate(
-      { anchor, unitIds: ids },
-      {
-        onSuccess: (answer) => {
-          if (thenClose) close();
-          else setTaskId(answer.task.id);
-        },
-      },
-    );
+    extract.mutate({ anchor, unitIds: ids });
   };
-
-  const results = task ? taskResults(task) : {};
-  const failed = Object.values(results).some((result) => result === "failed");
+  const left = answer ? skippedLine(answer.skipped) : "";
 
   return (
     <Drawer opened={opened} onClose={close} position="bottom" size="auto" title="Extract facts" padding="lg" radius="lg">
       <Stack>
-        {taskId !== null ? (
+        {answer !== undefined ? (
           <>
-            {task === undefined ? <Loader size="sm" aria-label="Starting" /> : <TaskRow task={task} showTitle={false} />}
-            {task?.state === "done" && (
-              <>
-                <Text>{failed ? "Some episodes could not be read." : "The facts are stored."}</Text>
-                <Text size="sm" c="dimmed">
-                  {resultLine(results)}
-                </Text>
-              </>
+            <Text>
+              {answer.queued > 0
+                ? `Queued ${answer.queued.toLocaleString()} ${answer.queued === 1 ? "episode" : "episodes"}. Follow them in Activity.`
+                : "Nothing new to read."}
+            </Text>
+            {answer.merged > 0 && (
+              <Text size="sm" c="dimmed">
+                {`${answer.merged.toLocaleString()} ${answer.merged === 1 ? "was" : "were"} already in line.`}
+              </Text>
             )}
-            <Button onClick={close}>{active || task === undefined ? "Run in background" : "Close"}</Button>
+            {left && (
+              <Text size="sm" c="dimmed">
+                {left}
+              </Text>
+            )}
+            <Button onClick={close}>Close</Button>
           </>
         ) : (
           <>
@@ -68,21 +59,17 @@ function ExtractSheet({ opened, ids, onClose }: { opened: boolean; ids: number[]
               <Text fw={600}>{ids.length.toLocaleString()}</Text>
             </Group>
             <Text size="sm" c="dimmed">
-              One call per episode, with the memory model. Nothing is translated. You can close this box: the work goes on and Activity shows it.
+              One call per episode, with the memory model. Nothing is translated. The jobs wait in line with the translations and
+              stop for the day's quota like them.
             </Text>
             {extract.isError && <Alert color="red">{extract.error.message}</Alert>}
             <Group justify="space-between" wrap="wrap">
               <Button variant="default" onClick={close}>
                 Cancel
               </Button>
-              <Group gap="xs" wrap="wrap">
-                <Button variant="light" disabled={ids.length === 0} loading={extract.isPending} onClick={() => start(true)}>
-                  Run in background
-                </Button>
-                <Button disabled={ids.length === 0} loading={extract.isPending} onClick={() => start(false)}>
-                  Confirm
-                </Button>
-              </Group>
+              <Button disabled={ids.length === 0} loading={extract.isPending} onClick={confirm}>
+                Confirm
+              </Button>
             </Group>
           </>
         )}
@@ -169,7 +156,9 @@ export function SeriesContextTab() {
   useEffect(() => {
     if (typeof storedId === "number") adopt();
   }, [storedId, adopt]);
-  const tasks = useTasks();
+  const unitIds = useMemo(() => new Set((memory.data?.units ?? []).map((unit) => unit.id)), [memory.data]);
+  const reading = useExtractJobs(unitIds);
+  const stop = useStopJobs();
   const [asking, setAsking] = useState<number[] | null>(null);
   const [picked, setPicked] = useState<Set<number>>(new Set());
 
@@ -184,9 +173,6 @@ export function SeriesContextTab() {
   const readable = new Set(missing.map((unit) => unit.id));
   // A pick that was read meanwhile (or whose subtitle went) drops out by itself.
   const chosen = units.filter((unit) => picked.has(unit.id) && readable.has(unit.id)).map((unit) => unit.id);
-  const running = (tasks.data?.items ?? []).filter(
-    (task) => task.kind === "extract-facts" && task.series_id === storedId && (task.state === "queued" || task.state === "running"),
-  );
 
   const toggle = (id: number, on: boolean) =>
     setPicked((current) => {
@@ -213,9 +199,21 @@ export function SeriesContextTab() {
               ? "Every episode with a source subtitle has its facts."
               : `${missing.length.toLocaleString()} ${missing.length === 1 ? "episode has" : "episodes have"} a source subtitle but no facts.`}
           </Text>
-          {running.map((task) => (
-            <TaskRow key={task.id} task={task} />
-          ))}
+          {reading.length > 0 && (
+            <Group justify="space-between" wrap="wrap" gap="sm" role="status">
+              <Text size="sm">{readingLine(reading)}</Text>
+              <Button
+                variant="default"
+                size="compact-md"
+                mih={44}
+                loading={stop.isPending}
+                onClick={() => stop.mutate(reading.map((job) => job.job_id))}
+              >
+                Stop reading
+              </Button>
+            </Group>
+          )}
+          {stop.isError && <Alert color="red">{stop.error.message}</Alert>}
           <Group>
             <Button disabled={missing.length === 0} onClick={() => setAsking(missing.map((unit) => unit.id))}>
               {`Extract facts (${missing.length.toLocaleString()} ${missing.length === 1 ? "episode" : "episodes"})`}

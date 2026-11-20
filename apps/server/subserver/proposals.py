@@ -15,8 +15,9 @@ and applies proposals. A generator has no review logic of its own.
 * Each kind (address rules, terms, characters) is stored as soon as it comes back, before the next is asked: a provider
   error in a later step propagates typed (the queue maps it) and loses nothing already paid for (R13-4). A run is safe to
   repeat. A character proposal reads the facts only up to the episode where it qualified (R13-2, ``subcore.suggest``).
-* It reads facts, never extracts them, and the hook (:meth:`FactsProposer.after_facts`) swallows every error: a
-  generator that fails must never make a translation job slow or fail.
+* It reads facts, never extracts them. A run is a ``suggest`` job (:meth:`FactsProposer.request`, run by ``read_jobs.SuggestJob``)
+  so the queue's quota, breaker and call caps apply; the hook (:meth:`FactsProposer.after_facts`) only queues that job and
+  swallows every error: a generator that fails must never make a translation job slow or fail.
 """
 
 from __future__ import annotations
@@ -30,15 +31,16 @@ from typing import Any, Callable, Sequence
 
 from subcore import srt
 from subcore.glossary import Glossary
-from subcore.providers import Provider, ProviderError
+from subcore.providers import Provider
 from subcore.suggest import (
     SUGGEST_PROMPT_VERSION, AddressItem, CharacterItem, Draft, Episode, SuggestError, TermItem,
     address_drafts, address_items, character_drafts, character_items, term_drafts, term_items,
 )
 
-from .config import DEFAULT_MODEL, model_for_task
+from . import queue_policy as policy
 from .memory import StoryMemory, unit_label
-from .ports import MissingApiKey, ProviderFactory, Telemetry
+from .ports import Telemetry
+from .queue import JobQueue
 from .suggestion_keys import identity_key
 from .suggestions import Proposal, SuggestionService, normalise
 from .telemetry import NULL
@@ -77,13 +79,13 @@ class FactsProposer:
         suggestions: SuggestionService,
         *,
         settings_source: Callable[[], dict[str, Any]] | None = None,
-        provider_factory: ProviderFactory | None = None,
         telemetry: Telemetry | None = None,
     ) -> None:
         self.memory, self.suggestions = memory, suggestions
         self._settings = settings_source or (lambda: {})
-        self._provider_factory = provider_factory
         self.telemetry: Telemetry = telemetry or NULL
+        # The queue a run is asked through (``request``); wired by the composition root once the queue exists.
+        self.jobs: JobQueue | None = None
 
     # -- what there is to propose -----------------------------------------------------------------------------
     def scan(self, series_id: int, lang: str) -> Scan:
@@ -203,40 +205,27 @@ class FactsProposer:
         unit_id = scan.unit_ids.get(str(evidence.get("episode")))
         return {**evidence, "unit_id": unit_id} if unit_id else evidence
 
-    def generate(self, series_id: int, lang: str, *, estimate_only: bool = False) -> dict[str, Any]:
-        """The admin's own request: ``estimate_only`` says what a run would ask, otherwise it runs (spends calls)."""
-        if estimate_only:
-            return self.estimate(series_id, lang)
-        settings = self._settings()
-        model = str(settings.get("gst_model") or DEFAULT_MODEL)
-        providers: dict[str, Provider] = {}
-        deadline = time.monotonic() + 600
-
-        def provider_for(task: str) -> Provider:
-            name = model_for_task(settings, task, model)
-            if name not in providers:
-                if self._provider_factory is None:
-                    raise RuntimeError("no provider factory is wired into the proposal generator")
-
-                def record(log) -> None:
-                    self.telemetry.llm_call("console-suggest", log, prompt_version=f"suggest-{SUGGEST_PROMPT_VERSION}")
-
-                providers[name] = self._provider_factory(settings, name, deadline=deadline, on_call=record)
-            return providers[name]
-
-        report: dict[str, Any] = {}
-        try:
-            return self.run(series_id, lang, provider_for, report)
-        except MissingApiKey as exc:
-            raise ValueError(str(exc)) from None
-        except ProviderError as exc:
-            kept = f" {report['added']} proposal(s) found before it are in the inbox." if report.get("added") else ""
-            raise ValueError(redact(f"The provider could not finish ({type(exc).__name__}: {exc}).{kept}", settings)) from None
+    # -- asking for a run: a job, never a thread of the caller's ----------------------------------------------
+    def request(self, series_id: int, lang: str, *, manual: bool = True) -> tuple[str, bool]:
+        """Queue the run for this series and language as a ``suggest`` job (F7): the queue runs it under the day's quota
+        and the breaker, one open per series and language. The admin's own request is interactive; the one a translation
+        leaves behind (``manual=False``) is the lowest class. Returns ``(job id, whether it is new)``."""
+        if self.jobs is None:
+            raise ValueError("no job queue is wired into the proposal generator")
+        series = self.memory.units.get_series(series_id)
+        if series is None:
+            raise LookupError(f"no series {series_id}")
+        if manual:
+            return self.jobs.enqueue_suggest(series_id, lang, title=series.title, bazarr_id=series.bazarr_id or "")
+        return self.jobs.enqueue_suggest(
+            series_id, lang, title=series.title, bazarr_id=series.bazarr_id or "", origin="facts", prio=policy.AUTO,
+        )
 
     # -- the hook of a translation job ----------------------------------------------------------------------
-    def after_facts(self, unit_ids: list[int], lang: str, provider_for: ProviderFor, settings: dict[str, Any]) -> None:
-        """Facts of these units were just extracted: look for proposals in their series. Never raises and never waits
-        on anything but the model calls themselves, so a job that called it is neither failed nor stalled by it."""
+    def after_facts(self, unit_ids: list[int], lang: str, settings: dict[str, Any]) -> None:
+        """Facts of these units were just extracted: queue a look for proposals in their series. It only makes a job (the
+        run happens later, on its own turn and budget), and never raises, so the translation job that called it ends as
+        soon as it is done and its own calls are not spent on this."""
         if not unit_ids or not lang:
             return
         try:
@@ -245,11 +234,11 @@ class FactsProposer:
                 return
             series_ids = {u.series_id for u in (self.memory.units.get_unit(i) for i in unit_ids) if u and u.series_id}
             for series_id in sorted(series_ids):
-                self.run(series_id, lang, provider_for)
+                self.request(series_id, lang, manual=False)
         except Exception as exc:  # noqa: BLE001 - by contract nothing here may reach the job
             message = redact(f"{type(exc).__name__}: {exc}", settings)
-            logging.warning("Could not look for suggestions in the new facts (%s)", message)
+            logging.warning("Could not queue a look for suggestions in the new facts (%s)", message)
             self.telemetry.event(
-                "suggestions.generator_failed", reason="the generator failed; the translation job is not affected",
+                "suggestions.generator_failed", reason="the generator could not be queued; the translation job is not affected",
                 lang=lang, error=message[:300],
             )

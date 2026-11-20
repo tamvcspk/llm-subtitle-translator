@@ -260,7 +260,7 @@ Ký hiệu: **Có** = đã có endpoint; **Mới** = cần backend nhỏ (P12b);
 | Style | các trục (mục 6.1), preset, giá trị hiệu lực, dòng impact, Try 20 lines, Compare on a whole episode | `GET/PUT /api/series/{id}/style` (`dry_run`), `POST …/style/preview`, `GET /api/style/presets`, `GET …/style/suggestions` (gợi ý preset theo TMDB), `POST /api/units/{id}/variant` |
 | Glossary | Terms (`source`, `target`, `locked`, `note`, `from`, `until`), Forms of address (`a`, `b`, `a_to_b`, `b_to_a`, `from`), `version`, `stale_units`, History (version, at, note, số mục), Restore, Copy from series, YAML import/export | `GET/PUT /api/series/{id}/glossary`, `…/history`, `…/restore`, `…/copy`; tải YAML: `GET /api/series/{id}/glossary.yaml?lang=` |
 | Characters | Name (`name`, tên dịch, `gender`, mô tả) và Voice (`speech`, `aliases`, `catchphrases`, `samples`, `style`, `always`), thêm/xoá | glossary `characters`; `PUT …/cards`, `POST …/cards/delete` |
-| Context | tập theo thứ tự câu chuyện (`has_source`, `has_facts`), policy, **Extract facts** (Estimate) | `GET /api/series/{id}/memory`, `POST /api/units/{id}/context/extract` |
+| Context | tập theo thứ tự câu chuyện (`has_source`, `has_facts`), policy, **Extract facts** (Estimate, một **Confirm**: tạo một job `extract` mỗi tập, theo dõi ở Activity; thẻ hiện "Reading S01E02 · 2 more in line" và **Stop reading**) | `GET /api/series/{id}/memory`, `POST /api/units/{id}/context/extract`, `GET /api/queue`, `POST /api/queue/stop` |
 
 ### A.4 Episode / Unit page
 

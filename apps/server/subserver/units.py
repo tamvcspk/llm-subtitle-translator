@@ -19,26 +19,20 @@ from typing import Any, Callable
 
 from subcore import glossary as g
 from subcore import srt
-from subcore.memory.facts import EXTRACT_PROMPT_VERSION
 from subcore.style import Style, StyleError
 from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
 
-from subcore.providers import ProviderError
-
-from .background import BackgroundTasks
 from .catalog import pick_source
-from .config import DEFAULT_MODEL, model_for_task
 from .estimates import Estimator
 from .glossaries import Glossaries
-from .jobs import FAILED, VARIANT, variant_key
+from .jobs import EXTRACT, FAILED, READING_KINDS, SUGGEST_CALLS, VARIANT, job_name, variant_key
 from .library import Library, Owner
-from .ports import CURRENT, KIND_EPISODE, KIND_SERIES, PRUNED, Correction, MissingApiKey, Output, ProviderFactory, Telemetry, Unit
+from .ports import CURRENT, KIND_EPISODE, KIND_SERIES, PRUNED, Correction, Output, Telemetry, Unit
 from .store import Store
 from .queue import JobQueue
 from .memory import MEMORY_MODES, StoryMemory, parse_anchor, unit_label
 from .rules import correction_position
 from .telemetry import Telemetry as TelemetrySink
-from .translation import redact
 from .versions import CUE_EDIT, TranslationVersions
 
 KINDS = ("term", "address", "note", "cue_edit")
@@ -90,14 +84,11 @@ class UnitService:
         refresh_bazarr: Callable[[dict[str, Any]], None] | None = None,
         memory: StoryMemory | None = None,
         settings_source: Callable[[], dict[str, Any]] | None = None,
-        provider_factory: ProviderFactory | None = None,
         usage: Store | None = None,
         telemetry: Telemetry | None = None,
         estimator: Estimator | None = None,
         source_languages: Callable[[], list[dict[str, Any]]] | None = None,
-        tasks: BackgroundTasks | None = None,
     ) -> None:
-        self.tasks = tasks  # the admin's long requests that run after the HTTP answer (Extract facts)
         self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)
         self._source_languages = source_languages  # the enabled source languages, to pick a source subtitle from the catalog
         self.library = library
@@ -110,7 +101,6 @@ class UnitService:
         self._refresh = refresh_bazarr
         self.memory = memory
         self._settings = settings_source or (lambda: {})
-        self._provider_factory = provider_factory
         self.estimator = estimator or Estimator(jobs.jobs.store, jobs, self._settings)
 
     # -- lookups -----------------------------------------------------------------
@@ -556,13 +546,15 @@ class UnitService:
             job = store.get(job_id)
             row: dict[str, Any] = {"job_id": job_id, "title": "", "lang": "", "cues": 0, "calls": 0, "skip": "", "reason": ""}
             if job is not None:
-                row.update(title=Path(str(job.get("subtitle_path") or "")).name, lang=str(job.get("target_code") or ""))
+                row.update(title=job_name(job), lang=str(job.get("target_code") or ""))
             reason = (
                 "no such job" if job is None else "the job is not failed" if job["state"] != FAILED
                 else "already requested" if store.has_open_twin(job_id) else ""
             )
             cues = calls = 0
-            if not reason and job is not None:
+            if not reason and job is not None and job.get("kind") in READING_KINDS:
+                calls = 1 if job.get("kind") == EXTRACT else SUGGEST_CALLS  # a job that reads has no subtitle to count cues in
+            elif not reason and job is not None:
                 try:
                     source = srt.parse_file(str(job.get("subtitle_path") or ""))
                 except (OSError, srt.SrtError):
@@ -964,27 +956,32 @@ class UnitService:
         return self.memory.own_facts(unit)
 
     def refresh_context(self, unit_id: int, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Extract facts for this episode and the earlier ones that have a source subtitle (spends calls).
+        """Read the facts of this episode and of the earlier ones that have a source subtitle (spends calls): one
+        ``extract`` job per episode, in story order, that the queue runs under the same quota and breaker as a
+        translation. The answer is the jobs made; the episodes left out say why (``no-source``: nothing to read;
+        ``cached``: the newest facts are those of the source as it is now).
 
-        ``unit_ids`` names exactly the episodes to read instead (of this series; nothing else is read).
-        ``background`` returns at once with a task that Activity follows, instead of holding the request until
-        every episode is read."""
+        ``unit_ids`` names exactly the episodes to read instead (of this series; nothing else is read)."""
         body = body or {}
         unit = self.unit(unit_id)
         if unit.series_id is None or self.memory is None:
             raise ValueError("story memory applies to episodes of a series only")
         only = self._picked_units(unit, body.get("unit_ids"))
-        if body.get("background") is not True:
-            return self._extract(unit, only, None)
-        if self.tasks is None:
-            raise ValueError("background work is not available in this worker")
         series = self.catalog.get_series(unit.series_id)
-        count = len(only) if only is not None else None
-        title = f"Extract facts · {series.title if series else 'series'}" + (f" ({count} episode{'s' if count != 1 else ''})" if count else "")
-        task = self.tasks.submit(
-            "extract-facts", title, lambda progress: self._extract(unit, only, progress), series_id=unit.series_id,
-        )
-        return {"ok": True, "task": task}
+        wanted: list[dict[str, Any]] = []
+        skipped: dict[str, str] = {}
+        for target in self.memory.targets(unit, only):
+            why = self.memory.needs_reading(target)
+            if why:
+                skipped[unit_label(target)] = why
+                continue
+            wanted.append({
+                "unit_id": target.id, "label": unit_label(target), "title": series.title if series else target.title,
+                # What fairness between series goes by: the same id the series' translation jobs carry.
+                "series_id": series.bazarr_id if series else "",
+            })
+        created, merged = self.jobs.enqueue_extract(wanted)
+        return {"ok": True, "job_ids": created, "queued": len(created), "merged": len(merged), "skipped": skipped}
 
     def _picked_units(self, unit: Unit, raw: Any) -> list[int] | None:
         """The episodes the admin ticked: whole numbers, all of this series. ``None`` when nothing was picked."""
@@ -1002,34 +999,6 @@ class UnitService:
         if stray:
             raise ValueError(f"episode {stray[0]} does not belong to this series")
         return list(dict.fromkeys(ids))
-
-    def _extract(self, unit: Unit, only: list[int] | None, progress: Callable[..., None] | None) -> dict[str, Any]:
-        settings = self._settings()
-        model = str(settings.get("gst_model") or DEFAULT_MODEL)
-        providers: dict[str, Any] = {}
-        # The provider waits out rate limits until this deadline; ten minutes for each episode that was asked for.
-        budget = 600 * (len(only) if only else 10)
-
-        def provider_for(task: str):
-            name = model if task == "translate" else model_for_task(settings, task, model)
-            if name not in providers:
-                if self._provider_factory is None:
-                    raise RuntimeError("no provider factory is wired into the unit service")
-                def record(log) -> None:
-                    self.telemetry.llm_call(
-                        "console-context", log, prompt_version=f"memory-{EXTRACT_PROMPT_VERSION}",
-                    )
-                providers[name] = self._provider_factory(settings, name, deadline=time.monotonic() + budget, on_call=record)
-            return providers[name]
-
-        try:
-            say = None if progress is None else (lambda done, total, label: progress(done, total, f"Reading {label}" if label else ""))
-            result = self.memory.refresh(unit, settings, provider_for, only=only, progress=say)
-        except MissingApiKey as exc:
-            raise ValueError(str(exc)) from None
-        except ProviderError as exc:
-            raise ValueError(redact(f"The provider could not finish ({type(exc).__name__}: {exc})", settings)) from None
-        return {"ok": True, **result}
 
     # -- glossary (in the database; YAML is the exchange format, FR-18.10) --------------------------------
     def _series(self, series_id: int):

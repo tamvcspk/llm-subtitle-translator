@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from subcore.memory import EXTRACT_PROMPT_VERSION
-from subcore.providers import FakeProvider, QuotaExhausted
+from subcore.providers import FakeProvider, QuotaExhausted, ResilientProvider
 from subcore.providers.fake import echo_items
 
 from subserver import library_api
@@ -23,6 +23,7 @@ from subserver.queue import JobQueue
 from subserver.library import Library
 from subserver.memory import StoryMemory, parse_anchor, unit_label
 from subserver.ports import EpisodeListing, Series, Unit
+from subserver.read_jobs import ExtractJob
 from subserver.store import Store
 from subserver.translation import ContextGapError, DailyQuotaExceededError
 from subserver.translation_attempt import TranslationAttempt
@@ -85,8 +86,17 @@ class Env:
         )
         self.service = UnitService(
             self.library, self.glossaries, self.versions, JobQueue(self.store), memory=self.memory,
-            settings_source=lambda: self.settings, provider_factory=lambda settings, model, **kw: self.fake,
+            settings_source=lambda: self.settings,
         )
+        # Calls go through the resilient wrapper so each one is recorded, as in the worker (the day's count reads it).
+        self.read = ExtractJob(
+            self.memory,
+            lambda settings, model, *, deadline=None, on_call=None: ResilientProvider(
+                self.fake, deadline=deadline, on_call=on_call, base_delay=0.0, max_attempts=1,
+            ),
+            settings_source=lambda: self.settings, usage=self.store,
+        )
+        self.handlers = {"extract": self.read}  # what runs a job of each kind, as the worker registers them
         self.episodes = range(1, 7)
 
     # -- the fake model ----------------------------------------------------------------
@@ -147,6 +157,22 @@ class Env:
     def unit_id(self, episode):
         series = self.store.list_series()[0]
         return self.store.find_unit(series.id, 1, episode).id
+
+    def run_jobs(self):
+        """Run every job the queue holds, as the worker would (the translations of this env are not queued): the
+        results as ``{label or job id: result}``, in the order they ran. A kind with no handler here fails its job."""
+        queue = self.service.jobs
+        queue.configure(self.settings, ("m-1",), "gemini")
+        done: dict[str, str] = {}
+
+        def execute(job, update_status):
+            result = self.handlers[job.get("kind", "publish")](job, update_status)
+            done[job.get("label") or job["job_id"]] = result
+            return result
+
+        while queue.process_once(execute):
+            pass
+        return done
 
     def status(self, episode):
         series = self.store.list_series()[0]
@@ -441,6 +467,7 @@ class ContextEndpointTests(unittest.TestCase):
         # Episode 1's subtitle is replaced and its facts re-read: what episode 2 was built on has moved.
         env.source(1).write_text(source_text(1).replace("Line 5", "Another line 5"), encoding="utf-8")
         env.service.refresh_context(env.unit_id(2))
+        env.run_jobs()
         self.assertTrue(env.service.context(env.unit_id(2))["used"]["changed"])
         self.assertEqual(env.status(2), "stale")
 
@@ -461,12 +488,14 @@ class ContextEndpointTests(unittest.TestCase):
         env.translate(2)  # extracts episodes 1 and 2
         before = len(env.calls("extract"))
         result = env.service.refresh_context(env.unit_id(2))
-        self.assertEqual((result["ok"], result["extracted"]), (True, []))  # everything is already stored
+        self.assertEqual((result["ok"], result["job_ids"]), (True, []))  # everything is already stored: no job
+        self.assertEqual(result["skipped"], {"S01E01": "cached", "S01E02": "cached"})
         self.assertEqual(len(env.calls("extract")), before)
 
         env.source(1).write_text(source_text(1).replace("Line 5", "Another line 5"), encoding="utf-8")
         result = env.service.refresh_context(env.unit_id(2))
-        self.assertEqual(result["extracted"], ["S01E01"])  # only what changed
+        self.assertEqual(len(result["job_ids"]), 1)  # only what changed
+        self.assertEqual(env.run_jobs(), {"S01E01": "extracted"})
 
     def test_movies_report_that_memory_does_not_apply(self):
         env = Env(self)
@@ -497,7 +526,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(handle("GET", "/api/units/9999/context")[0], 404)
         self.assertEqual(handle("GET", "/api/series/9999/memory")[0], 404)
 
-    def test_the_provider_failing_during_a_manual_read_is_a_clear_error(self):
+    def test_the_provider_failing_during_a_manual_read_makes_the_job_wait(self):
         env = all_sources(self)
         env.translate(2)
         env.source(1).write_text(source_text(1).replace("Line 5", "Other"), encoding="utf-8")
@@ -506,8 +535,37 @@ class RoutesTests(unittest.TestCase):
             raise QuotaExhausted("daily quota")
 
         env.fake.handler = refuse
-        with self.assertRaisesRegex(ValueError, "QuotaExhausted"):
-            env.service.refresh_context(env.unit_id(2))
+        (job_id,) = env.service.refresh_context(env.unit_id(2))["job_ids"]
+        queue = env.service.jobs
+        queue.configure(env.settings, ("m-1",), "gemini")
+        queue.process_once(env.read)  # the queue turns it into a wait for the quota to come back, not a failure
+        self.assertEqual((queue.jobs.state_of(job_id), queue.jobs.get(job_id)["wait_reason"]), ("waiting", "quota"))
+
+
+class FactsOfAnEpisodeTests(unittest.TestCase):
+    def test_what_the_facts_say_can_be_read_and_nothing_is_asked_of_the_model(self):
+        env = all_sources(self)
+        env.translate(1)
+        calls = len(env.fake.calls)
+        read = env.service.unit_facts(env.unit_id(1))
+        self.assertEqual((read["label"], read["stored"], read["has_source"]), ("S01E01", True, True))
+        self.assertEqual([c["name"] for c in read["facts"]["characters"]], ["Alice", "Bob"])
+        self.assertIn("EP1-SUMMARY-MARK", read["facts"]["summary"])
+        self.assertEqual(read["facts"]["relationship_events"][0]["evidence"], "EP1-LOVERS-MARK")
+        none = env.service.unit_facts(env.unit_id(4))
+        self.assertEqual((none["stored"], none["facts"]), (False, None))
+        self.assertEqual(len(env.fake.calls), calls)
+
+    def test_routes(self):
+        env = all_sources(self)
+        env.translate(1)
+        handle = lambda method, path, body=None: library_api.handle(env.service, method, path, {}, body)  # noqa: E731
+        status, payload = handle("GET", f"/api/units/{env.unit_id(1)}/facts")
+        self.assertEqual((status, payload["stored"]), (200, True))
+        self.assertEqual(handle("GET", "/api/units/999999/facts")[0], 404)
+        status, payload = handle("POST", f"/api/units/{env.unit_id(1)}/context/extract", {"unit_ids": [env.unit_id(2)]})
+        self.assertEqual((status, payload["queued"]), (200, 1))
+        self.assertEqual(handle("POST", f"/api/units/{env.unit_id(1)}/context/extract", {"unit_ids": []})[0], 400)
 
 
 class StoryOrderTests(unittest.TestCase):

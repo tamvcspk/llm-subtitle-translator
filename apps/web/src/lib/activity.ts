@@ -30,8 +30,16 @@ export function firstTab(counts: QueueCounts): JobTab {
 
 const baseName = (path: string | undefined) => (path ?? "").split(/[\\/]/).pop() ?? "";
 
-/** `Arcane · S01E04 · vi`; a job with no unit (an older queue file) is its subtitle's file name. */
+/** Jobs that read and do not translate: they have no subtitle to write and no bundle to export. */
+export const readsOnly = (job: Pick<QueueJob, "kind">): boolean => job.kind === "extract" || job.kind === "suggest";
+
+/**
+ * `Arcane · S01E04 · vi`; a job with no unit (an older queue file) is its subtitle's file name. A job that reads is named
+ * for what it reads: `Extract facts · Arcane · S01E04`, `Look for proposals · Arcane · vi`.
+ */
 export function jobName(job: QueueJob): string {
+  if (job.kind === "extract") return ["Extract facts", job.title, job.label].filter(Boolean).join(" · ");
+  if (job.kind === "suggest") return ["Look for proposals", job.title, job.target_code].filter(Boolean).join(" · ");
   const parts = [job.title, job.label].filter(Boolean);
   const name = parts.length > 0 ? parts.join(" · ") : baseName(job.subtitle_path) || job.job_id;
   return job.target_code ? `${name} · ${job.target_code}` : name;
@@ -56,6 +64,14 @@ const WAIT_TEXT: Record<string, string> = {
   context: "context",
   settle: "settling",
   rate: "provider busy",
+};
+
+/** What a reading job's result says, in words (the worker's result strings are not for people). */
+const READ_RESULT: Record<string, string> = {
+  extracted: "facts read",
+  cached: "the facts were already there",
+  stored: "kept the facts it had",
+  "skipped-no-source": "no source subtitle to read",
 };
 
 /** `manual · fill`, `policy · variant`: who asked and how. */
@@ -85,7 +101,7 @@ export function jobStatus(job: QueueJob, tab: JobTab, nowMs: number = Date.now()
       parts.push("Failed", lastLine(job.error));
       break;
     case "done":
-      parts.push(job.result || "done");
+      parts.push((readsOnly(job) ? READ_RESULT[job.result ?? ""] : undefined) ?? (job.result || "done"));
       if (job.output_path) parts.push(`wrote ${baseName(job.output_path)}`);
       break;
   }

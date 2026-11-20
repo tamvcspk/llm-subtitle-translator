@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MemoryUnit } from "../api/types";
-import { anchorProblem, fromChoice, memoryIsOn, missingFacts, progressLine, resultLine, taskResults, toChoice } from "./memory";
+import { anchorProblem, fromChoice, memoryIsOn, missingFacts, readingLine, skippedLine, toChoice } from "./memory";
 
 const unit = (id: number, has_source: boolean, has_facts: boolean): MemoryUnit => ({
   id,
@@ -38,24 +38,18 @@ describe("story memory", () => {
     expect(missingFacts([unit(1, true, true), unit(2, false, false)])).toEqual([]);
   });
 
-  it("says what an extraction did, episode by episode", () => {
-    expect(resultLine({ S01E01: "extracted", S01E02: "failed", S01E03: "cached" })).toBe("S01E01 read · S01E02 failed · S01E03 already had facts");
+  it("says which episodes were left out of a request, and why", () => {
+    expect(skippedLine({ S01E01: "cached", S01E02: "no-source" })).toBe("S01E01 already has its facts · S01E02 no source subtitle");
+    expect(skippedLine({})).toBe("");
   });
 
-  it("reads the results of a finished task, and nothing from one that has none", () => {
-    const task = (result: Record<string, unknown> | null) => ({ result }) as Parameters<typeof taskResults>[0];
-    expect(taskResults(task({ extracted: ["S01E01"], results: { S01E01: "extracted" } }))).toEqual({ S01E01: "extracted" });
-    expect(taskResults(task(null))).toEqual({});
-    expect(taskResults(task({ results: "junk" }))).toEqual({});
-  });
-
-  it("words how far a task is", () => {
-    const task = (state: string, done: number, total: number, message = "") => ({ state, done, total, message }) as Parameters<typeof progressLine>[0];
-    expect(progressLine(task("queued", 0, 0))).toBe("Waiting for the task before it");
-    expect(progressLine(task("running", 1, 3, "Reading S01E02"))).toBe("Reading S01E02 · 1 of 3");
-    expect(progressLine(task("running", 0, 0))).toBe("Starting");
-    expect(progressLine(task("done", 3, 3))).toBe("Done · 3 of 3");
-    expect(progressLine(task("cancelled", 1, 3))).toBe("Stopped · 1 of 3");
-    expect(progressLine(task("failed", 1, 3))).toBe("Failed · 1 of 3");
+  it("words what the open reading jobs are doing", () => {
+    expect(readingLine([])).toBe("");
+    expect(readingLine([{ label: "S01E02", running: true }])).toBe("Reading S01E02");
+    expect(readingLine([{ label: "S01E02", running: true }, { label: "S01E03", running: false }, { label: "S01E04", running: false }])).toBe(
+      "Reading S01E02 · 2 more in line",
+    );
+    expect(readingLine([{ label: "S01E03", running: false }])).toBe("1 episode in line to be read");
+    expect(readingLine([{ label: "S01E03", running: false }, { label: "S01E04", running: false }])).toBe("2 episodes in line to be read");
   });
 });

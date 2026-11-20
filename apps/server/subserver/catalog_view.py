@@ -268,8 +268,8 @@ class CatalogView:
 
     def _open_by_series(self) -> dict[str, dict[str, int]]:
         rows = self.store.query(
-            "SELECT series_key, state, COUNT(*) AS n FROM jobs WHERE series_key <> '' AND state IN (?, ?, ?)"
-            " GROUP BY series_key, state", OPEN_STATES,
+            "SELECT series_key, state, COUNT(*) AS n FROM jobs WHERE kind = 'publish' AND series_key <> ''"
+            " AND state IN (?, ?, ?) GROUP BY series_key, state", OPEN_STATES,
         )
         out: dict[str, dict[str, int]] = {}
         for row in rows:

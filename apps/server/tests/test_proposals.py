@@ -11,6 +11,7 @@ from subcore.suggest import SUGGEST_PROMPT_VERSION
 from subserver import suggestion_api
 from subserver.ports import SUGGESTION_PENDING, SUGGESTION_REJECTED
 from subserver.proposals import FactsProposer
+from subserver.read_jobs import SuggestJob
 from subserver.suggestions import SuggestionService
 
 from .test_story_memory import Env as MemoryEnv
@@ -22,12 +23,14 @@ class Env(MemoryEnv):
         self.settings.update(settings)
         self.models = []
         self.suggestions = SuggestionService(self.store, self.library, settings_source=lambda: self.settings)
-        self.proposer = FactsProposer(
-            self.memory, self.suggestions, settings_source=lambda: self.settings,
-            provider_factory=lambda settings, model, **kw: (self.models.append(model), self.fake)[1],
-        )
+        self.proposer = FactsProposer(self.memory, self.suggestions, settings_source=lambda: self.settings)
+        self.proposer.jobs = self.service.jobs  # a run is a job of the queue; run_jobs() is the worker
         self.suggestions.generator = self.proposer
         self.attempt.proposals = self.proposer
+        self.handlers["suggest"] = SuggestJob(
+            self.proposer, lambda settings, model, **kw: (self.models.append(model), self.fake)[1],
+            settings_source=lambda: self.settings, usage=self.store,
+        )
         self.suggest_error = None
         for n in range(1, 7):
             self.add_source(n)
@@ -57,6 +60,12 @@ class Env(MemoryEnv):
     def asked(self, what=None):
         return [c for c in self.fake.calls if c.meta.get("kind") == "suggest" and what in (None, c.meta["what"])]
 
+    def generate(self, lang="vi"):
+        """The admin asks for proposals and the queue runs the job: the report the run left in the job."""
+        job_id, _ = self.proposer.request(self.series_id, lang)
+        self.run_jobs()
+        return self.service.jobs.jobs.get(job_id)["report"]
+
     # -- what the admin sees -----------------------------------------------------------------------------
     @property
     def series_id(self):
@@ -78,7 +87,7 @@ class AddressRuleTests(unittest.TestCase):
         env = Env(self, suggest_from_facts=False)
         env.translate(6)
         before = env.statuses()
-        report = env.proposer.generate(env.series_id, "vi")
+        report = env.generate()
 
         first, second = sorted(env.pending("address_rule"), key=lambda i: i["payload"].get("from", ""))
         self.assertEqual((first["source"], first["status"], first["lang"]), ("facts", "pending", "vi"))
@@ -102,19 +111,19 @@ class AddressRuleTests(unittest.TestCase):
         env = Env(self, suggest_from_facts=False)
         env.translate(6)
         env.glossaries.write("series", "bazarr-7", "vi", "address_rules:\n  - {a: Bob, b: Alice, a_to_b: em}\n")
-        env.proposer.generate(env.series_id, "vi")
+        env.generate()
         self.assertEqual(env.asked("rules"), [])
         self.assertEqual(env.pending("address_rule"), [])
 
     def test_a_rule_the_admin_turned_down_is_not_asked_about_again_and_costs_no_call(self):
         env = Env(self, suggest_from_facts=False)
         env.translate(6)
-        env.proposer.generate(env.series_id, "vi")
+        env.generate()
         rules = env.pending("address_rule")
         for item in rules:
             env.suggestions.reject(item["id"])
         calls = len(env.asked())
-        again = env.proposer.generate(env.series_id, "vi")
+        again = env.generate()
         self.assertEqual(len(env.asked()), calls)  # nothing new to ask: no call
         self.assertEqual((again["added"], again["calls"], env.pending("address_rule")), (0, 0, []))
         rejected = env.suggestions.listing(status=SUGGESTION_REJECTED)["items"]
@@ -125,7 +134,7 @@ class TermTests(unittest.TestCase):
     def test_21b_a_name_in_two_episodes_and_not_in_the_glossary_is_a_pending_term(self):
         env = Env(self, suggest_from_facts=False)
         env.translate(6)
-        env.proposer.generate(env.series_id, "vi")
+        env.generate()
         terms = {i["payload"]["source"]: i for i in env.pending("term")}
         self.assertEqual(sorted(terms), ["Kyber crystal", "Pair Term"])  # "Lone Term" is in one episode only
         kyber = terms["Kyber crystal"]
@@ -139,7 +148,7 @@ class TermTests(unittest.TestCase):
         env = Env(self, suggest_from_facts=False)
         env.translate(6)
         env.glossaries.write("series", "bazarr-7", "vi", "terms:\n  - {source: kyber CRYSTAL, target: tinh thể Kyber}\n")
-        env.proposer.generate(env.series_id, "vi")
+        env.generate()
         self.assertEqual([i["payload"]["source"] for i in env.pending("term")], ["Pair Term"])
         self.assertNotIn("Kyber crystal", env.asked("terms")[0].user)
 
@@ -147,7 +156,7 @@ class TermTests(unittest.TestCase):
         # auto_accept_terms is on by default but needs two independent research sources (FR-4.4); facts give none.
         env = Env(self, suggest_from_facts=False, auto_accept_terms=True)
         env.translate(6)
-        report = env.proposer.generate(env.series_id, "vi")
+        report = env.generate()
         self.assertEqual(report["auto_accepted"], 0)
         self.assertTrue(env.pending("term"))
         self.assertTrue(env.glossary().is_empty())
@@ -157,7 +166,7 @@ class CharacterTests(unittest.TestCase):
     def test_a_character_of_two_episodes_is_proposed_from_memory_with_a_card_and_waits(self):
         env = Env(self, suggest_from_facts=False)
         env.translate(6)
-        env.proposer.generate(env.series_id, "vi")
+        env.generate()
         people = {i["payload"]["name"]: i for i in env.pending("character")}
         self.assertEqual(sorted(people), ["Alice", "Bob"])
         alice = people["Alice"]
@@ -168,23 +177,44 @@ class CharacterTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
-    def test_a_translation_that_extracts_facts_leaves_proposals_in_the_inbox_and_costs_three_cheap_calls(self):
+    def test_a_translation_that_extracts_facts_queues_a_look_for_proposals_and_spends_none_of_its_own_calls(self):
         env = Env(self)
         status = env.translate(6)
         self.assertEqual(status, "translated")
+        self.assertEqual(env.asked(), [])  # the translation job made no call for it ...
+        self.assertEqual(env.pending(), [])
+        (job,) = env.service.jobs.jobs.by_state("queued")  # ... it only left a job for the queue to run on its own turn
+        self.assertEqual((job["kind"], job["origin"], job["prio"]), ("suggest", "facts", 0))
+        env.run_jobs()
         self.assertTrue(env.pending("address_rule") and env.pending("term") and env.pending("character"))
         self.assertEqual([c.meta["what"] for c in env.asked()], ["rules", "terms", "characters"])
         self.assertTrue(all(c.task == "extract" for c in env.asked()))  # the cheap model's task (FR-9.3)
-        self.assertEqual(env.fake.calls[-1].meta["what"], "characters")  # after the translation, not before it
         order = [c.task if c.meta.get("kind") != "suggest" else "suggest" for c in env.fake.calls]
-        self.assertEqual(order, ["extract"] * 6 + ["translate"] + ["suggest"] * 3)
+        self.assertEqual(order, ["extract"] * 6 + ["translate"] + ["suggest"] * 3)  # after the translation, not before it
 
     def test_facts_that_were_already_stored_start_no_new_run(self):
         env = Env(self)
         env.translate(6)
+        env.run_jobs()
         asked = len(env.asked())
         env.translate(5)  # its facts are cached: nothing was extracted
+        self.assertEqual(env.service.jobs.jobs.open_count(), 0)
+        env.run_jobs()
         self.assertEqual(len(env.asked()), asked)
+
+    def test_a_series_whose_translations_all_read_facts_gets_one_open_look_not_one_per_translation(self):
+        env = Env(self)
+        env.translate(3)  # reads episodes 1 to 3
+        env.translate(5)  # reads 4 and 5
+        self.assertEqual([j["kind"] for j in env.service.jobs.jobs.by_state("queued")], ["suggest"])
+
+    def test_the_look_the_admin_asks_for_is_interactive_and_lifts_the_one_a_translation_left(self):
+        env = Env(self)
+        env.translate(6)
+        (left,) = env.service.jobs.jobs.by_state("queued")
+        answer = env.suggestions.generate(env.series_id, "vi")
+        self.assertEqual((answer["job_ids"], answer["queued"], answer["merged"]), ([left["job_id"]], 0, 1))
+        self.assertEqual(env.service.jobs.jobs.get(left["job_id"])["prio"], 200)
 
     def test_a_generator_that_fails_never_fails_or_loses_the_job(self):
         env = Env(self)
@@ -192,9 +222,19 @@ class RunTests(unittest.TestCase):
         self.assertEqual(env.translate(6), "translated")
         self.assertEqual(env.pending(), [])
         self.assertEqual(env.status(6), "current")  # the translation is published and in force
+        env.run_jobs()  # the provider is down for the proposals: the job waits, nothing is lost
+        (waiting,) = env.service.jobs.jobs.by_state("waiting", "queued")
+        self.assertEqual(waiting["kind"], "suggest")
+
+    def test_a_queue_that_cannot_take_the_job_never_reaches_the_translation(self):
+        env = Env(self)
+        env.proposer.jobs = None
+        self.assertEqual(env.translate(6), "translated")  # nothing raised
+        env.proposer.jobs = type("Broken", (), {"enqueue_suggest": lambda *a, **k: 1 / 0})()
+        self.assertEqual(env.translate(5, trigger="retranslate", retranslate={}), "translated")
 
     def test_its_calls_carry_a_prompt_version_of_their_own_in_the_call_record(self):
-        from subserver.translation_attempt import prompt_version_of
+        from subserver.provider_guard import prompt_version_of
 
         self.assertEqual(prompt_version_of("extract", "suggest"), f"suggest-{SUGGEST_PROMPT_VERSION}")
         self.assertEqual(prompt_version_of("extract", "extract"), prompt_version_of("extract"))  # facts keep theirs
@@ -208,7 +248,7 @@ class RunTests(unittest.TestCase):
             return "sorry" if req.meta.get("what") == "terms" else real(req, call_no)
 
         env.fake.handler = garbled
-        report = env.proposer.generate(env.series_id, "vi")
+        report = env.generate()
         self.assertEqual(len(report["errors"]), 1)
         self.assertIn("terms", report["errors"][0])
         self.assertTrue(env.pending("address_rule") and env.pending("character"))
@@ -217,8 +257,8 @@ class RunTests(unittest.TestCase):
     def test_the_setting_that_turns_it_off_stops_the_hook_but_not_the_admins_own_request(self):
         env = Env(self, suggest_from_facts=False)
         env.translate(6)
-        self.assertEqual(env.asked(), [])
-        self.assertEqual(env.proposer.generate(env.series_id, "vi")["ok"], True)
+        self.assertEqual((env.asked(), env.service.jobs.jobs.open_count()), ([], 0))  # the hook queued nothing
+        self.assertEqual(env.generate()["ok"], True)
         self.assertTrue(env.asked())
 
     def test_the_cheap_model_runs_it_and_an_estimate_spends_nothing(self):
@@ -231,12 +271,14 @@ class RunTests(unittest.TestCase):
             (estimate["estimate_only"], estimate["episodes"], estimate["calls"], estimate["characters"]), (True, 6, 3, 2),
         )
         env.suggestions.generate(env.series_id, "vi")
+        self.assertEqual(len(env.fake.calls), calls)  # asking only queues the run
+        env.run_jobs()
         self.assertEqual(env.models, ["m-cheap"])
 
     def test_one_episode_gives_only_what_one_episode_can_show(self):
         env = Env(self, suggest_from_facts=False)
         env.translate(1)  # one episode: its facts only; no term or character reaches two episodes
-        report = env.proposer.generate(env.series_id, "vi")
+        report = env.generate()
         self.assertEqual((report["terms"], report["characters"], report["calls"]), (0, 0, 1))  # only the pair of episode 1
 
     def test_the_route_asks_for_a_series_and_a_language(self):

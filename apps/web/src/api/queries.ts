@@ -4,7 +4,6 @@ import type { StyleDraft } from "../lib/style";
 import { api } from "./client";
 import type {
   AuthMe,
-  BackgroundTask,
   BulkAnswer,
   CatalogOverview,
   CatalogStatus,
@@ -12,6 +11,7 @@ import type {
   CompareAnswer,
   Correction,
   CuesPage,
+  ExtractAnswer,
   DiffAnswer,
   Estimate,
   GlossaryAnswer,
@@ -25,6 +25,7 @@ import type {
   MemoryPolicy,
   MoviesPage,
   QueueAnswer,
+  QueueJob,
   SeriesMemory,
   SeriesPage,
   StatusResponse,
@@ -38,7 +39,6 @@ import type {
   SuggestionPayload,
   SuggestionStatus,
   SuggestionSummary,
-  TaskStarted,
   UnitContextAnswer,
   UnitDetail,
   UnitFacts,
@@ -53,7 +53,6 @@ export const keys = {
   catalogStatus: ["catalog", "status"] as const,
   me: ["auth", "me"] as const,
   queue: ["queue"] as const,
-  tasks: ["tasks"] as const,
   catalog: ["catalog", "overview"] as const,
   movies: ["catalog", "movies"] as const,
 };
@@ -68,11 +67,32 @@ export function useStatus() {
 
 /** The Activity page: the latest 100 jobs of each state, the real counts and the health of each model. */
 export function useQueue() {
-  return useQuery({
+  const client = useQueryClient();
+  const query = useQuery({
     queryKey: keys.queue,
     queryFn: ({ signal }) => api<QueueAnswer>("/api/queue", { signal }),
     refetchInterval: 5_000,
   });
+  // A job that reads (the facts of an episode, proposals for a series) stores its result where other pages look: when one
+  // that was open is not any more, those pages read again.
+  const reading = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!query.data) return;
+    const now = new Set(openReadingJobs(query.data).map((job) => job.job_id));
+    const finished = [...reading.current].some((id) => !now.has(id));
+    reading.current = now;
+    if (finished) {
+      for (const queryKey of [["memory"], ["unit-facts"], ["suggestions"], ["library"], ["unit"]]) {
+        void client.invalidateQueries({ queryKey });
+      }
+    }
+  }, [query.data, client]);
+  return query;
+}
+
+/** The jobs that read and do not translate (`extract`, `suggest`) that are still open: running, in line or waiting. */
+function openReadingJobs(queue: QueueAnswer): QueueJob[] {
+  return [...queue.processing, ...queue.pending, ...queue.deferred].filter((job) => job.kind === "extract" || job.kind === "suggest");
 }
 
 /** The bundle of a job's latest attempt, read only when its box is open (it holds every cue, so it can be large). */
@@ -725,18 +745,42 @@ export function useSaveMemory(storedId: number) {
 }
 
 /**
- * Read the facts of these episodes (one model call each) in the background: the answer is the task, which Activity and
- * the box that asked follow. `anchor` is any episode of the series (the request is made through it).
+ * Read the facts of these episodes (one model call each): the worker makes one job per episode and the queue runs them
+ * under the day's quota like a translation. `anchor` is any episode of the series (the request is made through it).
  */
 export function useExtractFacts() {
-  const client = useQueryClient();
+  const refresh = useRefreshJobs();
   return useMutation({
     mutationFn: (request: { anchor: number; unitIds: number[] }) =>
-      api<TaskStarted>(`/api/units/${request.anchor}/context/extract`, {
-        method: "POST",
-        body: { unit_ids: request.unitIds, background: true },
-      }),
-    onSettled: () => void client.invalidateQueries({ queryKey: keys.tasks }),
+      api<ExtractAnswer>(`/api/units/${request.anchor}/context/extract`, { method: "POST", body: { unit_ids: request.unitIds } }),
+    onSettled: () => void refresh(),
+  });
+}
+
+/** An `extract` job still open for an episode: running, in line or waiting (for the quota, say). */
+export type OpenExtract = QueueJob & { running: boolean };
+
+export function openExtractJobs(queue: QueueAnswer | undefined, unitIds: ReadonlySet<number>): OpenExtract[] {
+  if (!queue) return [];
+  const mine = (job: QueueJob) => job.kind === "extract" && typeof job.unit_id === "number" && unitIds.has(job.unit_id);
+  return [
+    ...queue.processing.filter(mine).map((job) => ({ ...job, running: true })),
+    ...[...queue.pending, ...queue.deferred].filter(mine).map((job) => ({ ...job, running: false })),
+  ];
+}
+
+/** The reading of these episodes as the queue shows it (the queue's own polling reads the facts again when a job ends). */
+export function useExtractJobs(unitIds: ReadonlySet<number>) {
+  return openExtractJobs(useQueue().data, unitIds);
+}
+
+/** Stop several jobs at once: the ones in line are cancelled, a running one stops before its next step. */
+export function useStopJobs() {
+  const refresh = useRefreshJobs();
+  return useMutation({
+    mutationFn: (jobIds: string[]) =>
+      Promise.all(jobIds.map((jobId) => api<{ ok: boolean }>("/api/queue/stop", { method: "POST", body: { job_id: jobId } }))),
+    onSettled: () => void refresh(),
   });
 }
 
@@ -746,44 +790,6 @@ export function useUnitFacts(unitId: number, enabled: boolean) {
     queryKey: ["unit-facts", unitId] as const,
     queryFn: ({ signal }) => api<UnitFacts>(`/api/units/${unitId}/facts`, { signal }),
     enabled,
-  });
-}
-
-const ACTIVE_TASK = (task: BackgroundTask) => task.state === "queued" || task.state === "running";
-
-/**
- * The admin's long requests, newest state first. It looks again every 2 s while one is active (to show progress) and
- * every 15 s otherwise. When a task that was active is finished, whatever it stored (facts, proposals) is read again.
- */
-export function useTasks() {
-  const client = useQueryClient();
-  const query = useQuery({
-    queryKey: keys.tasks,
-    queryFn: ({ signal }) => api<{ items: BackgroundTask[] }>("/api/tasks", { signal }),
-    refetchInterval: (current) => (current.state.data?.items.some(ACTIVE_TASK) ? 2_000 : 15_000),
-    retry: false,
-  });
-  const active = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const items = query.data?.items;
-    if (!items) return;
-    const finished = items.some((task) => active.current.has(task.id) && !ACTIVE_TASK(task));
-    active.current = new Set(items.filter(ACTIVE_TASK).map((task) => task.id));
-    if (finished) {
-      for (const queryKey of [["memory"], ["unit-facts"], ["suggestions"], ["catalog"], ["library"], ["unit"]]) {
-        void client.invalidateQueries({ queryKey });
-      }
-    }
-  }, [query.data, client]);
-  return query;
-}
-
-/** Stop a task: a queued one never starts, a running one stops before its next item (what it stored stays). */
-export function useCancelTask() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (taskId: string) => api<BackgroundTask>(`/api/tasks/${taskId}/cancel`, { method: "POST", body: {} }),
-    onSettled: () => void client.invalidateQueries({ queryKey: keys.tasks }),
   });
 }
 

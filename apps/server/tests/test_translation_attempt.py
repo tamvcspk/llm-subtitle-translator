@@ -238,7 +238,7 @@ class FailureMappingTests(unittest.TestCase):
 
     def test_watchdog_stops_a_job_that_ran_out_of_time(self):
         env = Env(self)
-        with patch("subserver.translation_attempt.job_timeout_seconds", return_value=0.0):
+        with patch("subserver.provider_guard.job_timeout_seconds", return_value=0.0):
             with self.assertRaisesRegex(RuntimeError, "job limit"):
                 env.run()
         self.assertEqual(env.fake.calls, [])

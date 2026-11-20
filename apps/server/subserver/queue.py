@@ -18,8 +18,9 @@ from typing import Any, Callable
 from . import queue_policy as policy
 from .config import QUOTA_RESET_TZ, enabled_target_languages
 from .jobs import (
-    CANCELLED, DONE, FAILED, LEGACY_STATES, OPEN_STATES, QUEUED, REPLACE, RUNNING, SKIPPED, VARIANT, WAITING,
-    JobStore, FROM_LEGACY, job_key, retranslation_key, variant_key,
+    CANCELLED, DONE, FAILED, LEGACY_STATES, OPEN_STATES, PUBLISH, QUEUED, REPLACE, RUNNING, SKIPPED, VARIANT, WAITING,
+    EXTRACT, SUGGEST, TRANSLATING_KINDS, JobStore, FROM_LEGACY, extract_key, job_key, retranslation_key, suggest_key,
+    variant_key,
 )
 from .ports import Telemetry
 from .queue_policy import Health
@@ -341,6 +342,54 @@ class JobQueue:
         )
         return added.job_id
 
+    def enqueue_extract(self, units: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+        """One ``extract`` job per episode, in the order given (story order, so the facts of the early episodes come
+        first): the admin's own request, the interactive class. Each dict carries ``unit_id``, ``series_id`` (what
+        a series' jobs are told apart by), ``label`` (``S01E02``) and ``title``. An episode that already has an open
+        job is not made twice: that job is lifted to this class. Returns ``(created ids, ids of the jobs already open)``."""
+        created: list[str] = []
+        existing: list[str] = []
+        for unit in units:
+            unit_id = int(unit["unit_id"])
+            payload = {**unit, "unit_id": unit_id, "created_at": int(time.time())}
+            added = self.jobs.add(payload, key=extract_key(unit_id), kind=EXTRACT, mode=EXTRACT, origin="manual",
+                                  prio=policy.INTERACTIVE, job_id=f"{extract_key(unit_id)}-{time.time_ns()}")
+            if added.job_id:
+                created.append(added.job_id)
+                self._emit(
+                    "job.created", job_id=added.job_id, unit_id=unit_id,
+                    reason=f"the admin asked for the facts of {unit.get('label') or 'an episode'} to be read",
+                    origin="manual", job_kind=EXTRACT,
+                )
+            elif added.existing:
+                existing.append(added.existing)
+        return created, existing
+
+    def enqueue_suggest(
+        self, series_id: int, lang: str, *, title: str, bazarr_id: str = "", origin: str = "manual",
+        prio: int = policy.INTERACTIVE,
+    ) -> tuple[str, bool]:
+        """One ``suggest`` job for this series and language: it looks for proposals in the stored facts (at most three
+        model calls). Returns ``(job id, whether it is new)``. At most one is open per series and language: a second
+        request is that job, lifted to the higher class. The admin's own request is the interactive class; the one a
+        translation leaves behind (origin ``facts``) is the lowest, and is not the policy's, so it never counts against
+        ``auto_request_daily_cap``."""
+        payload = {
+            "stored_series_id": int(series_id), "series_id": bazarr_id, "title": title, "target_code": lang,
+            "created_at": int(time.time()),
+        }
+        key = suggest_key(series_id, lang)
+        added = self.jobs.add(payload, key=key, kind=SUGGEST, mode=SUGGEST, origin=origin, prio=prio,
+                              job_id=f"{key}-{time.time_ns()}")
+        if added.job_id:
+            self._emit(
+                "job.created", job_id=added.job_id, unit_id=None, target=lang, origin=origin, job_kind=SUGGEST,
+                reason=("the admin asked for proposals from the facts of " if origin == "manual"
+                        else "new facts were read: look for proposals in ") + (title or "the series"),
+            )
+            return added.job_id, True
+        return str(added.existing), False
+
     def retry(self, job_id: str) -> bool:
         """Put a failed job back in line with a fresh retry cycle (an admin's request)."""
         job = self.jobs.retry(job_id)
@@ -386,7 +435,8 @@ class JobQueue:
         names = self._unit_names({job["unit_id"] for jobs in listed.values() for job in jobs if _is_id(job.get("unit_id"))})
         for name, jobs in listed.items():
             for job in jobs:
-                job["title"], job["label"] = names.get(job.get("unit_id"), ("", ""))
+                # A job with no episode (a ``suggest`` job) brings its own title; an older one falls back to its file.
+                job["title"], job["label"] = names.get(job.get("unit_id"), (job.get("title") or "", job.get("label") or ""))
             snapshot[name] = jobs
         return snapshot
 
@@ -420,7 +470,7 @@ class JobQueue:
         """
         by_model: dict[str, dict[str, int]] = {}
         escalated = {"total": 0, "done": 0, "failed": 0, "waiting": 0}
-        for state, job in self.jobs.all_payloads():
+        for state, job in self.jobs.all_payloads(TRANSLATING_KINDS):
             if state == CANCELLED:
                 continue
             if job.get("escalated_from"):
@@ -493,7 +543,9 @@ class JobQueue:
     def _settled_from(self, payload: dict[str, Any], created_at: float, now: float) -> float:
         """The settle window protects an actively written subtitle, not the queue event: a manually queued,
         already-stable subtitle starts at once."""
-        subtitle = Path(str(payload.get("subtitle_path") or ""))
+        if not payload.get("subtitle_path"):
+            return float("-inf")  # a job that reads no subtitle (extract, suggest) has nothing to settle
+        subtitle = Path(str(payload["subtitle_path"]))
         try:
             return subtitle.stat().st_mtime if subtitle.exists() else float(payload.get("created_at") or created_at)
         except (OSError, TypeError, ValueError):
@@ -676,7 +728,7 @@ class JobQueue:
         logging.info("Job %s started | %s | %s -> %s", job_id, Path(str(job.get("subtitle_path", ""))).name,
                      job.get("source_code", "?"), job.get("target_code", "?"))
         try:
-            update_status("Starting translation")
+            update_status("Starting translation" if job.get("kind", PUBLISH) in TRANSLATING_KINDS else "Starting")
             status = execute(job, update_status)
             self._finished(job, status, started)
         except JobStopped as exc:
@@ -848,7 +900,8 @@ class JobQueue:
                     until=exc.retry_at, missing=list(exc.missing))
 
     def _hard_job(self, job: dict[str, Any], exc: HardJobError, now: float) -> None:
-        other = self._other_model(job, now)
+        # Only a translation has a stronger model to go to; an extract or suggest job that fails this way just fails.
+        other = self._other_model(job, now) if job.get("kind", PUBLISH) in TRANSLATING_KINDS else None
         model = job.get("gst_model")
         blocked = int(getattr(exc, "blocked", 0) or 0)
         if model:  # the provider answered (badly): it works, so a trial call has passed

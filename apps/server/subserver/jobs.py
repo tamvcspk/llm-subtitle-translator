@@ -14,6 +14,7 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import queue_policy as policy
@@ -38,7 +39,12 @@ LEGACY_STATES = ("pending", "processing", "deferred", "done", "failed")
 FROM_LEGACY = {"pending": (QUEUED,), "processing": (RUNNING,), "deferred": (WAITING,), "done": (DONE, SKIPPED),
                 "failed": (FAILED,)}
 
-PUBLISH, VARIANT = "publish", "variant"
+PUBLISH, VARIANT, EXTRACT, SUGGEST = "publish", "variant", "extract", "suggest"
+# The kinds that translate a subtitle (and so have a source, a target, a model layer and a bundle), against the kinds
+# that only read (F7): an ``extract`` job reads the facts of one episode, a ``suggest`` job looks for proposals in them.
+TRANSLATING_KINDS = (PUBLISH, VARIANT)
+READING_KINDS = (EXTRACT, SUGGEST)
+SUGGEST_CALLS = 3  # a ``suggest`` job asks about address rules, terms and characters: at most one call each
 FILL, REPLACE = "fill", "replace"
 
 SKIPPED_RESULTS = ("skipped", "skipped-not-wanted", "skipped-existing-output")
@@ -57,6 +63,26 @@ def variant_key(subtitle_path: str, output_path: str, target_code: str) -> str:
     """The key of a variant job (FR-18.8). Distinct from the publish key, so a failed variant is never taken for a
     failed translation of the same file when a request looks for a job to revive."""
     return hashlib.sha1(f"variant|{subtitle_path}|{output_path}|{target_code}".encode("utf-8")).hexdigest()
+
+
+def job_name(job: dict[str, Any]) -> str:
+    """What a person calls this job: the subtitle for a translation, what it reads for the others."""
+    kind = job.get("kind")
+    if kind == EXTRACT:
+        return f"Extract facts · {job.get('label') or 'episode'}"
+    if kind == SUGGEST:
+        return f"Look for proposals · {job.get('title') or 'series'}"
+    return Path(str(job.get("subtitle_path") or "")).name
+
+
+def extract_key(unit_id: int) -> str:
+    """The key of the job that reads the facts of one episode: at most one is open per episode (F7)."""
+    return f"extract:{int(unit_id)}"
+
+
+def suggest_key(series_id: int, target_lang: str) -> str:
+    """The key of the job that looks for proposals for one series and language (F7)."""
+    return f"suggest:{int(series_id)}:{target_lang}"
 
 
 @dataclass(frozen=True)
@@ -79,7 +105,7 @@ def view(row: sqlite3.Row) -> dict[str, Any]:
     job = _loads(row["payload_json"])
     job.update(
         job_id=row["job_id"], state=row["state"], _state=LEGACY_NAMES.get(row["state"], row["state"]),
-        mode=row["mode"], origin=row["origin"], prio=row["prio"], priority=row["prio"], wait_reason=row["wait_reason"],
+        kind=row["kind"], mode=row["mode"], origin=row["origin"], prio=row["prio"], priority=row["prio"], wait_reason=row["wait_reason"],
         attempts=row["attempts"], not_before=row["not_before"], tier=row["tier"], created_at=row["created_at"],
         cancel_requested=bool(row["cancel_requested"]), result=row["result"] or job.get("result", ""),
     )
@@ -134,8 +160,13 @@ class JobStore:
         marks = ",".join("?" * 3)
         return int(self.store.query(f"SELECT COUNT(*) AS n FROM jobs WHERE state IN ({marks})", (QUEUED, RUNNING, WAITING))[0]["n"])
 
-    def all_payloads(self) -> Iterable[tuple[str, dict[str, Any]]]:
-        for row in self.store.query("SELECT state, payload_json FROM jobs"):
+    def all_payloads(self, kinds: tuple[str, ...] | None = None) -> Iterable[tuple[str, dict[str, Any]]]:
+        """``(state, payload)`` of every job, or of the jobs of these kinds."""
+        sql, args = "SELECT state, payload_json FROM jobs", ()
+        if kinds:
+            sql += f" WHERE kind IN ({','.join('?' * len(kinds))})"
+            args = tuple(kinds)
+        for row in self.store.query(sql, args):
             yield row["state"], _loads(row["payload_json"])
 
     def open_for(self, key: str, kind: str = PUBLISH) -> dict[str, Any] | None:
@@ -153,10 +184,11 @@ class JobStore:
         )
         return view(rows[0]) if rows else None
 
-    def latest_for(self, key: str, *states: str) -> dict[str, Any] | None:
+    def latest_for(self, key: str, *states: str, kind: str = PUBLISH) -> dict[str, Any] | None:
         marks = ",".join("?" * len(states))
         rows = self.store.query(
-            f"SELECT * FROM jobs WHERE key = ? AND state IN ({marks}) ORDER BY id DESC LIMIT 1", (key, *states)
+            f"SELECT * FROM jobs WHERE key = ? AND kind = ? AND state IN ({marks}) ORDER BY id DESC LIMIT 1",
+            (key, kind, *states),
         )
         return view(rows[0]) if rows else None
 

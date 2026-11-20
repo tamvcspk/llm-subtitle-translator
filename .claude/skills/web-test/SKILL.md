@@ -87,7 +87,7 @@ disposable (`-Reset` rebuilds it), so you may test it **freely and like a hostil
 Limits (the only ones): you do not edit repository files; you do not read `local-state/secrets/`; and in **live** mode the key is
 the user's money: a box that shows a price (Estimate / Confirm) is a spending point. Press Confirm **only** for an action listed
 under "Money", at most once each, and only if the price shown is within what the plan allows; if it is higher, do not confirm and
-write a finding with the number shown. Do not press Run in background, Retry all, Extract, Try or any other spending button the
+write a finding with the number shown. Do not press Retry all, Extract, Try or any other spending button the
 plan does not list, and stay within the plan's call budget (the worker also enforces `-MaxCallsPerDay`). In fake mode nothing
 is spent and nothing can be broken for good.
 

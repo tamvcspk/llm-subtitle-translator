@@ -10,6 +10,7 @@ from unittest import mock
 from subcore.providers import Unavailable
 
 from subserver.proposals import SKIP_DAYS
+from subserver.queue_policy import Health
 from subserver.ports import SUGGESTION_REJECTED
 from subserver.styles import Styles
 from subserver.suggestion_keys import identity, identity_key
@@ -214,15 +215,18 @@ class GeneratorTests(unittest.TestCase):
             return real(req, call_no)
 
         env.fake.handler = failing
-        with self.assertRaises(ValueError) as caught:
-            env.proposer.generate(env.series_id, "vi")
-        self.assertIn("proposal(s) found before it are in the inbox", str(caught.exception))
-        self.assertTrue(env.pending("address_rule") and env.pending("term"))
+        job_id, _ = env.proposer.request(env.series_id, "vi")
+        env.run_jobs()  # the provider is down at the last step: the job waits, it is not failed
+        self.assertEqual(env.service.jobs.jobs.state_of(job_id), "waiting")
+        self.assertTrue(env.pending("address_rule") and env.pending("term"))  # what was paid for is stored
         self.assertEqual(env.pending("character"), [])
 
         env.fake.handler = real
+        env.service.jobs.jobs.set_health("gemini", "m-1", Health())
+        env.service.jobs.jobs.transition(job_id, "queued")
         rules, terms = len(env.asked("rules")), len(env.asked("terms"))
-        report = env.proposer.generate(env.series_id, "vi")  # safe to run again: it asks only about what is left
+        env.run_jobs()  # safe to run again: it asks only about what is left
+        report = env.service.jobs.jobs.get(job_id)["report"]
         self.assertEqual((len(env.asked("rules")), len(env.asked("terms"))), (rules, terms))
         self.assertEqual((report["address_rules"], report["terms"], report["characters"]), (0, 0, 2))
         self.assertEqual(sorted(i["payload"]["name"] for i in env.pending("character")), ["Alice", "Bob"])
@@ -244,10 +248,10 @@ class GeneratorTests(unittest.TestCase):
             return real(req, call_no)
 
         env.fake.handler = silent
-        env.proposer.generate(env.series_id, "vi")
+        env.generate()
         self.assertEqual([i["payload"]["source"] for i in env.pending("term")], ["Kyber crystal"])
         asked = len(env.asked("terms"))
-        again = env.proposer.generate(env.series_id, "vi")
+        again = env.generate()
         self.assertEqual((again["terms"], len(env.asked("terms"))), (0, asked))  # not asked about again ...
         later = time.time() + (SKIP_DAYS + 1) * 86400
         with mock.patch("subserver.proposals.time.time", return_value=later):
@@ -257,7 +261,7 @@ class GeneratorTests(unittest.TestCase):
         env = self.env()
         real = env.fake.handler
         env.fake.handler = lambda req, n: "sorry" if req.meta.get("what") == "terms" else real(req, n)
-        env.proposer.generate(env.series_id, "vi")
+        env.generate()
         self.assertEqual(len(env.proposer.scan(env.series_id, "vi").terms), 2)  # still to be asked
 
     def test_a_skip_belongs_to_the_prompt_it_was_made_under(self):
@@ -270,7 +274,7 @@ class GeneratorTests(unittest.TestCase):
         env = self.env()
         env.library.styles = Styles(env.store)
         env.library.styles.save_card("series", "bazarr-7", {"name": "Alice", "speech": "slow"})
-        env.proposer.generate(env.series_id, "vi")
+        env.generate()
         self.assertEqual([i["payload"]["name"] for i in env.pending("character")], ["Bob"])
         self.assertNotIn('"name": "Alice"', env.asked("characters")[0].user)  # (Bob's relations still name her)
 

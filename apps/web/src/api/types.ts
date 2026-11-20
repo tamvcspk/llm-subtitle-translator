@@ -54,6 +54,8 @@ export interface QueueJob {
   /** `S01E04`; empty for a movie. */
   label: string;
   unit_id?: number;
+  /** `publish` (a translation; also when the field is absent), `variant`, `extract` (the facts of one episode) or `suggest`. */
+  kind?: string;
   source_code?: string;
   target_code?: string;
   subtitle_path?: string;
@@ -478,39 +480,15 @@ export interface SeriesMemory {
   units: MemoryUnit[];
 }
 
-/** `POST /api/units/{id}/context/extract`: a result per episode: `cached`, `extracted`, `stored`, `no-source` or `failed`. */
+/** `POST /api/units/{id}/context/extract`: one `extract` job per episode that needs reading; the others say why they were left out. */
 export interface ExtractAnswer {
   ok: boolean;
-  extracted: string[];
-  results: Record<string, string>;
-}
-
-/** A long request of the admin that runs after the HTTP answer (`/api/tasks`): in memory only, so a restart forgets it. */
-export interface BackgroundTask {
-  id: string;
-  /** `extract-facts` or `suggest`. */
-  kind: string;
-  title: string;
-  series_id: number | null;
-  state: "queued" | "running" | "done" | "failed" | "cancelled";
-  done: number;
-  total: number;
-  /** What it is on now (an episode label), or how it ended. */
-  message: string;
-  /** What the finished work reports: for `extract-facts` the same `extracted` and `results` as {@link ExtractAnswer}. */
-  result: Record<string, unknown> | null;
-  error: string;
-  /** Unix seconds. */
-  created_at: number;
-  started_at: number | null;
-  finished_at: number | null;
-  cancel_requested: boolean;
-}
-
-/** `POST …/context/extract` with `background: true`. */
-export interface TaskStarted {
-  ok: boolean;
-  task: BackgroundTask;
+  job_ids: string[];
+  queued: number;
+  /** Episodes that already had an open job: it was lifted, not made twice. */
+  merged: number;
+  /** Episode label to `no-source` (nothing to read) or `cached` (the newest facts are those of the source as it is). */
+  skipped: Record<string, string>;
 }
 
 /** `GET /api/units/{id}/facts`: what the stored facts of an episode say. Read only, never a model call. */

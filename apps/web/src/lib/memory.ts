@@ -1,4 +1,4 @@
-import type { BackgroundTask, MemoryPolicy, MemoryUnit, SeriesMemory } from "../api/types";
+import type { MemoryPolicy, MemoryUnit, SeriesMemory } from "../api/types";
 
 export const POLICY_CHOICES: Array<{ value: "default" | "on" | "off"; label: string }> = [
   { value: "default", label: "Default" },
@@ -26,41 +26,24 @@ export function missingFacts(units: MemoryUnit[]): MemoryUnit[] {
   return units.filter((unit) => unit.has_source && !unit.has_facts);
 }
 
-/** What an `extract-facts` task reports per episode (`cached`, `extracted`, ...); nothing while it has not finished. */
-export function taskResults(task: Pick<BackgroundTask, "result">): Record<string, string> {
-  const results = task.result?.results;
-  if (results === null || typeof results !== "object" || Array.isArray(results)) return {};
-  return Object.fromEntries(Object.entries(results).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-}
-
-/** "Reading S01E02 · 1 of 3": where a task is, in words a person can read at a glance (the worker words the first part). */
-export function progressLine(task: Pick<BackgroundTask, "state" | "done" | "total" | "message">): string {
-  const of = task.total > 0 ? ` · ${task.done} of ${task.total}` : "";
-  switch (task.state) {
-    case "queued":
-      return "Waiting for the task before it";
-    case "running":
-      return task.total > 0 ? `${task.message || "Working"}${of}` : "Starting";
-    case "done":
-      return `Done${of}`;
-    case "cancelled":
-      return `Stopped${of}`;
-    case "failed":
-      return `Failed${of}`;
-  }
-}
-
-const RESULT_TEXT: Record<string, string> = {
-  extracted: "read",
-  stored: "read",
-  cached: "already had facts",
+const LEFT_OUT: Record<string, string> = {
   "no-source": "no source subtitle",
-  failed: "failed",
+  cached: "already has its facts",
 };
 
-/** "S01E01 read · S01E02 failed": what an extraction did, episode by episode. */
-export function resultLine(results: Record<string, string>): string {
-  return Object.entries(results)
-    .map(([label, result]) => `${label} ${RESULT_TEXT[result] ?? result}`)
+/** "S01E01 already has its facts · S01E02 no source subtitle": the episodes a request did not make a job for, and why. */
+export function skippedLine(skipped: Record<string, string>): string {
+  return Object.entries(skipped)
+    .map(([label, why]) => `${label} ${LEFT_OUT[why] ?? why}`)
     .join(" · ");
+}
+
+/** What the open `extract` jobs are doing, for the Context tab: "Reading S01E02 · 2 more in line". */
+export function readingLine(jobs: Array<{ label?: string; running: boolean }>): string {
+  if (jobs.length === 0) return "";
+  const running = jobs.find((job) => job.running);
+  const rest = jobs.length - (running ? 1 : 0);
+  if (!running) return `${rest.toLocaleString()} ${rest === 1 ? "episode" : "episodes"} in line to be read`;
+  const head = `Reading ${running.label || "an episode"}`;
+  return rest === 0 ? head : `${head} · ${rest.toLocaleString()} more in line`;
 }

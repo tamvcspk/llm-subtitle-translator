@@ -50,7 +50,6 @@ ROUTES: list[tuple[str, str, Handler]] = [
     # Ask the facts generator for proposals (spends model calls unless `estimate_only`; the page puts it behind Estimate).
     ("POST", r"/api/suggestions/generate", lambda s, m, q, b: s.generate(
         _series_id(b, "generating"), str(b.get("lang") or ""), estimate_only=bool(b.get("estimate_only")),
-        background=b.get("background") is True,
     )),
     ("POST", r"/api/suggestions/(\d+)/accept", lambda s, m, q, b: s.accept(
         int(m[1]), payload=b.get("payload"), dry_run=bool(b.get("dry_run")),

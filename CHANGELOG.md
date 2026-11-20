@@ -1,4 +1,28 @@
 # Unreleased
+- **Review wave W5: long work is a job (F7, D7).** One step per line below.
+  - **7a: what every kind of job shares.** The time limit, the call budget (`max_calls_per_job`, `max_calls_per_day`) and
+    the table that maps a provider's typed failure to the queue's classes moved out of `TranslationAttempt` into
+    `provider_guard.py`; `QueueWorker.run_job` runs a job by its `kind`. A job row now says its `kind` (`GET /api/queue`).
+    A job that reads no subtitle has nothing to settle, never goes to the strong model and is not counted in Model layers.
+  - **7b: Extract facts is one job per episode.** `POST /api/units/{id}/context/extract` only queues (`job_ids`, `queued`,
+    `merged`, `skipped`); the queue reads under the day's quota and the breaker, Stop works between episodes, and a restart
+    loses nothing. The price box has one **Confirm** (no **Run in background**); the Context card shows "Reading S01E02 · 2
+    more in line" with **Stop reading**; Activity lists "Extract facts · Series · S01E02".
+  - **7c: Look for proposals is one job per series and language, and a translation only leaves one behind (R14-4).**
+    `POST /api/suggestions/generate` only queues (`job_ids`, `queued`, `merged`); `estimate_only` still answers at once. After a
+    translation read new facts, `after_facts` no longer runs the three calls inside that job (they used its time, its
+    `max_calls_per_job` and the day's budget): it queues one `suggest` job for the series (origin `facts`, the lowest class, not
+    the policy's, so it never counts against `auto_request_daily_cap`), and N translations of a series leave one. A job that
+    stops midway (quota, outage) keeps what each finished kind stored and asks only for the rest when it runs again.
+  - **7d: `BackgroundTasks` is gone.** `background.py`, `tasks_api.py`, `/api/tasks`, the `background` flag, the Background work
+    card and **Run in background** are removed: the queue is the one place long work waits, with the day's quota, the
+    breaker, Stop and a restart. A reading job a person stops or that fails is an ordinary job: **Retry**, **Retry all
+    failed** and the price box count it (one call for an extract job, up to three for a suggest job) and Activity names it
+    ("Extract facts · Series · S01E02", "Look for proposals · Series · vi"); it has no job spec to export.
+  - **7e: the attempt is harder to misuse (R12-9, R11-10).** A variant is refused when the attempt has no version history or no
+    library (it could be written over the target, or translated in the wrong style, without a word). The overview, title and
+    story sections are masked before the bundle is gathered, so the bundle is serialised once and no longer rebuilt through
+    JSON and YAML; a key that still reaches it by another field is masked in the text and the bundle read back from it.
 - **Review wave W4: who may make a job, and how the catalog is read (R10-1, R10-3, R10-4, R10-6 to R10-9, R14-2, R14-3).**
   - **The policy leaves a failed or cancelled request alone (R10-1, D4).** A job made by `auto_request` that failed was put
     back in line at every sync (attempts reset, raised to the interactive class, quota spent, `auto_request_daily_cap`

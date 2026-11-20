@@ -11,7 +11,6 @@ from typing import Any, Callable
 
 from subserver.backups import BackupMaintenance, create_scheduled_backup_if_due, purge_old_backups
 from subserver.auth import ConsoleAuth
-from subserver.background import BackgroundTasks
 from subserver.cleanup import Cleanup
 from subserver.auto_request import AutoRequest, sync_and_request
 from subserver.bazarr import BazarrIntegration, BazarrMedia
@@ -23,7 +22,9 @@ from subserver.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
 from subserver.config import enabled_source_languages, provider_name
 from subserver.intake import import_queue_tree
 from subserver.job_requests import JobRequests
+from subserver.jobs import EXTRACT, PUBLISH, SUGGEST, VARIANT
 from subserver.queue import JobQueue, skip_reason
+from subserver.read_jobs import ExtractJob, SuggestJob
 from subserver.console import ConsoleActions
 from subserver.glossaries import Glossaries
 from subserver.style_service import StyleService
@@ -35,7 +36,6 @@ from subserver.memory import StoryMemory
 from subserver.queue_policy import configured_models
 from subserver.store import Store
 from subserver.llm import LiveProviderFactory, build_provider
-from subserver.translation import redact
 from subserver.translation_attempt import TranslationAttempt
 from subserver.units import UnitService
 from subserver.versions import TranslationVersions
@@ -141,6 +141,9 @@ class QueueWorker:
         self.media = media
         self.metadata = metadata
         self.console = ConsoleActions(self.queue)
+        self.handlers: dict[str, Callable[[dict[str, Any], Callable[..., None]], str]] = {
+            PUBLISH: self.translate_job, VARIANT: self.translate_job,
+        }
         # A waiting job finds its files again after Sonarr renamed them (FR-14.3).
         self.paths = CatalogPaths(self.store)
         self.queue.configure(settings, self.models(), provider_name(settings))
@@ -170,7 +173,19 @@ class QueueWorker:
         if apply is not None:
             apply(settings)
 
+    def register_handler(self, kind: str, handler: Callable[[dict[str, Any], Callable[..., None]], str]) -> None:
+        """What runs a job of this kind. The composition root registers the kinds that are not translations (F7)."""
+        self.handlers[kind] = handler
+
     def run_job(self, job: dict[str, Any], update_status: Callable[..., None]) -> str:
+        kind = str(job.get("kind") or PUBLISH)
+        handler = self.handlers.get(kind)
+        if handler is None:
+            raise RuntimeError(f"No handler is registered for jobs of kind {kind!r}")
+        return handler(job, update_status)
+
+    def translate_job(self, job: dict[str, Any], update_status: Callable[..., None]) -> str:
+        """A ``publish`` or ``variant`` job: translate one subtitle."""
         self.paths.refresh(job)  # the library's own id says where the files are now, not the paths the job was made with
         return process_job(
             job, self.settings, self.cache, self.http, update_status, self.attempt,
@@ -308,12 +323,9 @@ def main() -> int:
     suggestion_service = SuggestionService(store, library, settings_source=live_settings, telemetry=telemetry)
     # What the machine proposes from the facts of the episodes it reads (P14): stored only through the one service.
     proposer = FactsProposer(
-        memory, suggestion_service, settings_source=live_settings, provider_factory=provider_factory, telemetry=telemetry,
+        memory, suggestion_service, settings_source=live_settings, telemetry=telemetry,
     )
     suggestion_service.generator = proposer
-    # The admin's long requests (Extract facts, Look for proposals) run here after the HTTP answer, one at a time.
-    tasks = BackgroundTasks(redact=lambda text: redact(text, live_settings()))
-    suggestion_service.tasks = tasks
     attempt = TranslationAttempt(
         versions=versions, usage=store, provider_factory=provider_factory, library=library, memory=memory,
         telemetry=telemetry, proposals=proposer,
@@ -324,14 +336,22 @@ def main() -> int:
         key_ok=lambda: any(key.status == "ok" for key in store.api_keys(provider_name(live_settings()))),
         library=library,
     )
+    # Jobs that read and do not translate go through the same queue, quota and breaker (F7).
+    worker.register_handler(EXTRACT, ExtractJob(
+        memory, provider_factory, settings_source=live_settings, usage=store, telemetry=telemetry,
+    ))
+    worker.register_handler(SUGGEST, SuggestJob(
+        proposer, provider_factory, settings_source=live_settings, usage=store, telemetry=telemetry,
+    ))
+    # Proposals are asked for through the queue: by the admin, and by a translation that read new facts.
+    proposer.jobs = worker.queue
     # A saved setting, a pasted key or a key the provider refused reaches the running worker at once (FR-20.1).
     settings_service.subscribe(lambda: worker.apply_settings(settings_service.settings()))
     bazarr = BazarrIntegration(http, settings["bazarr_url"], settings["bazarr_api_key"])
     units = UnitService(
         library, glossaries, versions, worker.queue, refresh_bazarr=media.refresh,
-        memory=memory, settings_source=live_settings, usage=store, provider_factory=provider_factory,
+        memory=memory, settings_source=live_settings, usage=store,
         telemetry=telemetry, source_languages=lambda: enabled_source_languages(settings_service.app_config()),
-        tasks=tasks,
     )
     style_service = StyleService(
         library, styles, metadata=metadata, settings_source=live_settings, provider_factory=provider_factory,
@@ -401,7 +421,6 @@ def main() -> int:
             catalog=CatalogActions(store, library, catalog_sync, auto_request, job_requests, catalog_view),
             style=style_service,
             suggestions=suggestion_service,
-            tasks=tasks,
         ).as_handler_context()
         if not args.no_worker:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()

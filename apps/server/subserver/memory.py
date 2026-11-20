@@ -170,12 +170,14 @@ class StoryMemory:
         return {uid: row.facts for uid, row in rows.items()}
 
     def ensure_facts(
-        self, unit: Unit, title: str, settings: dict[str, Any], provider_for: ProviderFor | None
+        self, unit: Unit, title: str, settings: dict[str, Any], provider_for: ProviderFor | None,
+        why: list[str] | None = None,
     ) -> tuple[Facts | None, str]:
         """Facts for ``unit``: from the cache, or extracted now. Returns ``(facts, how)``.
 
         ``how`` is ``cached``, ``extracted``, ``stored`` (source gone or unreadable; older facts kept),
-        ``no-source`` or ``failed``. Provider errors (quota, outage) propagate to the queue.
+        ``no-source`` or ``failed``. Provider errors (quota, outage) propagate to the queue. ``why`` (when given)
+        gets the reason of a ``failed`` or ``stored`` that was not for want of a source, for a job to say.
         """
         unit_id = unit.id
         latest = self.facts.latest_facts([unit_id], EXTRACT_PROMPT_VERSION).get(unit_id)
@@ -202,6 +204,8 @@ class StoryMemory:
             )
         except (FactsError, srt.SrtError, OSError) as exc:
             logging.warning("Could not extract story facts for %s %s: %s", title or "unit", unit_label(unit), exc)
+            if why is not None:
+                why.append(str(exc))
             return (kept, "stored") if kept is not None else (None, "failed")
         self.facts.save_facts(
             unit_id, sha, EXTRACT_PROMPT_VERSION, model=result.model, facts=result.facts,
@@ -387,33 +391,28 @@ class StoryMemory:
             "own_has_source": self.has_source(unit),
         }
 
-    def refresh(
-        self, unit: Unit, settings: dict[str, Any], provider_for: ProviderFor,
-        *, only: list[int] | None = None, progress: Callable[[int, int, str], None] | None = None,
-    ) -> dict[str, Any]:
-        """Extract the facts of ``unit`` and of every earlier unit that has a source (spends model calls).
-
-        ``only`` names exactly the units to read (of this series, in story order) instead: the admin picked those, so
-        nothing else is read. ``progress(done, total, label)`` is told before each unit, which is where a caller that
-        was asked to stop gets to stop (a unit already read stays stored)."""
+    def targets(self, unit: Unit, only: list[int] | None = None) -> list[Unit]:
+        """The episodes an Extract facts request over ``unit`` reads, in story order: ``unit`` and every earlier one of
+        the story, or exactly ``only`` (the admin picked those, so nothing else is read)."""
         series = self.units.get_series(unit.series_id)
-        title = series.title
-        self.refresh_catalog(unit, series, unit.source_code)
         units = self.units.list_units(series.id)
         if only is None:
-            targets = [*self.prior_units(unit, units, series), self.units.get_unit(unit.id) or unit]
-        else:
-            wanted = set(only)
-            targets = sorted((u for u in units if u.id in wanted), key=lambda u: (u.season or 0, u.episode or 0, u.id))
-        results: dict[str, str] = {}
-        for done, target in enumerate(targets):
-            if progress is not None:
-                progress(done, len(targets), unit_label(target))
-            _, how = self.ensure_facts(target, title, settings, provider_for)
-            results[unit_label(target)] = how
-        if progress is not None:
-            progress(len(targets), len(targets), "")
-        return {"extracted": [k for k, v in results.items() if v == "extracted"], "results": results}
+            return [*self.prior_units(unit, units, series), self.units.get_unit(unit.id) or unit]
+        wanted = set(only)
+        return sorted((u for u in units if u.id in wanted), key=lambda u: (u.season or 0, u.episode or 0, u.id))
+
+    def needs_reading(self, unit: Unit) -> str:
+        """Why reading ``unit`` now would spend nothing (``no-source`` or ``cached``), or ``""`` when it would call the
+        model: it has a source subtitle whose facts are not stored yet."""
+        if not self.has_source(unit):
+            return "no-source"
+        try:
+            sha = sha256_file(Path(unit.source_path))
+        except OSError:
+            return "no-source"
+        latest = self.facts.latest_facts([unit.id], EXTRACT_PROMPT_VERSION).get(unit.id)
+        # Facts of an older version of the source are not the newest: reading touches them back into use (``ensure_facts``).
+        return "cached" if latest is not None and latest.source_sha256 == sha else ""
 
     def own_facts(self, unit: Unit) -> dict[str, Any]:
         """What the stored facts of one unit say (reads only), for the console to show: the characters, who stands

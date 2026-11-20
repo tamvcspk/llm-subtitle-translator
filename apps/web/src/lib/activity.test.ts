@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QueueJob } from "../api/types";
-import { firstTab, jobName, jobStatus, lastLine, layerRows, originLine, providerLine, reach, whenText } from "./activity";
+import { firstTab, jobName, jobStatus, lastLine, layerRows, originLine, providerLine, reach, readsOnly, whenText } from "./activity";
 
 const NOW = Date.UTC(2026, 10, 17, 12, 0, 0);
 const job = (extra: Partial<QueueJob> = {}): QueueJob => ({ job_id: "j1", title: "Arcane", label: "S01E04", target_code: "vi", origin: "manual", mode: "fill", ...extra });
@@ -11,6 +11,18 @@ describe("Activity", () => {
     expect(jobName(job({ title: "Heat", label: "" }))).toBe("Heat · vi");
     expect(jobName(job({ title: "", label: "", subtitle_path: "/media/Heat/Heat.en.srt" }))).toBe("Heat.en.srt · vi");
     expect(jobName(job({ title: "", label: "", subtitle_path: "", target_code: "" }))).toBe("j1");
+  });
+
+  it("names a job that reads for what it reads, and gives it no subtitle to export", () => {
+    const extract = job({ kind: "extract", target_code: undefined, mode: "extract" });
+    expect(jobName(extract)).toBe("Extract facts · Arcane · S01E04");
+    expect(jobName(job({ kind: "suggest", label: "", target_code: "vi" }))).toBe("Look for proposals · Arcane · vi");
+    expect(readsOnly(extract)).toBe(true);
+    expect(readsOnly(job({ kind: "variant" }))).toBe(false);
+    expect(readsOnly(job())).toBe(false);
+    expect(jobStatus({ ...extract, result: "extracted" }, "done")).toBe("manual · extract · facts read");
+    expect(jobStatus({ ...extract, result: "skipped-no-source" }, "done")).toBe("manual · extract · no source subtitle to read");
+    expect(jobStatus({ ...extract, stage: "Reading S01E04" }, "running")).toBe("manual · extract · Reading S01E04");
   });
 
   it("says who asked and how, calling a variant a variant", () => {

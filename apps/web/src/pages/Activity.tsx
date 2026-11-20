@@ -1,11 +1,10 @@
 import { Alert, Anchor, Button, Card, Group, Loader, Modal, Stack, Tabs, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useCatalogStatus, useQueue, useStatus, useStopJob, useSyncCatalog, useTasks } from "../api/queries";
+import { useCatalogStatus, useQueue, useStatus, useStopJob, useSyncCatalog } from "../api/queries";
 import type { QueueAnswer, QueueJob } from "../api/types";
 import { EstimateSheet, type EstimateRequest } from "../components/EstimateSheet";
 import { JobSpecSheet } from "../components/JobSpecSheet";
-import { TaskRow } from "../components/TaskRow";
 import {
   firstTab,
   isJobTab,
@@ -17,6 +16,7 @@ import {
   layerRows,
   providerLine,
   reach,
+  readsOnly,
   type JobTab,
 } from "../lib/activity";
 import { ago } from "../lib/format";
@@ -48,30 +48,6 @@ function Providers({ queue }: { queue: QueueAnswer }) {
         <Text size="xs" c="dimmed">
           Calls left today are shown in the price box.
         </Text>
-      </Stack>
-    </Card>
-  );
-}
-
-/** The admin's own long requests (Extract facts, Look for proposals): what runs after a box was closed. Quiet when there are none. */
-function BackgroundWork() {
-  const tasks = useTasks();
-  const items = tasks.data?.items ?? [];
-  if (items.length === 0) return null;
-  return (
-    <Card withBorder padding="md" radius="md" component="section" aria-label="Background work">
-      <Stack gap="sm">
-        <Title order={4}>Background work</Title>
-        <Text size="xs" c="dimmed">
-          Your own requests, one at a time. A restart forgets this list; what was read stays stored.
-        </Text>
-        <Stack gap="md" component="ul" style={{ listStyle: "none", margin: 0, padding: 0 }}>
-          {items.map((task) => (
-            <li key={task.id}>
-              <TaskRow task={task} />
-            </li>
-          ))}
-        </Stack>
       </Stack>
     </Card>
   );
@@ -199,7 +175,11 @@ function JobCard({
     <Card withBorder padding="md" radius="md" component="li" style={{ listStyle: "none" }}>
       <Stack gap="xs">
         {typeof job.unit_id === "number" ? (
-          <Anchor component={Link} to={`/unit/${job.unit_id}/subtitles${job.target_code ? `?lang=${encodeURIComponent(job.target_code)}` : ""}`} fw={600}>
+          <Anchor
+            component={Link}
+            to={job.kind === "extract" ? `/unit/${job.unit_id}/context` : `/unit/${job.unit_id}/subtitles${job.target_code ? `?lang=${encodeURIComponent(job.target_code)}` : ""}`}
+            fw={600}
+          >
             {name}
           </Anchor>
         ) : (
@@ -227,7 +207,7 @@ function JobCard({
               Stop
             </Button>
           )}
-          {tab === "waiting" && job.wait_reason === "context" && (
+          {tab === "waiting" && job.wait_reason === "context" && !readsOnly(job) && (
             <Button
               variant="light"
               aria-label={`Request that episode for ${name}`}
@@ -243,9 +223,11 @@ function JobCard({
               <Button variant="light" aria-label={`Retry ${name}`} onClick={() => onEstimate({ action: `Retry · ${name}`, retry: { job_id: job.job_id } })}>
                 Retry
               </Button>
-              <Button variant="default" aria-label={`Export job spec of ${name}`} onClick={() => onSpec(job)}>
-                Export job spec
-              </Button>
+              {!readsOnly(job) && (
+                <Button variant="default" aria-label={`Export job spec of ${name}`} onClick={() => onSpec(job)}>
+                  Export job spec
+                </Button>
+              )}
             </>
           )}
         </Group>
@@ -343,7 +325,6 @@ export function Activity() {
       <Title order={2}>Activity</Title>
       {queue.isPending && <Loader size="sm" aria-label="Loading activity" />}
       {queue.isError && <Alert color="red">{queue.error.message}</Alert>}
-      <BackgroundWork />
       {queue.data && <Providers queue={queue.data} />}
       {queue.data && <Layers />}
       <Catalog />

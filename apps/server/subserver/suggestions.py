@@ -188,31 +188,20 @@ class SuggestionService:
         self._lock = threading.RLock()  # a glossary is read, changed and written back: one change at a time
         # The generator the admin can ask for by hand (P14, ``FactsProposer``); wired by the composition root.
         self.generator: Any = None
-        self.tasks: Any = None  # BackgroundTasks, when the worker has them: a request may run after its answer
 
-    def generate(
-        self, series_id: int, lang: str, *, estimate_only: bool = False, background: bool = False,
-    ) -> dict[str, Any]:
-        """Ask the facts generator for proposals now (``POST /api/suggestions/generate``). ``estimate_only`` says what
-        it would ask without spending a call; ``background`` answers at once with a task that Activity follows."""
+    def generate(self, series_id: int, lang: str, *, estimate_only: bool = False) -> dict[str, Any]:
+        """Ask the facts generator for proposals (``POST /api/suggestions/generate``). ``estimate_only`` says what a run
+        would ask, without a call. Otherwise the run is a ``suggest`` job: the queue makes it under the day's quota and
+        the breaker, and the answer is the job (an open one for the same series and language is not made twice)."""
         if self.generator is None:
             raise ValueError("no proposal generator is wired into this worker")
         if not _LANG.match(lang or ""):
             raise ValueError(f"invalid language code {lang!r}")
-        owner = self.library.series_owner(series_id)  # LookupError for a series that is not there
-        if not background or estimate_only:
-            return self.generator.generate(series_id, lang, estimate_only=estimate_only)
-        if self.tasks is None:
-            raise ValueError("background work is not available in this worker")
-
-        def work(progress: Callable[..., None]) -> dict[str, Any]:
-            progress(0, 1, "asking the model")
-            report = self.generator.generate(series_id, lang)
-            progress(1, 1, "")
-            return report
-
-        task = self.tasks.submit("suggest", f"Look for proposals · {owner.title}", work, series_id=series_id)
-        return {"ok": True, "task": task}
+        self.library.series_owner(series_id)  # LookupError for a series that is not there
+        if estimate_only:
+            return self.generator.estimate(series_id, lang)
+        job_id, created = self.generator.request(series_id, lang)
+        return {"ok": True, "job_ids": [job_id], "queued": 1 if created else 0, "merged": 0 if created else 1}
 
     # -- proposing ----------------------------------------------------------------------------------------
     def propose(self, series_id: int, lang: str, proposals: list[Proposal], *, source: str) -> ProposeReport:

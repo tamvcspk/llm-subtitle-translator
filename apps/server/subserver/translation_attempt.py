@@ -6,78 +6,39 @@ import hashlib
 import json
 import logging
 import os
-import time
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
 from subcore import fewshot, srt
-from subcore.memory.facts import EXTRACT_PROMPT_VERSION
-from subcore.providers import (
-    AuthError,
-    CallLog,
-    DeadlineExceeded,
-    ModelNotFound,
-    Provider,
-    ProviderError,
-    QuotaExhausted,
-    RateLimited,
-    Unavailable,
-)
-from subcore.suggest import SUGGEST_PROMPT_VERSION
-from subcore.translate import TranslationError, run
+from subcore.providers import CallLog
+from subcore.translate import run
 from subcore.translate.engine import TranslationResult
 from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
 from subcore.translate.review import Finding, review
 
-from .config import DEFAULT_MODEL, model_for_task
+from .config import DEFAULT_MODEL
 from .gather import gather
 from .library import Library
 from .memory import StoryMemory
-from .ports import MissingApiKey, ProviderFactory, Telemetry, Unit
+from .ports import ProviderFactory, Telemetry, Unit
+from .provider_guard import JobProviders, int_setting, mapped_errors, prompt_version_of
 from .proposals import FactsProposer
 from .store import Store
 from .rules import UnitRules
 from .subtitles import target_output_path
 from .telemetry import Telemetry as TelemetrySink
-from .queue_policy import next_utc_midnight
-from .translation import (
-    ERROR_TAIL_LENGTH, CallBudgetError, ContextGapError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, ProviderAuthError,
-    ProviderUnavailableError, redact,
-)
+from .translation import ContextGapError, HardJobError, redact
 from .versions import AUTO, RETRANSLATE, SKIPPED_EXISTING, VARIANT, TranslationVersions, sha256_bytes
 
 # Bump when the prompt or engine behaviour changes enough that old results should not be reused (NFR-3).
 PROMPT_VERSION = SUBCORE_PROMPT_VERSION
-DEFAULT_JOB_TIMEOUT_SECONDS = 1800  # NFR-2 watchdog
-
-
-
-def prompt_version_of(task: str, kind: str = "") -> str:
-    """The version of the prompt a call of this task used, for the call record (FR-19.1). A proposal generator (P14)
-    runs on the ``extract`` model but has a prompt of its own, told apart by the call's ``kind``."""
-    if kind == "suggest":
-        return f"suggest-{SUGGEST_PROMPT_VERSION}"
-    if task == "translate":
-        return PROMPT_VERSION
-    if task in ("extract", "summarize"):
-        return f"memory-{EXTRACT_PROMPT_VERSION}"
-    return ""
 
 
 class _AfterRun:
-    """What a job leaves for the proposal generators: the units whose facts it extracted, and the provider it used."""
+    """What a job leaves for the proposal generators: the units whose facts it extracted."""
 
     def __init__(self) -> None:
         self.extracted: list[int] = []
-        self.provider_for: Callable[[str], Provider] | None = None
-
-
-def job_timeout_seconds() -> float:
-    try:
-        return max(60.0, float(os.getenv("JOB_TIMEOUT_SECONDS", DEFAULT_JOB_TIMEOUT_SECONDS)))
-    except ValueError:
-        return float(DEFAULT_JOB_TIMEOUT_SECONDS)
 
 
 def context_hash(
@@ -96,56 +57,6 @@ def _temperature(settings: dict[str, Any]) -> float | None:
         return float(str(settings.get("gst_temperature") or "").strip())
     except ValueError:
         return None
-
-
-class _Budget:
-    """The model calls one job may make, and the day's calls all jobs may make (FR-17.6)."""
-
-    def __init__(self, per_job: int, per_day: int, used_today: Callable[[float], int] | None, clock=time.time) -> None:
-        self.per_job, self.per_day, self.used_today, self.clock = per_job, per_day, used_today, clock
-        self.calls = 0
-
-    def spend(self) -> None:
-        if self.per_job > 0 and self.calls >= self.per_job:
-            raise CallBudgetError(f"the job already made {self.calls} model calls (max_calls_per_job={self.per_job})", "job")
-        if self.per_day > 0 and self.used_today is not None:
-            now = self.clock()
-            if self.used_today(next_utc_midnight(now) - 86_400) >= self.per_day:
-                raise CallBudgetError(f"the day's {self.per_day} model calls are spent (max_calls_per_day)", "day")
-        self.calls += 1
-
-
-class _BudgetedProvider:
-    """A provider that counts its calls against a budget before making them."""
-
-    def __init__(self, inner: Provider, budget: _Budget) -> None:
-        self.inner, self.budget = inner, budget
-
-    @property
-    def name(self) -> str:
-        return self.inner.name
-
-    @property
-    def model(self) -> str:
-        return self.inner.model
-
-    @property
-    def caps(self):
-        return self.inner.caps
-
-    def count_tokens(self, req):
-        return self.inner.count_tokens(req)
-
-    def generate(self, req):
-        self.budget.spend()
-        return self.inner.generate(req)
-
-
-def _int_setting(settings: dict[str, Any], key: str, default: int) -> int:
-    try:
-        return int(settings.get(key) if settings.get(key) not in (None, "") else default)
-    except (TypeError, ValueError):
-        return default
 
 
 class TranslationAttempt:
@@ -192,10 +103,11 @@ class TranslationAttempt:
         return result
 
     def _propose(self, job: dict[str, Any], settings: dict[str, Any], after: "_AfterRun") -> None:
-        """The proposal generators (P14) read the facts this job had just extracted. They run once the translation is
-        settled and never raise (``FactsProposer.after_facts``), so they cannot fail or slow the job beyond their calls."""
-        if self.proposals is not None and after.extracted and after.provider_for is not None:
-            self.proposals.after_facts(after.extracted, str(job.get("target_code") or ""), after.provider_for, settings)
+        """The proposal generators (P14) read the facts this job had just extracted, but not in this job: it only queues a
+        ``suggest`` job for the series (``FactsProposer.after_facts``, which never raises), so the translation ends when it
+        is done and the look for proposals spends its own turn and budget (F7)."""
+        if self.proposals is not None and after.extracted:
+            self.proposals.after_facts(after.extracted, str(job.get("target_code") or ""), settings)
 
     def _run(
         self,
@@ -209,6 +121,10 @@ class TranslationAttempt:
         target_code = str(job.get("target_code") or "vi")
         output = str(job.get("output_path") or target_output_path(str(source), target_code))
         trigger = str(job.get("trigger") or AUTO)
+        if trigger == VARIANT and (self.versions is None or self.library is None):
+            # What keeps a variant off the disk is ``TranslationVersions.publish``, and its style comes from the library:
+            # without either it would be written over the target, or translated in the wrong style, without a word (R12-9).
+            raise RuntimeError("A variant needs the version history and the library; this worker was wired without them")
         unit = self._register(job)
         job_id = str(job.get("job_id") or "")
         unit_id = unit.id if unit else None
@@ -260,30 +176,14 @@ class TranslationAttempt:
                 style_hash=rules.style_hash if log.task == "translate" else "",
             )
 
-        deadline = time.monotonic() + job_timeout_seconds()
-        providers: dict[str, Provider] = {}
-        budget = _Budget(
-            _int_setting(settings, "max_calls_per_job", 0), _int_setting(settings, "max_calls_per_day", 0),
-            getattr(self.usage, "calls_since", None),
-        )
-
-        def provider_for(task: str) -> Provider:
-            """One provider (and rate limiter) per model; each task has its own model setting (FR-9.3)."""
-            name = model if task == "translate" else model_for_task(settings, task, model)
-            if name not in providers:
-                if self.provider_factory is None:
-                    raise RuntimeError("no provider factory is wired into this translation attempt")
-                providers[name] = _BudgetedProvider(
-                    self.provider_factory(settings, name, deadline=deadline, on_call=record), budget
-                )
-            return providers[name]
+        providers = JobProviders(self.provider_factory, settings, model, usage=self.usage, on_call=record)
+        provider_for = providers.for_task
 
         # Story memory (P4): earlier episodes' facts are made sure of first, so the bundle is complete
         # whatever order Bazarr delivered the episodes in (FR-5.3). A gap defers the job (ContextGapError).
         plan = None
         if self.memory is not None and unit is not None and self.memory.enabled_for(unit, settings):
-            after.provider_for = provider_for
-            with self._mapped(settings):
+            with mapped_errors(settings):
                 plan = self.memory.plan(unit, job, settings, provider_for, extracted=after.extracted)
         ctx_hash = context_hash(model, target_code, description, temperature, rules.hash, plan.fingerprint if plan else "")
         published = dict(
@@ -358,29 +258,29 @@ class TranslationAttempt:
     ) -> tuple[TranslationResult, Any]:
         """The model work of one attempt: gather the bundle, keep it, run it through ``subcore``."""
         target_code = str(job.get("target_code") or "vi")
-        with self._mapped(settings):
+        with mapped_errors(settings):
             provider = provider_for("translate")
             bundle = gather(
                 cues=cues,
                 rules=rules,
                 unit=unit,
-                title=self._title(unit),  # the series, or the movie
-                overview=description,
+                title=redact(self._title(unit), settings),  # the series, or the movie
+                overview=redact(description, settings),
                 target_code=target_code,
                 target_name=str(job.get("target_language") or ""),
                 source_code=str(job.get("source_code") or ""),
-                extra_sections=plan.sections if plan else [],
+                extra_sections=[(redact(title, settings), redact(body, settings)) for title, body in (plan.sections if plan else [])],
                 model=str(getattr(provider, "model", "") or ""),
                 max_output_tokens=provider.caps.max_output_tokens,
                 temperature=temperature,
                 only=only,
                 keep=keep,
                 few_shot=self._few_shot(unit, target_code, cues, only, keep, settings),
-                glossary_filter_threshold=_int_setting(settings, "glossary_filter_threshold", 50),
+                glossary_filter_threshold=int_setting(settings, "glossary_filter_threshold", 50),
             )
-            bundle = self._clean(bundle, settings)
-            current["bundle_hash"] = bundle.bundle_hash()
-            self._keep_bundle(job, bundle, settings)
+            bundle, text = self._clean(bundle, settings)
+            current["bundle_hash"] = bundle_hash = bundle.bundle_hash()
+            self._keep_bundle(job, bundle_hash, text, settings)
             result = run(bundle, provider, on_progress=on_progress)
         return result, bundle
 
@@ -389,7 +289,7 @@ class TranslationAttempt:
 
         Taken from the series' cue edits, never from this episode's own (those are kept as they are). They go in the
         bundle and its hash, not in the rules hash: a fixed cue must not make the whole series stale (ADR-14 point 9)."""
-        budget = _int_setting(settings, "few_shot_budget_tokens", 600)
+        budget = int_setting(settings, "few_shot_budget_tokens", 600)
         if budget <= 0 or unit is None or unit.series_id is None or self.library is None:
             return ()
         edits = self.library.catalog.series_cue_edits(unit.series_id, target_code, exclude_unit=unit.id)
@@ -410,27 +310,29 @@ class TranslationAttempt:
             return []
 
     @staticmethod
-    def _clean(bundle, settings: dict[str, Any]):
-        """Mask a key that reached the text (a pasted overview, a correction) before anything else sees the bundle.
+    def _clean(bundle, settings: dict[str, Any]) -> tuple[Any, str]:
+        """The bundle and its JSON, with no key in either: the model never receives one, and the hash, the call records
+        and the exported spec all describe the same text, so a spec reproduces the run (NFR-12).
 
-        The model never receives it, and the hash, the call records and the exported spec all describe the same text,
-        so a spec reproduces the run (NFR-12). When masking leaves nothing readable the bundle is kept as it was.
+        The free-text inputs (overview, title, story sections) were masked before ``gather``, so in the usual case this
+        only serialises once and checks. A key that still got through (a pasted correction, a glossary note) is masked in
+        the JSON and the bundle read back from it; when that cannot be read the bundle is kept as it was.
         """
         text = bundle.to_json()
         masked = redact(text, settings)
         if masked == text:
-            return bundle
+            return bundle, text
         try:
-            return type(bundle).from_json(masked)
+            clean = type(bundle).from_json(masked)
         except Exception:  # noqa: BLE001 - a bundle that cannot be read back is not worth changing
-            return bundle
+            return bundle, text
+        return clean, clean.to_json()
 
-    def _keep_bundle(self, job: dict[str, Any], bundle, settings: dict[str, Any]) -> None:
-        """Keep the bundle for "Xuất job spec" and put its hash in the job's snapshot (FR-15.10, FR-21.2).
+    def _keep_bundle(self, job: dict[str, Any], bundle_hash: str, text: str, settings: dict[str, Any]) -> None:
+        """Keep the bundle (its JSON ``text``) for "Xuất job spec" and put its hash in the job's snapshot (FR-15.10, FR-21.2).
 
         Best effort: a failure here is logged and the translation goes on; the bundle is never a reason to fail a job.
         """
-        bundle_hash = bundle.bundle_hash()
         snapshot = job.get("snapshot")
         if isinstance(snapshot, dict):
             snapshot["bundle_hash"] = bundle_hash
@@ -438,7 +340,7 @@ class TranslationAttempt:
         if self.usage is None or not job_id:
             return
         try:
-            self.usage.save_job_bundle(job_id, bundle_hash, bundle.to_json())
+            self.usage.save_job_bundle(job_id, bundle_hash, text)
         except Exception as exc:  # noqa: BLE001 - a bundle that cannot be kept must not fail the job
             logging.warning("Could not keep the bundle of job %s: %s", job_id, redact(str(exc), settings))
 
@@ -451,36 +353,6 @@ class TranslationAttempt:
                 "validate", unit_id=unit_id, cue=issue.cue, before=issue.source, after=issue.candidate,
                 issue=issue.kind, call=issue.call, error=issue.error, detail=issue.detail, job_id=job_id, model=model,
             )
-
-    @contextmanager
-    def _mapped(self, settings: dict[str, Any]):
-        """Turn typed provider failures into the queue's failure classes (never by parsing text)."""
-        try:
-            yield
-        except QuotaExhausted as exc:
-            raise DailyQuotaExceededError(self._message("Daily quota exhausted", exc, settings)) from None
-        except (RateLimited, Unavailable) as exc:
-            raise ProviderUnavailableError(self._message("Provider unavailable", exc, settings)) from None
-        except DeadlineExceeded:
-            raise RuntimeError(
-                f"Translation exceeded the {int(job_timeout_seconds() // 60)} minute job limit"
-            ) from None
-        except AuthError as exc:
-            raise ProviderAuthError(self._message("The provider rejected the API key", exc, settings)) from None
-        except ModelNotFound as exc:
-            raise ModelNotFoundError(
-                self._message("The provider does not know the model (check the model in Settings)", exc, settings),
-                model=str(settings.get("gst_model") or ""),
-            ) from None
-        except MissingApiKey as exc:
-            raise RuntimeError(str(exc)) from None
-        except TranslationError as exc:
-            error = HardJobError(self._message("Translation failed", exc, settings))
-            error.issues = list(getattr(exc, "issues", ()))  # type: ignore[attr-defined]
-            error.blocked = int(getattr(exc, "blocked", 0) or 0)  # type: ignore[attr-defined]
-            raise error from None
-        except ProviderError as exc:
-            raise RuntimeError(self._message("Translation failed", exc, settings)) from None
 
     # -- library ---------------------------------------------------------------
     def _register(self, job: dict[str, Any]) -> Unit | None:
@@ -528,9 +400,3 @@ class TranslationAttempt:
             keep = {n: cue.text for n, cue in enumerate(current, start=1) if not first <= n <= last}
         keep.update(rules.locked)
         return only, keep
-
-    @staticmethod
-    def _message(prefix: str, exc: BaseException, settings: dict[str, Any]) -> str:
-        detail = redact(f"{type(exc).__name__}: {exc}", settings)
-        return f"{prefix}: {detail}"[-ERROR_TAIL_LENGTH:]
-

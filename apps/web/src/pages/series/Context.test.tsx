@@ -28,15 +28,20 @@ function memory(overrides: Record<string, unknown> = {}, units = [unit(501, true
   return { series: { id: 9, title: "Arcane" }, policy: "", specials_after: "", global_enabled: true, units, ...overrides };
 }
 
-/** A background task of this series, running unless `over` says otherwise. */
-const task = (over: Record<string, unknown> = {}) => ({
-  id: "abc123abc123", kind: "extract-facts", title: "Extract facts · Arcane (2 episodes)", series_id: 9, state: "running",
-  done: 1, total: 2, message: "Reading S01E04", result: null, error: "", created_at: 1, started_at: 2, finished_at: null,
-  cancel_requested: false, ...over,
+/** What queueing an extraction answers: one job per episode that needs reading. */
+const extract = (over: Record<string, unknown> = {}) => ({
+  "/api/units/504/context/extract": { body: { ok: true, job_ids: ["x1", "x2"], queued: 2, merged: 0, skipped: {}, ...over } },
 });
 
-/** What starting an extraction answers: the task that was made. */
-const extract = () => ({ "/api/units/504/context/extract": { body: { ok: true, task: task({ state: "queued", done: 0, total: 0, message: "" }) } } });
+/** An `extract` job of this series, in line unless `over` says otherwise. */
+const job = (id: string, unit_id: number, over: Record<string, unknown> = {}) => ({
+  job_id: id, kind: "extract", title: "Arcane", label: `S01E0${unit_id - 500}`, unit_id, origin: "manual", mode: "extract", ...over,
+});
+
+/** `/api/queue` with these jobs: the running ones, then the ones in line. */
+const queue = (processing: unknown[], pending: unknown[] = []) => ({
+  "/api/queue": { body: { counts: {}, total: 0, daily_quota_pause: null, providers: [], processing, pending, deferred: [], done: [], failed: [] } },
+});
 
 function serveMemory(initial = memory(), extra: Record<string, unknown> = {}) {
   serve({
@@ -119,45 +124,49 @@ describe("Series Context tab", () => {
     expect(screen.getByRole("button", { name: "Extract facts (2 episodes)" })).toBeEnabled();
   });
 
-  it("asks the price of Extract facts, starts it as a background task and follows it until it is stored", async () => {
-    const finished = task({ state: "done", done: 2, message: "", finished_at: 9, result: { extracted: ["S01E02", "S01E04"], results: { S01E02: "extracted", S01E04: "extracted" } } });
-    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [finished] } } });
+  it("asks the price of Extract facts, queues one job per episode and says where to follow them", async () => {
+    serveMemory(memory(), extract());
     show("/series/1/context");
     await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
     const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
     expect(within(sheet).getByText("Model calls (est.)").nextSibling).toHaveTextContent("2");
     expect(within(sheet).getByText(/One call per episode/)).toBeInTheDocument();
+    expect(within(sheet).queryByRole("button", { name: "Run in background" })).not.toBeInTheDocument(); // the queue is the background now
     expect(sent("/api/units/504/context/extract")).toEqual([]);
     await userEvent.click(within(sheet).getByRole("button", { name: "Confirm" }));
-    expect(await within(sheet).findByText("The facts are stored.")).toBeInTheDocument();
-    expect(within(sheet).getByText("S01E02 read · S01E04 read")).toBeInTheDocument();
-    expect(sent("/api/units/504/context/extract")).toEqual([{ unit_ids: [502, 504], background: true }]);
-    expect(within(sheet).getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(await within(sheet).findByText("Queued 2 episodes. Follow them in Activity.")).toBeInTheDocument();
+    expect(sent("/api/units/504/context/extract")).toEqual([{ unit_ids: [502, 504] }]);
+    await userEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
-  it("shows how far a running task is, and Run in background closes the box while it goes on", async () => {
-    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [task()] } } });
+  it("says which episodes were left out of the request and which were already in line", async () => {
+    serveMemory(memory(), extract({ queued: 1, merged: 1, skipped: { S01E02: "cached", S01E03: "no-source" } }));
     show("/series/1/context");
     await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
-    const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
-    await userEvent.click(within(sheet).getByRole("button", { name: "Confirm" }));
-    expect(await within(sheet).findByText("Reading S01E04 · 1 of 2")).toBeInTheDocument();
-    await userEvent.click(within(sheet).getByRole("button", { name: "Run in background" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    // the series' own card still shows it, with Stop
-    const card = screen.getByRole("region", { name: "Story memory" });
-    expect(await within(card).findByText("Reading S01E04 · 1 of 2")).toBeInTheDocument();
-    expect(within(card).getByRole("button", { name: /^Stop / })).toBeInTheDocument();
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Confirm" }));
+    expect(await screen.findByText("Queued 1 episode. Follow them in Activity.")).toBeInTheDocument();
+    expect(screen.getByText("1 was already in line.")).toBeInTheDocument();
+    expect(screen.getByText("S01E02 already has its facts · S01E03 no source subtitle")).toBeInTheDocument();
   });
 
-  it("Run in background in the price box starts the task and closes the box at once", async () => {
-    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [task()] } } });
+  it("shows how far the reading is on the series' card, and Stop reading stops every open job", async () => {
+    serveMemory(memory(), {
+      ...queue([job("j1", 502)], [job("j2", 504), job("j3", 999)]), // j3 belongs to another series
+      "/api/queue/stop": { body: { ok: true } },
+    });
     show("/series/1/context");
-    await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
-    const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
-    await userEvent.click(within(sheet).getByRole("button", { name: "Run in background" }));
-    await waitFor(() => expect(sent("/api/units/504/context/extract")).toEqual([{ unit_ids: [502, 504], background: true }]));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const card = await screen.findByRole("region", { name: "Story memory" });
+    expect(await within(card).findByText("Reading S01E02 · 1 more in line")).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Stop reading" }));
+    await waitFor(() => expect(sent("/api/queue/stop")).toEqual([{ job_id: "j1" }, { job_id: "j2" }]));
+  });
+
+  it("says nothing about reading when no job of the series is open", async () => {
+    serveMemory(memory(), queue([], [job("j3", 999)]));
+    show("/series/1/context");
+    await screen.findByRole("list", { name: "Episodes" });
+    expect(screen.queryByRole("button", { name: "Stop reading" })).not.toBeInTheDocument();
   });
 
   it("reads only the episodes that were ticked, and only ones that can be read can be ticked", async () => {
@@ -170,8 +179,8 @@ describe("Series Context tab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Extract ticked (1)" }));
     const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
     expect(within(sheet).getByText("Model calls (est.)").nextSibling).toHaveTextContent("1");
-    await userEvent.click(within(sheet).getByRole("button", { name: "Run in background" }));
-    await waitFor(() => expect(sent("/api/units/504/context/extract")).toEqual([{ unit_ids: [504], background: true }]));
+    await userEvent.click(within(sheet).getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(sent("/api/units/504/context/extract")).toEqual([{ unit_ids: [504] }]));
   });
 
   it("clears the ticks", async () => {
@@ -182,26 +191,6 @@ describe("Series Context tab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Clear ticks" }));
     expect(screen.queryByRole("button", { name: /Extract ticked/ })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Read the facts of S01E02" })).not.toBeChecked();
-  });
-
-  it("says which episode failed", async () => {
-    const finished = task({ state: "done", done: 2, finished_at: 9, result: { extracted: [], results: { S01E02: "failed", S01E04: "no-source" } } });
-    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [finished] } } });
-    show("/series/1/context");
-    await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
-    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Confirm" }));
-    expect(await screen.findByText("Some episodes could not be read.")).toBeInTheDocument();
-    expect(screen.getByText("S01E02 failed · S01E04 no source subtitle")).toBeInTheDocument();
-  });
-
-  it("shows why a task failed (the provider refused) in the box", async () => {
-    const refused = task({ state: "failed", done: 0, error: "The provider could not finish (QuotaExhausted: spent)", finished_at: 9 });
-    serveMemory(memory(), { ...extract(), "/api/tasks": { body: { items: [refused] } } });
-    show("/series/1/context");
-    await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
-    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Confirm" }));
-    expect(await screen.findByText("The provider could not finish (QuotaExhausted: spent)")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 
   it("opens the facts of an episode and says what they hold", async () => {

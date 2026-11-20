@@ -26,6 +26,15 @@ One translation of one source subtitle into one target language, stored as a row
 waiting, a reason. A job is only ever failed for its own faults: its source, its glossary,
 an invalid output after the strong model, a refused content filter, or too many crashes.
 
+**Extract job** (job kind `extract`):
+One job reads the facts of one episode with the memory model (one call). "Extract facts (N episodes)" makes N of them in story
+order, so Stop works between episodes and a translation can go in between. It waits for the day's quota like any job.
+
+**Suggest job** (job kind `suggest`):
+One job looks for proposals (address rules, terms, characters) in the stored facts of one series for one language, in at most
+three calls, each kind stored as soon as it returns. The admin asks for it; a translation that read new facts leaves one behind
+(origin `facts`, the lowest class), and at most one is open per series and language.
+
 **Waiting** (job state `waiting`):
 A job that cannot run now for a reason outside its own control. The reason is shown:
 `quota`, `provider` (key refused, model unknown, breaker open), `context` (earlier
