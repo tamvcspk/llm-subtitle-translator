@@ -288,10 +288,14 @@ Since P8 jobs are rows of the `jobs` table in `app.db` (ADR-11), claimed by `Job
 `queue_policy.py`.
 
 The old folders `pending/ processing/ deferred/ done/ failed/ held/ rejected/` are only read once, at
-start-up (`intake.import_queue_tree`), and moved to `queue.migrated/`: `pending`/`processing`/`deferred` become
-jobs, `done`/`failed` the history, a `held` job is dropped (the item is Missing again) and a `rejected` one
-becomes an Ignored decision (`unit_decisions`). The `held`/`rejected` rows P8 may have left in the table are
-settled the same way. Running it again changes nothing.
+start-up (`intake.import_queue_tree`), and moved to `queue.migrated/`: `processing`/`deferred` become jobs,
+`done`/`failed` the history, a `held` job is dropped (the item is Missing again) and a `rejected` one
+becomes an Ignored decision (`unit_decisions`). `pending` is what the old Bazarr script dropped and nobody approved,
+so it is not run either: those items are Missing again and the start-up logs how many (an admin's own request or a
+retranslation still waiting there is a job). The `held`/`rejected` rows P8 may have left in the table are
+settled the same way. A "no" is written down before the row or the folder that held it goes; one that cannot be
+written yet (no library, a job that cannot be placed) stays, with its folder, and is tried again at the next
+start-up. Running it again changes nothing.
 
 ## Job Shape
 

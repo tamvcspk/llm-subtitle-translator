@@ -52,9 +52,12 @@ never overwritten by an automatic job.
 ## Upgrading from the post-processing script (before P10)
 
 1. Update and start the worker. At its first start it settles the old queue once: files left in
-   `pending/`, `deferred/` become jobs, `done/` and `failed/` become history, **held** jobs are
-   dropped (the item is simply Missing again), **rejected** jobs become Ignored. The old folders
-   move to `queue.migrated/`; nothing is deleted. Running it again changes nothing.
+   `processing/` and `deferred/` become jobs, `done/` and `failed/` become history, **held** jobs
+   are dropped (the item is simply Missing again), **rejected** jobs become Ignored. Files the script
+   had left in `pending/` and nobody had approved are **not** run: those items are Missing again, the
+   log says how many, and you request them in Library when you want them. The old folders move to
+   `queue.migrated/`; nothing is deleted. A rejection that could not be recorded yet stays in its
+   folder (which is not moved) and is tried again at the next start. Running it again changes nothing.
 2. In Bazarr: Settings → Subtitles → **Use Custom Post-Processing**: switch it off and clear the
    command (`/config/postprocess/gst_enqueue.sh ...`).
 3. In Bazarr's compose, drop the `.../postprocess:/config/postprocess` mount. The worker no

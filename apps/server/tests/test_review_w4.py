@@ -4,15 +4,17 @@ how the catalog is read and shown (R10-3, R10-6, R10-9, R14-3). A fake Bazarr an
 import os
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from subserver import queue_policy as policy
+from subserver import versions as versions_module
 from subserver.auto_request import AutoRequest, AutoRequested, sync_and_request
 from subserver.bazarr import BazarrMedia
 from subserver.catalog_view import JobIndex
 from subserver.ports import CatalogSubtitle
 
-from .test_catalog import CatalogCase, Env
+from .test_catalog import EN, SRT, CatalogCase, Env
 
 
 class PolicyAndFailedJobTests(CatalogCase):
@@ -319,6 +321,85 @@ class CatalogWritesTests(CatalogCase):
         finally:
             env.store.query = real
         self.assertLess(len([c for c in calls if "FROM jobs" in c]), 4)
+
+
+class PageLabelTests(CatalogCase):
+    """R10-9 (the rest, W6): the labels of a page read the history of its files in a few queries and do not read a file
+    again while it is unchanged, and are the labels the item would get one at a time."""
+
+    def build(self):
+        env = self.env()
+        for n in range(1, 7):
+            env.episode(n, vi=n != 1)
+        env.sync.run()
+        env.translated("7102")
+        Path(env.paths("7103")[1]).write_text(SRT, encoding="utf-8")  # made by nobody here
+        env.translated("7104", edited=True)
+        unit_id, _ = env.translated("7105")
+        env.store.add_correction(unit_id, "vi", "term", {"source": "Hi", "target": "Chao", "locked": True})  # stale
+        _, target = env.translated("7106")
+        env.versions.remove(target)
+        env.replace_entry(env.fake.entries[6], subtitles=env.fake.entries[6].subtitles[:1], missing=("vi",))
+        env.clock.advance(60)
+        env.sync.run()
+        return env
+
+    def page(self, env):
+        return env.view.series_page(env.item("7", "series").id)
+
+    def test_the_page_says_what_each_item_says_on_its_own(self):
+        env = self.build()
+        series = env.item("7", "series")
+        by_item = {i["bazarr_id"]: i["targets"][0] for i in self.page(env)["items"]}
+        self.assertEqual({b: t["content"] for b, t in by_item.items()}, {
+            "7101": "missing", "7102": "translated", "7103": "external", "7104": "edited", "7105": "translated",
+            "7106": "missing",
+        })
+        self.assertEqual([b for b, t in by_item.items() if t["stale"]], ["7105"])
+        self.assertEqual([b for b, t in by_item.items() if t["removed"]], ["7106"])
+        for bazarr_id, indexed in by_item.items():
+            plain = env.view.item(env.item(bazarr_id), series, ["vi"], env.store.decisions(), [EN])["targets"][0]
+            self.assertEqual(indexed, plain, bazarr_id)
+
+    def test_the_history_of_a_page_is_read_in_a_few_queries(self):
+        env = self.build()
+        for n in range(7, 31):
+            env.episode(n, vi=True)
+        env.sync.run()
+        statements = []
+        env.store._db.set_trace_callback(statements.append)
+        try:
+            self.page(env)
+        finally:
+            env.store._db.set_trace_callback(None)
+        reads = [s for s in statements if "FROM translations" in s]
+        self.assertTrue(1 <= len(reads) < 4, len(reads))
+
+    def test_a_file_is_not_read_again_while_it_is_unchanged_and_is_when_it_changes(self):
+        env = self.build()
+        reads = []
+        real = versions_module.sha256_file
+        with patch.object(versions_module, "sha256_file", lambda path: (reads.append(Path(path).name), real(path))[1]):
+            first = self.page(env)
+            self.assertGreaterEqual(len(reads), 3)  # the files the system made are checked once
+            reads.clear()
+            again = self.page(env)
+            self.assertEqual(reads, [])
+            self.assertEqual(again["items"], first["items"])
+            target = Path(env.paths("7102")[1])
+            target.write_text(SRT + "\n99\n00:00:09,000 --> 00:00:10,000\nBye\n", encoding="utf-8")  # a hand edit
+            changed = {i["bazarr_id"]: i["targets"][0]["content"] for i in self.page(env)["items"]}
+        self.assertEqual(reads, [target.name])
+        self.assertEqual(changed["7102"], "external")
+
+    def test_what_decides_an_overwrite_still_reads_the_file(self):
+        env = self.build()
+        target = env.paths("7102")[1]
+        self.assertTrue(env.versions.is_system_file(target))
+        with patch.object(versions_module, "sha256_file", wraps=versions_module.sha256_file) as hashed:
+            env.versions.is_system_file(target)
+            env.versions.is_system_file(target)
+        self.assertEqual(hashed.call_count, 2)
 
 
 class ReadsWriteNothingTests(CatalogCase):

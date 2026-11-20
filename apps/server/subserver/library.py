@@ -27,7 +27,7 @@ from .ports import KIND_EPISODE, KIND_MOVIE, CatalogEntry, MediaLibrary, Output,
 from .store import Store
 from .rules import StyleLayers, UnitRules, build_rules
 from .styles import Styles
-from .versions import TranslationVersions
+from .versions import TranslationVersions, VersionPage
 
 STATUSES = ("current", "stale", "incomplete", "untranslated")
 _ATTENTION = {"stale": 0, "incomplete": 1, "untranslated": 2, "current": 3}
@@ -312,11 +312,15 @@ class Library:
 
     def target_info(
         self, unit: Unit, output: Output, *, glossary: g.Glossary | None = None, cache: dict | None = None,
-        styles: StyleLayers | None = None,
+        styles: StyleLayers | None = None, page: VersionPage | None = None, exists: bool | None = None,
     ) -> dict[str, Any]:
+        """``page`` (the history of a whole page of files, read once) and ``exists`` (the caller just looked) save
+        the queries and the stat a listing would repeat for every target; a file is also not read again while its
+        size and time are what they were (display only, see ``TranslationVersions.is_system_file``)."""
         lang, output_path = output.target_lang, output.output_path
-        exists = Path(output_path).is_file()
-        current = self.versions.repo.current_version(output_path)
+        if exists is None:
+            exists = Path(output_path).is_file()
+        current = page.current.get(output_path) if page is not None else self.versions.repo.current_version(output_path)
         info: dict[str, Any] = {
             "lang": lang,
             "language": output.target_language or lang,
@@ -332,7 +336,8 @@ class Library:
         }
         if current is None or not exists:
             info["modified_outside"] = exists and current is None  # a file we did not make
-            info["removed"] = not exists and self.versions.latest_status(output_path) == "removed"
+            latest = page.latest.get(output_path, "") if page is not None else self.versions.latest_status(output_path)
+            info["removed"] = not exists and latest == "removed"
             return info
         stale = not self.stale_ignored(unit) and (
             current.glossary_hash != self.unit_rules(unit, lang, glossary=glossary, cache=cache, styles=styles).hash
@@ -341,7 +346,10 @@ class Library:
         info.update(
             version=current.version, trigger=current.trigger, model=current.model,
             missing_units=list(current.missing_units),
-            updated_at=current.created_at, modified_outside=not self.versions.is_system_file(output_path),
+            updated_at=current.created_at,
+            modified_outside=not self.versions.is_system_file(
+                output_path, current=current, trusting_stat=page is not None
+            ),
             status="stale" if stale else ("current" if current.context_complete else "incomplete"),
         )
         return info

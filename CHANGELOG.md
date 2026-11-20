@@ -1,4 +1,17 @@
 # Unreleased
+- **Review wave W6: the old queue settles safely, and the Library page reads less (F8, R10-2, R10-5, R10-9).**
+  - **A refusal of the old queue is written down before what held it goes (R10-2).** The start-up used to delete the script's
+    `rejected` rows first and record the Ignored decision after, and moved the folders even when it could not (no library, a
+    job that could not be placed): a crash or a broken job turned a "no" into Missing, and the item could be translated. Now the
+    decision comes first; one that cannot be written yet keeps its row and its `rejected/` folder (which is not moved) and is
+    tried again at the next start-up, with a warning that counts them.
+  - **Files the script left in `pending/` are not run (R10-5, D5).** On upgrade every unapproved file there became a queued job
+    and spent quota. They are Missing again, the start-up logs how many (and `queue.imported` carries `unrequested`); request
+    them in Library when you want them. An admin's own request or a retranslation still waiting there is a job as before.
+  - **A page of the Library reads the version history in a few queries (R10-9).** `label()` asked for the current version, the
+    newest status and a full read of the target file for every episode and language, again every few seconds. A series page
+    now reads the history of all its files at once, shares the glossary, style and memory reads between its episodes, stats a
+    file once, and does not hash it again while its size and time are unchanged. What decides an overwrite still hashes the file.
 - **Review wave W5: long work is a job (F7, D7).** One step per line below.
   - **7a: what every kind of job shares.** The time limit, the call budget (`max_calls_per_job`, `max_calls_per_day`) and
     the table that maps a provider's typed failure to the queue's classes moved out of `TranslationAttempt` into

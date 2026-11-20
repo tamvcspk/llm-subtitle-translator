@@ -108,9 +108,11 @@ class TestWorkerQueueTests(unittest.TestCase):
         return worker.QueueWorker(str(queue_dir), settings, gst_http.MemoryCache(), FakeHTTP({}), store=store, **kwargs)
 
     def drop(self, queue_dir, job):
-        """What Bazarr's script does: one JSON file in the gate folder, `pending/`."""
+        """A job waiting in the old queue folder at start-up. Only an admin's request there still becomes a job (the
+        script's own files are Missing again, R10-5), so the file says it is one."""
         folder = Path(queue_dir) / "pending"
         folder.mkdir(parents=True, exist_ok=True)
+        job = {"admission": "admin", **job}
         (folder / f"{job['job_id']}.json").write_text(json.dumps(job), encoding="utf-8")
 
     def names(self, jobs, state):

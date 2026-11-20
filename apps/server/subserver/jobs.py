@@ -28,7 +28,8 @@ OPEN_STATES = (QUEUED, RUNNING, WAITING)
 ENDED_STATES = (DONE, FAILED, CANCELLED, SKIPPED)  # what cleanup may delete
 STATES = (QUEUED, RUNNING, WAITING, DONE, FAILED, CANCELLED, SKIPPED)
 # The two states of the script's admission gate (FR-12), gone since P10: the rows an older worker left are turned
-# into decisions once, at start-up (``take_gate_rows``), and never written again.
+# into decisions once, at start-up (``gate_rows``, then ``drop_gate_row`` after the decision is written), and never
+# written again.
 GATE_HELD, GATE_REJECTED = "held", "rejected"
 
 # What the console has always called the states (the queue was a folder tree), kept for the HTTP API and the
@@ -90,6 +91,15 @@ class Added:
     job_id: str | None  # the new job; None when an open job already holds the key
     existing: str | None = None  # the open job a request was merged into
     revived: bool = False  # a failed job of the same key was put back in line instead of a new one
+
+
+@dataclass(frozen=True)
+class GateRow:
+    """A row the script's admission gate left: ``rejected`` says "no" (Ignored); otherwise it was held (Missing)."""
+
+    row_id: int
+    rejected: bool
+    payload: dict[str, Any]
 
 
 def _loads(text: str) -> dict[str, Any]:
@@ -515,21 +525,20 @@ class JobStore:
                 return "stopping"
         return None
 
-    def take_gate_rows(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """The rows the script's admission gate left (FR-12), taken out of the table: ``(held, rejected)`` payloads.
+    def gate_rows(self) -> list["GateRow"]:
+        """The rows the script's admission gate left (FR-12), still in the table, oldest first.
 
         P10 removes the gate. A held job was "wanted, not decided yet", which is what Missing says; a rejected one
-        was a "no", which is an Ignored decision. The caller turns them into that; running this again finds nothing.
-        """
+        was a "no", which is an Ignored decision. The caller records that decision first and only then calls
+        ``drop_gate_row``, so a crash between the two leaves the row for the next start-up (R10-2)."""
+        rows = self.store.query("SELECT id, state, payload_json FROM jobs WHERE state IN (?, ?) ORDER BY id",
+                                (GATE_HELD, GATE_REJECTED))
+        return [GateRow(int(r["id"]), str(r["state"]) == GATE_REJECTED, _loads(r["payload_json"])) for r in rows]
+
+    def drop_gate_row(self, row_id: int) -> None:
         with self.store.transaction() as db:
-            rows = db.execute("SELECT id, state, payload_json FROM jobs WHERE state IN (?, ?) ORDER BY id",
-                              (GATE_HELD, GATE_REJECTED)).fetchall()
-            for row in rows:
-                db.execute("DELETE FROM jobs WHERE id = ?", (row["id"],))
+            db.execute("DELETE FROM jobs WHERE id = ? AND state IN (?, ?)", (row_id, GATE_HELD, GATE_REJECTED))
             self._sweep_bundles(db)
-        held = [_loads(r["payload_json"]) for r in rows if r["state"] == GATE_HELD]
-        rejected = [_loads(r["payload_json"]) for r in rows if r["state"] == GATE_REJECTED]
-        return held, rejected
 
     def expired(self, states: tuple[str, ...], finished_before: float) -> Reclaimed:
         """Finished jobs in ``states`` that ended before ``finished_before``: how many rows and how much text they

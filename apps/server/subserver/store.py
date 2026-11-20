@@ -988,6 +988,38 @@ class Store:
             ).fetchone()
         return str(row["status"]) if row else ""
 
+    _PATH_CHUNK = 400  # well under SQLite's limit on bound variables
+
+    def current_versions_for(self, output_paths: Iterable[str]) -> dict[str, TranslationVersion]:
+        """The current version of each of these files that has one: one query per few hundred paths, for a page."""
+        wanted = list(dict.fromkeys(output_paths))
+        found: dict[str, TranslationVersion] = {}
+        for start in range(0, len(wanted), self._PATH_CHUNK):
+            chunk = wanted[start:start + self._PATH_CHUNK]
+            with self._lock:
+                rows = self._db.execute(
+                    f"SELECT * FROM translations WHERE status = 'current' AND output_path IN ({','.join('?' * len(chunk))})",
+                    chunk,
+                ).fetchall()
+            found.update((str(row["output_path"]), _version_from_row(row)) for row in rows)
+        return found
+
+    def latest_version_statuses(self, output_paths: Iterable[str]) -> dict[str, str]:
+        """``latest_version_status`` of each of these files that has a history (the others are left out)."""
+        wanted = list(dict.fromkeys(output_paths))
+        found: dict[str, str] = {}
+        for start in range(0, len(wanted), self._PATH_CHUNK):
+            chunk = wanted[start:start + self._PATH_CHUNK]
+            with self._lock:
+                rows = self._db.execute(
+                    "SELECT t.output_path, t.status FROM translations t WHERE t.output_path IN"
+                    f" ({','.join('?' * len(chunk))}) AND t.version = ("
+                    "SELECT MAX(v.version) FROM translations v WHERE v.output_path = t.output_path)",
+                    chunk,
+                ).fetchall()
+            found.update((str(row["output_path"]), str(row["status"])) for row in rows)
+        return found
+
     def next_version(self, output_path: str) -> int:
         with self._lock:
             row = self._db.execute(

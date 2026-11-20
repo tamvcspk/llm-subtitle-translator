@@ -24,7 +24,7 @@ from .ports import KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, Output, 
 from .queue import JobQueue
 from .store import Store
 from .subtitles import target_output_path
-from .versions import TranslationVersions
+from .versions import TranslationVersions, VersionPage
 
 # The content axis, the job axis, and the words the console shows for them.
 CONTENT_TEXT = {
@@ -62,6 +62,16 @@ class JobIndex:
 
     open: dict[tuple[int, str], dict[str, Any]] = field(default_factory=dict)
     ended: dict[tuple[int, str], dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass
+class PageReads:
+    """What the labels of one page share: its jobs, the history of its files and a scratch ``cache`` for the rules
+    (glossary, styles, story memory) that every episode of a series would otherwise load again."""
+
+    jobs: JobIndex
+    versions: VersionPage
+    cache: dict
 
 
 class CatalogView:
@@ -102,12 +112,30 @@ class CatalogView:
             (index.open if job["state"] in OPEN_STATES else index.ended)[slot] = job
         return index
 
-    def label(self, entry: CatalogEntry, lang: str, unit: Unit | None, ignored: set[tuple[int, str]],
-              sources: list[dict[str, Any]], jobs: "JobIndex | None" = None) -> dict[str, Any]:
-        lang = lang.lower()
+    @staticmethod
+    def _outputs(entry: CatalogEntry, lang: str, sources: list[dict[str, Any]]) -> tuple[Any, str, Any]:
+        """``(picked source, the path the worker would write, the subtitle Bazarr lists)`` of an (item, language)."""
         picked = pick_source(entry, sources)
         derived = target_output_path(picked[0].path, lang, str(picked[1]["code"])) if picked else ""
         listed = next((s for s in entry.subtitles if s.code == lang and not s.forced), None)
+        return picked, derived, listed
+
+    def page_reads(self, units: list[Unit], entries: list[CatalogEntry], langs: list[str],
+                   sources: list[dict[str, Any]]) -> "PageReads":
+        """Everything a page of items reads from the database, taken once: the jobs of its units and the history of
+        every file its labels may look at (R10-9)."""
+        paths: list[str] = []
+        for entry in entries:
+            for lang in langs:
+                _, derived, listed = self._outputs(entry, lang.lower(), sources)
+                paths += [derived, listed.path if listed is not None else ""]
+        return PageReads(self.job_index(units), self.versions.page(paths), {})
+
+    def label(self, entry: CatalogEntry, lang: str, unit: Unit | None, ignored: set[tuple[int, str]],
+              sources: list[dict[str, Any]], reads: "PageReads | None" = None) -> dict[str, Any]:
+        lang = lang.lower()
+        picked, derived, listed = self._outputs(entry, lang, sources)
+        page = reads.versions if reads is not None else None
         stale = removed = False
         # A file the worker just wrote is there before the next read of Bazarr says so: the cache may be minutes old.
         written = listed is None and bool(derived) and Path(derived).is_file()
@@ -115,21 +143,28 @@ class CatalogView:
             content = "external"
             path = (listed.path if listed is not None else "") or derived
             if unit is not None and path:
-                info = self.library.target_info(unit, Output(unit.id, lang, path))
+                info = self.library.target_info(
+                    unit, Output(unit.id, lang, path), page=page, cache=reads.cache if reads is not None else None,
+                    exists=True if written else None,
+                )
                 if info["status"] != "untranslated" and not info["modified_outside"]:
-                    content = "edited" if info["trigger"] in ("cue_edit",) or self._edited(path) else "translated"
+                    content = "edited" if info["trigger"] in ("cue_edit",) or self._edited(path, page) else "translated"
                     stale = info["status"] == "stale"
         else:
-            removed = bool(derived) and self.versions.latest_status(derived) == "removed"
+            latest = ""
+            if derived:
+                latest = page.latest.get(derived, "") if page is not None else self.versions.latest_status(derived)
+            removed = latest == "removed"
             content = "missing" if (lang in entry.missing or removed) else "outside"
-        job, wait, info = self._job(entry, unit, lang, picked[0].path if picked else "", derived, jobs)
+        job, wait, info = self._job(entry, unit, lang, picked[0].path if picked else "", derived,
+                                    reads.jobs if reads is not None else None)
         return {
             "lang": lang, "content": content, "removed": removed, "stale": stale, "job": job, "wait": wait,
             "ignored": unit is not None and (unit.id, lang) in ignored, "job_info": info,
         }
 
-    def _edited(self, path: str) -> bool:
-        current = self.versions.repo.current_version(path)
+    def _edited(self, path: str, page: VersionPage | None = None) -> bool:
+        current = page.current.get(path) if page is not None else self.versions.repo.current_version(path)
         return current is not None and current.origin == "edit"
 
     @staticmethod
@@ -185,13 +220,13 @@ class CatalogView:
 
     def item(self, entry: CatalogEntry, series: CatalogEntry | None, langs: list[str],
              ignored: set[tuple[int, str]], sources: list[dict[str, Any]], *, hold: bool = False,
-             jobs: "JobIndex | None" = None, unit: Unit | None | object = _UNSET) -> dict[str, Any]:
-        """``hold``: the policy would ask for this item but waits for the series' glossary to be reviewed. ``jobs``
-        and ``unit`` (None when the item has none) are what a page already read for the item (see ``job_index``)."""
+             reads: "PageReads | None" = None, unit: Unit | None | object = _UNSET) -> dict[str, Any]:
+        """``hold``: the policy would ask for this item but waits for the series' glossary to be reviewed. ``reads``
+        and ``unit`` (None when the item has none) are what a page already read for the item (see ``page_reads``)."""
         unit = self.library.unit_of(entry) if unit is _UNSET else unit
         labels = []
         for lang in langs:
-            label = self.label(entry, lang, unit, ignored, sources, jobs)
+            label = self.label(entry, lang, unit, ignored, sources, reads)
             waiting = hold and label["content"] == "missing" and not label["job"] and not label["ignored"] and not label["removed"]
             label["reason"] = "bootstrap" if waiting else ""
             label["text"] = display_text(label)
@@ -291,9 +326,9 @@ class CatalogView:
         held = policy_on and state.locked
         # The page's units and jobs are read once, not asked for per item and language (R10-9).
         units = {(u.season, u.episode): u for u in self.store.list_units(stored.id)} if stored else {}
-        index = self.job_index(list(units.values()))
+        reads = self.page_reads(list(units.values()), listed, langs, sources)
         items = [
-            self.item(e, series, langs, ignored, sources, hold=held and e.id not in state.allowed, jobs=index,
+            self.item(e, series, langs, ignored, sources, hold=held and e.id not in state.allowed, reads=reads,
                       unit=units.get((e.season, e.episode)))
             for e in listed
         ]
@@ -310,7 +345,10 @@ class CatalogView:
     def movies_page(self) -> dict[str, Any]:
         langs, sources = self._targets(), enabled_source_languages(self._config())
         ignored = self.store.decisions()
+        movies = self.store.catalog_entries(KIND_MOVIE)
+        units = {m.id: self.library.unit_of(m) for m in movies}
+        reads = self.page_reads([u for u in units.values() if u is not None], movies, langs, sources)
         return {
             "status": self.status(), "languages": langs,
-            "items": [self.item(m, None, langs, ignored, sources) for m in self.store.catalog_entries(KIND_MOVIE)],
+            "items": [self.item(m, None, langs, ignored, sources, reads=reads, unit=units[m.id]) for m in movies],
         }

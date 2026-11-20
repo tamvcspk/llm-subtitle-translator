@@ -64,12 +64,14 @@ class ImportTests(Intake):
         return import_queue_tree(self.queue, str(self.queue_dir), self.library)
 
     OLD = ("pending", "processing", "deferred", "done", "failed", "held", "rejected", "provider-pause.json")
+    ZERO = {"imported": 0, "present": 0, "skipped": 0, "held": 0, "unrequested": 0, "ignored": 0, "unsettled": 0}
 
     def test_13i_every_folder_becomes_the_right_thing_and_the_old_tree_is_kept_aside(self):
         self.build_tree()
         counts = self.settle()
-        self.assertEqual(counts, {"imported": 7, "present": 0, "skipped": 0, "held": 1, "ignored": 1})
-        self.assertEqual(self.names("pending"), ["fresh", "running"])  # `running` was running when the worker stopped
+        self.assertEqual(counts, {"imported": 6, "present": 0, "skipped": 0, "held": 1, "unrequested": 1, "ignored": 1,
+                                  "unsettled": 0})
+        self.assertEqual(self.names("pending"), ["running"])  # `running` was running when the worker stopped
         self.assertEqual(self.names("deferred"), ["waits-503", "waits-gap"])
         self.assertEqual(self.queue.jobs.get("waits-503")["wait_reason"], "provider")
         self.assertEqual(self.queue.jobs.get("waits-gap")["wait_reason"], "context")
@@ -78,7 +80,6 @@ class ImportTests(Intake):
         self.assertEqual(self.queue.jobs.get("skip")["state"], "skipped")
         self.assertEqual(self.queue.jobs.get("ok")["result"], "translated")
         self.assertEqual(self.queue.jobs.get("bad")["error"], "Translation failed: boom")
-        self.assertEqual(self.queue.jobs.get("fresh")["origin"], "script")
         for old in self.OLD:
             self.assertFalse((self.queue_dir / old).exists(), old)
             self.assertTrue((self.queue_dir / MIGRATED_DIR / old).exists(), old)
@@ -99,11 +100,10 @@ class ImportTests(Intake):
         self.settle()
         total = sum(self.queue.jobs.counts().values())
         decisions = self.store.decisions()
-        zero = {"imported": 0, "present": 0, "skipped": 0, "held": 0, "ignored": 0}
-        self.assertEqual(self.settle(), zero)
+        self.assertEqual(self.settle(), self.ZERO)
         self.build_tree()  # the same files again, as if a backup of the folders were restored
         again = self.settle()
-        self.assertEqual((again["imported"], again["present"]), (0, 7))
+        self.assertEqual((again["imported"], again["present"]), (0, 6))
         self.assertEqual(sum(self.queue.jobs.counts().values()), total)
         self.assertEqual(self.store.decisions(), decisions)
         self.assertEqual(len(list((self.queue_dir / MIGRATED_DIR).iterdir())), 2 * len(self.OLD))  # two generations, none deleted
@@ -121,14 +121,100 @@ class ImportTests(Intake):
         self.assertEqual(len(self.store.decisions()), 1)
         self.assertEqual(self.settle()["ignored"], 0)
 
+    def add_gate_rows(self):
+        for name, state in (("gate-held", "held"), ("gate-no", "rejected")):
+            self.queue.jobs.add(
+                {"job_id": name, "subtitle_path": f"/m/{name}.en.srt", "output_path": f"/m/{name}.vi.srt",
+                 "source_code": "en", "target_code": "vi"}, key=name, state=state, job_id=name,
+            )
+
+    def test_r10_5_what_the_script_dropped_and_nobody_approved_is_Missing_not_a_job(self):
+        self.write("pending", "fresh")
+        self.write("pending", "fresh-2")
+        self.write("pending", "mine", admission="admin")  # an explicit request of the admin is still a request
+        self.write("pending", "again", trigger="retranslate", priority=100)
+        counts = self.settle()
+        self.assertEqual((counts["imported"], counts["unrequested"]), (2, 2))
+        self.assertEqual(sorted(j["job_id"] for j in self.queue.jobs.by_state("queued")), ["again", "mine"])
+        self.assertIsNone(self.queue.jobs.get("fresh"))
+        self.assertTrue((self.queue_dir / MIGRATED_DIR / "pending" / "fresh.json").exists())  # kept aside, not deleted
+
+    def test_r10_5_the_start_up_says_how_many_were_not_queued(self):
+        self.write("pending", "fresh")
+        with self.assertLogs(level="WARNING") as logged:
+            self.settle()
+        self.assertIn("1 job(s)", "\n".join(logged.output))
+
+    def test_r10_2_a_refusal_that_cannot_be_written_yet_stays_and_is_tried_again(self):
+        self.write("rejected", "no-1")
+        self.write("done", "ok", result="translated")
+        self.add_gate_rows()
+        counts = import_queue_tree(self.queue, str(self.queue_dir), None)  # no library: nothing can be recorded
+        self.assertEqual((counts["ignored"], counts["unsettled"], counts["held"], counts["imported"]), (0, 2, 1, 1))
+        self.assertEqual(self.store.decisions(), set())
+        self.assertTrue((self.queue_dir / "rejected" / "no-1.json").exists())  # the folder was not put aside
+        self.assertFalse((self.queue_dir / "done").exists())  # the rest was
+        self.assertIsNone(self.queue.jobs.get("gate-held"))
+        self.assertEqual(self.queue.jobs.get("gate-no")["state"], "rejected")  # the row is the record of that "no"
+
+        again = self.settle()  # the next start-up has the library
+        self.assertEqual((again["ignored"], again["unsettled"]), (2, 0))
+        self.assertEqual(len(self.store.decisions()), 2)
+        self.assertIsNone(self.queue.jobs.get("gate-no"))
+        self.assertTrue((self.queue_dir / MIGRATED_DIR / "rejected" / "no-1.json").exists())
+
+    def test_r10_2_a_refusal_that_cannot_be_placed_is_kept_not_lost(self):
+        self.add_gate_rows()
+        real = self.library.register_job
+        self.library.register_job = lambda job: (_ for _ in ()).throw(RuntimeError("database is locked"))
+        with self.assertLogs(level="WARNING"):
+            counts = self.settle()
+        self.assertEqual((counts["ignored"], counts["unsettled"]), (0, 1))
+        self.assertEqual(self.queue.jobs.get("gate-no")["state"], "rejected")
+        self.library.register_job = real
+        self.assertEqual(self.settle()["ignored"], 1)
+        self.assertEqual(len(self.store.decisions()), 1)
+
+    def test_r10_2_the_decision_is_written_before_the_row_goes(self):
+        self.add_gate_rows()
+        order = []
+        real_set, real_drop = self.library.catalog.set_decision, self.queue.jobs.drop_gate_row
+        self.library.catalog.set_decision = lambda *a, **k: (order.append("decision"), real_set(*a, **k))[1]
+        self.queue.jobs.drop_gate_row = lambda row_id: (order.append("drop"), real_drop(row_id))[1]
+        self.settle()
+        self.assertEqual(order, ["drop", "decision", "drop"])  # the held row has no decision to write
+
+    def test_r10_2_a_crash_between_the_decision_and_the_row_loses_nothing(self):
+        self.add_gate_rows()
+        real = self.queue.jobs.drop_gate_row
+        self.queue.jobs.drop_gate_row = lambda row_id: (_ for _ in ()).throw(RuntimeError("crash"))
+        with self.assertRaises(RuntimeError):
+            self.settle()
+        self.queue.jobs.drop_gate_row = real
+        self.assertEqual(len(self.store.decisions()), 0)  # crashed on the held row before the rejected one
+        self.queue.jobs.drop_gate_row = lambda row_id: real(row_id) if row_id == 1 else (_ for _ in ()).throw(RuntimeError("crash"))
+        with self.assertRaises(RuntimeError):
+            self.settle()
+        self.queue.jobs.drop_gate_row = real
+        self.assertEqual(len(self.store.decisions()), 1)  # the "no" was written before the crash
+        self.assertEqual(self.queue.jobs.get("gate-no")["state"], "rejected")  # and the row is still there
+        self.assertEqual(self.settle()["ignored"], 1)
+        self.assertEqual(len(self.store.decisions()), 1)  # the same decision, not a second one
+        self.assertIsNone(self.queue.jobs.get("gate-no"))
+
+    def test_a_refusal_that_names_no_language_is_dropped_not_kept_forever(self):
+        self.write("rejected", "odd", target_code="")
+        counts = self.settle()
+        self.assertEqual((counts["ignored"], counts["unsettled"]), (0, 0))
+        self.assertTrue((self.queue_dir / MIGRATED_DIR / "rejected" / "odd.json").exists())
+
     def test_a_file_that_is_not_json_is_left_out_and_counted(self):
         (self.queue_dir / "done").mkdir(parents=True)
         (self.queue_dir / "done" / "junk.json").write_text("not json", encoding="utf-8")
         self.assertEqual(self.settle()["skipped"], 1)
 
     def test_a_queue_that_was_never_there_is_fine(self):
-        self.assertEqual(import_queue_tree(self.queue, str(self.queue_dir / "nowhere"), self.library),
-                         {"imported": 0, "present": 0, "skipped": 0, "held": 0, "ignored": 0})
+        self.assertEqual(import_queue_tree(self.queue, str(self.queue_dir / "nowhere"), self.library), self.ZERO)
 
     def test_an_imported_job_runs_like_any_other(self):
         self.write("deferred", "waits-503", deferred_reason="provider-unavailable", retry_at=5_000)

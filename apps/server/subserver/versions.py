@@ -56,7 +56,21 @@ class Published:
     reason: str = ""
 
 
+_UNSET: Any = object()
+
+
+@dataclass(frozen=True)
+class VersionPage:
+    """The current version and the newest status of each file of a page, read once. A file missing from ``current``
+    has no current version; one missing from ``latest`` has no history."""
+
+    current: dict[str, TranslationVersion]
+    latest: dict[str, str]
+
+
 class TranslationVersions:
+    _HASHED_LIMIT = 4096  # files remembered by ``is_system_file(trusting_stat=True)``
+
     def __init__(
         self,
         repo: Store,
@@ -71,6 +85,7 @@ class TranslationVersions:
         self.telemetry: Telemetry = telemetry or NULL_TELEMETRY
         self.coalesce_seconds = coalesce_seconds
         self.clock = clock
+        self._hashed: dict[str, tuple[tuple[int, int], str]] = {}
 
     # -- paths -------------------------------------------------------------
     def _version_path(self, output_path: str, version: int) -> Path:
@@ -107,18 +122,41 @@ class TranslationVersions:
         return data
 
     # -- state -------------------------------------------------------------
-    def is_system_file(self, output_path: str) -> bool:
+    def is_system_file(self, output_path: str, *, current: TranslationVersion | None | object = _UNSET,
+                       trusting_stat: bool = False) -> bool:
+        """Is the file on disk the stored current version, byte for byte?
+
+        ``current`` is the version a caller already read. ``trusting_stat`` is for display only (a page of the
+        Library): a file whose size and modification time are what they were when it was last hashed is taken to be
+        unchanged, so it is not read again. Anything that decides what may be overwritten leaves it off."""
         path = Path(output_path)
-        current = self.repo.current_version(output_path)
-        return bool(
-            current
-            and path.is_file()
-            and hmac.compare_digest(sha256_file(path), current.sha256)
-        )
+        if current is _UNSET:
+            current = self.repo.current_version(output_path)
+        if not current or not path.is_file():
+            return False
+        if not trusting_stat:
+            return hmac.compare_digest(sha256_file(path), current.sha256)
+        try:
+            stat = path.stat()
+        except OSError:
+            return False
+        mark = (stat.st_mtime_ns, stat.st_size)
+        known = self._hashed.get(output_path)
+        if known is None or known[0] != mark:
+            if len(self._hashed) >= self._HASHED_LIMIT:
+                self._hashed.clear()
+            known = (mark, sha256_file(path))
+            self._hashed[output_path] = known
+        return hmac.compare_digest(known[1], current.sha256)
 
     def latest_status(self, output_path: str) -> str:
         """Status of the newest version of a file ('' when there is none): a removed one stays removed (FR-16.6)."""
         return self.repo.latest_version_status(output_path)
+
+    def page(self, output_paths: Iterable[str]) -> "VersionPage":
+        """What a page of the Library needs of the history of these files, read in a few queries (R10-9)."""
+        paths = [p for p in output_paths if p]
+        return VersionPage(self.repo.current_versions_for(paths), self.repo.latest_version_statuses(paths))
 
     def _note_external(self, output_path: str) -> TranslationVersion | None:
         """Keep a file that is not the stored current version as an ``external`` version, once per content.

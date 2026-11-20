@@ -5,14 +5,21 @@ worker sorted them into folders (``processing``, ``deferred``, ``done``, ``faile
 all but ``pending/`` into the table and kept an admission gate on the script's files. P10 removes the script and the
 gate, so what they left is settled here, once, at start-up:
 
-* ``pending`` and ``deferred`` become jobs (``queued`` and ``waiting`` with the reason they had);
+* ``processing`` and ``deferred`` become jobs (``queued`` and ``waiting`` with the reason they had): the gate had
+  already let them in;
+* ``pending`` is what the script dropped and nobody has approved (D5, R10-5), so it is **not** run: those items are
+  Missing in the Library again and only the admin's request or the ``auto_request`` policy makes a job for them. An
+  explicit request of the admin that is still there (a retranslation, ``admission: admin``) is a job as before;
 * ``done`` and ``failed`` become the history;
 * ``held`` was "wanted, not decided": Bazarr lists it as missing, so it is Missing in the Library again and the file
-  is dropped (it would only be requested by the admin or the ``auto_request`` policy);
-* ``rejected`` was a "no": it becomes an Ignored decision for that item and language.
+  is dropped;
+* ``rejected`` was a "no": it becomes an Ignored decision for that item and language. The decision is written
+  **before** the row or the folder that held it goes (R10-2): a "no" that cannot be written yet (no library, a job
+  that cannot be placed) stays where it is and is tried again at the next start-up, never lost.
 
 Running it again changes nothing (SPEC criterion 13i): a job already in the table under the same id is left alone,
-a decision is the same decision, and the old folders have gone to ``queue.migrated/`` (nothing is deleted).
+a decision is the same decision, and the old folders have gone to ``queue.migrated/`` (nothing is deleted), except a
+folder that still holds a "no" it could not record.
 """
 from __future__ import annotations
 
@@ -31,6 +38,9 @@ from .queue import JobQueue
 MIGRATED_DIR = "queue.migrated"
 TREE_STATES = ("pending", "processing", "deferred", "done", "failed", "held", "rejected")
 IGNORED = "ignored"
+
+# What happened to a "no": written down, or too broken to place (nothing to write: dropped), or not writable yet.
+SETTLED, DROPPED, UNSETTLED = "settled", "dropped", "unsettled"
 
 
 def _read(path: Path) -> dict[str, Any] | None:
@@ -53,10 +63,15 @@ def _wait_reason(job: dict[str, Any]) -> str:
     return {"provider-unavailable": "provider", "context-gap": "context"}.get(str(job.get("deferred_reason") or ""), "rate")
 
 
+def _requested_by_admin(job: dict[str, Any]) -> bool:
+    return job.get("trigger") == "retranslate" or job.get("admission") == "admin"
+
+
 def import_queue_tree(queue: JobQueue, queue_dir: str, library: Library | None = None) -> dict[str, int]:
     """Settle an older queue (see the module text). Returns what became what."""
     root = Path(queue_dir) if queue_dir else None
-    counts = {"imported": 0, "present": 0, "skipped": 0, "held": 0, "ignored": 0}
+    counts = {"imported": 0, "present": 0, "skipped": 0, "held": 0, "unrequested": 0, "ignored": 0, "unsettled": 0}
+    keep: set[str] = set()  # folders that still hold a "no" nobody could write down
     if root is not None and any((root / state).is_dir() and any((root / state).glob("*.json")) for state in TREE_STATES):
         for state in TREE_STATES:
             for path in sorted((root / state).glob("*.json"), key=lambda p: (p.stat().st_mtime, p.name)):
@@ -69,18 +84,34 @@ def import_queue_tree(queue: JobQueue, queue_dir: str, library: Library | None =
                 if state == "held":
                     counts["held"] += 1
                 elif state == "rejected":
-                    counts["ignored"] += _ignore(library, job)
+                    if _settle(counts, library, job, path.name) == UNSETTLED:
+                        keep.add(state)
+                elif state == "pending" and not _requested_by_admin(job):
+                    counts["unrequested"] += 1
                 else:
                     _import_job(queue, job, path, state, counts)
-    gate_held, gate_rejected = queue.jobs.take_gate_rows()
-    counts["held"] += len(gate_held)
-    counts["ignored"] += sum(_ignore(library, job) for job in gate_rejected)
+    for row in queue.jobs.gate_rows():
+        if row.rejected and _settle(counts, library, row.payload, f"row {row.row_id}") == UNSETTLED:
+            continue  # the row stays: it is the only record of that "no"
+        if not row.rejected:
+            counts["held"] += 1
+        queue.jobs.drop_gate_row(row.row_id)
     if root is not None:
-        _retire(root)
-    if any(counts[name] for name in ("imported", "held", "ignored")):
+        _retire(root, keep)
+    if counts["unrequested"]:
+        logging.warning(
+            "%d job(s) the old Bazarr script had dropped and nobody had approved were not queued: they are Missing "
+            "in the Library again; request them there if you want them translated", counts["unrequested"],
+        )
+    if counts["unsettled"]:
+        logging.warning(
+            "%d refusal(s) of the old queue could not be recorded as Ignored yet; they are kept and tried again at "
+            "the next start-up", counts["unsettled"],
+        )
+    if any(counts[name] for name in ("imported", "held", "unrequested", "ignored", "unsettled")):
         queue._emit(
-            "queue.imported", reason="the old queue was settled into the database: held jobs are Missing again, "
-            "rejected ones are Ignored", **counts,
+            "queue.imported", reason="the old queue was settled into the database: held and unapproved jobs are "
+            "Missing again, rejected ones are Ignored", **counts,
         )
     return counts
 
@@ -117,26 +148,40 @@ def _import_job(queue: JobQueue, job: dict[str, Any], path: Path, state: str, co
     counts["imported"] += 1
 
 
-def _ignore(library: Library | None, job: dict[str, Any]) -> int:
-    """A rejected job becomes an Ignored decision for its unit and language; 0 when it cannot be placed."""
+def _settle(counts: dict[str, int], library: Library | None, job: dict[str, Any], where: str) -> str:
+    """Write down a "no" and count it; the caller removes what held it only when this is not ``UNSETTLED``."""
+    outcome = _ignore(library, job, where)
+    if outcome == SETTLED:
+        counts["ignored"] += 1
+    elif outcome == UNSETTLED:
+        counts["unsettled"] += 1
+    return outcome
+
+
+def _ignore(library: Library | None, job: dict[str, Any], where: str) -> str:
+    """A rejected job becomes an Ignored decision for its unit and language."""
     target = str(job.get("target_code") or "")
-    if library is None or not target:
-        return 0
+    if not target:
+        logging.warning("A refusal of the old queue (%s) names no language; it is dropped", where)
+        return DROPPED
+    if library is None:
+        return UNSETTLED
     try:
         unit_id = library.register_job(job)
-    except Exception:  # noqa: BLE001 - a job too broken to place is dropped, never a reason to stop the start-up
-        logging.warning("A rejected job could not be placed in the library; it is dropped", exc_info=True)
-        return 0
-    library.catalog.set_decision(unit_id, target, IGNORED, time.time())
-    return 1
+        library.catalog.set_decision(unit_id, target, IGNORED, time.time())
+    except Exception:  # noqa: BLE001 - never a reason to stop the start-up; the "no" stays and is tried again
+        logging.warning("A refusal of the old queue (%s) could not be recorded yet; it is kept", where, exc_info=True)
+        return UNSETTLED
+    return SETTLED
 
 
-def _retire(root: Path) -> None:
-    """Put the old folders (and the old pause file) under ``queue.migrated/``; empty ones are simply removed."""
+def _retire(root: Path, keep: set[str] = frozenset()) -> None:
+    """Put the old folders (and the old pause file) under ``queue.migrated/``; empty ones are simply removed. A folder
+    named in ``keep`` stays where it is."""
     destination = root / MIGRATED_DIR
     for name in (*TREE_STATES, "provider-pause.json"):
         source = root / name
-        if not source.exists():
+        if name in keep or not source.exists():
             continue
         if source.is_dir() and not any(source.iterdir()):
             try:
