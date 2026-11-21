@@ -353,7 +353,7 @@ class Criterion13d(CatalogCase):
             env.episode(n)
         state, auto = sync_and_request(env.sync, env.auto)
         self.assertEqual((state.status, auto.created), ("ok", 0))
-        self.assertEqual(env.queue.jobs.counts(), {"pending": 0, "processing": 0, "deferred": 0, "done": 0, "failed": 0})
+        self.assertEqual(env.queue.jobs.counts(), {"pending": 0, "processing": 0, "deferred": 0, "done": 0, "failed": 0, "cancelled": 0})
 
     def test_13d_a_read_that_was_set_aside_does_not_wake_the_policy(self):
         env = self.env(auto_request=True)
@@ -630,6 +630,28 @@ class OverviewAndApi(CatalogCase):
                          ("Show", 3, {"vi": 3}, {"requested": 1}))
         self.assertEqual(page["languages"], ["vi"])
         self.assertEqual(env.actions.series_page(series["id"])["items"][0]["targets"][0]["text"], "Missing · Requested")
+
+    def test_a_series_bazarr_stopped_listing_stays_while_the_worker_keeps_a_unit_of_it(self):
+        env = self.env()
+        env.add_series("8", "Other", "80")
+        env.add_series("9", "Never Kept", "90")
+        env.episode(1)
+        env.episode(2)
+        env.episode(1, series="8")
+        env.episode(1, series="9")
+        env.sync.run()
+        env.translated("7101")  # the worker keeps a unit (and a translation) of Show S01E01 only
+        env.settings["catalog_shrink_guard"] = 0
+        env.clock.advance(60)
+        env.fake.entries = [e for e in env.fake.entries if e.bazarr_id in ("8", "8101")]  # only "Other" is still listed
+        self.assertEqual(env.sync.run().status, "ok")
+        page = env.actions.overview()
+        self.assertEqual([(s["title"], s["gone"]) for s in page["series"]], [("Other", False), ("Show", True)])
+        show = page["series"][1]
+        self.assertEqual((show["episodes"], show["missing"], show["open_jobs"]), (1, {"vi": 0}, {}))
+        items = env.actions.series_page(show["id"])["items"]  # the page shows what the worker kept, marked gone
+        self.assertEqual([(i["title"], i["gone"]) for i in items], [("Episode 1", True)])
+        self.assertEqual(env.actions.series_page(show["id"])["series"]["gone"], True)
 
     def _label_counts(self, env, page):
         """What the labels of a series page say, counted per language: the number the overview must equal."""

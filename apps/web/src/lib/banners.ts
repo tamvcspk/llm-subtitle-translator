@@ -44,7 +44,16 @@ export function deriveBanners(
     });
   }
 
-  if (catalog?.status === "kept") {
+  if (catalog?.status === "kept" && catalog.shrink) {
+    // Bazarr answered; the answer is set aside on purpose because it listed far fewer items. Accepting is on Activity.
+    const warning = catalog.warning ? ` ${catalog.warning}` : "";
+    banners.push({
+      id: "catalog-shrunk",
+      tone: "yellow",
+      message: `Showing the library as of ${ago(catalog.synced_at, nowMs)}.${warning}`,
+      action: { label: "Open Activity", kind: "navigate", to: "/activity" },
+    });
+  } else if (catalog?.status === "kept") {
     const warning = catalog.warning ? ` ${catalog.warning}` : "";
     banners.push({
       id: "catalog-kept",

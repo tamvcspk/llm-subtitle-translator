@@ -1,7 +1,7 @@
 import type { ModelLayers, ProviderHealth, QueueAnswer, QueueCounts, QueueJob } from "../api/types";
 import { clock } from "./format";
 
-export type JobTab = "requested" | "running" | "waiting" | "failed" | "done";
+export type JobTab = "requested" | "running" | "waiting" | "failed" | "done" | "cancelled";
 
 /** The tabs of Activity use the labels of UX §3, never the internal state names (`pending`, `processing`, `deferred`). */
 export const JOB_TABS: Array<{ value: JobTab; label: string; state: keyof QueueCounts }> = [
@@ -10,13 +10,15 @@ export const JOB_TABS: Array<{ value: JobTab; label: string; state: keyof QueueC
   { value: "waiting", label: "Waiting", state: "deferred" },
   { value: "failed", label: "Failed", state: "failed" },
   { value: "done", label: "Done", state: "done" },
+  // One tab for a job cancelled before it started and one stopped while it ran: the worker keeps one state for both.
+  { value: "cancelled", label: "Cancelled", state: "cancelled" },
 ];
 
 export const isJobTab = (value: string | null): value is JobTab => JOB_TABS.some((tab) => tab.value === value);
 
 export function jobsOf(queue: QueueAnswer, tab: JobTab): QueueJob[] {
   const state = JOB_TABS.find((candidate) => candidate.value === tab)?.state ?? "pending";
-  return queue[state];
+  return queue[state] ?? [];
 }
 
 /** What to look at first when nobody has chosen: what is running, then what is in line, then what needs a person. */
@@ -99,6 +101,9 @@ export function jobStatus(job: QueueJob, tab: JobTab, nowMs: number = Date.now()
     }
     case "failed":
       parts.push("Failed", lastLine(job.error));
+      break;
+    case "cancelled":
+      parts.push("Cancelled");
       break;
     case "done":
       parts.push((readsOnly(job) ? READ_RESULT[job.result ?? ""] : undefined) ?? (job.result || "done"));

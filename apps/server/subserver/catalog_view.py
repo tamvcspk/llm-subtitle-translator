@@ -246,12 +246,18 @@ class CatalogView:
         open_by_series = self._open_by_series()
         failed, ignored = self._failed_units(), self._ignored_units()
         out = []
-        for series in self.store.catalog_entries(KIND_SERIES):
-            episodes = self.store.catalog_entries(KIND_EPISODE, parent_id=series.id)
-            counts = {lang: sum(1 for e in episodes if lang in e.missing) for lang in langs}
+        # A series Bazarr stopped listing stays while the worker keeps something of it (a unit, so translations and
+        # history): it is shown as ``gone``, with nothing missing and nothing to request, never silently dropped (F3).
+        for series in self.store.catalog_entries(KIND_SERIES, include_gone=True):
             stored = self.store.series_by_key(series.series_key)
+            gone = series.gone_at is not None
+            if gone and not (stored and self.store.list_units(stored.id)):
+                continue
+            episodes = self._kept_episodes(series)
+            listed = [e for e in episodes if e.gone_at is None]
+            counts = {lang: sum(1 for e in listed if lang in e.missing) for lang in langs}
             out.append({
-                "id": series.id, "title": series.title, "key": series.series_key, "episodes": len(episodes),
+                "id": series.id, "title": series.title, "key": series.series_key, "episodes": len(episodes), "gone": gone,
                 "missing": counts, "open_jobs": open_by_series.get(series.bazarr_id, {}),
                 "failed": self._per_lang(failed, series.series_key, langs),
                 "ignored": self._per_lang(ignored, series.series_key, langs),
@@ -263,6 +269,12 @@ class CatalogView:
             "movies": {"count": len(movies), "missing": {lang: sum(1 for m in movies if lang in m.missing) for lang in langs},
                        "failed": self._per_lang(failed, None, langs), "ignored": self._per_lang(ignored, None, langs)},
         }
+
+    def _kept_episodes(self, series: CatalogEntry) -> list[CatalogEntry]:
+        """The episodes of a series a page lists: those Bazarr lists, and those it stopped listing that the worker keeps
+        a unit for (their files and history are still there)."""
+        return [e for e in self.store.catalog_entries(KIND_EPISODE, parent_id=series.id, include_gone=True)
+                if e.gone_at is None or self.library.unit_of(e) is not None]
 
     @staticmethod
     def _per_lang(counts: dict[tuple[str | None, str], int], owner: str | None, langs: list[str]) -> dict[str, int]:
@@ -318,8 +330,7 @@ class CatalogView:
         langs, sources = self._targets(), enabled_source_languages(self._config())
         ignored = self.store.decisions()
         stored = self.store.series_by_key(series.series_key)
-        listed = [e for e in self.store.catalog_entries(KIND_EPISODE, parent_id=series.id, include_gone=True)
-                  if e.gone_at is None or self.library.unit_of(e) is not None]
+        listed = self._kept_episodes(series)
         override = stored.auto_request if stored else ""
         policy_on = override == "on" or (override != "off" and bool(self._settings().get("auto_request")))
         state = self.bootstrap.state(series, [e for e in listed if e.gone_at is None], stored, langs)
@@ -345,8 +356,10 @@ class CatalogView:
     def movies_page(self) -> dict[str, Any]:
         langs, sources = self._targets(), enabled_source_languages(self._config())
         ignored = self.store.decisions()
-        movies = self.store.catalog_entries(KIND_MOVIE)
-        units = {m.id: self.library.unit_of(m) for m in movies}
+        # A movie Bazarr stopped listing stays while the worker keeps a unit for it, shown as ``gone`` (F3).
+        everything = self.store.catalog_entries(KIND_MOVIE, include_gone=True)
+        units = {m.id: self.library.unit_of(m) for m in everything}
+        movies = [m for m in everything if m.gone_at is None or units[m.id] is not None]
         reads = self.page_reads([u for u in units.values() if u is not None], movies, langs, sources)
         return {
             "status": self.status(), "languages": langs,

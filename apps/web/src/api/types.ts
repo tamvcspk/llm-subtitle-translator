@@ -28,6 +28,8 @@ export interface QueueCounts {
   deferred: number;
   done: number;
   failed: number;
+  /** Jobs the admin cancelled or stopped; the worker always sends it. */
+  cancelled?: number;
 }
 
 export interface StatusResponse {
@@ -91,6 +93,7 @@ export interface QueueAnswer {
   deferred: QueueJob[];
   done: QueueJob[];
   failed: QueueJob[];
+  cancelled?: QueueJob[];
 }
 
 export interface CatalogStatus {
@@ -164,6 +167,8 @@ export interface CatalogSeries {
   title: string;
   key: string;
   episodes: number;
+  /** Bazarr stopped listing it; the worker still keeps its translations and history (nothing is missing or requestable). */
+  gone: boolean;
   missing: PerLang;
   /** `requested`, `running`, `waiting`: open jobs of the series by state. */
   open_jobs: Partial<Record<"requested" | "running" | "waiting", number>>;

@@ -15,7 +15,8 @@ export const EPISODE_TABS = [
 export const MOVIE_TABS = EPISODE_TABS.filter((tab) => tab.value !== "context");
 
 export function unitTitle(unit: UnitDetail): string {
-  return unit.series ? `${episodeCode(unit.season, unit.episode)} · ${unit.title}` : unit.title;
+  // An episode Bazarr gives no title for is just its code, never `S01E01 ·`.
+  return unit.series ? [episodeCode(unit.season, unit.episode), unit.title].filter(Boolean).join(" · ") : unit.title;
 }
 
 /** "Edited", "Translated · Stale": what the person sees first about the file of one language. */

@@ -220,6 +220,28 @@ describe("Activity", () => {
     expect(screen.getByRole("tab", { name: "Done 1" })).toHaveAttribute("aria-selected", "true");
   });
 
+  it("lists the jobs the admin cancelled or stopped on their own tab", async () => {
+    serve(
+      activity(
+        {},
+        queue({
+          counts: { pending: 0, processing: 0, deferred: 0, done: 0, failed: 0, cancelled: 2 },
+          pending: [],
+          processing: [],
+          deferred: [],
+          failed: [],
+          done: [],
+          cancelled: [job("c-1", { kind: "extract", label: "S01E01" }), job("c-2", { kind: "extract", label: "S01E02" })],
+        }),
+      ),
+    );
+    show("/activity");
+    expect(await screen.findByRole("tab", { name: "Cancelled 2" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Cancelled 2" }));
+    expect(await screen.findByText("Extract facts · Arcane · S01E02")).toBeInTheDocument();
+    expect(screen.getAllByText("manual · fill · Cancelled")).toHaveLength(2);
+  });
+
   it("says when only the latest jobs are listed", async () => {
     serve(activity());
     show("/activity?tab=done");

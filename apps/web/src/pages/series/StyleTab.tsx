@@ -13,6 +13,6 @@ export function SeriesStyle() {
   }
   const episodes = page.items
     .filter((item) => item.has_source && item.unit_id !== null && !item.gone)
-    .map((item) => ({ unit_id: item.unit_id as number, label: `${episodeCode(item.season, item.episode)} · ${item.title}` }));
+    .map((item) => ({ unit_id: item.unit_id as number, label: [episodeCode(item.season, item.episode), item.title].filter(Boolean).join(" · ") }));
   return <OwnerStyle owner={{ kind: "series", id: storedId }} lang={lang} episodes={episodes} />;
 }

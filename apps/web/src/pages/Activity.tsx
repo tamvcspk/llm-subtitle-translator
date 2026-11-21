@@ -242,6 +242,7 @@ const EMPTY: Record<JobTab, string> = {
   waiting: "No job is waiting for anything.",
   failed: "No job has failed.",
   done: "No job has finished yet.",
+  cancelled: "No job was cancelled or stopped.",
 };
 
 function Jobs({ queue }: { queue: QueueAnswer }) {
@@ -253,7 +254,7 @@ function Jobs({ queue }: { queue: QueueAnswer }) {
   const [spec, setSpec] = useState<QueueJob | null>(null);
 
   const jobs = jobsOf(queue, tab);
-  const count = queue.counts[JOB_TABS.find((candidate) => candidate.value === tab)?.state ?? "pending"];
+  const count = queue.counts[JOB_TABS.find((candidate) => candidate.value === tab)?.state ?? "pending"] ?? 0;
 
   const choose = (value: string | null) => {
     if (value && isJobTab(value)) setParams({ tab: value }, { replace: true });
@@ -281,7 +282,7 @@ function Jobs({ queue }: { queue: QueueAnswer }) {
         <Tabs.List style={{ overflowX: "auto", flexWrap: "nowrap" }}>
           {JOB_TABS.map((item) => (
             <Tabs.Tab key={item.value} value={item.value} style={{ minHeight: 44, flexShrink: 0 }}>
-              {item.label} {queue.counts[item.state]}
+              {item.label} {queue.counts[item.state] ?? 0}
             </Tabs.Tab>
           ))}
         </Tabs.List>

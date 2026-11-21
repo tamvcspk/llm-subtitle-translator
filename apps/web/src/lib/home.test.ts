@@ -25,6 +25,13 @@ describe("seriesRow", () => {
     expect(seriesRow(series()).action).toEqual({ kind: "improve", to: "/series/1/style" });
   });
 
+  it("says a series Bazarr stopped listing is gone, offers no Translate and does not count it as missing", () => {
+    const row = seriesRow(series({ gone: true, episodes: 2, missing: { vi: 2 } }));
+    expect(row.facts).toEqual(["2 eps", "No longer in Bazarr"]);
+    expect(row.action).toEqual({ kind: "improve", to: "/series/1/style" });
+    expect(row.missing).toBe(false);
+  });
+
   it("sums the counts over every target language", () => {
     const row = seriesRow(series({ missing: { vi: 1, fr: 2 }, failed: { vi: 0, fr: 0 } }));
     expect(row.facts).toContain("Missing 3");
@@ -80,15 +87,18 @@ describe("buildRows and filterRows", () => {
   };
   const rows = buildRows(overview, [movie(), movie({ id: 101, title: "Gone", gone: true })]);
 
-  it("sorts by title and leaves out a movie Bazarr no longer lists", () => {
-    expect(rows.map((row) => row.title)).toEqual(["Arcane", "Oppenheimer", "Severance", "Shōgun"]);
+  it("sorts by title and keeps a movie Bazarr no longer lists, said as such and never missing", () => {
+    expect(rows.map((row) => row.title)).toEqual(["Arcane", "Gone", "Oppenheimer", "Severance", "Shōgun"]);
+    const gone = rows.find((row) => row.title === "Gone");
+    expect(gone?.facts).toEqual(["No longer in Bazarr"]);
+    expect(gone).toMatchObject({ missing: false, action: { kind: "none" } });
   });
 
   it("filters by chip", () => {
     expect(filterRows(rows, "", "failed").map((row) => row.title)).toEqual(["Arcane"]);
     expect(filterRows(rows, "", "ignored").map((row) => row.title)).toEqual(["Shōgun"]);
     expect(filterRows(rows, "", "missing").map((row) => row.title)).toEqual(["Oppenheimer", "Severance"]);
-    expect(filterRows(rows, "", "all")).toHaveLength(4);
+    expect(filterRows(rows, "", "all")).toHaveLength(5);
   });
 
   it("searches without regard to case or accents", () => {

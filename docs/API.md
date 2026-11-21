@@ -115,7 +115,8 @@ second layer is not paying for itself.
 ## GET /api/queue
 
 Returns all queue states and counts. The states are `pending` (queued), `processing`
-(running), `deferred` (waiting, see `wait_reason`), `done` (includes `skipped`) and `failed`;
+(running), `deferred` (waiting, see `wait_reason`), `done` (includes `skipped`), `failed` and `cancelled`
+(a job the admin cancelled before it started or stopped while it ran: one state for both);
 each list is the latest 100 jobs of its state, `counts` has the real numbers.
 
 Each waiting job carries `wait_reason` and `retry_at` (Unix seconds, when it may run
@@ -502,7 +503,7 @@ glossary review`.
 
 | Method and path | Answer |
 |---|---|
-| `GET /api/catalog` | `{"status", "languages", "series": [{"id", "title", "key", "episodes", "missing": {"vi": 3}, "open_jobs": {"requested": 1}, "failed": {"vi": 2}, "ignored": {"vi": 1}, "auto_request", "series_id"}], "movies": {"count", "missing", "failed", "ignored"}}`. Counts come from the catalog, the jobs and the decisions in a few queries (no per-item work). `failed` and `ignored` are per target language and equal what the `Failed` and `Ignored` labels of the series page (or the movies page) add up to: `failed` counts units with no open job whose newest finished job for that language is `failed` (so a failure asked for again, or followed by a success, is not counted); `ignored` counts the "do not translate" decisions. They feed the Failed and Ignored chips of Home. |
+| `GET /api/catalog` | `{"status", "languages", "series": [{"id", "title", "key", "episodes", "gone", "missing": {"vi": 3}, "open_jobs": {"requested": 1}, "failed": {"vi": 2}, "ignored": {"vi": 1}, "auto_request", "series_id"}], "movies": {"count", "missing", "failed", "ignored"}}`. Counts come from the catalog, the jobs and the decisions in a few queries (no per-item work). `failed` and `ignored` are per target language and equal what the `Failed` and `Ignored` labels of the series page (or the movies page) add up to: `failed` counts units with no open job whose newest finished job for that language is `failed` (so a failure asked for again, or followed by a success, is not counted); `ignored` counts the "do not translate" decisions. They feed the Failed and Ignored chips of Home. A series (or movie) Bazarr stopped listing stays in the list with `gone: true` while the worker keeps a unit of it (its translations and history are still there): nothing is missing and nothing can be requested for it; `episodes` counts what its page lists, listed or kept. One the worker never kept anything of is not listed. |
 | `GET /api/catalog/status` | `{"synced_at", "attempted_at", "status": "ok" \| "kept" \| "", "warning", "items", "listed", "auto_request", "auto_request_daily_cap"}`. `synced_at` is the last accepted read; `status: "kept"` means the last read was set aside and `warning` says why (Bazarr unreachable, empty, or shrunk by more than `catalog_shrink_guard`). `shrink` is `{"listed", "dropped"}` when the guard was the reason (otherwise null; kept in memory, so it is empty again after a restart until the next read): the console offers to accept that read. |
 | `GET /api/catalog/series/{id}` | `{"status", "languages", "series": {"id", "title", "key", "auto_request", "series_id", "gone", "bootstrap": {"locked", "limit", "pending", "released", "held"}}, "items": [{"id", "kind", "bazarr_id", "title", "season", "episode", "unit_id", "source", "has_source", "gone", "targets": [<target>]}]}`. `unit_id` is set once the worker keeps a unit for the item (it opens the Episode page). |
 | `GET /api/catalog/movies` | The same `items` for movies. |

@@ -36,6 +36,17 @@ class SnapshotNamesTests(SchedulerCase):
         self.assertEqual(len([sql for sql in seen if "FROM units" in sql]), 1)
         self.assertEqual({job["title"] for job in jobs}, {"Arcane"})
 
+    def test_a_cancelled_job_is_listed_and_counted_on_its_own(self):
+        series = self.store.upsert_series("arcane", title="Arcane")
+        episode = self.store.upsert_unit(series_id=series, season=1, episode=4, title="x")
+        self.add("ep", unit_id=episode)
+        self.add("other", unit_id=episode)
+        self.assertEqual(self.queue.jobs.request_stop("ep"), "cancelled")  # not started: it ends at once
+        snapshot = self.queue.snapshot()
+        self.assertEqual((snapshot["counts"]["cancelled"], snapshot["counts"]["pending"]), (1, 1))
+        self.assertEqual([(j["job_id"], j["label"]) for j in snapshot["cancelled"]], [("ep", "S01E04")])
+        self.assertEqual([j["job_id"] for j in snapshot["pending"]], ["other"])
+
     def test_the_names_are_read_from_the_job_not_stored_in_it(self):
         series = self.store.upsert_series("arcane", title="Arcane")
         episode = self.store.upsert_unit(series_id=series, season=2, episode=1, title="x")

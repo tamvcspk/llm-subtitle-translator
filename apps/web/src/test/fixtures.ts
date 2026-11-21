@@ -6,6 +6,7 @@ export function series(overrides: Partial<CatalogSeries> = {}): CatalogSeries {
     title: "Arcane",
     key: "arcane",
     episodes: 18,
+    gone: false,
     missing: { vi: 0 },
     open_jobs: {},
     failed: { vi: 0 },

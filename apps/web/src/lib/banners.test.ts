@@ -70,6 +70,15 @@ describe("deriveBanners", () => {
       "Bazarr could not be read. Showing the library as of 2m ago. Bazarr answered with nothing.",
     );
   });
+
+  it("does not say Bazarr could not be read when it answered and the guard set the answer aside", () => {
+    const warning = "Bazarr listed 2 items, 4 fewer than the 6 before (more than 20%): the answer is set aside.";
+    const banners = deriveBanners(status(), catalog({ status: "kept", warning, shrink: { listed: 2, dropped: 4 } }), NOW);
+    expect(banners).toHaveLength(1);
+    expect(banners[0]).toMatchObject({ id: "catalog-shrunk", tone: "yellow", action: { kind: "navigate", to: "/activity" } });
+    expect(banners[0]?.message).toBe(`Showing the library as of 2m ago. ${warning}`);
+    expect(banners[0]?.message).not.toContain("could not be read");
+  });
 });
 
 describe("deriveStrip", () => {

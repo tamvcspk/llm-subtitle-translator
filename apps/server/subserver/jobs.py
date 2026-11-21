@@ -35,10 +35,12 @@ GATE_HELD, GATE_REJECTED = "held", "rejected"
 # What the console has always called the states (the queue was a folder tree), kept for the HTTP API and the
 # pages built on it. `skipped` shows with `done`: both ended without anything left to do.
 LEGACY_NAMES = {QUEUED: "pending", RUNNING: "processing", WAITING: "deferred", DONE: "done", SKIPPED: "done",
-                FAILED: "failed"}
-LEGACY_STATES = ("pending", "processing", "deferred", "done", "failed")
+                FAILED: "failed", CANCELLED: "cancelled"}
+# ``cancelled`` is one list for both a job the admin cancelled before it started and one it stopped while it ran: the
+# row keeps one state for both, so there is one tab, not two.
+LEGACY_STATES = ("pending", "processing", "deferred", "done", "failed", "cancelled")
 FROM_LEGACY = {"pending": (QUEUED,), "processing": (RUNNING,), "deferred": (WAITING,), "done": (DONE, SKIPPED),
-                "failed": (FAILED,)}
+                "failed": (FAILED,), "cancelled": (CANCELLED,)}
 
 PUBLISH, VARIANT, EXTRACT, SUGGEST = "publish", "variant", "extract", "suggest"
 # The kinds that translate a subtitle (and so have a source, a target, a model layer and a bundle), against the kinds

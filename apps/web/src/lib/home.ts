@@ -25,6 +25,9 @@ export interface Row {
   ignored: boolean;
 }
 
+/** What a row says about an item the library source stopped listing (the worker still keeps its files and history). */
+const GONE_TEXT = "No longer in Bazarr";
+
 const total = (counts: PerLang): number => Object.values(counts).reduce((sum, n) => sum + n, 0);
 
 /** The names the person sees for the target language ("Vietnamese"); the code when the browser does not know it. */
@@ -45,7 +48,7 @@ export function seriesRow(series: CatalogSeries): Row {
   const waiting = series.open_jobs.waiting ?? 0;
   const open = requested + running + waiting;
 
-  const facts = [`${series.episodes} eps`, `Missing ${missing}`];
+  const facts = [`${series.episodes} eps`, series.gone ? GONE_TEXT : `Missing ${missing}`];
   if (requested) facts.push(`Requested ${requested}`);
   if (running) facts.push(`Running ${running}`);
   if (waiting) facts.push(`Waiting ${waiting}`);
@@ -55,7 +58,7 @@ export function seriesRow(series: CatalogSeries): Row {
   // covered by open jobs gets no Translate button: it would only make duplicates.
   let action: RowAction;
   if (failed > 0) action = { kind: "view-failed", to: `/series/${series.id}/episodes?status=failed` };
-  else if (missing > open) action = { kind: "translate", selector: { series: series.id }, title: series.title };
+  else if (!series.gone && missing > open) action = { kind: "translate", selector: { series: series.id }, title: series.title };
   else action = { kind: "improve", to: `/series/${series.id}/style` };
 
   return {
@@ -65,7 +68,7 @@ export function seriesRow(series: CatalogSeries): Row {
     to: `/series/${series.id}/episodes`,
     facts,
     action,
-    missing: missing > 0,
+    missing: !series.gone && missing > 0,
     running: open > 0,
     failed: failed > 0,
     ignored: ignored > 0,
@@ -75,13 +78,17 @@ export function seriesRow(series: CatalogSeries): Row {
 export function movieRow(movie: CatalogItem): Row {
   const targets = movie.targets;
   const single = targets.length <= 1;
-  const facts = targets.map((target) => (single ? target.text : `${target.lang.toUpperCase()}: ${target.text}`));
+  // A gone movie's "Missing" comes from the cache of a read that no longer lists it: say what the worker kept instead.
+  const shown = movie.gone ? targets.filter((target) => target.content !== "missing" && target.content !== "outside") : targets;
+  const facts = shown.map((target) => (single ? target.text : `${target.lang.toUpperCase()}: ${target.text}`));
+  if (movie.gone) facts.push(GONE_TEXT);
   const failed = targets.some((target) => target.job === "failed");
   const open = targets.some((target) => target.job !== "" && target.job !== "failed");
-  const unaskedMissing = targets.some((target) => target.content === "missing" && target.job === "" && !target.ignored);
+  const unaskedMissing =
+    !movie.gone && targets.some((target) => target.content === "missing" && target.job === "" && !target.ignored);
   const hasSubtitle = targets.some((target) => ["translated", "edited", "external"].includes(target.content));
   const unit = movie.unit_id;
-  if (!movie.has_source && targets.some((target) => target.content === "missing")) facts.push("No source subtitle");
+  if (!movie.gone && !movie.has_source && targets.some((target) => target.content === "missing")) facts.push("No source subtitle");
 
   let action: RowAction = { kind: "none" };
   if (failed && unit !== null) action = { kind: "view-failed", to: `/unit/${unit}` };
@@ -95,7 +102,7 @@ export function movieRow(movie: CatalogItem): Row {
     to: unit === null ? null : `/unit/${unit}`,
     facts: facts.length > 0 ? facts : ["No target language"],
     action,
-    missing: targets.some((target) => target.content === "missing"),
+    missing: !movie.gone && targets.some((target) => target.content === "missing"),
     running: open,
     failed,
     ignored: targets.some((target) => target.ignored),
@@ -105,7 +112,7 @@ export function movieRow(movie: CatalogItem): Row {
 export function buildRows(overview: CatalogOverview | undefined, movies: CatalogItem[] | undefined): Row[] {
   const rows = [
     ...(overview?.series ?? []).map(seriesRow),
-    ...(movies ?? []).filter((movie) => !movie.gone).map(movieRow),
+    ...(movies ?? []).map(movieRow),
   ];
   return rows.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base", numeric: true }));
 }
