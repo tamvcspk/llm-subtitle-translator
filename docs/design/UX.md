@@ -124,7 +124,9 @@ Nhãn lấy **nguyên văn từ SPEC FR-14.5** và ghép từ ba trục độc l
 
 **Huy hiệu của phiên bản (không phải nhãn của một mục):** *Candidate* là bản chưa ra đĩa (variant, hoặc kết quả bị chặn ghi đè). Nó hiện trong History và trên trang Compare, với nút **Compare** và **Use this version**. FR-14.5 chưa liệt kê nó vì nó là trạng thái của một phiên bản, không phải của (unit, ngôn ngữ).
 
-**Tên trạng thái của hàng đợi trên Activity** dùng cùng nhãn: *Requested · Running · Waiting · Failed · Done* (không dùng `pending`, `deferred`, `processing`).
+**Tên trạng thái của hàng đợi trên Activity** dùng cùng nhãn: *Requested · Running · Waiting · Failed · Done · Cancelled* (không dùng `pending`, `deferred`, `processing`). *Cancelled* gom job admin hủy khi chưa chạy và job Stop khi đang chạy: worker giữ một trạng thái `cancelled` cho cả hai.
+
+**Mục Bazarr không còn liệt kê:** series hoặc phim mà Bazarr ngừng liệt kê vẫn hiện trong Library khi worker còn giữ unit của nó (bản dịch, lịch sử), với nhãn *No longer in Bazarr*. Nó không bao giờ được tính là Missing và không có nút Translate. Mục mà worker chưa giữ gì thì không hiện.
 
 Chưa nói được "Missing vì sao" ở phía Bazarr (không tìm thấy, đang tải, vượt hạn mức): worker chưa đọc lịch sử hay trạng thái provider của Bazarr (SPEC #25.6).
 
