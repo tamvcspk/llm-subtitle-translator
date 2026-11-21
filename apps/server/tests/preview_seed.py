@@ -11,6 +11,7 @@ in use, a character card, a Spanish subtitle next to the Vietnamese one, and a m
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 import time
@@ -55,6 +56,35 @@ def srt(episode: int) -> str:
 
 def translate(text: str) -> str:
     return f"[vi] {text}".replace("Kyber crystal", "tinh thể Kyber")
+
+
+def write_old_queue(state: Path) -> None:
+    """What an older worker (before P10) and Bazarr's script leave in ``<state>/queue``, so the start-up has something
+    to settle: a refusal of episode 3 (becomes Ignored) and a file the script dropped for the movie that nobody approved
+    (stays Missing, not a job). Call it after ``seed``."""
+    show = state / "preview-media" / "Arcane Demo" / "Season 1"
+    queue = state / "queue"
+    episode = {
+        "media_type": "series", "series_id": "7", "media_id": "103", "series_title": "Arcane Demo", "season": 1,
+        "episode": 3, "video_path": str(show / "Arcane.Demo.S01E03.mkv"),
+        "subtitle_path": str(show / "Arcane.Demo.S01E03.en.srt"), "output_path": str(show / "Arcane.Demo.S01E03.vi.srt"),
+        "source_code": "en", "target_code": "vi", "target_language": "Vietnamese", "created_at": time.time() - 3600,
+    }
+    movie_dir = state / "preview-media" / "Demo Movie (2020)"
+    movie = {
+        "media_type": "movie", "media_id": "55", "movie_title": "Demo Movie",
+        "video_path": str(movie_dir / "Demo.Movie.mkv"), "subtitle_path": str(movie_dir / "Demo.Movie.en.srt"),
+        "output_path": str(movie_dir / "Demo.Movie.vi.srt"), "source_code": "en", "target_code": "vi",
+        "target_language": "Vietnamese", "created_at": time.time() - 3600,
+    }
+    files = {
+        "rejected/old-refusal-s01e03.json": {**episode, "job_id": "old-refusal-s01e03"},
+        "pending/old-script-movie.json": {**movie, "job_id": "old-script-movie"},
+    }
+    for name, job in files.items():
+        path = queue / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(job), encoding="utf-8")
 
 
 def seed(state: Path, translated: tuple[int, ...] = (1, 2)) -> str:
@@ -122,6 +152,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--live", action="store_true", help="translate nothing here: a real model will, so every episode is missing")
+    parser.add_argument("--old-queue", action="store_true", help="also leave an older worker's queue folders for the start-up to settle")
     parser.add_argument("--reset", action="store_true", help="delete the state directory first (only one this script made)")
     args = parser.parse_args()
     state = Path(args.state_dir).resolve()
@@ -136,6 +167,8 @@ def main() -> int:
     state.mkdir(parents=True)
     (state / MARK).write_text("made by tests/preview_seed.py; --reset may delete this folder\n", encoding="utf-8")
     seed(state, () if args.live else (1, 2))
+    if args.old_queue:
+        write_old_queue(state)
     print(f"seeded {state}")
     return 0
 

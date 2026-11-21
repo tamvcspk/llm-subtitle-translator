@@ -5,6 +5,9 @@ param(
     [switch]$Reset,    # rebuild the seeded state from scratch (only a folder the seed script made)
     [switch]$Rebuild,  # build apps\web again even when dist looks current
     [switch]$Live,     # a real worker and a real Gemini key: episodes are NOT pre-translated, Request really translates
+    [switch]$Bazarr,   # a stand-in Bazarr (scripts\fake_bazarr.py, port 6791), the catalog sync running, an older queue to settle; still no key and no job ever runs
+    [ValidateRange(1, 65535)]
+    [int]$BazarrPort = 6791,
     [string]$KeyFile = '',   # Live: file holding the key; default local-state\secrets\gemini.key, else $env:GEMINI_API_KEY
     [int]$MaxCallsPerDay = 60  # Live: a hard cap on model calls for the whole run (MAX_CALLS_PER_DAY)
 )
@@ -16,8 +19,13 @@ param(
 # model. The key is read here and handed to the worker through its environment (it seeds the key table on the first run
 # of a state, so use -Reset after changing the key); it is never printed or written to a file by this script. There is no
 # Bazarr (BAZARR_URL points nowhere, nothing is read or refreshed) and GST_ONLY_PATHS confines work to the demo media.
+# -Bazarr: the catalog sync loop runs against scripts\fake_bazarr.py (Sync now really reads something; open
+# http://127.0.0.1:6791/__fake/shrink to make it answer with a much smaller library, /__fake/restore to undo), the old queue
+# folders of an earlier worker are left in the state so the start-up settles them, and the queue itself never runs (--no-queue,
+# no key): nothing can call a model. Not together with -Live.
 # Port 6790, not 6789: start-local.ps1 and a Docker service keep 6789. Ctrl+C stops it.
 $ErrorActionPreference = 'Stop'
+if ($Live -and $Bazarr) { throw '-Bazarr and -Live cannot be used together: -Live has no Bazarr on purpose.' }
 $savedKey = $env:GEMINI_API_KEY   # only used by -Live, before the fake preview clears it
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $projectRoot '.venv\Scripts\python.exe'
@@ -62,6 +70,7 @@ $stateDir = Join-Path $projectRoot 'local-state\preview'
 $seed = @('run', '--locked', '--directory', (Join-Path $projectRoot 'apps\server'), 'python', '-m', 'tests.preview_seed', '--state-dir', $stateDir)
 if ($Reset) { $seed += '--reset' }
 if ($Live) { $seed += '--live' }
+if ($Bazarr) { $seed += '--old-queue' }
 $liveKey = ''
 if ($Live) {
     # Read the key before anything is built or deleted, so a missing key costs nothing.
@@ -93,10 +102,35 @@ if ($Live) {
     [System.IO.File]::WriteAllText($env:APP_CONFIG_PATH, $json, (New-Object System.Text.UTF8Encoding($false)))
     $env:BAZARR_URL = 'http://127.0.0.1:1'           # nothing to ask; fails at once instead of waiting on a name
     $env:GST_ONLY_PATHS = Join-Path $stateDir 'preview-media'
+} elseif ($Bazarr) {
+    # The catalog sync runs, the queue does not. The address and key are read once, on the first run of a state (-Reset).
+    $env:BAZARR_URL = "http://127.0.0.1:$BazarrPort"
+    $env:BAZARR_API_KEY = 'preview'
+    $env:GST_ONLY_PATHS = Join-Path $stateDir 'preview-media'
+    $workerArgs += '--no-queue'
 } else {
     $workerArgs += '--no-worker'
 }
 
-$mode = if ($Live) { "LIVE (real Gemini key, cap $MaxCallsPerDay model calls/day)" } else { 'fake (no model calls)' }
+$fake = $null
+if ($Bazarr) {
+    $busy = Get-NetTCPConnection -LocalPort $BazarrPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($busy) {
+        $other = Get-CimInstance Win32_Process -Filter "ProcessId = $($busy.OwningProcess)"
+        if ($other.CommandLine -notlike '*fake_bazarr.py*') { throw "Port $BazarrPort is used by another program (pid $($busy.OwningProcess)); pass -BazarrPort." }
+        Stop-Process -Id $busy.OwningProcess -Force
+        Start-Sleep -Milliseconds 500
+    }
+    $fake = Start-Process -FilePath $python -PassThru -WindowStyle Hidden -ArgumentList @(
+        (Join-Path $projectRoot 'scripts\fake_bazarr.py'), '--media', (Join-Path $stateDir 'preview-media'), '--port', $BazarrPort
+    )
+    Write-Host "Stand-in Bazarr: http://127.0.0.1:$BazarrPort  (/__fake/shrink, /__fake/restore, /__fake/state)" -ForegroundColor Cyan
+}
+
+$mode = if ($Live) { "LIVE (real Gemini key, cap $MaxCallsPerDay model calls/day)" } elseif ($Bazarr) { 'fake, with a stand-in Bazarr and an older queue (no model calls, the queue never runs)' } else { 'fake (no model calls)' }
 Write-Host "Preview console: http://127.0.0.1:$Port  [$mode]  (state: $stateDir)" -ForegroundColor Cyan
-& $python (Join-Path $projectRoot 'apps\server\worker.py') @workerArgs
+try {
+    & $python (Join-Path $projectRoot 'apps\server\worker.py') @workerArgs
+} finally {
+    if ($fake -and -not $fake.HasExited) { Stop-Process -Id $fake.Id -Force }
+}

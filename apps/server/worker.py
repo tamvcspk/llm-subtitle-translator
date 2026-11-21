@@ -260,6 +260,10 @@ def main() -> int:
     parser.add_argument("--once", action="store_true", help="process one available job and exit")
     parser.add_argument("--worker-only", action="store_true", help="run queue worker without the web console")
     parser.add_argument("--no-worker", action="store_true", help="run web console without the background worker")
+    parser.add_argument(
+        "--no-queue", action="store_true",
+        help="keep the catalog sync but never run queued jobs (a preview that must not call a model)",
+    )
     parser.add_argument("--host", default=os.getenv("WEB_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.getenv("WEB_PORT", "6789")))
     parser.add_argument("--sleep", type=int, default=int(os.getenv("WORKER_SLEEP_SECONDS", "15")))
@@ -422,7 +426,7 @@ def main() -> int:
             style=style_service,
             suggestions=suggestion_service,
         ).as_handler_context()
-        if not args.no_worker:
+        if not args.no_worker and not args.no_queue:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()
         start_web_server(ctx, args.host, args.port, ConsoleAuth.from_env(os.environ, store))
         return 0
