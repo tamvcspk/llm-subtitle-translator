@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from subserver.ports import Account
-from subserver.store import Store
+from subserver.domain.ports import Account
+from subserver.adapters.store import Store
 
 
 class AuthRepoContract:
@@ -56,7 +56,7 @@ class ConsoleAuthOnAMemoryStoreTests(unittest.TestCase):
     """ConsoleAuth only needs the port: no SQLite anywhere in this test."""
 
     def test_seed_verify_and_change_password_through_the_port(self):
-        from subserver.auth import ConsoleAuth
+        from subserver.services.auth import ConsoleAuth
 
         repo = Store(":memory:")
         auth = ConsoleAuth.from_env({"CONSOLE_USER": "admin", "CONSOLE_PASSWORD": "password-1"}, repo)

@@ -39,15 +39,15 @@ class ConsoleDeliveryTests(unittest.TestCase):
         self.assertNotRegex(html, r"url\(\s*['\"]?(?!data:)")
 
     def test_what_the_old_console_alone_used_is_gone_from_the_api(self):
-        from subserver.config import DEFAULT_APP_CONFIG
+        from subserver.domain.config import DEFAULT_APP_CONFIG
 
-        handler = (APP_ROOT / "subserver" / "web.py").read_text(encoding="utf-8")
+        handler = (APP_ROOT / "subserver" / "api" / "web.py").read_text(encoding="utf-8")
         for route in ("/api/wanted", "/api/scan", "/api/enqueue-scan"):
             self.assertNotIn(f'"{route}"', handler)
         self.assertNotIn("scan_limit", DEFAULT_APP_CONFIG)
 
     def test_a_backup_made_before_scan_limit_went_still_restores(self):
-        from subserver.config import normalize_app_config
+        from subserver.domain.config import normalize_app_config
 
         self.assertNotIn("scan_limit", normalize_app_config({"scan_limit": 500, "media_roots": ["/m"]}))
 

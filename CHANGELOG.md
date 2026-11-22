@@ -1,4 +1,12 @@
 # Unreleased
+- **P15c: `subserver/` is organised in layers (ADR-18, part 1). Nothing a user sees changes.** The ~60 flat modules are now
+  five packages, `domain/` (pure decisions and the port types), `services/` (use cases), `jobs/` (the queue and the handlers
+  that run a job), `adapters/` (Bazarr, TMDB, HTTP client, providers, settings, log, telemetry, the SQLite store) and `api/`
+  (the HTTP handler and its routers); `runtime.py` stays on top. `store.py` (~2000 lines) is the package `adapters/store/`:
+  the connection and the migrations, then one mixin per group of tables behind the same `Store`. Only imports changed: no
+  behaviour, HTTP route, database schema or image layout (`/app/subserver`). The old flat paths are gone, with no alias.
+  `tests/test_core_boundary.py` now checks the direction of imports by package instead of a hand-kept list of modules, and
+  `scripts/doccheck.py` reads every layer. The server suite has the same tests plus the new boundary and doccheck ones.
 - **P15b: the docs follow the code again; a script checks it.** `scripts/doccheck.py` (standard library only) fails when a
   `subserver` module or a `subcore` module is not named in `docs/ARCHITECTURE.md`, or an `/api/*` route in the code is not
   in `docs/API.md`; the server suite runs it (`tests/test_doccheck.py`) and the `ci-check` skill lists it. `docs/ARCHITECTURE.md`

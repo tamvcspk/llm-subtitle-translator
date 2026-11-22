@@ -8,9 +8,9 @@ import threading
 import unittest
 from http.server import ThreadingHTTPServer
 
-from subserver import library_api
-from subserver.console import ConsoleActions
-from subserver.estimates import Estimator
+from subserver.api import library_api
+from subserver.services.console import ConsoleActions
+from subserver.services.estimates import Estimator
 
 from .test_corrections import SETTINGS, sha
 from .test_style_profile import Env
@@ -256,7 +256,7 @@ class Routes(unittest.TestCase):
 
     def test_the_retry_route_estimates_only_when_asked_and_otherwise_retries(self):
         import worker
-        from subserver.auth import ConsoleAuth
+        from subserver.services.auth import ConsoleAuth
 
         env = Env(self)
         env.translated(1)

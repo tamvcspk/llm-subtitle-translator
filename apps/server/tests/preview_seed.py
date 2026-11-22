@@ -19,13 +19,13 @@ from pathlib import Path
 
 from subcore.providers import FakeProvider
 
-from subserver.glossaries import Glossaries
-from subserver.library import Library
-from subserver.ports import KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, CatalogSubtitle
-from subserver.store import Store
-from subserver.styles import Styles
-from subserver.translation_attempt import TranslationAttempt
-from subserver.versions import TranslationVersions
+from subserver.services.glossaries import Glossaries
+from subserver.services.library import Library
+from subserver.domain.ports import KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, CatalogSubtitle
+from subserver.adapters.store import Store
+from subserver.services.styles import Styles
+from subserver.jobs.translation_attempt import TranslationAttempt
+from subserver.services.versions import TranslationVersions
 
 MARK = ".preview-seed"
 SETTINGS = {"gst_model": "preview-fake"}

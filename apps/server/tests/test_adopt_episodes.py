@@ -3,10 +3,10 @@ were translated before, or by someone else): their units are made from the catal
 
 import unittest
 
-from subserver.glossaries import Glossaries
-from subserver.memory import StoryMemory
-from subserver.ports import CatalogSubtitle
-from subserver.units import UnitService
+from subserver.services.glossaries import Glossaries
+from subserver.services.memory import StoryMemory
+from subserver.domain.ports import CatalogSubtitle
+from subserver.services.units import UnitService
 
 from .test_catalog import CatalogCase, Env
 

@@ -1,0 +1,367 @@
+"""What the Library page shows: the catalog with the state of each (item, language) derived on reading (FR-14.4,
+FR-14.5, FR-14.6).
+
+There is no column that says "Missing" or "Translated". Three independent axes are read from where they live and put
+side by side: the **content** (the catalog says what Bazarr lists, the version history says who made the file), the
+**job** (an open job, or the last one failing) and the **decision** (Ignored). A request for the same item and
+language is therefore "Missing · Requested", and a translated subtitle that the glossary has since outgrown is
+"Translated · Stale". The cheap overview counts only what the catalog and the open jobs say; the full labels are
+worked out for one series (or the movies) at a time.
+"""
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from .bootstrap import Bootstrap
+from .catalog import pick_source
+from ..domain.config import enabled_source_languages, enabled_target_languages
+from ..jobs.jobs import CANCELLED, DONE, FAILED, OPEN_STATES, QUEUED, RUNNING, SKIPPED, WAITING, job_key
+from .library import Library
+from ..domain.ports import KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, Output, Unit
+from ..jobs.queue import JobQueue
+from ..adapters.store import Store
+from ..domain.subtitles import target_output_path
+from .versions import TranslationVersions, VersionPage
+
+# The content axis, the job axis, and the words the console shows for them.
+CONTENT_TEXT = {
+    "missing": "Missing", "translated": "Translated", "edited": "Edited", "external": "External",
+    "outside": "Outside profile",
+}
+WAIT_TEXT = {"quota": "daily quota", "provider": "provider", "context": "earlier episodes", "settle": "settling", "rate": "busy"}
+# Why the policy has not asked for a Missing item yet. A reason of the Library, never a state of a job (FR-15.12).
+REASON_TEXT = {"bootstrap": "Waiting for glossary review"}
+
+
+def display_text(label: dict[str, Any]) -> str:
+    parts = [CONTENT_TEXT[label["content"]]]
+    if label["removed"]:
+        parts.append("Removed")
+    if label["stale"]:
+        parts.append("Stale")
+    job = label["job"]
+    if job:
+        parts.append({"requested": "Requested", "running": "Running", "failed": "Failed"}.get(job) or
+                     f"Waiting · {WAIT_TEXT.get(label['wait'], label['wait'])}")
+    if label["ignored"]:
+        parts.append("Ignored")
+    if label.get("reason"):
+        parts.append(REASON_TEXT[label["reason"]])
+    return " · ".join(parts)
+
+
+_UNSET: Any = object()
+
+
+@dataclass
+class JobIndex:
+    """The newest open job and the newest finished job of each ``(unit id, language)``, read for a whole page."""
+
+    open: dict[tuple[int, str], dict[str, Any]] = field(default_factory=dict)
+    ended: dict[tuple[int, str], dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass
+class PageReads:
+    """What the labels of one page share: its jobs, the history of its files and a scratch ``cache`` for the rules
+    (glossary, styles, story memory) that every episode of a series would otherwise load again."""
+
+    jobs: JobIndex
+    versions: VersionPage
+    cache: dict
+
+
+class CatalogView:
+    def __init__(
+        self,
+        store: Store,
+        library: Library,
+        queue: JobQueue,
+        versions: TranslationVersions,
+        *,
+        config_source: Callable[[], dict[str, Any]],
+        settings_source: Callable[[], dict[str, Any]],
+    ) -> None:
+        self.store = store
+        self.library = library
+        self.queue = queue
+        self.versions = versions
+        self._config = config_source
+        self._settings = settings_source
+        self.bootstrap = Bootstrap(store, settings_source)
+
+    # -- the cache and its age -----------------------------------------------------------------------------------------
+    def status(self) -> dict[str, Any]:
+        state = self.store.catalog_state()
+        return {
+            "synced_at": state.synced_at or None, "attempted_at": state.attempted_at or None, "status": state.status,
+            "warning": state.warning, "items": state.items, "listed": self.store.catalog_count(),
+            "auto_request": bool(self._settings().get("auto_request")),
+            "auto_request_daily_cap": int(self._settings().get("auto_request_daily_cap") or 0),
+        }
+
+    # -- the labels ----------------------------------------------------------------------------------------------------
+    def job_index(self, units: list[Unit]) -> "JobIndex":
+        """The jobs of these units read once, for a page that labels every (item, language) of them (R10-9)."""
+        index = JobIndex()
+        for job in self.queue.jobs.for_units(u.id for u in units):
+            slot = (int(job["_unit_id"]), str(job["_lang"]))
+            (index.open if job["state"] in OPEN_STATES else index.ended)[slot] = job
+        return index
+
+    @staticmethod
+    def _outputs(entry: CatalogEntry, lang: str, sources: list[dict[str, Any]]) -> tuple[Any, str, Any]:
+        """``(picked source, the path the worker would write, the subtitle Bazarr lists)`` of an (item, language)."""
+        picked = pick_source(entry, sources)
+        derived = target_output_path(picked[0].path, lang, str(picked[1]["code"])) if picked else ""
+        listed = next((s for s in entry.subtitles if s.code == lang and not s.forced), None)
+        return picked, derived, listed
+
+    def page_reads(self, units: list[Unit], entries: list[CatalogEntry], langs: list[str],
+                   sources: list[dict[str, Any]]) -> "PageReads":
+        """Everything a page of items reads from the database, taken once: the jobs of its units and the history of
+        every file its labels may look at (R10-9)."""
+        paths: list[str] = []
+        for entry in entries:
+            for lang in langs:
+                _, derived, listed = self._outputs(entry, lang.lower(), sources)
+                paths += [derived, listed.path if listed is not None else ""]
+        return PageReads(self.job_index(units), self.versions.page(paths), {})
+
+    def label(self, entry: CatalogEntry, lang: str, unit: Unit | None, ignored: set[tuple[int, str]],
+              sources: list[dict[str, Any]], reads: "PageReads | None" = None) -> dict[str, Any]:
+        lang = lang.lower()
+        picked, derived, listed = self._outputs(entry, lang, sources)
+        page = reads.versions if reads is not None else None
+        stale = removed = False
+        # A file the worker just wrote is there before the next read of Bazarr says so: the cache may be minutes old.
+        written = listed is None and bool(derived) and Path(derived).is_file()
+        if listed is not None or written:
+            content = "external"
+            path = (listed.path if listed is not None else "") or derived
+            if unit is not None and path:
+                info = self.library.target_info(
+                    unit, Output(unit.id, lang, path), page=page, cache=reads.cache if reads is not None else None,
+                    exists=True if written else None,
+                )
+                if info["status"] != "untranslated" and not info["modified_outside"]:
+                    content = "edited" if info["trigger"] in ("cue_edit",) or self._edited(path, page) else "translated"
+                    stale = info["status"] == "stale"
+        else:
+            latest = ""
+            if derived:
+                latest = page.latest.get(derived, "") if page is not None else self.versions.latest_status(derived)
+            removed = latest == "removed"
+            content = "missing" if (lang in entry.missing or removed) else "outside"
+        job, wait, info = self._job(entry, unit, lang, picked[0].path if picked else "", derived,
+                                    reads.jobs if reads is not None else None)
+        return {
+            "lang": lang, "content": content, "removed": removed, "stale": stale, "job": job, "wait": wait,
+            "ignored": unit is not None and (unit.id, lang) in ignored, "job_info": info,
+        }
+
+    def _edited(self, path: str, page: VersionPage | None = None) -> bool:
+        current = page.current.get(path) if page is not None else self.versions.repo.current_version(path)
+        return current is not None and current.origin == "edit"
+
+    @staticmethod
+    def _job_info(job: dict[str, Any]) -> dict[str, Any]:
+        """What a row needs to act on the job it shows (Cancel, Stop, Retry, a progress bar), never the job's payload."""
+        done, total = job.get("progress_done"), job.get("progress_total")
+        retry_at = job.get("retry_at") if job["state"] == WAITING else None
+        return {
+            "job_id": str(job["job_id"]),
+            "progress_done": int(done) if isinstance(done, (int, float)) else None,
+            "progress_total": int(total) if isinstance(total, (int, float)) else None,
+            "retry_at": float(retry_at) if isinstance(retry_at, (int, float)) and retry_at else None,
+            "error": str(job.get("error") or "")[-300:],
+            "missing_units": [str(m) for m in job.get("missing_units") or []] if job["state"] == WAITING else [],
+        }
+
+    def _job(self, entry: CatalogEntry, unit: Unit | None, lang: str, source: str, output: str,
+             index: "JobIndex | None" = None) -> tuple[str, str, dict[str, Any] | None]:
+        """``(axis value, wait reason, job info)``: requested | running | waiting | failed, or '' when no job says
+        anything (``info`` is then None). With an ``index`` of the page's units a unit's jobs are looked up there, with no
+        query; an item without a unit still asks by key."""
+        jobs = self.queue.jobs
+        if index is not None and unit is not None:
+            open_job = index.open.get((unit.id, lang))
+            last = index.ended.get((unit.id, lang))
+        else:
+            open_job = jobs.open_for(job_key(source, output, lang)) if source and output else None
+            if open_job is None and unit is not None:
+                open_job = jobs.open_for_unit(unit.id, lang)
+            last = None
+        if open_job is not None:
+            state = open_job["state"]
+            info = self._job_info(open_job)
+            if state == RUNNING:
+                return "running", "", info
+            if state == WAITING:
+                return "waiting", str(open_job.get("wait_reason") or ""), info
+            return "requested", "", info
+        # "Failed" is read by (unit, language), the same way ``_failed_units`` counts it for the overview, so the number
+        # on a Home row and the labels of its page cannot disagree after a rename gives the request a new key.
+        if index is not None and unit is not None:
+            pass  # ``last`` came from the index
+        elif unit is not None:
+            last = jobs.latest_for_unit(unit.id, lang, FAILED, DONE, SKIPPED, CANCELLED)
+        else:
+            last = jobs.latest_for(job_key(source, output, lang), FAILED, DONE, SKIPPED, CANCELLED) if source and output else None
+        if last is not None and last["state"] == FAILED:
+            return "failed", "", self._job_info(last)
+        return "", "", None
+
+    def _targets(self) -> list[str]:
+        return [str(t["code"]).lower() for t in enabled_target_languages(self._config())]
+
+    def item(self, entry: CatalogEntry, series: CatalogEntry | None, langs: list[str],
+             ignored: set[tuple[int, str]], sources: list[dict[str, Any]], *, hold: bool = False,
+             reads: "PageReads | None" = None, unit: Unit | None | object = _UNSET) -> dict[str, Any]:
+        """``hold``: the policy would ask for this item but waits for the series' glossary to be reviewed. ``reads``
+        and ``unit`` (None when the item has none) are what a page already read for the item (see ``page_reads``)."""
+        unit = self.library.unit_of(entry) if unit is _UNSET else unit
+        labels = []
+        for lang in langs:
+            label = self.label(entry, lang, unit, ignored, sources, reads)
+            waiting = hold and label["content"] == "missing" and not label["job"] and not label["ignored"] and not label["removed"]
+            label["reason"] = "bootstrap" if waiting else ""
+            label["text"] = display_text(label)
+            labels.append(label)
+        picked = pick_source(entry, sources)
+        return {
+            "id": entry.id, "kind": entry.kind, "bazarr_id": entry.bazarr_id, "title": entry.title,
+            "season": entry.season, "episode": entry.episode, "unit_id": unit.id if unit else None,
+            "source": picked[0].code if picked else None, "has_source": picked is not None,
+            "gone": entry.gone_at is not None, "targets": labels,
+        }
+
+    # -- the pages ---------------------------------------------------------------------------------------------------------
+    def overview(self) -> dict[str, Any]:
+        """Series (with counts that need no per-item work) and movies, for the Library list."""
+        langs = self._targets()
+        open_by_series = self._open_by_series()
+        failed, ignored = self._failed_units(), self._ignored_units()
+        out = []
+        # A series Bazarr stopped listing stays while the worker keeps something of it (a unit, so translations and
+        # history): it is shown as ``gone``, with nothing missing and nothing to request, never silently dropped (F3).
+        for series in self.store.catalog_entries(KIND_SERIES, include_gone=True):
+            stored = self.store.series_by_key(series.series_key)
+            gone = series.gone_at is not None
+            if gone and not (stored and self.store.list_units(stored.id)):
+                continue
+            episodes = self._kept_episodes(series)
+            listed = [e for e in episodes if e.gone_at is None]
+            counts = {lang: sum(1 for e in listed if lang in e.missing) for lang in langs}
+            out.append({
+                "id": series.id, "title": series.title, "key": series.series_key, "episodes": len(episodes), "gone": gone,
+                "missing": counts, "open_jobs": open_by_series.get(series.bazarr_id, {}),
+                "failed": self._per_lang(failed, series.series_key, langs),
+                "ignored": self._per_lang(ignored, series.series_key, langs),
+                "auto_request": stored.auto_request if stored else "", "series_id": stored.id if stored else None,
+            })
+        movies = self.store.catalog_entries(KIND_MOVIE)
+        return {
+            "status": self.status(), "languages": langs, "series": out,
+            "movies": {"count": len(movies), "missing": {lang: sum(1 for m in movies if lang in m.missing) for lang in langs},
+                       "failed": self._per_lang(failed, None, langs), "ignored": self._per_lang(ignored, None, langs)},
+        }
+
+    def _kept_episodes(self, series: CatalogEntry) -> list[CatalogEntry]:
+        """The episodes of a series a page lists: those Bazarr lists, and those it stopped listing that the worker keeps
+        a unit for (their files and history are still there)."""
+        return [e for e in self.store.catalog_entries(KIND_EPISODE, parent_id=series.id, include_gone=True)
+                if e.gone_at is None or self.library.unit_of(e) is not None]
+
+    @staticmethod
+    def _per_lang(counts: dict[tuple[str | None, str], int], owner: str | None, langs: list[str]) -> dict[str, int]:
+        return {lang: counts.get((owner, lang), 0) for lang in langs}
+
+    # The two counts below stand for the labels of ``item`` without working them out per item. ``owner`` is the series
+    # key, or None for a movie; only units the catalog still lists as a movie, or that belong to a listed series, are counted.
+    _LISTED = (
+        "LEFT JOIN series s ON s.id = u.series_id"
+        " LEFT JOIN catalog_items c ON c.kind = 'movie' AND c.series_key = u.movie_key AND c.gone_at IS NULL"
+        " WHERE (u.series_id IS NOT NULL OR c.id IS NOT NULL)"
+    )
+
+    def _failed_units(self) -> dict[tuple[str | None, str], int]:
+        """Per (series key or None, language): units with no open job whose newest finished job is ``failed`` (the
+        ``Failed`` label of ``_job``). A job that failed and was asked for again is open, so it is not counted."""
+        finished, open_states = (FAILED, DONE, SKIPPED, CANCELLED), OPEN_STATES
+        done_marks, open_marks = ",".join("?" * len(finished)), ",".join("?" * len(open_states))
+        rows = self.store.query(
+            "SELECT s.key AS owner, j.target_lang AS lang, COUNT(DISTINCT j.unit_id) AS n FROM jobs j"
+            " JOIN units u ON u.id = j.unit_id " + self._LISTED +
+            " AND j.kind = 'publish' AND j.state = ?"
+            f" AND j.id = (SELECT MAX(k.id) FROM jobs k WHERE k.unit_id = j.unit_id AND k.target_lang = j.target_lang"
+            f"  AND k.kind = 'publish' AND k.state IN ({done_marks}))"
+            f" AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.unit_id = j.unit_id AND o.target_lang = j.target_lang"
+            f"  AND o.kind = 'publish' AND o.state IN ({open_marks}))"
+            " GROUP BY s.key, j.target_lang", (FAILED, *finished, *open_states),
+        )
+        return {(row["owner"], str(row["lang"])): int(row["n"]) for row in rows}
+
+    def _ignored_units(self) -> dict[tuple[str | None, str], int]:
+        rows = self.store.query(
+            "SELECT s.key AS owner, d.target_lang AS lang, COUNT(*) AS n FROM unit_decisions d"
+            " JOIN units u ON u.id = d.unit_id " + self._LISTED + " AND d.decision = 'ignored'"
+            " GROUP BY s.key, d.target_lang"
+        )
+        return {(row["owner"], str(row["lang"])): int(row["n"]) for row in rows}
+
+    def _open_by_series(self) -> dict[str, dict[str, int]]:
+        rows = self.store.query(
+            "SELECT series_key, state, COUNT(*) AS n FROM jobs WHERE kind = 'publish' AND series_key <> ''"
+            " AND state IN (?, ?, ?) GROUP BY series_key, state", OPEN_STATES,
+        )
+        out: dict[str, dict[str, int]] = {}
+        for row in rows:
+            out.setdefault(str(row["series_key"]), {})[{QUEUED: "requested"}.get(row["state"], row["state"])] = int(row["n"])
+        return out
+
+    def series_page(self, catalog_id: int) -> dict[str, Any]:
+        series = self.store.catalog_entry(catalog_id)
+        if series is None or series.kind != KIND_SERIES:
+            raise LookupError(f"no series {catalog_id} in the catalog")
+        langs, sources = self._targets(), enabled_source_languages(self._config())
+        ignored = self.store.decisions()
+        stored = self.store.series_by_key(series.series_key)
+        listed = self._kept_episodes(series)
+        override = stored.auto_request if stored else ""
+        policy_on = override == "on" or (override != "off" and bool(self._settings().get("auto_request")))
+        state = self.bootstrap.state(series, [e for e in listed if e.gone_at is None], stored, langs)
+        held = policy_on and state.locked
+        # The page's units and jobs are read once, not asked for per item and language (R10-9).
+        units = {(u.season, u.episode): u for u in self.store.list_units(stored.id)} if stored else {}
+        reads = self.page_reads(list(units.values()), listed, langs, sources)
+        items = [
+            self.item(e, series, langs, ignored, sources, hold=held and e.id not in state.allowed, reads=reads,
+                      unit=units.get((e.season, e.episode)))
+            for e in listed
+        ]
+        return {
+            "status": self.status(), "languages": langs,
+            "series": {"id": series.id, "title": series.title, "key": series.series_key,
+                       "auto_request": stored.auto_request if stored else "", "series_id": stored.id if stored else None,
+                       "gone": series.gone_at is not None,
+                       "bootstrap": {"locked": held, "limit": state.limit, "pending": state.pending, "released": state.released,
+                                     "held": sum(1 for i in items for t in i["targets"] if t["reason"])}},
+            "items": items,
+        }
+
+    def movies_page(self) -> dict[str, Any]:
+        langs, sources = self._targets(), enabled_source_languages(self._config())
+        ignored = self.store.decisions()
+        # A movie Bazarr stopped listing stays while the worker keeps a unit for it, shown as ``gone`` (F3).
+        everything = self.store.catalog_entries(KIND_MOVIE, include_gone=True)
+        units = {m.id: self.library.unit_of(m) for m in everything}
+        movies = [m for m in everything if m.gone_at is None or units[m.id] is not None]
+        reads = self.page_reads([u for u in units.values() if u is not None], movies, langs, sources)
+        return {
+            "status": self.status(), "languages": langs,
+            "items": [self.item(m, None, langs, ignored, sources, reads=reads, unit=units[m.id]) for m in movies],
+        }

@@ -10,7 +10,7 @@ from dataclasses import replace
 from subcore import glossary as g
 from subcore import srt
 
-from subserver.rules import build_rules
+from subserver.domain.rules import build_rules
 
 from .test_corrections import SETTINGS
 from .test_style_profile import Env

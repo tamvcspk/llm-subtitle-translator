@@ -9,12 +9,12 @@ from unittest import mock
 
 from subcore.providers import Unavailable
 
-from subserver.proposals import SKIP_DAYS
-from subserver.queue_policy import Health
-from subserver.ports import SUGGESTION_REJECTED
-from subserver.styles import Styles
-from subserver.suggestion_keys import identity, identity_key
-from subserver.suggestions import Proposal, independent_sources, source_host
+from subserver.services.proposals import SKIP_DAYS
+from subserver.domain.queue_policy import Health
+from subserver.domain.ports import SUGGESTION_REJECTED
+from subserver.services.styles import Styles
+from subserver.domain.suggestion_keys import identity, identity_key
+from subserver.services.suggestions import Proposal, independent_sources, source_host
 
 from .test_proposals import Env as ProposerEnv
 from .test_style_profile import Env as StyleEnv
@@ -254,7 +254,7 @@ class GeneratorTests(unittest.TestCase):
         again = env.generate()
         self.assertEqual((again["terms"], len(env.asked("terms"))), (0, asked))  # not asked about again ...
         later = time.time() + (SKIP_DAYS + 1) * 86400
-        with mock.patch("subserver.proposals.time.time", return_value=later):
+        with mock.patch("subserver.services.proposals.time.time", return_value=later):
             self.assertEqual([t.source for t in env.proposer.scan(env.series_id, "vi").terms], ["Pair Term"])  # ... for a while
 
     def test_an_answer_that_could_not_be_used_at_all_is_not_remembered_as_unanswerable(self):

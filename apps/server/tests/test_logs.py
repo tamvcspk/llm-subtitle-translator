@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from subserver.logs import UTCFormatter, clear_logs, read_log_snapshot
+from subserver.adapters.logs import UTCFormatter, clear_logs, read_log_snapshot
 from logging.handlers import RotatingFileHandler
 
 
@@ -30,7 +30,7 @@ class LogTests(unittest.TestCase):
                 "2026-09-07T12:00:00Z ERROR Old entry\n" + "x" * 10000 + "\n"
                 "2026-09-07T12:01:00Z INFO Latest entry\n", encoding="utf-8",
             )
-            with patch("subserver.logs.MAX_LOG_BYTES", 100):
+            with patch("subserver.adapters.logs.MAX_LOG_BYTES", 100):
                 result = read_log_snapshot(tmp)
             self.assertTrue(result["truncated"])
             self.assertEqual([entry["message"] for entry in result["entries"]], ["Latest entry"])

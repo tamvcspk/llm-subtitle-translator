@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from subserver.glossaries import Glossaries
-from subserver.intake import MIGRATED_DIR, import_queue_tree
-from subserver.jobs import FROM_LEGACY
-from subserver.library import Library
-from subserver.queue import JobQueue
-from subserver.store import Store
-from subserver.versions import TranslationVersions
+from subserver.services.glossaries import Glossaries
+from subserver.jobs.intake import MIGRATED_DIR, import_queue_tree
+from subserver.jobs.jobs import FROM_LEGACY
+from subserver.services.library import Library
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
+from subserver.services.versions import TranslationVersions
 from tests.test_corrections import Env
 
 

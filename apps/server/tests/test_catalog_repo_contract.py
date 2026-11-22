@@ -6,8 +6,8 @@ import time
 import unittest
 from pathlib import Path
 
-from subserver.ports import Correction, Output, Series, Unit
-from subserver.store import Store
+from subserver.domain.ports import Correction, Output, Series, Unit
+from subserver.adapters.store import Store
 
 
 class CatalogRepoContract:

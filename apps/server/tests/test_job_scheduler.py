@@ -10,12 +10,12 @@ import threading
 import unittest
 from pathlib import Path
 
-from subserver import queue_policy as policy
-from subserver.jobs import DONE, FAILED, QUEUED, RUNNING, WAITING, job_key
-from subserver.queue import JobQueue
-from subserver.store import Store
+from subserver.domain import queue_policy as policy
+from subserver.jobs.jobs import DONE, FAILED, QUEUED, RUNNING, WAITING, job_key
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
 from tests.queue_harness import START, SchedulerCase
-from subserver.translation import (
+from subserver.domain.translation import (
     CallBudgetError, ContextGapError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, ProviderAuthError,
     ProviderUnavailableError,
 )

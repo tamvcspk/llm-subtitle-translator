@@ -8,9 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from subserver.ports import CANDIDATE, CURRENT, REMOVED, SUPERSEDED
-from subserver.store import Store
-from subserver.versions import AUTO, CUE_EDIT, RETRANSLATE, REVERT, TranslationVersions
+from subserver.domain.ports import CANDIDATE, CURRENT, REMOVED, SUPERSEDED
+from subserver.adapters.store import Store
+from subserver.services.versions import AUTO, CUE_EDIT, RETRANSLATE, REVERT, TranslationVersions
 
 
 def sha_of(text: str) -> str:
@@ -235,7 +235,7 @@ class BazarrRefreshTests(unittest.TestCase):
     def test_a_failing_bazarr_is_retried_and_then_given_up_without_raising(self):
         from types import SimpleNamespace
 
-        from subserver.units import UnitService
+        from subserver.services.units import UnitService
 
         calls = []
 
@@ -250,7 +250,7 @@ class BazarrRefreshTests(unittest.TestCase):
     def test_a_refresh_that_lands_on_a_later_attempt_stops_there(self):
         from types import SimpleNamespace
 
-        from subserver.units import UnitService
+        from subserver.services.units import UnitService
 
         attempts = []
 

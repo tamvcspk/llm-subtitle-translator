@@ -7,12 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from subserver import queue_policy as policy
-from subserver import versions as versions_module
-from subserver.auto_request import AutoRequest, AutoRequested, sync_and_request
-from subserver.bazarr import BazarrMedia
-from subserver.catalog_view import JobIndex
-from subserver.ports import CatalogSubtitle
+from subserver.domain import queue_policy as policy
+from subserver.services import versions as versions_module
+from subserver.services.auto_request import AutoRequest, AutoRequested, sync_and_request
+from subserver.adapters.bazarr import BazarrMedia
+from subserver.services.catalog_view import JobIndex
+from subserver.domain.ports import CatalogSubtitle
 
 from .test_catalog import EN, SRT, CatalogCase, Env
 
@@ -45,7 +45,7 @@ class PolicyAndFailedJobTests(CatalogCase):
         env.episode(1)
         env.sync.run()
         self.failed_job(env)
-        from subserver.job_requests import Selection
+        from subserver.services.job_requests import Selection
         plan = env.requests.plan(Selection(everything=True), automatic=True, measure=False)
         self.assertEqual([j.skip for j in plan.skipped], ["failed"])
         self.assertIn("only a manual request", plan.skipped[0].reason)
@@ -99,7 +99,7 @@ class CapTests(CatalogCase):
         for n in (1, 2, 3):
             env.episode(n)
         env.sync.run()
-        from subserver.job_requests import Selection
+        from subserver.services.job_requests import Selection
         plan = env.requests.plan(Selection(everything=True), automatic=False, measure=False)
         os.remove(env.paths("7102")[0])  # the source vanishes before the jobs are made
         made = env.requests.create(plan, origin="policy", prio=policy.AUTO, limit=5)
@@ -202,7 +202,7 @@ class PagesTests(unittest.TestCase):
             return {"data": [], "total": 0}
 
     def titles(self, total):
-        with patch("subserver.bazarr.CATALOG_PAGE_SIZE", 2):
+        with patch("subserver.adapters.bazarr.CATALOG_PAGE_SIZE", 2):
             media = BazarrMedia(self.Capped(total), lambda: {"bazarr_url": "http://bazarr", "bazarr_api_key": "key"})
             return [e.title for e in media.catalog() if e.kind == "series"]
 

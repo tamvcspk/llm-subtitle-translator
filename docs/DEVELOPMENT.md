@@ -102,7 +102,7 @@ uv run python apps/server/worker.py --no-worker --host 127.0.0.1 --port 6789
 - Keep the Bazarr integration read-only (the catalog read) and behind the
   `MediaLibrary` port; a read never creates a job.
 - Keep model calls inside `subcore` providers, reached through
-  `subserver/translation_attempt.py` and the job handlers; do not install
+  `subserver/jobs/translation_attempt.py` and the job handlers; do not install
   dependencies into the Bazarr image.
 - Never log Gemini, TMDB, or Bazarr API keys.
 - Preserve the no-overwrite rule for existing target subtitle files.

@@ -21,20 +21,20 @@ from subcore.providers import CallLog, FakeProvider, LLMRequest, ResilientProvid
 from subcore.providers.fake import echo_items
 
 import worker
-from subserver import queue as gst_queue
-from subserver.bodies import BodyLog, encode_record
-from subserver.config import normalize_app_config
-from subserver.glossaries import Glossaries
-from subserver.library import Library
-from subserver.logs import RedactingFormatter, set_log_level
-from subserver.ports import BodyRef, Telemetry as TelemetryPort
-from subserver.redaction import REDACTED, Redactor
-from subserver.settings import SettingsService
-from subserver.store import Store
-from subserver.telemetry import NULL, Telemetry, events_page
-from subserver.translation_attempt import PROMPT_VERSION, TranslationAttempt
-from subserver.units import UnitService
-from subserver.versions import TranslationVersions
+from subserver.jobs import queue as gst_queue
+from subserver.adapters.bodies import BodyLog, encode_record
+from subserver.domain.config import normalize_app_config
+from subserver.services.glossaries import Glossaries
+from subserver.services.library import Library
+from subserver.adapters.logs import RedactingFormatter, set_log_level
+from subserver.domain.ports import BodyRef, Telemetry as TelemetryPort
+from subserver.domain.redaction import REDACTED, Redactor
+from subserver.adapters.settings import SettingsService
+from subserver.adapters.store import Store
+from subserver.adapters.telemetry import NULL, Telemetry, events_page
+from subserver.jobs.translation_attempt import PROMPT_VERSION, TranslationAttempt
+from subserver.services.units import UnitService
+from subserver.services.versions import TranslationVersions
 
 SECRET = "AIzaSyTESTKEY0123456789abcdefghij"
 SOURCE = (
@@ -585,8 +585,8 @@ class SecretTests(unittest.TestCase):
         self.assertIn(REDACTED, stream.getvalue())
 
     def test_the_process_log_is_configured_with_the_redacting_formatter(self):
-        from subserver.logs import configure_logging
-        from subserver.redaction import DEFAULT
+        from subserver.adapters.logs import configure_logging
+        from subserver.domain.redaction import DEFAULT
 
         root = logging.getLogger()
         saved, level = list(root.handlers), root.level

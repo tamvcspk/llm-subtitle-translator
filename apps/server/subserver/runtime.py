@@ -1,10 +1,10 @@
 """Runtime composition seam for the worker process."""
 from dataclasses import dataclass
 from typing import Any
-from .console import ConsoleActions
-from .http import HTTPClient, HTTPTransport
-from .bazarr import BazarrIntegration
-from .backups import BackupMaintenance
+from .services.console import ConsoleActions
+from .adapters.http import HTTPClient, HTTPTransport
+from .adapters.bazarr import BazarrIntegration
+from .adapters.backups import BackupMaintenance
 
 @dataclass
 class RuntimeContext:

@@ -15,9 +15,9 @@ from subcore import srt
 from subcore.bundle import TranslationBundle
 from subcore.translate import PromptContext
 from subcore.translate.engine import make_bundle
-from subserver.auth import ConsoleAuth
-from subserver.console import ConsoleActions
-from subserver.ports import JobBundle
+from subserver.services.auth import ConsoleAuth
+from subserver.services.console import ConsoleActions
+from subserver.domain.ports import JobBundle
 
 from .test_console_auth import PASSWORD, USER, basic
 

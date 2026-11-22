@@ -5,8 +5,8 @@ import time
 import unittest
 from pathlib import Path
 
-from subserver.ports import LlmCall, TokenTotals
-from subserver.store import Store
+from subserver.domain.ports import LlmCall, TokenTotals
+from subserver.adapters.store import Store
 
 
 def record(log: Store, job_id="j1", *, tokens_in=10, tokens_out=5, at=None, task="translate", outcome="ok"):

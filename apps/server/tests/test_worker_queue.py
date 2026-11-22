@@ -9,23 +9,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 import worker
-from subserver import queue_policy
-from subserver.jobs import FROM_LEGACY, JobStore
-from subserver.queue import JobQueue
-from subserver.store import Store
-from subserver import (
-    backups as gst_backups,
-    bazarr as gst_bazarr,
-    config as gst_config,
-    connection_tests as gst_connection_tests,
-    gemini as gst_gemini,
-    http as gst_http,
-    logs as gst_logs,
-    queue as gst_queue,
-    subtitles as gst_subtitles,
-    tmdb as gst_tmdb,
-    translation as gst_translation,
-)
+from subserver.domain import queue_policy
+from subserver.jobs.jobs import FROM_LEGACY, JobStore
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
+from subserver.adapters import backups as gst_backups
+from subserver.adapters import bazarr as gst_bazarr
+from subserver.domain import config as gst_config
+from subserver.adapters import connection_tests as gst_connection_tests
+from subserver.adapters import gemini as gst_gemini
+from subserver.adapters import http as gst_http
+from subserver.adapters import logs as gst_logs
+from subserver.jobs import queue as gst_queue
+from subserver.domain import subtitles as gst_subtitles
+from subserver.adapters import tmdb as gst_tmdb
+from subserver.domain import translation as gst_translation
 
 
 class FakeHTTP:

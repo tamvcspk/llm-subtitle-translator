@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from subserver.console import ConsoleActions
-from subserver.queue_policy import PROVIDER_RETRY_DELAYS, daily_quota_reset_at, next_utc_midnight
+from subserver.services.console import ConsoleActions
+from subserver.domain.queue_policy import PROVIDER_RETRY_DELAYS, daily_quota_reset_at, next_utc_midnight
 
 
 class QueuePolicyTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class ConsoleActionsTests(unittest.TestCase):
         straight from a request body."""
         self.assertFalse(hasattr(ConsoleActions(Mock()), "enqueue"))
         self.assertFalse(hasattr(ConsoleActions(Mock()), "enqueue_subtitle"))
-        web = (Path(__file__).resolve().parents[1] / "subserver" / "web.py").read_text(encoding="utf-8")
+        web = (Path(__file__).resolve().parents[1] / "subserver" / "api" / "web.py").read_text(encoding="utf-8")
         self.assertNotIn('"/api/enqueue"', web)
 
 

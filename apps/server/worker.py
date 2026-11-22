@@ -9,49 +9,49 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from subserver.backups import BackupMaintenance, create_scheduled_backup_if_due, purge_old_backups
-from subserver.auth import ConsoleAuth
-from subserver.cleanup import Cleanup
-from subserver.auto_request import AutoRequest, sync_and_request
-from subserver.bazarr import BazarrIntegration, BazarrMedia
-from subserver.catalog import CatalogPaths, CatalogSync
-from subserver.catalog_actions import CatalogActions
-from subserver.catalog_view import CatalogView
-from subserver.logs import configure_logging
-from subserver.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
-from subserver.config import enabled_source_languages, provider_name
-from subserver.intake import import_queue_tree
-from subserver.job_requests import JobRequests
-from subserver.jobs import EXTRACT, JUDGE, PUBLISH, SUGGEST, VARIANT
-from subserver.judge import JudgeService
-from subserver.queue import JobQueue, skip_reason
-from subserver.read_jobs import ExtractJob, JudgeJob, SuggestJob
-from subserver.console import ConsoleActions
-from subserver.glossaries import Glossaries
-from subserver.style_service import StyleService
-from subserver.styles import Styles
-from subserver.proposals import FactsProposer
-from subserver.suggestions import SuggestionService
-from subserver.library import Library, enrich_job_identity
-from subserver.memory import StoryMemory
-from subserver.queue_policy import configured_models
-from subserver.store import Store
-from subserver.llm import LiveProviderFactory, build_provider, rate_limits
-from subserver.feedback import FeedbackProposer
-from subserver.insight_api import Insights
-from subserver.metrics import Metrics
-from subserver.translation_attempt import TranslationAttempt
-from subserver.units import UnitService
-from subserver.versions import TranslationVersions
+from subserver.adapters.backups import BackupMaintenance, create_scheduled_backup_if_due, purge_old_backups
+from subserver.services.auth import ConsoleAuth
+from subserver.services.cleanup import Cleanup
+from subserver.services.auto_request import AutoRequest, sync_and_request
+from subserver.adapters.bazarr import BazarrIntegration, BazarrMedia
+from subserver.services.catalog import CatalogPaths, CatalogSync
+from subserver.services.catalog_actions import CatalogActions
+from subserver.services.catalog_view import CatalogView
+from subserver.adapters.logs import configure_logging
+from subserver.adapters.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
+from subserver.domain.config import enabled_source_languages, provider_name
+from subserver.jobs.intake import import_queue_tree
+from subserver.services.job_requests import JobRequests
+from subserver.jobs.jobs import EXTRACT, JUDGE, PUBLISH, SUGGEST, VARIANT
+from subserver.services.judge import JudgeService
+from subserver.jobs.queue import JobQueue, skip_reason
+from subserver.jobs.read_jobs import ExtractJob, JudgeJob, SuggestJob
+from subserver.services.console import ConsoleActions
+from subserver.services.glossaries import Glossaries
+from subserver.services.style_service import StyleService
+from subserver.services.styles import Styles
+from subserver.services.proposals import FactsProposer
+from subserver.services.suggestions import SuggestionService
+from subserver.services.library import Library, enrich_job_identity
+from subserver.services.memory import StoryMemory
+from subserver.domain.queue_policy import configured_models
+from subserver.adapters.store import Store
+from subserver.adapters.llm import LiveProviderFactory, build_provider, rate_limits
+from subserver.services.feedback import FeedbackProposer
+from subserver.api.insight_api import Insights
+from subserver.services.metrics import Metrics
+from subserver.jobs.translation_attempt import TranslationAttempt
+from subserver.services.units import UnitService
+from subserver.services.versions import TranslationVersions
 from subserver.runtime import RuntimeContext
-from subserver.ports import MediaLibrary, Metadata, Telemetry
-from subserver.bodies import BodyLog
-from subserver.redaction import DEFAULT as DEFAULT_REDACTOR, SECRET_SETTING_KEYS
-from subserver.telemetry import NULL as NULL_TELEMETRY, Telemetry as TelemetrySink
-from subserver.tmdb import TmdbMetadata
+from subserver.domain.ports import MediaLibrary, Metadata, Telemetry
+from subserver.adapters.bodies import BodyLog
+from subserver.domain.redaction import DEFAULT as DEFAULT_REDACTOR, SECRET_SETTING_KEYS
+from subserver.adapters.telemetry import NULL as NULL_TELEMETRY, Telemetry as TelemetrySink
+from subserver.adapters.tmdb import TmdbMetadata
 # The settings service and the HTTP adapter live in their own modules; they stay importable from here.
-from subserver.settings import SettingsService
-from subserver.web import ConsoleHandler, start_web_server  # noqa: F401
+from subserver.adapters.settings import SettingsService
+from subserver.api.web import ConsoleHandler, start_web_server  # noqa: F401
 
 # Used when `process_job` is called without an explicit attempt (no history, no library): the legacy entry point.
 DEFAULT_ATTEMPT = TranslationAttempt(provider_factory=build_provider)

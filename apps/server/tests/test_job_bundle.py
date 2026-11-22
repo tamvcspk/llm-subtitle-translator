@@ -10,11 +10,11 @@ from subcore.glossary import loads as load_glossary
 from subcore.translate.review import review
 from subcore import srt
 
-from subserver import gather as gather_mod
-from subserver.console import ConsoleActions
-from subserver.rules import build_rules
-from subserver.store import Store
-from subserver import translation_attempt
+from subserver.domain import gather as gather_mod
+from subserver.services.console import ConsoleActions
+from subserver.domain.rules import build_rules
+from subserver.adapters.store import Store
+from subserver.jobs import translation_attempt
 
 from .test_corrections import SETTINGS, Env
 

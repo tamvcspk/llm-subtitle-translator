@@ -135,7 +135,7 @@ The rules that move a translation job through the job queue, including settling,
 recovery, retries, quota pauses, and terminal outcomes.
 
 **Port**:
-A narrow interface (`Protocol`, in `subserver/ports.py`) for something the worker core
+A narrow interface (`Protocol`, in `subserver/domain/ports.py`) for something the worker core
 needs from outside and does not own: Bazarr, TMDB, the model provider. It returns named
 immutable types, never a `dict` or a database row. The application's own SQLite
 (`Store`) is not behind a port: the core uses it directly, and tests run it on `:memory:`.
@@ -304,7 +304,7 @@ Everything one translation reads, as plain data: the cues with their timing, the
 (already narrowed to the episode), its address rules placed on cues, the effective style and the voices of the
 characters the dialogue names, the corrections and story sections, few-shot examples by value, the cues asked for
 and the model parameters. The worker gathers it from the
-database (`subserver/gather.py`); the engine renders and runs it; the CLI runs the same file. It holds no key
+database (`subserver/domain/gather.py`); the engine renders and runs it; the CLI runs the same file. It holds no key
 and no machine path. `bundle_version` says how to read it, and `bundle_hash` changes only when the prompt or a
 parameter changes.
 

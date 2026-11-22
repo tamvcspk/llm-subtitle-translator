@@ -14,18 +14,18 @@ from pathlib import Path
 from subcore import srt
 from subcore.providers import FakeProvider
 
-from subserver import library_api
-from subserver.bazarr import BazarrMedia
-from subserver import queue as gst_queue
-from subserver.glossaries import Glossaries
-from subserver.jobs import job_key
-from subserver.queue import JobQueue
-from subserver.library import Library, identify_job
-from subserver.ports import Correction
-from subserver.store import _MIGRATIONS, Store
-from subserver.translation_attempt import TranslationAttempt
-from subserver.units import UnitService, parse_time_ms
-from subserver.versions import TranslationVersions
+from subserver.api import library_api
+from subserver.adapters.bazarr import BazarrMedia
+from subserver.jobs import queue as gst_queue
+from subserver.services.glossaries import Glossaries
+from subserver.jobs.jobs import job_key
+from subserver.jobs.queue import JobQueue
+from subserver.services.library import Library, identify_job
+from subserver.domain.ports import Correction
+from subserver.adapters.store import _MIGRATIONS, Store
+from subserver.jobs.translation_attempt import TranslationAttempt
+from subserver.services.units import UnitService, parse_time_ms
+from subserver.services.versions import TranslationVersions
 
 SETTINGS = {"gst_model": "m-1"}
 CUES = 12
@@ -613,7 +613,7 @@ class ApiRoutingTests(unittest.TestCase):
 class RulesTests(unittest.TestCase):
     def test_an_address_correction_replaces_the_files_rule_for_that_pair_from_its_cue_on(self):
         from subcore import glossary as g
-        from subserver.rules import build_rules
+        from subserver.domain.rules import build_rules
 
         glossary = g.loads("address_rules:\n  - {a: Alice, b: Bob, a_to_b: 'tôi–anh', from: S01E01}\n"
                            "  - {a: Carol, b: Dan, a_to_b: 'chị–em'}\n")
@@ -633,7 +633,7 @@ class RulesTests(unittest.TestCase):
 
     def test_the_hash_tracks_rules_but_not_hand_edited_cues(self):
         from subcore import glossary as g
-        from subserver.rules import build_rules
+        from subserver.domain.rules import build_rules
 
         plain = build_rules(g.Glossary(), season=1, episode=1)
         with_edit = build_rules(g.Glossary(), season=1, episode=1,
@@ -655,7 +655,7 @@ class HttpRoutingTests(unittest.TestCase):
         from http.server import ThreadingHTTPServer
 
         import worker
-        from subserver.auth import ConsoleAuth
+        from subserver.services.auth import ConsoleAuth
 
         env = Env(self)
         env.translate(1)
@@ -702,7 +702,7 @@ BAZARR = {"bazarr_url": "http://bazarr", "bazarr_api_key": "key"}
 
 class WorkerWiringTests(unittest.TestCase):
     def test_process_job_enriches_the_identity_from_bazarr_when_it_can(self):
-        from subserver.library import enrich_job_identity
+        from subserver.services.library import enrich_job_identity
 
         class Bazarr:
             def get_json(self, url, params=None, headers=None):
@@ -717,7 +717,7 @@ class WorkerWiringTests(unittest.TestCase):
                          ("tvdb-70327", "Malcolm in the Middle", 1, 1, "Pilot"))
 
     def test_a_bazarr_failure_never_fails_the_job(self):
-        from subserver.library import enrich_job_identity
+        from subserver.services.library import enrich_job_identity
 
         class Down:
             def get_json(self, *args, **kwargs):

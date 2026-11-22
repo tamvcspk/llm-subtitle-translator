@@ -15,16 +15,17 @@ from subcore import golden
 from subcore.feedback import MIN_REPEATS
 
 import worker
-from subserver import insight_api, suggestion_api
-from subserver.auth import ConsoleAuth
-from subserver.console import ConsoleActions
-from subserver.queue import JobQueue
-from subserver.feedback import FeedbackProposer
-from subserver.insight_api import Insights
-from subserver.metrics import DAY, MARK_DAY, Metrics
-from subserver.ports import MetricRow
-from subserver.store import Store
-from subserver.suggestions import SuggestionService
+from subserver.api import insight_api
+from subserver.api import suggestion_api
+from subserver.services.auth import ConsoleAuth
+from subserver.services.console import ConsoleActions
+from subserver.jobs.queue import JobQueue
+from subserver.services.feedback import FeedbackProposer
+from subserver.api.insight_api import Insights
+from subserver.services.metrics import DAY, MARK_DAY, Metrics
+from subserver.domain.ports import MetricRow
+from subserver.adapters.store import Store
+from subserver.services.suggestions import SuggestionService
 
 from .test_corrections import SETTINGS, Env as CorrectionsEnv
 
@@ -512,7 +513,7 @@ class HttpTests(unittest.TestCase):
         auth = ConsoleAuth.from_env({"CONSOLE_USER": "admin", "CONSOLE_PASSWORD": "correct horse battery"})
         server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
         server.ctx, server.auth = ctx, auth
-        from subserver.auth import LoginThrottle, SessionStore
+        from subserver.services.auth import LoginThrottle, SessionStore
 
         server.sessions, server.throttle = SessionStore.for_auth(auth), LoginThrottle()
         thread = threading.Thread(target=server.serve_forever, daemon=True)

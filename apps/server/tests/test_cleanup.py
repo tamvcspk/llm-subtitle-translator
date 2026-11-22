@@ -15,13 +15,13 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import worker
-from subserver.auth import ConsoleAuth
-from subserver.cleanup import GLOSSARY, JOBS_DONE, JOBS_FAILED, TEMP, VERSIONS, Cleanup, orphan_temp_files
-from subserver.glossaries import Glossaries
-from subserver.jobs import CANCELLED, DONE, FAILED, QUEUED, RUNNING, SKIPPED, WAITING, JobStore
-from subserver.ports import CURRENT, PRUNED, SUPERSEDED
-from subserver.store import Store
-from subserver.versions import AUTO, RETRANSLATE, TranslationVersions
+from subserver.services.auth import ConsoleAuth
+from subserver.services.cleanup import GLOSSARY, JOBS_DONE, JOBS_FAILED, TEMP, VERSIONS, Cleanup, orphan_temp_files
+from subserver.services.glossaries import Glossaries
+from subserver.jobs.jobs import CANCELLED, DONE, FAILED, QUEUED, RUNNING, SKIPPED, WAITING, JobStore
+from subserver.domain.ports import CURRENT, PRUNED, SUPERSEDED
+from subserver.adapters.store import Store
+from subserver.services.versions import AUTO, RETRANSLATE, TranslationVersions
 
 DAY = 86400
 NOW = 2_000_000_000.0  # a fixed "today"; job rows and file times are laid out relative to it
@@ -489,14 +489,14 @@ class SettingsAndStatistics(unittest.TestCase):
     KEYS = ("retention_done_days", "retention_failed_days", "retention_versions_keep", "retention_glossary_keep")
 
     def test_the_defaults_are_the_ones_in_the_spec_and_a_bad_value_is_repaired(self):
-        from subserver.config import normalize_app_config
+        from subserver.domain.config import normalize_app_config
 
         self.assertEqual([normalize_app_config({})[key] for key in self.KEYS], [30, 90, 5, 20])
         repaired = normalize_app_config({key: bad for key, bad in zip(self.KEYS, (-3, "soon", None, "7"))})
         self.assertEqual([repaired[key] for key in self.KEYS], [0, 90, 5, 7])
 
     def test_they_are_editable_settings_that_reach_the_runtime_settings(self):
-        from subserver.settings import SettingsService
+        from subserver.adapters.settings import SettingsService
 
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -513,7 +513,7 @@ class SettingsAndStatistics(unittest.TestCase):
         self.assertEqual([service.settings()[key] for key in self.KEYS], [7, 90, 0, 20])
 
     def test_the_model_statistics_say_how_far_back_they_reach(self):
-        from subserver.queue import JobQueue
+        from subserver.jobs.queue import JobQueue
 
         queue = JobQueue(Store(":memory:"))
         queue.configure({"retention_done_days": 14, "retention_failed_days": 0}, ("light",), "gemini")

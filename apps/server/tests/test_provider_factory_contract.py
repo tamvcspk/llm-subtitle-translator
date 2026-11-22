@@ -5,8 +5,8 @@ import unittest
 from subcore.providers import Provider
 from subcore.providers.fake import FakeProvider
 
-from subserver.llm import build_provider
-from subserver.ports import MissingApiKey, ProviderFactory
+from subserver.adapters.llm import build_provider
+from subserver.domain.ports import MissingApiKey, ProviderFactory
 
 
 def fake_factory(settings, model, *, deadline=None, on_call=None):

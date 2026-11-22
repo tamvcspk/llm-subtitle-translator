@@ -8,19 +8,19 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from subserver import queue_policy as policy
-from subserver.auto_request import AutoRequest, sync_and_request
-from subserver.catalog import CatalogPaths, CatalogSync, with_keys
-from subserver.catalog_actions import CatalogActions
-from subserver.catalog_api import handle
-from subserver.catalog_view import CatalogView
-from subserver.glossaries import Glossaries
-from subserver.job_requests import JobRequests
-from subserver.library import Library, identify_job
-from subserver.ports import CatalogEntry, CatalogSubtitle, MediaLibraryError
-from subserver.queue import JobQueue
-from subserver.store import Store
-from subserver.versions import TranslationVersions
+from subserver.domain import queue_policy as policy
+from subserver.services.auto_request import AutoRequest, sync_and_request
+from subserver.services.catalog import CatalogPaths, CatalogSync, with_keys
+from subserver.services.catalog_actions import CatalogActions
+from subserver.api.catalog_api import handle
+from subserver.services.catalog_view import CatalogView
+from subserver.services.glossaries import Glossaries
+from subserver.services.job_requests import JobRequests
+from subserver.services.library import Library, identify_job
+from subserver.domain.ports import CatalogEntry, CatalogSubtitle, MediaLibraryError
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
+from subserver.services.versions import TranslationVersions
 from tests.queue_harness import Clock
 
 SRT = "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n2\n00:00:03,000 --> 00:00:04,000\nWorld\n"

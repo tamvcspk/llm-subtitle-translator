@@ -13,19 +13,19 @@ from subcore import srt
 from subcore.translate import TranslationError
 
 import worker
-from subserver import provider_guard as guard
-from subserver.gather import gather
-from subserver.rules import UnitRules
-from subserver import queue_policy as policy
-from subserver import suggestion_api
-from subserver.jobs import (
+from subserver.jobs import provider_guard as guard
+from subserver.domain.gather import gather
+from subserver.domain.rules import UnitRules
+from subserver.domain import queue_policy as policy
+from subserver.api import suggestion_api
+from subserver.jobs.jobs import (
     CANCELLED, FAILED, PUBLISH, QUEUED, RUNNING, TRANSLATING_KINDS, VARIANT, WAITING, job_key, job_name,
 )
-from subserver.queue import JobQueue
-from subserver.queue_policy import Health
-from subserver.ports import MissingApiKey
-from subserver.store import Store
-from subserver.translation import (
+from subserver.jobs.queue import JobQueue
+from subserver.domain.queue_policy import Health
+from subserver.domain.ports import MissingApiKey
+from subserver.adapters.store import Store
+from subserver.domain.translation import (
     CallBudgetError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, ProviderAuthError,
     ProviderUnavailableError,
 )
@@ -34,7 +34,7 @@ from tests.test_proposals import Env as ProposalEnv
 from tests.test_translation_attempt import SOURCE as SOURCE_TEXT, Env as AttemptEnv
 from tests.test_story_memory import all_sources, source_text
 
-import subserver.http as gst_http
+import subserver.adapters.http as gst_http
 
 
 class ErrorMappingTests(unittest.TestCase):
@@ -572,7 +572,7 @@ class BackgroundTasksAreGoneTests(unittest.TestCase):
         self.assertNotIn("tasks", RuntimeContext.__dataclass_fields__)
 
     def test_no_route_serves_tasks_and_nothing_takes_a_background_flag(self):
-        from subserver import web
+        from subserver.api import web
 
         self.assertFalse(hasattr(web.ConsoleHandler, "tasks_route"))
         env = ProposalEnv(self, suggest_from_facts=False)
@@ -593,7 +593,7 @@ class ExtractJobsAreNotTranslationsTests(unittest.TestCase):
         self.assertEqual(env.store.policy_jobs_since(0), 0)
 
     def test_an_extract_job_does_not_count_as_a_series_translation_in_the_catalog(self):
-        from subserver.catalog_view import CatalogView
+        from subserver.services.catalog_view import CatalogView
 
         env = with_episodes(self)
         env.service.refresh_context(env.unit_id(1), {"unit_ids": [env.unit_id(2)]})

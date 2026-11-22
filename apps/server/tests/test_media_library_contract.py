@@ -3,8 +3,8 @@
 import unittest
 from unittest.mock import patch
 
-from subserver.bazarr import BazarrMedia
-from subserver.ports import CatalogEntry, CatalogSubtitle, EpisodeListing, MediaDetails, MediaLibrary, MediaLibraryError
+from subserver.adapters.bazarr import BazarrMedia
+from subserver.domain.ports import CatalogEntry, CatalogSubtitle, EpisodeListing, MediaDetails, MediaLibrary, MediaLibraryError
 
 
 class InMemoryMediaLibrary:
@@ -192,7 +192,7 @@ class BazarrMediaTests(MediaLibraryContract, unittest.TestCase):
                     return {"data": []}
                 return {"data": [], "total": 0}
 
-        with patch("subserver.bazarr.CATALOG_PAGE_SIZE", 2):
+        with patch("subserver.adapters.bazarr.CATALOG_PAGE_SIZE", 2):
             media = BazarrMedia(Paged(), lambda: {"bazarr_url": "http://bazarr", "bazarr_api_key": "key"})
             titles = [e.title for e in media.catalog() if e.kind == "series"]
         self.assertEqual(titles, ["S1", "S2", "S3"])

@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import worker
-from subserver.backups import BackupMaintenance
+from subserver.adapters.backups import BackupMaintenance
 
 
 class WorkerStartupTests(unittest.TestCase):

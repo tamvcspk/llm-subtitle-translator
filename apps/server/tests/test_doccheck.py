@@ -62,6 +62,21 @@ class ModuleTests(unittest.TestCase):
         problems = doccheck.missing_modules("subjobs.py x.jobs.py subcore.memoryx", ["jobs"], ["memory"])
         self.assertEqual(len(problems), 2)
 
+    def test_server_modules_are_found_in_every_layer_and_a_sub_package_is_named_with_its_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in (
+                "__init__.py", "runtime.py", "services/__init__.py", "services/units.py", "jobs/queue.py",
+                "adapters/store/__init__.py", "adapters/store/auth.py", "adapters/http.py",
+            ):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("", encoding="utf-8")
+            self.assertEqual(
+                doccheck.server_modules(root), ["http", "queue", "runtime", "store/auth", "units"],
+            )
+        problems = doccheck.missing_modules("`auth.py` and `units.py`", ["store/auth", "units"], [])
+        self.assertEqual(problems, ["docs/ARCHITECTURE.md does not name subserver/store/auth.py"])
+
     def test_subcore_modules_lists_packages_and_modules_but_not_main(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

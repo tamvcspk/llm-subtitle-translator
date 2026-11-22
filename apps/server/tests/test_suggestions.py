@@ -5,9 +5,9 @@ import unittest
 
 from subcore import glossary as g
 
-from subserver import suggestion_api
-from subserver.ports import SUGGESTION_ACCEPTED, SUGGESTION_PENDING, SUGGESTION_REJECTED
-from subserver.suggestions import SOURCES, Proposal, SuggestionService, fingerprint, independent_sources, normalise
+from subserver.api import suggestion_api
+from subserver.domain.ports import SUGGESTION_ACCEPTED, SUGGESTION_PENDING, SUGGESTION_REJECTED
+from subserver.services.suggestions import SOURCES, Proposal, SuggestionService, fingerprint, independent_sources, normalise
 
 from .test_style_profile import Env as StyleEnv
 
@@ -469,7 +469,7 @@ class StoreTests(unittest.TestCase):
         self.assertIsNotNone(env.store.suggestion_add(env.series, "fr", "term", "facts", "fp", TERM, [], []))
 
     def test_settings_have_their_defaults_and_read_text_as_switches(self):
-        from subserver.config import normalize_app_config
+        from subserver.domain.config import normalize_app_config
 
         defaults = normalize_app_config({})
         self.assertEqual(

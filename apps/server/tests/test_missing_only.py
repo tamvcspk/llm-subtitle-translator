@@ -7,9 +7,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import worker
-from subserver import bazarr, queue, subtitles, translation
-from subserver.queue import JobQueue
-from subserver.store import Store
+from subserver.adapters import bazarr
+from subserver.jobs import queue
+from subserver.domain import subtitles
+from subserver.domain import translation
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
 
 TARGETS = [{"code": "vi", "language": "Vietnamese", "enabled": True}]
 LITE = "gemini-3.1-flash-lite"

@@ -15,20 +15,20 @@ from subcore.memory import EXTRACT_PROMPT_VERSION
 from subcore.providers import FakeProvider, QuotaExhausted, ResilientProvider
 from subcore.providers.fake import echo_items
 
-from subserver import library_api
-from subserver import queue as gst_queue
-from subserver.bazarr import list_series_episodes
-from subserver.glossaries import Glossaries
-from subserver.queue import JobQueue
-from subserver.library import Library
-from subserver.memory import StoryMemory, parse_anchor, unit_label
-from subserver.ports import EpisodeListing, Series, Unit
-from subserver.read_jobs import ExtractJob
-from subserver.store import Store
-from subserver.translation import ContextGapError, DailyQuotaExceededError
-from subserver.translation_attempt import TranslationAttempt
-from subserver.units import UnitService
-from subserver.versions import TranslationVersions
+from subserver.api import library_api
+from subserver.jobs import queue as gst_queue
+from subserver.adapters.bazarr import list_series_episodes
+from subserver.services.glossaries import Glossaries
+from subserver.jobs.queue import JobQueue
+from subserver.services.library import Library
+from subserver.services.memory import StoryMemory, parse_anchor, unit_label
+from subserver.domain.ports import EpisodeListing, Series, Unit
+from subserver.jobs.read_jobs import ExtractJob
+from subserver.adapters.store import Store
+from subserver.domain.translation import ContextGapError, DailyQuotaExceededError
+from subserver.jobs.translation_attempt import TranslationAttempt
+from subserver.services.units import UnitService
+from subserver.services.versions import TranslationVersions
 
 CUES = 12
 SETTINGS = {"gst_model": "m-1", "memory_enabled": True, "memory_gap_wait_seconds": 1800}

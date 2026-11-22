@@ -5,8 +5,8 @@ import time
 import unittest
 from pathlib import Path
 
-from subserver.ports import CURRENT, REMOVED, SUPERSEDED, TranslationVersion
-from subserver.store import Store
+from subserver.domain.ports import CURRENT, REMOVED, SUPERSEDED, TranslationVersion
+from subserver.adapters.store import Store
 
 OUT = "/media/Show.S01E01.vi.srt"
 
@@ -108,7 +108,7 @@ class TranslationVersionsOnAMemoryStoreTests(unittest.TestCase):
     """The publish/revert rules need only the port: no SQLite in this test."""
 
     def test_publish_retranslate_and_revert_through_the_port(self):
-        from subserver.versions import AUTO, RETRANSLATE, TranslationVersions
+        from subserver.services.versions import AUTO, RETRANSLATE, TranslationVersions
 
         with tempfile.TemporaryDirectory() as tmp:
             output = str(Path(tmp) / "media" / "Show.vi.srt")

@@ -8,11 +8,11 @@ import unittest
 from subcore.providers import Unavailable
 from subcore.suggest import SUGGEST_PROMPT_VERSION
 
-from subserver import suggestion_api
-from subserver.ports import SUGGESTION_PENDING, SUGGESTION_REJECTED
-from subserver.proposals import FactsProposer
-from subserver.read_jobs import SuggestJob
-from subserver.suggestions import SuggestionService
+from subserver.api import suggestion_api
+from subserver.domain.ports import SUGGESTION_PENDING, SUGGESTION_REJECTED
+from subserver.services.proposals import FactsProposer
+from subserver.jobs.read_jobs import SuggestJob
+from subserver.services.suggestions import SuggestionService
 
 from .test_story_memory import Env as MemoryEnv
 
@@ -234,7 +234,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(env.translate(5, trigger="retranslate", retranslate={}), "translated")
 
     def test_its_calls_carry_a_prompt_version_of_their_own_in_the_call_record(self):
-        from subserver.provider_guard import prompt_version_of
+        from subserver.jobs.provider_guard import prompt_version_of
 
         self.assertEqual(prompt_version_of("extract", "suggest"), f"suggest-{SUGGEST_PROMPT_VERSION}")
         self.assertEqual(prompt_version_of("extract", "extract"), prompt_version_of("extract"))  # facts keep theirs

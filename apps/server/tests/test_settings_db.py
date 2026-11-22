@@ -18,13 +18,13 @@ from unittest.mock import patch
 from subcore.providers import AuthError, FakeProvider, LLMRequest, ModelNotFound
 
 import worker
-from subserver import backups as gst_backups
-from subserver.auth import ConsoleAuth
-from subserver.llm import KeyedProvider, LiveProviderFactory, build_provider
-from subserver.ports import MissingApiKey
-from subserver.redaction import DEFAULT, REDACTED
-from subserver.settings import SettingsService, last_chars
-from subserver.store import Store
+from subserver.adapters import backups as gst_backups
+from subserver.services.auth import ConsoleAuth
+from subserver.adapters.llm import KeyedProvider, LiveProviderFactory, build_provider
+from subserver.domain.ports import MissingApiKey
+from subserver.domain.redaction import DEFAULT, REDACTED
+from subserver.adapters.settings import SettingsService, last_chars
+from subserver.adapters.store import Store
 
 KEY_A = "AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1111"
 KEY_B = "AIzaSyBBBBBBBBBBBBBBBBBBBBBBBBBBBBB2222"

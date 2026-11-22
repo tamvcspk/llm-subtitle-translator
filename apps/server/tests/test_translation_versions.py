@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from subserver.ports import TokenTotals
-from subserver.store import Store
-from subserver.versions import AUTO, EXTERNAL, RETRANSLATE, REVERT, SKIPPED_EXISTING, TranslationVersions
+from subserver.domain.ports import TokenTotals
+from subserver.adapters.store import Store
+from subserver.services.versions import AUTO, EXTERNAL, RETRANSLATE, REVERT, SKIPPED_EXISTING, TranslationVersions
 
 
 def sha(path):

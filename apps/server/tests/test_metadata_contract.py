@@ -2,9 +2,9 @@
 
 import unittest
 
-from subserver.http import MemoryCache
-from subserver.ports import Metadata
-from subserver.tmdb import TmdbMetadata
+from subserver.adapters.http import MemoryCache
+from subserver.domain.ports import Metadata
+from subserver.adapters.tmdb import TmdbMetadata
 
 MOVIE_JOB = {"media_type": "movie", "video_path": "/media/The.Matrix.(1999).{tmdb-603}.mkv", "subtitle_path": "x"}
 MOVIE = {"title": "The Matrix", "release_date": "1999-03-31", "genres": [{"name": "Sci-Fi"}], "overview": "A hacker."}

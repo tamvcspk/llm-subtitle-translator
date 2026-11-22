@@ -1,8 +1,9 @@
 # Architecture
 
-> Describes the current (inherited) worker. The repository is a uv workspace:
+> Describes the worker as built. The repository is a uv workspace:
 > worker paths below (`worker.py`, `subserver/`, `tests/`) live under
 > `apps/server/`; the console is `apps/web` and the new engine package is `packages/subcore/`.
+> Module names below are file names inside the layer packages of `subserver/` (see "Layers of `subserver/`").
 > The image keeps the old runtime layout (`/app/worker.py`, `/app/subserver`) and serves the
 > console build from `/app/static`.
 > Target design: [design/ARCHITECTURE.md](design/ARCHITECTURE.md).
@@ -35,7 +36,31 @@ SQLite or HTTP-server module itself (`tests/test_core_boundary.py`). In normal m
   loop from claiming);
 - the catalog sync loop (`run_catalog_sync`, the only caller of `sync_and_request`) and the backup and clean-up
   scheduler thread;
-- a small stdlib (`http.server`) server for the console and JSON API (`subserver/web.py`).
+- a small stdlib (`http.server`) server for the console and JSON API (`subserver/api/web.py`).
+
+### Layers of `subserver/` (ADR-18, P15c)
+
+`subserver/` is five layer packages and the composition seam; every module belongs to exactly one layer, and the
+direction of imports is checked by `tests/test_core_boundary.py`:
+
+| Package | Holds | May import |
+|---|---|---|
+| `domain/` | pure decisions and the port types: `ports`, `config`, `queue_policy`, `rules`, `gather`, `suggestion_keys`, `subtitles`, `translation`, `redaction` | `subcore` and the standard library |
+| `services/` | the use cases: `units`, `console`, `library`, `versions`, `memory`, `suggestions`, `judge`, `metrics`, `cleanup`, `catalog*`, `job_requests`, `auto_request`, `glossaries`, `styles`, `style_service`, `proposals`, `feedback`, `estimates`, `bootstrap`, `auth` | `domain`, `jobs`, the `Store` and the `Telemetry` sink |
+| `jobs/` | the queue and what runs a job: `jobs` (`JobStore`), `queue` (`JobQueue`), `provider_guard`, `read_jobs`, `translation_attempt`, `intake` | the same as `services/` |
+| `adapters/` | what touches infrastructure: `bazarr`, `tmdb`, `http`, `gemini`, `llm`, `backups`, `connection_tests`, `settings`, `logs`, `bodies`, `telemetry` and the `store/` package | `domain` and other adapters |
+| `api/` | the HTTP handler `web` and the pure routers `*_api`, `keys_api` | everything below, but never the `Store`, `JobQueue` or `JobStore` directly: a route asks a service |
+| `runtime.py` | `RuntimeContext`, the typed composition seam (with `worker.py`, the composition root) | any layer |
+
+Where a new file goes: a pure function or a type that crosses layers is `domain/`; a class a route or a job calls to do
+something is `services/`; code that runs a kind of job is `jobs/`; a module that opens a socket, a file the worker does
+not own or a model provider is `adapters/`; a route is `api/`. A module that fits none of these fails the boundary test.
+
+The `Store` is a package, `adapters/store/`: `base.py` holds the connection, the lock and the migrations runner,
+`migrations.py` the schema scripts, and one repository mixin per group of tables (`auth.py`, `bundles.py`,
+`settings.py`, `records.py` (calls, events, signals, prompt bodies), `insights.py`, `versions.py`, `library.py`
+(series, units, corrections), `glossary.py`, `suggestions.py`, `catalog.py`, `memory.py`) is assembled into the one
+`Store` the rest of the worker holds (`store/__init__.py`). A method lives in the file of the table it touches.
 
 Domain code is split under `subserver/`:
 
@@ -109,10 +134,12 @@ Domain code is split under `subserver/`:
   reports a refused key (`AuthError`: the key becomes `invalid`), a use, and an
   unknown model (`ModelNotFound`: a Settings warning) back to the service;
   `build_provider` is the plain function over a settings mapping;
-- `store.py`: SQLite (`app.db`, versioned migrations, file mode `0600`) with the
-  `translations`, `llm_calls`, library, `facts`, `summaries_cache`,
-  `context_snapshots`, `events`, `quality_signals`, `llm_bodies`, `settings` and
-  `api_keys` tables;
+- `store/` (`store/base.py`, `store/migrations.py`, `store/auth.py`, `store/bundles.py`, `store/settings.py`,
+  `store/records.py`, `store/insights.py`, `store/versions.py`, `store/library.py`, `store/glossary.py`,
+  `store/suggestions.py`, `store/catalog.py`, `store/memory.py`): SQLite (`app.db`, versioned migrations, file
+  mode `0600`) with the `translations`, `llm_calls`, library, `facts`, `summaries_cache`, `context_snapshots`,
+  `events`, `quality_signals`, `llm_bodies`, `settings` and `api_keys` tables. `Store` is the facade the worker
+  holds; tests build it on `Store(":memory:")`;
 - `memory.py`: `StoryMemory`, the worker side of story memory: story order,
   prerequisite fact extraction, gap waiting, the context bundle and its staleness;
 - `versions.py`: `TranslationVersions`, publishing with version history, backup

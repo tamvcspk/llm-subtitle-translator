@@ -18,17 +18,17 @@ from pathlib import Path
 from subcore import srt
 from subcore.providers import AuthError, OpenAICompatProvider, ResilientProvider
 
-from subserver.bodies import BodyLog
-from subserver.config import model_for_task, normalize_app_config, provider_name
-from subserver.connection_tests import test_connection
-from subserver.gemini import openai_models
-from subserver.llm import KeyedProvider, LiveProviderFactory, build_provider, rate_limits
-from subserver.ports import ApiKey, MissingApiKey
-from subserver.redaction import DEFAULT
-from subserver.settings import SettingsService
-from subserver.store import Store
-from subserver.telemetry import Telemetry
-from subserver.translation_attempt import TranslationAttempt
+from subserver.adapters.bodies import BodyLog
+from subserver.domain.config import model_for_task, normalize_app_config, provider_name
+from subserver.adapters.connection_tests import test_connection
+from subserver.adapters.gemini import openai_models
+from subserver.adapters.llm import KeyedProvider, LiveProviderFactory, build_provider, rate_limits
+from subserver.domain.ports import ApiKey, MissingApiKey
+from subserver.domain.redaction import DEFAULT
+from subserver.adapters.settings import SettingsService
+from subserver.adapters.store import Store
+from subserver.adapters.telemetry import Telemetry
+from subserver.jobs.translation_attempt import TranslationAttempt
 
 KEY = "sk-or-v1-5f1c9d0a7e2b4c6d8e0f1a2b3c4d5e6f"
 OTHER_KEY = "sk-or-v1-aaaaaaaabbbbbbbbccccccccdddddddd"
@@ -504,7 +504,7 @@ class _CaptureLogs:
         return False
 
     def text(self) -> str:
-        from subserver.logs import RedactingFormatter
+        from subserver.adapters.logs import RedactingFormatter
 
         formatter = RedactingFormatter("%(name)s %(message)s")
         return "\n".join(formatter.format(record) for record in self.records)

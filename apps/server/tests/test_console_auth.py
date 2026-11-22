@@ -10,10 +10,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import worker
-from subserver.console import ConsoleActions
-from subserver.queue import JobQueue
-from subserver.store import Store
-from subserver.auth import ALLOW, UNAUTHORIZED, UNCONFIGURED, ConsoleAuth
+from subserver.services.console import ConsoleActions
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
+from subserver.services.auth import ALLOW, UNAUTHORIZED, UNCONFIGURED, ConsoleAuth
 
 USER = "admin"
 PASSWORD = "s3cret-pässword:with:colons"
@@ -54,7 +54,7 @@ class ConsoleAuthPolicyTests(unittest.TestCase):
                 self.assertEqual(auth.check(header), UNAUTHORIZED)
 
     def test_a_refusal_is_explained_without_revealing_the_credentials(self):
-        from subserver.auth import explain_failure
+        from subserver.services.auth import explain_failure
 
         auth = ConsoleAuth.from_env({"CONSOLE_USER": "trial", "CONSOLE_PASSWORD": "abcDEF123"})
         self.assertIn("no credentials were sent", explain_failure(auth, None))

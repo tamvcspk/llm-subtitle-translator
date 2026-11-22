@@ -4,11 +4,11 @@ network."""
 
 import unittest
 
-from subserver.auto_request import AutoRequest, sync_and_request
-from subserver.bootstrap import BootstrapState, is_locked, story_order
-from subserver.catalog_api import handle
-from subserver.ports import SeriesSeed
-from subserver.suggestions import Proposal, SuggestionService
+from subserver.services.auto_request import AutoRequest, sync_and_request
+from subserver.services.bootstrap import BootstrapState, is_locked, story_order
+from subserver.api.catalog_api import handle
+from subserver.domain.ports import SeriesSeed
+from subserver.services.suggestions import Proposal, SuggestionService
 
 from .test_catalog import CatalogCase, Env
 

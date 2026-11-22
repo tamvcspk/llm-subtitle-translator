@@ -8,8 +8,8 @@ from pathlib import Path
 
 from subcore.memory import Character, Facts
 
-from subserver.ports import StoredFacts
-from subserver.store import Store
+from subserver.domain.ports import StoredFacts
+from subserver.adapters.store import Store
 
 PV = "x3"
 

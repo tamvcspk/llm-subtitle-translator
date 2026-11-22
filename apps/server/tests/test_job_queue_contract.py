@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from subserver.jobs import FAILED
-from subserver.queue import JobQueue
-from subserver.store import Store
+from subserver.jobs.jobs import FAILED
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
 
 TARGETS = [{"code": "vi", "language": "Vietnamese", "enabled": True}, {"code": "de", "language": "German", "enabled": True}]
 

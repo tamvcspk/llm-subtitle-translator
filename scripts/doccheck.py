@@ -3,7 +3,7 @@
 
 Two checks, both one-directional (code -> docs; a doc may keep history):
 
-* every module of ``apps/server/subserver`` is named in ``docs/ARCHITECTURE.md`` as ``<name>.py``, and every module of
+* every module of ``apps/server/subserver`` (all layer packages, ADR-18) is named in ``docs/ARCHITECTURE.md`` as ``<name>.py``, and every module of
   ``packages/subcore/src/subcore`` as ``subcore.<dotted.name>`` (a package as ``subcore.<package>``);
 * every ``/api/...`` route found as a string literal in ``apps/server/subserver`` and ``worker.py`` appears in
   ``docs/API.md`` (``{name}`` and a regex group are the same placeholder; a query string is ignored).
@@ -24,7 +24,19 @@ SUBCORE = ROOT / "packages" / "subcore" / "src" / "subcore"
 
 
 def server_modules(package: Path = SERVER / "subserver") -> list[str]:
-    return sorted(p.stem for p in package.glob("*.py") if p.name != "__init__.py")
+    """The names the docs must give, one per module under the layer packages of ``subserver`` (ADR-18).
+
+    A module of a layer (``services/units.py``) is named by its file, ``units.py``. A module inside a sub-package of a
+    layer (``adapters/store/auth.py``) is named with its folder, ``store/auth.py``: several of them share a file name
+    with a module of another layer.
+    """
+    names: set[str] = set()
+    for path in package.rglob("*.py"):
+        if path.name == "__init__.py" or "__pycache__" in path.parts:
+            continue
+        parts = path.relative_to(package).with_suffix("").parts
+        names.add("/".join(parts[1:]) if len(parts) > 2 else parts[-1])
+    return sorted(names)
 
 
 def subcore_modules(package: Path = SUBCORE) -> list[str]:
@@ -115,7 +127,9 @@ def check(root: Path = ROOT) -> list[str]:
     architecture = (root / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     api_doc = (root / "docs" / "API.md").read_text(encoding="utf-8")
     server = root / "apps" / "server"
-    sources = sorted((server / "subserver").glob("*.py")) + [server / "worker.py"]
+    sources = sorted(
+        p for p in (server / "subserver").rglob("*.py") if "__pycache__" not in p.parts
+    ) + [server / "worker.py"]
     routes: set[str] = set()
     for path in sources:
         routes |= code_routes(path.read_text(encoding="utf-8"))

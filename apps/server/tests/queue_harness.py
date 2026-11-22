@@ -2,10 +2,10 @@
 
 import unittest
 
-from subserver import queue_policy as policy
-from subserver.jobs import job_key
-from subserver.queue import JobQueue
-from subserver.store import Store
+from subserver.domain import queue_policy as policy
+from subserver.jobs.jobs import job_key
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
 
 START = 1_800_000_000.0  # a Thursday, 2027-01-15 08:00 UTC: far from any midnight
 

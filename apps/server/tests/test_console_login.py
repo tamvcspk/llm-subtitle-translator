@@ -12,9 +12,9 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import worker
-from subserver.console import ConsoleActions
-from subserver.queue import JobQueue
-from subserver.auth import (
+from subserver.services.console import ConsoleActions
+from subserver.jobs.queue import JobQueue
+from subserver.services.auth import (
     LOCK_SECONDS,
     SESSION_COOKIE,
     UNCONFIGURED,
@@ -27,7 +27,7 @@ from subserver.auth import (
     session_cookie,
     session_token,
 )
-from subserver.store import Store
+from subserver.adapters.store import Store
 
 USER = "admin"
 PASSWORD = "s3cret-pässword"

@@ -9,12 +9,12 @@ from subcore import glossary as g
 from subcore import srt
 from subcore.style import Style
 
-from subserver import style_api
-from subserver.glossaries import Glossaries, IMPORTED_MARK
-from subserver.queue import skip_reason
-from subserver.style_service import StyleService, pick_samples
-from subserver.styles import Styles
-from subserver.versions import RETRANSLATE
+from subserver.api import style_api
+from subserver.services.glossaries import Glossaries, IMPORTED_MARK
+from subserver.jobs.queue import skip_reason
+from subserver.services.style_service import StyleService, pick_samples
+from subserver.services.styles import Styles
+from subserver.services.versions import RETRANSLATE
 
 from .test_corrections import SETTINGS, Env as BaseEnv, sha
 
@@ -131,7 +131,7 @@ class StaleTests(unittest.TestCase):
 
     def test_a_style_nobody_set_leaves_every_hash_as_it_was_before_p12(self):
         """An episode with no stored style and no card keeps the hash it had before P12, so an upgrade flags nothing."""
-        from subserver.rules import StyleLayers, build_rules
+        from subserver.domain.rules import StyleLayers, build_rules
 
         env = Env(self)
         env.translated(1)
@@ -651,7 +651,7 @@ class HttpWiringTests(unittest.TestCase):
         from http.server import ThreadingHTTPServer
 
         import worker
-        from subserver.auth import ConsoleAuth
+        from subserver.services.auth import ConsoleAuth
 
         env = Env(self)
         series = env.translated(1)

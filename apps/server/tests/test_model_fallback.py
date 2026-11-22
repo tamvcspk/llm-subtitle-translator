@@ -4,8 +4,9 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import worker
-from subserver import queue_policy, translation
-from subserver import queue_policy as policy
+from subserver.domain import queue_policy
+from subserver.domain import translation
+from subserver.domain import queue_policy as policy
 from tests.queue_harness import START, SchedulerCase
 
 PRIMARY = "gemini-3.8-flash"

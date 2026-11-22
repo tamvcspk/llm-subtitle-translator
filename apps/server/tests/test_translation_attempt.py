@@ -18,14 +18,14 @@ from subcore.providers import (
     Unavailable,
 )
 
-from subserver.queue import JobQueue
-from subserver.store import Store
-from subserver.translation import (
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
+from subserver.domain.translation import (
     CallBudgetError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, ProviderAuthError,
     ProviderUnavailableError,
 )
-from subserver.translation_attempt import TranslationAttempt
-from subserver.versions import TranslationVersions
+from subserver.jobs.translation_attempt import TranslationAttempt
+from subserver.services.versions import TranslationVersions
 
 SOURCE = (
     "1\n00:00:01,000 --> 00:00:02,000\nHello <i>there</i>\n\n"
@@ -238,7 +238,7 @@ class FailureMappingTests(unittest.TestCase):
 
     def test_watchdog_stops_a_job_that_ran_out_of_time(self):
         env = Env(self)
-        with patch("subserver.provider_guard.job_timeout_seconds", return_value=0.0):
+        with patch("subserver.jobs.provider_guard.job_timeout_seconds", return_value=0.0):
             with self.assertRaisesRegex(RuntimeError, "job limit"):
                 env.run()
         self.assertEqual(env.fake.calls, [])

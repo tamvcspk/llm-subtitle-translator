@@ -2,7 +2,7 @@ import unittest
 
 from subcore.providers import FailoverProvider, ResilientProvider
 
-from subserver import llm
+from subserver.adapters import llm
 
 
 class LimitTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class BuildProviderTests(unittest.TestCase):
             llm.build_provider({}, "gemini-3.5-flash")
 
     def test_the_missing_key_error_belongs_to_the_core_port(self):
-        from subserver.ports import MissingApiKey
+        from subserver.domain.ports import MissingApiKey
 
         self.assertIs(llm.MissingApiKey, MissingApiKey)
         with self.assertRaises(MissingApiKey):

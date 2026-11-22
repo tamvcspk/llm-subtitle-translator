@@ -3,7 +3,7 @@ in one transaction, so a failure leaves neither half behind. Every provider is a
 
 import unittest
 
-from subserver import style_api
+from subserver.api import style_api
 
 from .test_style_profile import Env
 

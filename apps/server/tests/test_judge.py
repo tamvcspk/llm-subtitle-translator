@@ -11,18 +11,18 @@ from unittest import mock
 from subcore.judge import BATCH, JUDGE_PROMPT_VERSION, variant_is_a
 from subcore.providers import FakeProvider, QuotaExhausted, RateLimited
 
-from subserver import judge as judge_module
-from subserver import library_api
-from subserver import queue_policy as policy
-from subserver.config import DEFAULT_APP_CONFIG, model_for_task, normalize_app_config
-from subserver.jobs import FAILED, JUDGE, READING_KINDS, job_name
-from subserver.judge import JudgeService, calls_for
-from subserver.read_jobs import JudgeJob
-from subserver.redaction import Redactor
-from subserver.settings import SettingsService
-from subserver.store import Store
-from subserver.telemetry import Telemetry as TelemetrySink
-from subserver.translation import CallBudgetError, DailyQuotaExceededError, JobStopped, ProviderUnavailableError
+from subserver.services import judge as judge_module
+from subserver.api import library_api
+from subserver.domain import queue_policy as policy
+from subserver.domain.config import DEFAULT_APP_CONFIG, model_for_task, normalize_app_config
+from subserver.jobs.jobs import FAILED, JUDGE, READING_KINDS, job_name
+from subserver.services.judge import JudgeService, calls_for
+from subserver.jobs.read_jobs import JudgeJob
+from subserver.domain.redaction import Redactor
+from subserver.adapters.settings import SettingsService
+from subserver.adapters.store import Store
+from subserver.adapters.telemetry import Telemetry as TelemetrySink
+from subserver.domain.translation import CallBudgetError, DailyQuotaExceededError, JobStopped, ProviderUnavailableError
 
 from . import test_corrections
 from .test_corrections import SETTINGS, sha
@@ -268,7 +268,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual([s.cue for s in env.store.signals(kind="ab")], [1])
 
     def test_the_judge_is_not_an_ab_figure_in_insights(self):
-        from subserver.metrics import Metrics
+        from subserver.services.metrics import Metrics
 
         env = JudgeEnv(self)
         version = env.candidate()

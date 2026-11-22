@@ -4,7 +4,8 @@ worked out for the movie's one unit. Every provider is a fake; nothing touches t
 
 import unittest
 
-from subserver import library_api, style_api
+from subserver.api import library_api
+from subserver.api import style_api
 
 from .test_corrections import SETTINGS, source_text
 from .test_style_profile import Env as StyleEnv

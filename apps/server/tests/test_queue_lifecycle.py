@@ -4,9 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from subserver import queue, queue_policy as policy, translation
-from subserver.queue import JobQueue
-from subserver.store import Store
+from subserver.jobs import queue
+from subserver.domain import queue_policy as policy
+from subserver.domain import translation
+from subserver.jobs.queue import JobQueue
+from subserver.adapters.store import Store
 
 
 class QueueLifecycleTests(unittest.TestCase):

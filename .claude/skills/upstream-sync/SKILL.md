@@ -19,9 +19,9 @@ Focus on files the fork still shares with upstream (upstream path → fork path)
 
 | Upstream | Fork |
 |---|---|
-| `subserver/bazarr.py`, `subserver/tmdb.py` | `apps/server/subserver/…` |
-| `subserver/queue*.py` | `apps/server/subserver/…` (the queue is the `jobs` table now, so a queue fix is usually ported by hand) |
-| `worker.py`, `tests/` | `apps/server/…` (the HTTP handler that was in `worker.py` is `subserver/web.py` here: re-apply a fix there; upstream's `static/` console has no counterpart: the console is `apps/web`, so skip such changes) |
+| `subserver/bazarr.py`, `subserver/tmdb.py` | `apps/server/subserver/adapters/bazarr.py`, `…/tmdb.py` (P15c moved every module into a layer package, so git's rename detection may not follow: apply by hand) |
+| `subserver/queue*.py` | `apps/server/subserver/jobs/queue.py` and `…/domain/queue_policy.py` (the queue is the `jobs` table now, so a queue fix is usually ported by hand) |
+| `worker.py`, `tests/` | `apps/server/…` (the HTTP handler that was in `worker.py` is `subserver/api/web.py` here: re-apply a fix there; upstream's `static/` console has no counterpart: the console is `apps/web`, so skip such changes) |
 
 Nothing is shared any more with upstream's `bazarr-postprocess/gst_enqueue.sh` (Bazarr pushes nothing since P10): skip changes to it.
 
