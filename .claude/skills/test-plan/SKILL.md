@@ -1,9 +1,14 @@
 ---
 name: test-plan
-description: Session 1 (heavy model, writes the code) hands testing to session 2 (a light model that drives the browser) through a short plain-language markdown plan - write the plan after finishing a change, or read the findings session 2 wrote. Use when the user says "viết kịch bản test", "lập test plan", "bàn giao test", "/test-plan", or "đọc kết quả test", "đọc finding". Does not run any test itself.
+description: Session 1 (heavy model, writes the code) hands testing to session 2 (a light model that drives the browser) through a short plain-language markdown plan - write the plan after finishing a change, or read the findings session 2 wrote. Use when the user says "viết kịch bản test", "viết test", "test case", "test cases", "lập test plan", "bàn giao test", "/test-plan", or "đọc kết quả test", "đọc finding". In this project "viết test" or "test case" means THIS plan, not unit tests. Does not run any test itself.
 ---
 
 # Test plan (session 1 side)
+
+**Which test is meant.** Unit tests (Python `unittest`, web `vitest`) are never a separate request: they are written with the
+code of every change and phase (`implement-phase` §3) and must be in the diff before it is called done. When the user says
+"viết test", "test case" or "kịch bản test" after a change, they mean *this* skill: the browser hand-off plan below. Do not
+answer it by writing more unit tests; if the unit tests of the change are missing, say so and add them as part of the change.
 
 Two sessions, one file. This session **writes** a plan in plain language; session 2 (light model, `/web-test`) opens the real app
 in a browser, follows the plan, and writes **findings** into the same file; this session then **reads** them. Spend heavy tokens

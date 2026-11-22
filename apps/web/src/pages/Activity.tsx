@@ -9,6 +9,7 @@ import {
   firstTab,
   isJobTab,
   JOB_TABS,
+  jobLink,
   jobName,
   jobsOf,
   jobStatus,
@@ -177,7 +178,7 @@ function JobCard({
         {typeof job.unit_id === "number" ? (
           <Anchor
             component={Link}
-            to={job.kind === "extract" ? `/unit/${job.unit_id}/context` : `/unit/${job.unit_id}/subtitles${job.target_code ? `?lang=${encodeURIComponent(job.target_code)}` : ""}`}
+            to={jobLink(job)}
             fw={600}
           >
             {name}

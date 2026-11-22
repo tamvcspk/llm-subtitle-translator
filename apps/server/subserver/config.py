@@ -56,6 +56,7 @@ GST_STRING_CONFIG_KEYS = (
     "llm_provider",
     "llm_base_url",
     "research_model",
+    "judge_model",
 )
 # Which adapter the models run on (FR-9.1): Gemini, or any OpenAI-compatible server at `llm_base_url`
 # (OpenRouter, Ollama, LM Studio, vLLM). One provider at a time; every task and both model layers use it.
@@ -108,6 +109,10 @@ SUGGESTION_BOOL_CONFIG_KEYS = {
     # P15 (FR-19.6): after a cue edit, look for what the admin keeps correcting. No model call; the suggestions wait in Review.
     "suggest_from_edits": True,
 }
+# The LLM judge between a variant and the current translation (P15, FR-18.8): advice about which cues to look at first,
+# never a verdict that counts. Off by default because every use spends model calls; `judge_model` (task `judge`) is the
+# model that judges, and a stronger one than the one that translated is the point. key -> default
+JUDGE_BOOL_CONFIG_KEYS = {"judge_enabled": False}
 # Logging and measurement (P5, FR-19). `log_prompt_bodies` is what is kept of the prompts and answers of model
 # calls: `off`, `errors` (failed calls only), `sample` (failed calls and one call in ten) or `all`.
 LOG_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -165,11 +170,13 @@ DEFAULT_APP_CONFIG = {
     "llm_provider": PROVIDER_GEMINI,
     "llm_base_url": "",
     "research_model": "",
+    "judge_model": "",
     **{key: default for key, (default, _) in LLM_INT_CONFIG_KEYS.items()},
     "job_settle_seconds": 600,
     "auto_request": False,
     **{key: default for key, (default, _) in CATALOG_INT_CONFIG_KEYS.items()},
     **SUGGESTION_BOOL_CONFIG_KEYS,
+    **JUDGE_BOOL_CONFIG_KEYS,
     "memory_enabled": False,
     "memory_model": "",
     "summarize_model": "",
@@ -193,7 +200,8 @@ def provider_name(settings: dict[str, Any]) -> str:
 def model_for_task(settings: dict[str, Any], task: str, default: str = DEFAULT_MODEL) -> str:
     """The model a task runs on (FR-9.3). ``translate`` uses ``gst_model``; ``extract`` the cheaper
     ``memory_model``; ``summarize`` its own ``summarize_model``, else ``memory_model``; ``research``
-    ``research_model``. Each falls back to the translation model, so a single model setting is enough."""
+    ``research_model``; ``judge`` ``judge_model``. Each falls back to the translation model, so a single model
+    setting is enough."""
     def named(key: str) -> str:
         return str(settings.get(key) or "").strip()
 
@@ -204,6 +212,8 @@ def model_for_task(settings: dict[str, Any], task: str, default: str = DEFAULT_M
         return named("summarize_model") or named("memory_model") or main
     if task == "research":
         return named("research_model") or main
+    if task == "judge":
+        return named("judge_model") or main
     return main
 
 
@@ -282,7 +292,7 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             normalized[key] = default
     normalized["catalog_shrink_guard"] = min(100, normalized["catalog_shrink_guard"])
-    for key in SUGGESTION_BOOL_CONFIG_KEYS:
+    for key in (*SUGGESTION_BOOL_CONFIG_KEYS, *JUDGE_BOOL_CONFIG_KEYS):
         value = normalized.get(key)
         normalized[key] = value is True or str(value).strip().lower() in ("1", "true", "on")
     for key in MEMORY_BOOL_CONFIG_KEYS:

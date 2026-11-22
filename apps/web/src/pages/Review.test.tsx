@@ -71,10 +71,12 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("Review", () => {
   it("groups what is waiting by series, with its kind, source and evidence", async () => {
-    serve(inbox());
+    // The series page is addressed by the catalog's id (3), not the worker's own series id (7) the suggestion carries.
+    serve(inbox({ "/api/catalog": { body: { status: {}, languages: ["vi"], series: [{ id: 3, title: "Arcane", series_id: 7 }], movies: {} } } }));
     show("/review");
     const arcane = await screen.findByRole("region", { name: "Arcane" });
-    expect(within(arcane).getByRole("link", { name: "Arcane" })).toHaveAttribute("href", "/series/7/glossary");
+    expect(await within(arcane).findByRole("link", { name: "Arcane" })).toHaveAttribute("href", "/series/3/glossary");
+    expect(within(screen.getByRole("region", { name: "Severance" })).queryByRole("link", { name: "Severance" })).toBeNull(); // no catalog row: plain text
     expect(within(arcane).getByText("2 suggestions waiting")).toBeInTheDocument();
     const term = within(arcane).getByRole("listitem", { name: "Term: Kyber crystal → tinh thể Kyber" });
     expect(within(term).getByText("Story facts")).toBeInTheDocument();
@@ -94,6 +96,32 @@ describe("Review", () => {
     expect(await within(screen.getByRole("listitem", { name: "Form of address: Vi ↔ Jinx" })).findByText("No translation is affected.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /check/i })).toBeNull();
     expect(sent("/api/suggestions/1/accept")[0]).toEqual({ dry_run: true });
+  });
+
+  it("does not ask the worker for the impact of a suggestion it has just decided (it would refuse with a 400)", async () => {
+    serve(inbox());
+    show("/review");
+    const term = await screen.findByRole("listitem", { name: "Term: Kyber crystal → tinh thể Kyber" });
+    await within(term).findByText("Accepting flags 12 translations stale. Nothing is redone.");
+    await userEvent.click(within(term).getByRole("button", { name: "Accept Kyber crystal → tinh thể Kyber" }));
+    await screen.findByText(/Accepted “Kyber crystal → tinh thể Kyber”/);
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input) === "/api/suggestions?status=pending")).toBe(true));
+    expect(sent("/api/suggestions/1/accept").filter((body) => body?.dry_run)).toHaveLength(1);
+  });
+
+  it("asks for the impact again when an accept fails, since the card stays", async () => {
+    serve(
+      inbox({
+        "/api/suggestions/1/accept": (body: Record<string, unknown> | null) =>
+          body?.dry_run ? impact(12) : { status: 409, body: { error: "the entry changed since" } },
+      }),
+    );
+    show("/review");
+    const term = await screen.findByRole("listitem", { name: "Term: Kyber crystal → tinh thể Kyber" });
+    await within(term).findByText("Accepting flags 12 translations stale. Nothing is redone.");
+    await userEvent.click(within(term).getByRole("button", { name: "Accept Kyber crystal → tinh thể Kyber" }));
+    expect(await screen.findByText("the entry changed since")).toBeInTheDocument();
+    await waitFor(() => expect(sent("/api/suggestions/1/accept").filter((body) => body?.dry_run)).toHaveLength(2));
   });
 
   it("accepts with one tap, says what it did, and Undo puts it back", async () => {

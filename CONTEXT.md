@@ -35,6 +35,17 @@ One job looks for proposals (address rules, terms, characters) in the stored fac
 three calls, each kind stored as soon as it returns. The admin asks for it; a translation that read new facts leaves one behind
 (origin `facts`, the lowest class), and at most one is open per series and language.
 
+**Judge job** (job kind `judge`):
+One job asks a model which of two translations of a cue is better, for the cues where a candidate (a variant) differs from the
+current translation: 30 cues a call, up to 300 cues a job, each batch stored when it returns. The admin asks for it on the
+Compare page, after seeing its price, and it is off until `judge_enabled` is turned on.
+
+**LLM judge** (`subcore.judge`, `judge.py`):
+A model's opinion on a cue, shown next to it in Compare as advice (`Judge prefers the variant: tighter wording`). It is not the
+admin's verdict: it never counts in a style's A/B score, never edits a cue and never retranslates. Which text is shown first
+(A) is fixed per cue and mixed, so neither the variant nor the current text has the first place; a verdict belongs to the
+two texts it saw and to the rubric version, and disappears when either changes.
+
 **Waiting** (job state `waiting`):
 A job that cannot run now for a reason outside its own control. The reason is shown:
 `quota`, `provider` (key refused, model unknown, breaker open), `context` (earlier

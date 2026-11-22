@@ -47,7 +47,7 @@ class PatternTests(unittest.TestCase):
     def test_20a_the_same_swap_in_three_cues_is_a_pattern_with_its_source_word(self):
         (pattern,) = find_patterns(MOM)
         self.assertEqual((pattern.old, pattern.new, pattern.count), ("Mẹ", "Má", 3))
-        self.assertEqual(pattern.source, "mom")
+        self.assertEqual(pattern.source, "Mom")
         self.assertEqual({c.key for c in pattern.cues}, {1, 2, 3})
 
     def test_two_cues_are_not_enough(self):
@@ -65,7 +65,13 @@ class PatternTests(unittest.TestCase):
         # "the" is in every pattern cue, but also in every other edited cue: it says nothing.
         pattern_cues = [edit(i, f"The Mom {i}", "Mẹ", "Má") for i in range(3)]
         others = [edit(10 + i, "The door", "Cửa", "Cánh cửa") for i in range(4)]
-        self.assertEqual(find_patterns(pattern_cues + others)[0].source, "mom")
+        self.assertEqual(find_patterns(pattern_cues + others)[0].source, "Mom")
+
+    def test_the_source_word_keeps_the_spelling_most_cues_use_and_prefers_fewer_capitals_on_a_tie(self):
+        majority = [edit(1, "Mom!", "Mẹ", "Má"), edit(2, "Hi Mom.", "Mẹ", "Má"), edit(3, "my mom", "Mẹ", "Má")]
+        self.assertEqual(find_patterns(majority)[0].source, "Mom")
+        tie = [edit(1, "Mom!", "Mẹ", "Má"), edit(2, "my mom", "Mẹ", "Má")]
+        self.assertEqual(find_patterns(tie, min_repeats=2)[0].source, "mom")
 
     def test_no_shared_source_word_gives_a_pattern_without_one(self):
         cues = [edit(1, "Mum!", "Mẹ", "Má"), edit(2, "Mommy!", "Mẹ", "Má"), edit(3, "Mother!", "Mẹ", "Má")]

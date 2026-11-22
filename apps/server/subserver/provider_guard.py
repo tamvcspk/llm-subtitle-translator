@@ -13,6 +13,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Callable
 
+from subcore.judge import JUDGE_PROMPT_VERSION
 from subcore.memory.facts import EXTRACT_PROMPT_VERSION
 from subcore.providers import (
     AuthError,
@@ -59,6 +60,8 @@ def prompt_version_of(task: str, kind: str = "") -> str:
     runs on the ``extract`` model but has a prompt of its own, told apart by the call's ``kind``."""
     if kind == "suggest":
         return f"suggest-{SUGGEST_PROMPT_VERSION}"
+    if task == "judge":
+        return f"judge-{JUDGE_PROMPT_VERSION}"
     if task == "translate":
         return PROMPT_VERSION
     if task in ("extract", "summarize"):

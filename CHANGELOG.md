@@ -1,4 +1,16 @@
 # Unreleased
+- **Fixes from the P15 code review (the judge).** A judge job run again after a stop, quota pause or restart no longer asks
+  twice for the cues it already judged (`again` skips the verdicts of the same job). Verdicts are written straight to the
+  database, not through the best-effort telemetry sink, and the stored and live texts are compared through the same
+  redaction. Turning the judge off now also stops a job already in line (`skipped-judge-off`). `again` while a judge job is
+  open is refused with a reason instead of being silently merged. A job is sized to `max_calls_per_job` (no budget error
+  half way; the rest is asked in the next job). The Compare page looks every minute, not every 4 s, while the job waits for
+  the day's quota. Review refreshes the impact of a card again when its accept failed.
+- **Fixes from the P15 browser test.** The series name in Review and in Insights' "Your corrections" linked to
+  `/series/<worker id>/glossary`, but a series page is addressed by the catalog's id: it now goes through the catalog (plain text
+  when the catalog has no row). Accepting or rejecting a suggestion no longer asks the worker for the impact of the suggestion
+  just decided (a 400 in the console). A term proposed from your edits keeps the source word's spelling (`Mom`, not `mom`).
+  `preview.ps1 -Live` sets `job_settle_seconds` to 0 so the first job does not wait ten minutes.
 - **P15: Insights and the feedback loop (FR-19.5, FR-19.6; criteria 17h, 20 a-d).** Measure before you change a prompt or a style.
   - **Insights page and `GET /api/metrics?days=`.** The worker's figures from its own records: queue depth and wait, calls
     today against the limits, the share of calls answered 429 and 503, escalation and rescue, tokens and cost per episode,
@@ -19,8 +31,18 @@
     cues you corrected. `subcore compare file.srt --bundle a.json --bundle b.json --golden golden.json` scores both
     configurations on exactly those cues (`golden: exact cues`, `golden: similarity`); an entry whose source line changed is
     left out. The way to use it is in [docs/QUALITY.md](docs/QUALITY.md).
-  - **Not done:** the optional LLM-as-judge (off by default, it would spend quota); the per-style split of translation calls
-    (a call records only the hash of its style).
+  - **Not done:** the per-style split of translation calls (a call records only the hash of its style).
+  - **The LLM judge on a candidate (FR-18.8), off by default.** On a variant in Compare, **Ask the judge** (after its price)
+    queues a `judge` job: a model reads the current text and the variant cue by cue and says which serves a viewer better
+    (meaning, then natural speech, then fit; length, formality and being first are no reason). Its advice shows under each
+    cue (`Judge prefers the variant: tighter wording`) and as a tally; it never ticks a cue for you, never edits one and never
+    counts in a style's score (it is a `judge` quality signal, not `ab`). Which text is shown first is fixed per cue and mixed,
+    so neither side always has the first place. Thirty cues a call, at most 300 a job, each batch kept when it returns, through
+    the one queue (quota, `max_calls_per_job`, the breaker, Stop). Settings `judge_enabled` (off) and `judge_model`
+    (blank = Default model; a stronger model judges better). `POST /api/units/{id}/versions/{v}/judge`.
+  - **Fixed: a switch turned off in Settings did not reach the running worker** for `suggest_from_facts`, `auto_accept_terms`,
+    `auto_accept_address_rules`, `auto_accept_characters` and `suggest_from_edits`: the runtime settings did not carry them, so
+    the worker always read each one's default (the page saved them and showed them off, and the worker kept acting as if on).
 - **Review wave W6: the old queue settles safely, and the Library page reads less (F8, R10-2, R10-5, R10-9).**
   - **A refusal of the old queue is written down before what held it goes (R10-2).** The start-up used to delete the script's
     `rejected` rows first and record the Ignored decision after, and moved the folders even when it could not (no library, a

@@ -157,6 +157,12 @@ describe("Insights", () => {
     await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input) === "/api/metrics?days=7")).toBe(true));
   });
 
+  it("links a series' name to its page by the catalog's id, not the worker's", async () => {
+    serve(pageRoutes({ "/api/catalog": { body: { status: {}, languages: ["vi"], series: [{ id: 3, title: "Arcane", series_id: 7 }], movies: {} } } }));
+    show("/insights");
+    expect(await screen.findByRole("link", { name: "Arcane" })).toHaveAttribute("href", "/series/3/glossary");
+  });
+
   it("offers each series' golden set as a link the worker serves, and looks at the edits for free", async () => {
     serve(
       pageRoutes({

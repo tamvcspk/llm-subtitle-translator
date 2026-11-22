@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import {
   useAcceptSuggestion,
+  useCatalog,
   useRejectSuggestion,
   useSuggestions,
   useSuggestionSummary,
@@ -12,6 +13,7 @@ import type { BulkAnswer, Suggestion, SuggestionDecision } from "../api/types";
 import { BulkSheet } from "../components/review/BulkSheet";
 import { EditSheet } from "../components/review/EditSheet";
 import { DecidedCard, PendingCard } from "../components/review/SuggestionCard";
+import { seriesRoute } from "../lib/seriesLink";
 import { describe, groupBySeries, pendingLine, type SeriesGroup } from "../lib/suggestions";
 
 /** What the last decision did, with Undo while it can still be undone. */
@@ -27,6 +29,7 @@ function staleSentence(stale: number, again = false): string {
 
 function SeriesBlock({
   group,
+  href,
   count,
   working,
   onAccept,
@@ -35,6 +38,8 @@ function SeriesBlock({
   onAll,
 }: {
   group: SeriesGroup;
+  /** The series page, or `null` when the catalog has no row for it (the name is then plain text). */
+  href: string | null;
   count: number;
   working: number | null;
   onAccept: (suggestion: Suggestion) => void;
@@ -46,9 +51,15 @@ function SeriesBlock({
     <Stack gap="sm" component="section" aria-label={group.series}>
       <Group justify="space-between" wrap="wrap" gap="sm">
         <Stack gap={0}>
-          <Anchor component={Link} to={`/series/${group.seriesId}/glossary`} fw={600} size="lg">
-            {group.series}
-          </Anchor>
+          {href ? (
+            <Anchor component={Link} to={href} fw={600} size="lg">
+              {group.series}
+            </Anchor>
+          ) : (
+            <Text fw={600} size="lg">
+              {group.series}
+            </Text>
+          )}
           <Text size="sm" c="dimmed">
             {pendingLine(count)} waiting
           </Text>
@@ -75,6 +86,7 @@ export function Review() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "history" ? "history" : "pending";
   const summary = useSuggestionSummary();
+  const catalog = useCatalog();
   const pending = useSuggestions("pending", tab === "pending");
   const history = useSuggestions("decided", tab === "history");
   const accept = useAcceptSuggestion();
@@ -170,6 +182,7 @@ export function Review() {
           <SeriesBlock
             key={group.seriesId}
             group={group}
+            href={seriesRoute(catalog.data, group.seriesId, "glossary")}
             count={perSeries.get(group.seriesId) ?? group.items.length}
             working={working}
             onAccept={doAccept}

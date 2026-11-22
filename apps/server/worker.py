@@ -22,9 +22,10 @@ from subserver.http import HTTPClient, HTTPTransport, JsonFileCache, MemoryCache
 from subserver.config import enabled_source_languages, provider_name
 from subserver.intake import import_queue_tree
 from subserver.job_requests import JobRequests
-from subserver.jobs import EXTRACT, PUBLISH, SUGGEST, VARIANT
+from subserver.jobs import EXTRACT, JUDGE, PUBLISH, SUGGEST, VARIANT
+from subserver.judge import JudgeService
 from subserver.queue import JobQueue, skip_reason
-from subserver.read_jobs import ExtractJob, SuggestJob
+from subserver.read_jobs import ExtractJob, JudgeJob, SuggestJob
 from subserver.console import ConsoleActions
 from subserver.glossaries import Glossaries
 from subserver.style_service import StyleService
@@ -364,6 +365,13 @@ def main() -> int:
     feedback = FeedbackProposer(suggestion_service, settings_source=live_settings, telemetry=telemetry)
     suggestion_service.feedback = feedback
     units.feedback = feedback
+    # The judge between a variant and the current translation (P15): advice, off until the admin turns it on. Its job
+    # goes through the one queue like every job that spends model calls.
+    judge = JudgeService(units, worker.queue, store, settings_source=live_settings, telemetry=telemetry)
+    units.judge = judge
+    worker.register_handler(JUDGE, JudgeJob(
+        judge, provider_factory, settings_source=live_settings, usage=store, telemetry=telemetry,
+    ))
     insights = Insights(
         Metrics(store, console=worker.console, settings_source=live_settings, limits=lambda: rate_limits(live_settings())),
         feedback,

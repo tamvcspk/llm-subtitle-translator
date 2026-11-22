@@ -72,6 +72,7 @@ ROUTES: list[tuple[str, str, Handler]] = [
     ("POST", r"/api/units/(\d+)/variant", lambda s, m, q, b: s.variant(int(m[1]), b)),
     ("GET", r"/api/units/(\d+)/versions/(\d+)/compare", lambda s, m, q, b: s.compare(int(m[1]), int(m[2]), _lang(q))),
     ("POST", r"/api/units/(\d+)/versions/(\d+)/choose", lambda s, m, q, b: s.choose(int(m[1]), int(m[2]), b)),
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/judge", lambda s, m, q, b: s.ask_judge(int(m[1]), int(m[2]), b)),
     ("GET", r"/api/units/(\d+)/versions", lambda s, m, q, b: s.list_versions(int(m[1]), _lang(q))),
     (
         "GET",

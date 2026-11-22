@@ -19,8 +19,8 @@ from . import queue_policy as policy
 from .config import QUOTA_RESET_TZ, enabled_target_languages
 from .jobs import (
     CANCELLED, DONE, FAILED, LEGACY_STATES, OPEN_STATES, PUBLISH, QUEUED, REPLACE, RUNNING, SKIPPED, VARIANT, WAITING,
-    EXTRACT, SUGGEST, TRANSLATING_KINDS, JobStore, FROM_LEGACY, extract_key, job_key, retranslation_key, suggest_key,
-    variant_key,
+    EXTRACT, JUDGE, SUGGEST, TRANSLATING_KINDS, JobStore, FROM_LEGACY, extract_key, job_key, judge_key,
+    retranslation_key, suggest_key, variant_key,
 )
 from .ports import Telemetry
 from .queue_policy import Health
@@ -36,7 +36,7 @@ RETRANSLATE_PRIORITY = policy.RETRANSLATE
 SETTINGS_SNAPSHOT_KEYS = (
     "llm_provider", "llm_base_url", "gst_model", "gst_fallback_model", "gst_temperature", "gst_thinking_budget",
     "gst_no_thinking", "memory_enabled", "memory_model", "summarize_model", "research_model",
-    "max_calls_per_job", "max_calls_per_day", "breaker_threshold",
+    "judge_model", "max_calls_per_job", "max_calls_per_day", "breaker_threshold",
 )
 
 
@@ -386,6 +386,25 @@ class JobQueue:
                 "job.created", job_id=added.job_id, unit_id=None, target=lang, origin=origin, job_kind=SUGGEST,
                 reason=("the admin asked for proposals from the facts of " if origin == "manual"
                         else "new facts were read: look for proposals in ") + (title or "the series"),
+            )
+            return added.job_id, True
+        return str(added.existing), False
+
+    def enqueue_judge(self, payload: dict[str, Any]) -> tuple[str, bool]:
+        """One ``judge`` job for a candidate (P15): it reads the candidate next to the current translation and says which
+        cues look better, in as many calls as it takes to cover them (a few dozen cues each). The admin's own request,
+        the interactive class. At most one is open per candidate: a second request is that job. Returns ``(job id,
+        whether it is new)``. ``payload`` has ``unit_id``, ``target_code``, ``version``, ``label``, ``title`` and ``calls``."""
+        unit_id, lang, version = int(payload["unit_id"]), str(payload["target_code"]), int(payload["version"])
+        key = judge_key(unit_id, lang, version)
+        added = self.jobs.add(
+            {**payload, "created_at": int(time.time())}, key=key, kind=JUDGE, mode=JUDGE, origin="manual",
+            prio=policy.INTERACTIVE, job_id=f"{key}-{time.time_ns()}",
+        )
+        if added.job_id:
+            self._emit(
+                "job.created", job_id=added.job_id, unit_id=unit_id, target=lang, origin="manual", job_kind=JUDGE,
+                reason=f"the admin asked the judge to compare candidate v{version} with the current translation",
             )
             return added.job_id, True
         return str(added.existing), False

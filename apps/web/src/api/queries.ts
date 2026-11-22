@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import { readsOnly } from "../lib/activity";
 import type { StyleDraft } from "../lib/style";
 import { api } from "./client";
 import type {
@@ -93,9 +94,9 @@ export function useQueue() {
   return query;
 }
 
-/** The jobs that read and do not translate (`extract`, `suggest`) that are still open: running, in line or waiting. */
+/** The jobs that read and do not translate (`extract`, `suggest`, `judge`) that are still open: running, in line or waiting. */
 function openReadingJobs(queue: QueueAnswer): QueueJob[] {
-  return [...queue.processing, ...queue.pending, ...queue.deferred].filter((job) => job.kind === "extract" || job.kind === "suggest");
+  return [...queue.processing, ...queue.pending, ...queue.deferred].filter((job) => readsOnly(job));
 }
 
 /** The bundle of a job's latest attempt, read only when its box is open (it holds every cue, so it can be large). */
@@ -173,7 +174,14 @@ export type CostRequest =
   | { retry: { job_id: string } | { all: true } }
   | { prerequisites: { job_id: string } }
   | { retranslate: { unit_id: number; body: RetranslateBody } }
-  | { variant: { unit_id: number; body: VariantBody } };
+  | { variant: { unit_id: number; body: VariantBody } }
+  | { judge: { unit_id: number; version: number; body: JudgeBody } };
+
+/** The judge reads a candidate next to the current translation; `again` also asks about the cues it has already judged. */
+export interface JudgeBody {
+  lang: string;
+  again?: boolean;
+}
 
 /** The whole episode translated with another style, kept as a candidate to compare with the current one. */
 export interface VariantBody {
@@ -221,6 +229,15 @@ export function useEstimate(request: CostRequest | null) {
         });
         return { estimate_only: true, estimate: answer.estimate, planned_total: answer.estimate.jobs, skipped_total: 0, skipped_by_reason: {} };
       }
+      if (request && "judge" in request) {
+        const { unit_id, version, body } = request.judge;
+        const answer = await api<RetranslateAnswer>(`/api/units/${unit_id}/versions/${version}/judge`, {
+          method: "POST",
+          body: { ...body, estimate_only: true },
+          signal,
+        });
+        return { estimate_only: true, estimate: answer.estimate, planned_total: answer.estimate.jobs, skipped_total: 0, skipped_by_reason: {} };
+      }
       return api<JobsAnswer>("/api/jobs", { method: "POST", body: { ...request?.selector, estimate_only: true }, signal });
     },
     enabled: request !== null,
@@ -246,6 +263,7 @@ function useRefreshJobs() {
 /** Confirm: make the jobs (or put the failed one back in line); `count` is how many are now in line. */
 export function useRequestJobs() {
   const refresh = useRefreshJobs();
+  const client = useQueryClient();
   return useMutation({
     mutationFn: async (request: CostRequest): Promise<{ count: number }> => {
       if ("retry" in request) {
@@ -260,6 +278,12 @@ export function useRequestJobs() {
       if ("retranslate" in request || "variant" in request) {
         const [path, call] = "retranslate" in request ? ["retranslate", request.retranslate] : ["variant", request.variant];
         await api<{ ok: boolean }>(`/api/units/${call.unit_id}/${path}`, { method: "POST", body: call.body });
+        return { count: 1 };
+      }
+      if ("judge" in request) {
+        const { unit_id, version, body } = request.judge;
+        await api<{ ok: boolean }>(`/api/units/${unit_id}/versions/${version}/judge`, { method: "POST", body });
+        void client.invalidateQueries({ queryKey: keys.unit(unit_id) }); // the comparison now says a judge is at work
         return { count: 1 };
       }
       const answer = await api<JobsAnswer>("/api/jobs", { method: "POST", body: request.selector });
@@ -359,6 +383,12 @@ export function useCompare(id: number, lang: string, version: number) {
     queryFn: ({ signal }) =>
       api<CompareAnswer>(`/api/units/${id}/versions/${version}/compare?lang=${encodeURIComponent(lang)}`, { signal }),
     enabled: lang !== "",
+    // While a judge job is open its verdicts arrive batch by batch: look again every few seconds, and stop when it ends.
+    // A job parked on the day's quota can wait for hours and changes nothing meanwhile: look only once a minute.
+    refetchInterval: (query) => {
+      const job = query.state.data?.judge?.job;
+      return job ? (job.state === "waiting" ? 60_000 : 4000) : false;
+    },
   });
 }
 
@@ -1121,13 +1151,23 @@ export function useBulkImpact(seriesId: number, enabled: boolean) {
   });
 }
 
-/** A decision changes the badge, the lists, and (an accept or an undo) the glossary and every label that says Stale. */
+/**
+ * A decision changes the badge, the lists, and (an accept or an undo) the glossary and every label that says Stale.
+ * `decided` names what was just accepted or rejected, and only when that succeeded: its card is about to leave the inbox
+ * and the worker refuses a dry run of a decided suggestion (400), so its impact is not asked again. `"all"` (a bulk
+ * accept) first lets the list drop every card it decided, then refreshes the impact of the ones still showing. After a
+ * failure nothing is left out: the card stays and its count is looked at again.
+ */
 function useRefreshSuggestions() {
   const client = useQueryClient();
-  return () =>
-    Promise.all([
-      client.invalidateQueries({ queryKey: ["suggestions"] }),
-      client.invalidateQueries({ queryKey: ["suggestion-impact"] }),
+  return async (decided?: number | "all") => {
+    if (decided === "all") await client.invalidateQueries({ queryKey: ["suggestions"] });
+    await Promise.all([
+      decided === "all" ? undefined : client.invalidateQueries({ queryKey: ["suggestions"] }),
+      client.invalidateQueries({
+        queryKey: ["suggestion-impact"],
+        predicate: (query) => typeof decided !== "number" || query.queryKey[1] !== decided,
+      }),
       client.invalidateQueries({ queryKey: ["suggestion-bulk-impact"] }),
       client.invalidateQueries({ queryKey: ["glossary"] }),
       client.invalidateQueries({ queryKey: ["style"] }),
@@ -1135,6 +1175,7 @@ function useRefreshSuggestions() {
       client.invalidateQueries({ queryKey: ["library"] }),
       client.invalidateQueries({ queryKey: ["unit"] }),
     ]);
+  };
 }
 
 /** Accept, or edit then accept (`payload`). The glossary changes; translations made without it are flagged stale, never redone. */
@@ -1143,7 +1184,7 @@ export function useAcceptSuggestion() {
   return useMutation({
     mutationFn: (args: { id: number; payload?: SuggestionPayload }) =>
       api<SuggestionDecision>(`/api/suggestions/${args.id}/accept`, { method: "POST", body: args.payload ? { payload: args.payload } : {} }),
-    onSettled: () => void refresh(),
+    onSettled: (_answer, error, args) => void refresh(error ? undefined : args.id),
   });
 }
 
@@ -1152,7 +1193,7 @@ export function useRejectSuggestion() {
   const refresh = useRefreshSuggestions();
   return useMutation({
     mutationFn: (id: number) => api<SuggestionDecision>(`/api/suggestions/${id}/reject`, { method: "POST", body: {} }),
-    onSettled: () => void refresh(),
+    onSettled: (_answer, error, id) => void refresh(error ? undefined : id),
   });
 }
 
@@ -1171,7 +1212,7 @@ export function useBulkAccept() {
   return useMutation({
     mutationFn: (args: { seriesId: number; expect: number }) =>
       api<BulkAnswer>("/api/suggestions/bulk", { method: "POST", body: { series_id: args.seriesId, expect: args.expect } }),
-    onSettled: () => void refresh(),
+    onSettled: (_answer, error) => void refresh(error ? undefined : "all"),
   });
 }
 

@@ -1,4 +1,4 @@
-"""The jobs that read and do not translate: what a worker runs for an ``extract`` job and for a ``suggest`` job.
+"""The jobs that read and do not translate: what a worker runs for an ``extract``, a ``suggest`` and a ``judge`` job.
 
 The queue has already picked the model, claimed the job under the day's quota and the breaker, and will map whatever
 a handler raises: a handler only does its work and lets typed provider errors through ``mapped_errors`` so the queue
@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .config import DEFAULT_MODEL, model_for_task
+from .judge import JudgeService
 from .memory import StoryMemory, unit_label
 from .proposals import FactsProposer
 from .ports import ProviderFactory, Telemetry
@@ -107,3 +108,38 @@ class SuggestJob:
         finally:
             job["report"] = report  # what was stored before a stop or a failure is told as well as what was stored after a finish
         return "proposed" if report.get("added") else "nothing-new"
+
+
+class JudgeJob:
+    """Judges the cues of a candidate against the current translation (``judge`` job, P15): the model calls are the
+    judge's, the verdicts are stored by ``JudgeService.run`` as each batch returns. Advice only: nothing here edits a
+    subtitle or scores a style."""
+
+    def __init__(
+        self,
+        judge: JudgeService,
+        provider_factory: ProviderFactory | None,
+        *,
+        settings_source: Callable[[], dict[str, Any]],
+        usage: Any = None,
+        telemetry: Telemetry | None = None,
+    ) -> None:
+        self.judge = judge
+        self.provider_factory = provider_factory
+        self.settings_source = settings_source
+        self.usage = usage
+        self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)
+
+    def __call__(self, job: dict[str, Any], update_status: StatusCallback) -> str:
+        settings = self.settings_source()
+        if job.get("gst_model"):
+            settings = {**settings, "gst_model": str(job["gst_model"])}
+        job_id = str(job.get("job_id") or "")
+        model = str(settings.get("gst_model") or DEFAULT_MODEL)
+
+        def record(log) -> None:
+            self.telemetry.llm_call(job_id, log, prompt_version=prompt_version_of(log.task, getattr(log, "kind", "") or ""))
+
+        providers = JobProviders(self.provider_factory, settings, model, usage=self.usage, on_call=record)
+        with mapped_errors(settings, model_for_task(settings, "judge", model)):
+            return self.judge.run(job, update_status, providers.for_task)

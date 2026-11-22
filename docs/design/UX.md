@@ -278,7 +278,7 @@ Ký hiệu: **Có** = đã có endpoint; **Mới** = cần backend nhỏ (P12b);
 | History | version, trigger, origin, status, parent, model, tokens, `created_at`, `params`; diff; Restore; Compare; Use this version | `GET …/versions`, `…/diff`, `POST …/revert`, `…/adopt` |
 | Context | `used.sections` và `now.sections` (mỗi section: `title`, `body`; story memory), `changed`, `missing`; không có version glossary hay style | `GET …/context` |
 | Style | ghi đè cấp tập | `GET/PUT /api/units/{id}/style` |
-| Compare | `n`, `source`, `current`, `variant`, `differs`; chọn từng cue hoặc cả bản; checkbox lưu style | `GET …/versions/{v}/compare`, `POST …/choose`, `POST …/adopt` (+ lưu style: **Mới**) |
+| Compare | `n`, `source`, `current`, `variant`, `differs`; chọn từng cue hoặc cả bản; checkbox lưu style; **Judge** (P15): thẻ "The judge looked at N cues: …" và một dòng lời khuyên dưới từng cue (`Judge prefers the variant: <lý do>`), nút **Ask the judge (N cues)** qua Estimate (chỉ hiện khi `judge_enabled`; lời khuyên không tick hộ ô nào) | `GET …/versions/{v}/compare` (`judge` mỗi hàng và cả trang), `POST …/choose`, `POST …/adopt` (+ lưu style: **Mới**), `POST …/judge` (`estimate_only`) |
 
 ### A.5 Activity
 
@@ -330,6 +330,8 @@ Nguồn: `docs/CONFIGURATION.md`. Khi một tên giá trị trong tài liệu đ
 | Translation | `gst_model` (Default model) | chọn từ danh sách | `gemini-3.1-flash-lite` | |
 | | `gst_fallback_model` (Strong model) | chọn | `gemini-3.5-flash` | xoá để bỏ tầng thứ hai |
 | | `research_model` (Research model) | chọn | rỗng = dùng `gst_model` | chưa ai gọi (P16) |
+| | `judge_enabled` (LLM judge) | bật/tắt | tắt | mỗi lần dùng tốn lời gọi; chỉ là lời khuyên (P15) |
+| | `judge_model` (Judge model) | chọn | rỗng = dùng `gst_model` | model mạnh hơn model dịch thì chấm tốt hơn |
 | | `gst_temperature` | số | `0.7` | |
 | | `gst_thinking_budget`, `gst_no_thinking` | số, bật/tắt | `2048`, tắt | |
 | | `gst_paid_quota` (Paid quota tier) | bật/tắt | tắt | |

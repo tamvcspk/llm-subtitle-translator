@@ -42,7 +42,7 @@ class EditedCue:
 @dataclass(frozen=True)
 class Pattern:
     """The same swap in several cues. ``old`` and ``new`` are written the way most of those cues wrote them;
-    ``source`` is the word of the source line all those cues share (empty when there is none)."""
+    ``source`` is the word of the source line all those cues share, spelled as most of them wrote it (empty when there is none)."""
 
     old: str
     new: str
@@ -99,6 +99,20 @@ def _source_word(members: Sequence[EditedCue], others: Sequence[EditedCue]) -> s
     return word if share <= MAX_BACKGROUND_SHARE else ""
 
 
+def _as_written(word: str, members: Sequence[EditedCue]) -> str:
+    """``word`` (folded) in the spelling most of the cues' source lines use; a tie goes to the one with fewer capitals
+    (a capital at the start of a line says nothing), then to the first. Matching ignores case, so this is only for show."""
+    forms: Counter[str] = Counter()
+    for cue in members:
+        for found in _WORD.finditer(cue.source):
+            if found.group().casefold() == word:
+                forms[found.group()] += 1
+                break
+    if not forms:
+        return word
+    return min(forms, key=lambda f: (-forms[f], sum(ch.isupper() for ch in f)))
+
+
 def find_patterns(edits: Iterable[EditedCue], *, min_repeats: int = MIN_REPEATS) -> list[Pattern]:
     """Swaps made in at least ``min_repeats`` different cues, the most repeated first. A cue is one occurrence of a
     swap however many times the swap shows in it."""
@@ -121,5 +135,6 @@ def find_patterns(edits: Iterable[EditedCue], *, min_repeats: int = MIN_REPEATS)
         old, new = min(forms, key=lambda f: (-forms[f], sum(ch.isupper() for ch in f[1]), f))
         inside = list(members.values())
         others = [c for c in cues if c.key not in members]
-        found.append(Pattern(old, new, tuple(inside), _source_word(inside, others)))
+        word = _source_word(inside, others)
+        found.append(Pattern(old, new, tuple(inside), _as_written(word, inside) if word else ""))
     return sorted(found, key=lambda p: (-p.count, p.old.casefold(), p.new.casefold()))

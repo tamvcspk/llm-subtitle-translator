@@ -25,7 +25,7 @@ from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
 from .catalog import pick_source
 from .estimates import Estimator
 from .glossaries import Glossaries
-from .jobs import EXTRACT, FAILED, READING_KINDS, SUGGEST_CALLS, VARIANT, job_name, variant_key
+from .jobs import EXTRACT, FAILED, JUDGE, READING_KINDS, SUGGEST_CALLS, VARIANT, job_name, variant_key
 from .library import Library, Owner
 from .ports import CURRENT, KIND_EPISODE, KIND_SERIES, PRUNED, Correction, Output, Telemetry, Unit
 from .store import Store
@@ -76,6 +76,7 @@ def _correction_json(c: Correction) -> dict[str, Any]:
 
 class UnitService:
     feedback: Any = None  # ``FeedbackProposer``: told after cue edits, wired by the composition root (P15)
+    judge: Any = None  # ``JudgeService``: its verdicts are laid over a comparison and it queues the judging (P15)
 
     def __init__(
         self,
@@ -579,7 +580,9 @@ class UnitService:
             )
             cues = calls = 0
             if not reason and job is not None and job.get("kind") in READING_KINDS:
-                calls = 1 if job.get("kind") == EXTRACT else SUGGEST_CALLS  # a job that reads has no subtitle to count cues in
+                # a job that reads has no subtitle to count cues in: its calls are fixed, or a judge job says how many it needs
+                kind = job.get("kind")
+                calls = 1 if kind == EXTRACT else max(1, int(job.get("calls") or 0)) if kind == JUDGE else SUGGEST_CALLS
             elif not reason and job is not None:
                 try:
                     source = srt.parse_file(str(job.get("subtitle_path") or ""))
@@ -628,11 +631,20 @@ class UnitService:
         ]
         for item in rows:
             item["differs"] = item["current"] != item["variant"]
-        return {
+        view = {
             "lang": out.target_lang, "version": version, "status": row.status, "params": row.params, "model": row.model,
             "aligned": len(other) == len(source) and len(current) == len(source),
             "differing": sum(1 for r in rows if r["differs"]), "rows": rows,
         }
+        if self.judge is not None:  # advice only: a verdict of the judge sits next to a row, it never picks one
+            view["judge"] = self.judge.annotate(unit.id, out.target_lang, version, rows)
+        return view
+
+    def ask_judge(self, unit_id: int, version: int, body: dict[str, Any]) -> dict[str, Any]:
+        """``POST /api/units/{id}/versions/{v}/judge``: queue the judging of a candidate (or its price, ``estimate_only``)."""
+        if self.judge is None:
+            raise ValueError("The judge is not available")
+        return self.judge.request(unit_id, version, body)
 
     def choose(self, unit_id: int, version: int, body: dict[str, Any]) -> dict[str, Any]:
         """The admin's verdict on a variant (FR-18.8): which text is better for some cues or for the whole episode.

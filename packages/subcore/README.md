@@ -18,6 +18,7 @@ Roadmap: `PLAN.md`, design: `docs/design/ARCHITECTURE.md`.
 | `matching` | the one test of "does this line mention that name" (CJK and Korean anywhere in the text, other names as whole words with up to two letters of ending); the glossary filter, character cards, locked terms and the console all ask it |
 | `compare` | side-by-side numbers for two configurations or a golden set |
 | `golden` | the golden set of a series (`golden.json`: the cues an admin corrected and the text they should have), read by `compare --golden` |
+| `judge` | an LLM as a judge between two translations of a cue (the rubric, the request, the parse; position bias met by a fixed order per cue). Advice only; the worker queues it as a `judge` job |
 | `feedback` | what an admin keeps correcting: the same swap of words in several corrected cues, and the source word they share (pure; the worker turns it into a suggestion) |
 | `glossary` | YAML load/merge/dump/validate, `from_doc`/`to_doc` (the document the worker stores), locked terms, timed address rules |
 | `cli` | manual translation and debugging |

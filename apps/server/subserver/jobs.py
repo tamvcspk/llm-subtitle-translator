@@ -42,12 +42,14 @@ LEGACY_STATES = ("pending", "processing", "deferred", "done", "failed", "cancell
 FROM_LEGACY = {"pending": (QUEUED,), "processing": (RUNNING,), "deferred": (WAITING,), "done": (DONE, SKIPPED),
                 "failed": (FAILED,), "cancelled": (CANCELLED,)}
 
-PUBLISH, VARIANT, EXTRACT, SUGGEST = "publish", "variant", "extract", "suggest"
+PUBLISH, VARIANT, EXTRACT, SUGGEST, JUDGE = "publish", "variant", "extract", "suggest", "judge"
 # The kinds that translate a subtitle (and so have a source, a target, a model layer and a bundle), against the kinds
-# that only read (F7): an ``extract`` job reads the facts of one episode, a ``suggest`` job looks for proposals in them.
+# that only read (F7): an ``extract`` job reads the facts of one episode, a ``suggest`` job looks for proposals in them,
+# a ``judge`` job reads a candidate next to the current translation and says which cues look better (P15).
 TRANSLATING_KINDS = (PUBLISH, VARIANT)
-READING_KINDS = (EXTRACT, SUGGEST)
+READING_KINDS = (EXTRACT, SUGGEST, JUDGE)
 SUGGEST_CALLS = 3  # a ``suggest`` job asks about address rules, terms and characters: at most one call each
+JUDGE_MAX_CUES = 300  # a ``judge`` job looks at the first cues that differ, up to this many (ten calls)
 FILL, REPLACE = "fill", "replace"
 
 SKIPPED_RESULTS = ("skipped", "skipped-not-wanted", "skipped-existing-output")
@@ -75,6 +77,8 @@ def job_name(job: dict[str, Any]) -> str:
         return f"Extract facts · {job.get('label') or 'episode'}"
     if kind == SUGGEST:
         return f"Look for proposals · {job.get('title') or 'series'}"
+    if kind == JUDGE:
+        return f"Judge variant · {job.get('label') or 'episode'}"
     return Path(str(job.get("subtitle_path") or "")).name
 
 
@@ -86,6 +90,11 @@ def extract_key(unit_id: int) -> str:
 def suggest_key(series_id: int, target_lang: str) -> str:
     """The key of the job that looks for proposals for one series and language (F7)."""
     return f"suggest:{int(series_id)}:{target_lang}"
+
+
+def judge_key(unit_id: int, target_lang: str, version: int) -> str:
+    """The key of the job that judges one candidate against the current translation: at most one is open per candidate."""
+    return f"judge:{int(unit_id)}:{target_lang}:{int(version)}"
 
 
 @dataclass(frozen=True)

@@ -219,6 +219,8 @@ Saved settings with their defaults (the Settings page shows the same fields; key
   "llm_max_input_tokens": 128000,
   "llm_max_output_tokens": 8192,
   "research_model": "",
+  "judge_enabled": false,
+  "judge_model": "",
   "job_settle_seconds": 600,
   "memory_enabled": false,
   "memory_model": "",
@@ -298,6 +300,12 @@ The Settings page saves these options:
   jobs escalate and how many the strong model finishes; if few escalate or it
   rescues few, drop the layer.
 - `research_model`: model of the research task (FR-7, P16); blank uses `gst_model`. Nothing calls it yet.
+- `judge_enabled` (default **off**) and `judge_model`: the LLM judge on a candidate in Compare (P15, FR-18.8). Off, the Compare
+  page shows nothing about it and `POST /api/units/{id}/versions/{v}/judge` answers `400`: every use spends model calls (a
+  call per 30 differing cues, through the one queue, so `max_calls_per_day` and the breaker apply; the price is shown before
+  anything is queued). `judge_model` is the model of the `judge` task; blank uses `gst_model`. A stronger model than the one that
+  translated judges better, and the same model judging its own work is the weakest setting. The judge only advises: its
+  verdicts are `judge` quality signals, never an A/B score and never an edit.
 - `gst_paid_quota`: removes the default free-tier request limit (`LLM_RPM`).
 - `gst_temperature`: model temperature.
 - `gst_thinking_budget`, `gst_no_thinking`: thinking token budget, applied only

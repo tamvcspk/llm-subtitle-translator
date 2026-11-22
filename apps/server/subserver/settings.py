@@ -23,6 +23,7 @@ from .config import (
     DEFAULT_MODEL,
     GST_BOOL_CONFIG_KEYS,
     GST_STRING_CONFIG_KEYS,
+    JUDGE_BOOL_CONFIG_KEYS,
     KEY_SLOTS,
     LLM_INT_CONFIG_KEYS,
     LLM_PROVIDERS,
@@ -38,6 +39,7 @@ from .config import (
     SECRET_CONFIG_KEYS,
     SECRET_MASK,
     STYLE_INT_CONFIG_KEYS,
+    SUGGESTION_BOOL_CONFIG_KEYS,
     SYSTEM_SETTING_KEYS,
     enabled_source_languages,
     enabled_target_languages,
@@ -219,6 +221,10 @@ class SettingsService:
             settings[key] = bool(app.get(key))
         for key in CATALOG_INT_CONFIG_KEYS:
             settings[key] = int(app[key])
+        # The switches of suggestions and of the judge: without them here the running worker reads each one's default
+        # and a switch turned off in the console would change nothing.
+        for key in (*SUGGESTION_BOOL_CONFIG_KEYS, *JUDGE_BOOL_CONFIG_KEYS):
+            settings[key] = bool(app.get(key))
         for key in MEMORY_BOOL_CONFIG_KEYS:
             settings[key] = bool(app.get(key))
         for key in MEMORY_STRING_CONFIG_KEYS:
@@ -520,7 +526,7 @@ class SettingsService:
         settings = self.app_config()
         wanted = {
             str(settings.get(name) or "")
-            for name in ("gst_model", "gst_fallback_model", "memory_model", "summarize_model", "research_model")
+            for name in ("gst_model", "gst_fallback_model", "memory_model", "summarize_model", "research_model", "judge_model")
         }
         for model in sorted(self.model_warnings):
             if model in wanted:  # a model that is no longer configured has nothing left to warn about

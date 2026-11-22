@@ -1,7 +1,7 @@
 import { Alert, Anchor, Badge, Button, Card, Group, Loader, SegmentedControl, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { useFromEdits, useInsights, useLibrarySeries, useSeriesUnits } from "../api/queries";
+import { useCatalog, useFromEdits, useInsights, useLibrarySeries, useSeriesUnits } from "../api/queries";
 import type { InsightsBreakdown, InsightsDay, LibrarySeriesRow } from "../api/types";
 import {
   abLabel,
@@ -17,6 +17,7 @@ import {
   percent,
   reviewLabel,
 } from "../lib/insights";
+import { seriesRoute } from "../lib/seriesLink";
 
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
@@ -115,16 +116,20 @@ function Days({ days }: { days: InsightsDay[] }) {
 }
 
 /** The golden set and the look for repeated corrections of one series, one row per language it has. */
-function SeriesCorrections({ series }: { series: LibrarySeriesRow }) {
+function SeriesCorrections({ series, href }: { series: LibrarySeriesRow; href: string | null }) {
   const languages = useSeriesUnits(series.id).data?.languages ?? [];
   const look = useFromEdits();
   const [said, setSaid] = useState<{ lang: string; line: string } | null>(null);
   if (languages.length === 0) return null;
   return (
     <Stack gap="xs" component="li" style={{ listStyle: "none" }} aria-label={series.title}>
-      <Anchor component={Link} to={`/series/${series.id}/glossary`} fw={600}>
-        {series.title}
-      </Anchor>
+      {href ? (
+        <Anchor component={Link} to={href} fw={600}>
+          {series.title}
+        </Anchor>
+      ) : (
+        <Text fw={600}>{series.title}</Text>
+      )}
       {languages.map((lang) => (
         <Group key={lang} gap="sm" wrap="wrap">
           <Badge variant="light" size="lg" radius="sm">
@@ -165,6 +170,7 @@ export function Insights() {
   const [days, setDays] = useState<number>(30);
   const insights = useInsights(days);
   const series = useLibrarySeries();
+  const catalog = useCatalog();
   const data = insights.data;
 
   return (
@@ -335,7 +341,7 @@ export function Insights() {
         {series.data && series.data.items.length === 0 && <Text c="dimmed">The worker keeps no series yet.</Text>}
         <Stack gap="md" component="ul" aria-label="Series" style={{ margin: 0, padding: 0 }}>
           {(series.data?.items ?? []).map((row) => (
-            <SeriesCorrections key={row.id} series={row} />
+            <SeriesCorrections key={row.id} series={row} href={seriesRoute(catalog.data, row.id, "glossary")} />
           ))}
         </Stack>
       </Section>

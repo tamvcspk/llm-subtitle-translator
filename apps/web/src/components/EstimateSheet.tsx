@@ -37,6 +37,7 @@ function withoutAction(request: EstimateRequest): CostRequest {
   if ("prerequisites" in request) return { prerequisites: request.prerequisites };
   if ("retranslate" in request) return { retranslate: request.retranslate };
   if ("variant" in request) return { variant: request.variant };
+  if ("judge" in request) return { judge: request.judge };
   return { selector: request.selector };
 }
 

@@ -30,6 +30,8 @@ const defaults: Record<string, unknown> = {
   gst_model: "gemini-3.1-flash-lite",
   gst_fallback_model: "gemini-3.5-flash",
   research_model: "",
+  judge_enabled: false,
+  judge_model: "",
   gst_temperature: "0.7",
   gst_thinking_budget: "2048",
   gst_no_thinking: false,
@@ -153,6 +155,8 @@ describe("Settings", () => {
         "gst_model",
         "gst_fallback_model",
         "research_model",
+        "judge_enabled",
+        "judge_model",
         "gst_temperature",
         "gst_thinking_budget",
         "gst_no_thinking",
@@ -165,6 +169,18 @@ describe("Settings", () => {
     );
     expect(await screen.findByText("✓ Saved")).toBeInTheDocument();
     expect(within(screen.getByRole("button", { name: /^2\. Translation/ })).queryByText("Unsaved changes")).not.toBeInTheDocument();
+  });
+
+  it("keeps the LLM judge off until it is switched on, and saves it with its model", async () => {
+    serve(worker());
+    show("/settings");
+    const judge = await screen.findByRole("switch", { name: /^LLM judge/ });
+    expect(judge).not.toBeChecked();
+    await userEvent.click(judge);
+    await userEvent.click(screen.getByRole("button", { name: "Save 2. Translation" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]).toMatchObject({ judge_enabled: true, judge_model: "" });
+    expect(await screen.findByRole("switch", { name: /^LLM judge/ })).toBeChecked();
   });
 
   it("refuses a number the worker would clamp and says why", async () => {

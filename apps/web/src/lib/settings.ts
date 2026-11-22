@@ -21,6 +21,13 @@ export const TRANSLATION_FIELDS: Field[] = [
   { key: "gst_model", label: "Default model", kind: "model", hint: "Does the work." },
   { key: "gst_fallback_model", label: "Strong model", kind: "model", empty: "(none)", hint: "Takes hard jobs, outages and spent quota. Clear it to run on one model." },
   { key: "research_model", label: "Research model", kind: "model", empty: "(same as Default)", hint: "Nothing calls it yet." },
+  {
+    key: "judge_enabled",
+    label: "LLM judge",
+    kind: "switch",
+    hint: "Off by default. On a candidate in Compare, a model says which cues look better. Advice only, and every use spends model calls.",
+  },
+  { key: "judge_model", label: "Judge model", kind: "model", empty: "(same as Default)", hint: "A stronger model than the one that translated judges better." },
   { key: "gst_temperature", label: "Temperature", kind: "numtext", min: 0, max: 2, step: 0.1 },
   { key: "gst_thinking_budget", label: "Thinking budget", kind: "numtext", min: 0, step: 128 },
   { key: "gst_no_thinking", label: "No thinking", kind: "switch" },

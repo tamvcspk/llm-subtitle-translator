@@ -33,18 +33,29 @@ export function firstTab(counts: QueueCounts): JobTab {
 const baseName = (path: string | undefined) => (path ?? "").split(/[\\/]/).pop() ?? "";
 
 /** Jobs that read and do not translate: they have no subtitle to write and no bundle to export. */
-export const readsOnly = (job: Pick<QueueJob, "kind">): boolean => job.kind === "extract" || job.kind === "suggest";
+export const readsOnly = (job: Pick<QueueJob, "kind">): boolean =>
+  job.kind === "extract" || job.kind === "suggest" || job.kind === "judge";
 
 /**
  * `Arcane · S01E04 · vi`; a job with no unit (an older queue file) is its subtitle's file name. A job that reads is named
- * for what it reads: `Extract facts · Arcane · S01E04`, `Look for proposals · Arcane · vi`.
+ * for what it reads: `Extract facts · Arcane · S01E04`, `Look for proposals · Arcane · vi`,
+ * `Judge variant · Arcane · S01E04 · vi`.
  */
 export function jobName(job: QueueJob): string {
   if (job.kind === "extract") return ["Extract facts", job.title, job.label].filter(Boolean).join(" · ");
   if (job.kind === "suggest") return ["Look for proposals", job.title, job.target_code].filter(Boolean).join(" · ");
+  if (job.kind === "judge") return ["Judge variant", job.title, job.label, job.target_code].filter(Boolean).join(" · ");
   const parts = [job.title, job.label].filter(Boolean);
   const name = parts.length > 0 ? parts.join(" · ") : baseName(job.subtitle_path) || job.job_id;
   return job.target_code ? `${name} · ${job.target_code}` : name;
+}
+
+/** Where a job's name leads: the facts of its episode, the comparison it judges, or the subtitles of its episode. */
+export function jobLink(job: QueueJob): string {
+  const lang = job.target_code ? `?lang=${encodeURIComponent(job.target_code)}` : "";
+  if (job.kind === "extract") return `/unit/${job.unit_id}/context`;
+  if (job.kind === "judge" && typeof job.version === "number") return `/unit/${job.unit_id}/compare/${job.version}${lang}`;
+  return `/unit/${job.unit_id}/subtitles${lang}`;
 }
 
 /** The last non-empty line of an error: the one that says what went wrong (the rest is the trace). */
@@ -74,6 +85,10 @@ const READ_RESULT: Record<string, string> = {
   cached: "the facts were already there",
   stored: "kept the facts it had",
   "skipped-no-source": "no source subtitle to read",
+  judged: "verdicts kept",
+  "nothing-answered": "the judge gave no answer",
+  "skipped-nothing-to-judge": "nothing left to judge",
+  "skipped-not-a-candidate": "the version is no longer a candidate",
 };
 
 /** `manual · fill`, `policy · variant`: who asked and how. */
@@ -89,7 +104,9 @@ export function jobStatus(job: QueueJob, tab: JobTab, nowMs: number = Date.now()
       parts.push("Requested");
       break;
     case "running":
-      parts.push(job.progress_total ? `translating ${job.progress_done ?? 0}/${job.progress_total}` : job.stage || "working");
+      parts.push(
+        job.progress_total ? `${job.kind === "judge" ? "judging" : "translating"} ${job.progress_done ?? 0}/${job.progress_total}` : job.stage || "working",
+      );
       break;
     case "waiting": {
       const reason = job.wait_reason ?? "";

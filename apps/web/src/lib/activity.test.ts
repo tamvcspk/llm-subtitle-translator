@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QueueJob } from "../api/types";
-import { firstTab, jobName, jobStatus, lastLine, layerRows, originLine, providerLine, reach, readsOnly, whenText } from "./activity";
+import { firstTab, jobLink, jobName, jobStatus, lastLine, layerRows, originLine, providerLine, reach, readsOnly, whenText } from "./activity";
 
 const NOW = Date.UTC(2026, 10, 17, 12, 0, 0);
 const job = (extra: Partial<QueueJob> = {}): QueueJob => ({ job_id: "j1", title: "Arcane", label: "S01E04", target_code: "vi", origin: "manual", mode: "fill", ...extra });
@@ -23,6 +23,23 @@ describe("Activity", () => {
     expect(jobStatus({ ...extract, result: "extracted" }, "done")).toBe("manual · extract · facts read");
     expect(jobStatus({ ...extract, result: "skipped-no-source" }, "done")).toBe("manual · extract · no source subtitle to read");
     expect(jobStatus({ ...extract, stage: "Reading S01E04" }, "running")).toBe("manual · extract · Reading S01E04");
+  });
+
+  it("names a judge job for the candidate it reads, leads to its comparison and has no subtitle to export", () => {
+    const judge = job({ kind: "judge", unit_id: 7, version: 4, mode: "judge" });
+    expect(jobName(judge)).toBe("Judge variant · Arcane · S01E04 · vi");
+    expect(readsOnly(judge)).toBe(true);
+    expect(jobLink(judge)).toBe("/unit/7/compare/4?lang=vi");
+    expect(jobStatus({ ...judge, progress_done: 30, progress_total: 70 }, "running")).toBe("manual · judge · judging 30/70");
+    expect(jobStatus({ ...judge, result: "judged" }, "done")).toBe("manual · judge · verdicts kept");
+    expect(jobStatus({ ...judge, result: "skipped-not-a-candidate" }, "done")).toBe("manual · judge · the version is no longer a candidate");
+  });
+
+  it("leads a job to its facts, its comparison or its subtitles", () => {
+    expect(jobLink(job({ kind: "extract", unit_id: 7 }))).toBe("/unit/7/context");
+    expect(jobLink(job({ unit_id: 7 }))).toBe("/unit/7/subtitles?lang=vi");
+    expect(jobLink(job({ unit_id: 7, target_code: "" }))).toBe("/unit/7/subtitles");
+    expect(jobLink(job({ kind: "judge", unit_id: 7 }))).toBe("/unit/7/subtitles?lang=vi"); // an older judge job without a version
   });
 
   it("says who asked and how, calling a variant a variant", () => {

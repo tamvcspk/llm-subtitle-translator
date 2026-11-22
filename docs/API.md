@@ -249,6 +249,8 @@ keys beyond these four fields.
   "llm_max_input_tokens": 128000,
   "llm_max_output_tokens": 8192,
   "research_model": "",
+  "judge_enabled": false,
+  "judge_model": "",
   "openai_compat_api_key": "",
   "job_settle_seconds": 600,
   "auto_request": false,
@@ -854,7 +856,27 @@ the same way, nothing is queued, and the reply is `{"ok", "estimate_only": true,
 
 ### GET /api/units/{id}/versions/{v}/compare?lang=
 The current translation and a version side by side: `{"lang", "version", "status", "params", "model", "aligned",
-"differing", "rows": [{"n", "source", "current", "variant", "differs"}]}`.
+"differing", "rows": [{"n", "source", "current", "variant", "differs", "judge"?}], "judge"}`.
+
+`judge` on a row (P15) is the LLM judge's advice on that cue, `{"winner": "variant" | "current" | "tie", "why"}`. It is there
+only when the judge has looked at exactly these two texts under today's rubric (an edit of the cue, a new variant or a new rubric
+version takes it away). `judge` on the answer says how the judge stands for this candidate: `{"enabled", "model",
+"prompt_version", "judged", "variant", "current", "tie", "todo", "job"}`, where `todo` counts the differing cues with no verdict
+and `job` is the open judge job of this candidate (`{"job_id", "state", "stage"}`) or `null`.
+
+### POST /api/units/{id}/versions/{v}/judge
+Body `{"lang": "vi", "again": false, "estimate_only": false}`. Queues a **judge** job (kind `judge`, key
+`judge:<unit>:<lang>:<version>`, the interactive class): a model reads the candidate next to the current translation and says,
+cue by cue, which text a viewer is better served by (meaning first, then natural speech, then fit; position, length and
+formality are no reason). It is advice only (FR-18.8): a verdict never becomes a cue edit and never counts in an A/B score (it
+is a `judge` quality signal, not an `ab` one); only `choose` does. The judge asks about the differing cues that have no verdict
+yet (`again` asks about all of them), up to 300 cues, in calls of 30 cues each; each batch is stored when it returns, so Stop or
+a restart keeps what was paid for and asking again pays only for the rest. The job goes through the one queue: the day's quota,
+`max_calls_per_day`, `max_calls_per_job`, the breaker and Stop apply. At most one is open per candidate (a second request
+returns that job, `"new": false`). Reply `{"ok", "job_id", "new", "cues", "calls"}`. With `"estimate_only": true` nothing is
+queued: `{"ok", "estimate_only": true, "cues", "differing", "capped", "calls", "model", "estimate": {...}}`.
+`400` when `judge_enabled` is off (it is by default), when the version is not a candidate, or when there is nothing to judge;
+`404` for a version that does not exist. Read the verdicts with `GET …/compare`.
 
 ### POST /api/units/{id}/versions/{v}/choose
 Body `{"lang": "vi", "picks": {"12": "variant", "13": "current"}, "whole": "variant", "apply": false}`. Records the admin's

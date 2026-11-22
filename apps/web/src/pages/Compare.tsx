@@ -3,8 +3,9 @@ import { IconChevronLeft } from "@tabler/icons-react";
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { useAdoptImpact, useChoose, useCompare, useUnit, useVersions } from "../api/queries";
+import { EstimateSheet, type EstimateRequest } from "../components/EstimateSheet";
 import { impactSentence } from "../lib/style";
-import { styleLines, tally, verdicts, visibleRows } from "../lib/compare";
+import { judgeAsk, judgeNote, judgeStatus, styleLines, tally, verdicts, visibleRows } from "../lib/compare";
 import { unitTitle } from "../lib/unit";
 
 /** Compare (wireframe 4): the current translation against a candidate, cue by cue; pick cues or take the whole version. */
@@ -22,6 +23,7 @@ export function Compare() {
   const [picked, setPicked] = useState<ReadonlySet<number>>(new Set());
   const [asking, setAsking] = useState(false);
   const [withStyle, setWithStyle] = useState(true);
+  const [judging, setJudging] = useState<EstimateRequest | null>(null);
 
   const variant = compare.data?.params.variant;
   const candidate = compare.data?.status === "candidate";
@@ -38,6 +40,8 @@ export function Compare() {
   const { fromVariant, kept } = tally(data.rows, picked);
   const back = `/unit/${unitId}/history${lang ? `?lang=${lang}` : ""}`;
   const done = choose.data;
+  const judge = data.judge;
+  const ask = judge ? judgeAsk(judge) : null;
 
   const toggle = (n: number) =>
     setPicked((previous) => {
@@ -70,6 +74,32 @@ export function Compare() {
           onChange={(event) => setOnly(event.currentTarget.checked)}
         />
       </Stack>
+
+      {candidate && judge?.enabled && (
+        <Card withBorder padding="sm" radius="md" component="section" aria-label="Judge">
+          <Stack gap="xs">
+            <Text size="sm" role="status">
+              {judgeStatus(judge)}
+            </Text>
+            <Text size="xs" c="dimmed">
+              Advice from {judge.model}, never a pick: only what you tick counts.
+            </Text>
+            {ask && (
+              <Button
+                variant="default"
+                onClick={() =>
+                  setJudging({
+                    action: `Ask the judge · Candidate v${data.version}`,
+                    judge: { unit_id: unitId, version, body: { lang, ...(ask.again ? { again: true } : {}) } },
+                  })
+                }
+              >
+                {ask.label}
+              </Button>
+            )}
+          </Stack>
+        </Card>
+      )}
 
       {done && (
         <Alert color="teal">
@@ -121,6 +151,11 @@ export function Compare() {
                   </Text>
                   {row.variant ?? "—"}
                 </Text>
+                {row.judge && (
+                  <Text size="sm" c={row.judge.winner === "tie" ? "dimmed" : row.judge.winner === "variant" ? "teal" : "blue"}>
+                    {judgeNote(row.judge)}
+                  </Text>
+                )}
               </Stack>
             </Card>
           ))}
@@ -157,6 +192,8 @@ export function Compare() {
           </Stack>
         </Box>
       )}
+
+      <EstimateSheet request={judging} onClose={() => setJudging(null)} />
 
       <Drawer opened={asking} onClose={closeAsk} position="bottom" size="auto" padding="lg" radius="lg" title={`Use candidate v${data.version} as the current translation?`}>
         <Stack>

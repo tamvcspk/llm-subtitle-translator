@@ -45,9 +45,20 @@ LINES = [
 ]
 
 
-def srt(episode: int) -> str:
+# The lines of the one episode of "Edit Demo" (``--live`` only): three of them say "Mom" and the machine wrote "Mẹ" for it,
+# so correcting "Mẹ" to another word in three cues is a swap the feedback loop can find without a model call.
+EDIT_LINES = [
+    "Mom, wait for me!",
+    "I love you, Mom.",
+    "Where is Mom going?",
+    "The door is open.",
+    "Dad is late again.",
+]
+
+
+def srt(episode: int, lines: list[str] = LINES) -> str:
     blocks = []
-    for n, text in enumerate(LINES, start=1):
+    for n, text in enumerate(lines, start=1):
         start, end = (n - 1) * 2500, (n - 1) * 2500 + 2000
         stamp = lambda ms: f"00:00:{ms // 1000:02d},{ms % 1000:03d}"  # noqa: E731
         blocks.append(f"{n}\n{stamp(start)} --> {stamp(end)}\n{text}\n")
@@ -55,7 +66,7 @@ def srt(episode: int) -> str:
 
 
 def translate(text: str) -> str:
-    return f"[vi] {text}".replace("Kyber crystal", "tinh thể Kyber")
+    return f"[vi] {text}".replace("Kyber crystal", "tinh thể Kyber").replace("Mom", "Mẹ")
 
 
 def write_old_queue(state: Path) -> None:
@@ -87,7 +98,7 @@ def write_old_queue(state: Path) -> None:
         path.write_text(json.dumps(job), encoding="utf-8")
 
 
-def seed(state: Path, translated: tuple[int, ...] = (1, 2)) -> str:
+def seed(state: Path, translated: tuple[int, ...] = (1, 2), *, edit_demo: bool = False) -> str:
     media = state / "preview-media"
     show = media / "Arcane Demo" / "Season 1"
     show.mkdir(parents=True)
@@ -142,6 +153,26 @@ def seed(state: Path, translated: tuple[int, ...] = (1, 2)) -> str:
         KIND_MOVIE, "55", series_key="bazarr-movie-55", title="Demo Movie", video_path=str(movie_source.with_suffix(".mkv")),
         subtitles=(CatalogSubtitle("en", str(movie_source)),), missing=("vi",),
     ))
+    if edit_demo:
+        # One small episode translated by the fake provider (free, even in live mode), to correct by hand: the feedback loop
+        # and the golden set need cues whose machine text is known, and a live translation is not.
+        folder = media / "Edit Demo" / "Season 1"
+        folder.mkdir(parents=True)
+        source = folder / "Edit.Demo.S01E01.en.srt"
+        source.write_text(srt(1, EDIT_LINES), encoding="utf-8")
+        target = folder / "Edit.Demo.S01E01.vi.srt"
+        attempt.run({
+            "job_id": "seed-edit", "provider": "gemini-console", "media_type": "series", "series_id": "11", "media_id": "111",
+            "video_path": str(folder / "Edit.Demo.S01E01.mkv"), "subtitle_path": str(source), "output_path": str(target),
+            "source_code": "en", "target_code": "vi", "target_language": "Vietnamese", "series_title": "Edit Demo",
+            "season": 1, "episode": 1,
+        }, "", SETTINGS)
+        entries.append(CatalogEntry(KIND_SERIES, "11", series_key="bazarr-11", title="Edit Demo"))
+        entries.append(CatalogEntry(
+            KIND_EPISODE, "111", series_key="bazarr-11", parent_bazarr_id="11", season=1, episode=1, title="Episode 1",
+            video_path=str(folder / "Edit.Demo.S01E01.mkv"),
+            subtitles=(CatalogSubtitle("en", str(source)), CatalogSubtitle("vi", str(target))),
+        ))
     store.catalog_apply(entries, time.time())
 
     store.close()
@@ -166,7 +197,7 @@ def main() -> int:
         shutil.rmtree(state)
     state.mkdir(parents=True)
     (state / MARK).write_text("made by tests/preview_seed.py; --reset may delete this folder\n", encoding="utf-8")
-    seed(state, () if args.live else (1, 2))
+    seed(state, () if args.live else (1, 2), edit_demo=args.live)
     if args.old_queue:
         write_old_queue(state)
     print(f"seeded {state}")

@@ -350,7 +350,7 @@ class RepeatedEditTests(unittest.TestCase):
         self.assertEqual((answer["patterns"], answer["proposed"], answer["report"]["added"]), (1, 1, 1))
         (item,) = env.pending()
         self.assertEqual((item["kind"], item["source"]), ("term", "feedback"))
-        self.assertEqual((item["payload"]["source"], item["payload"]["target"]), ("mom", "Má"))
+        self.assertEqual((item["payload"]["source"], item["payload"]["target"]), ("Mom", "Má"))
         self.assertIn("3 cues", item["payload"]["note"])
         self.assertEqual(sorted((e["episode"], e["cue"]) for e in item["evidence"]), [("S01E01", 1), ("S01E01", 3), ("S01E02", 1)])
         self.assertTrue(all(e["unit_id"] for e in item["evidence"]))
@@ -395,7 +395,7 @@ class RepeatedEditTests(unittest.TestCase):
             env.mom(episode, cue)
         env.suggestions.accept(env.pending()[0]["id"])
         (term,) = env.glossaries.load("series", "bazarr-7", "vi").terms
-        self.assertEqual((term.source, term.target), ("mom", "Má"))
+        self.assertEqual((term.source, term.target), ("Mom", "Má"))
 
     def test_a_word_added_where_there_was_none_is_no_pattern(self):
         env = FeedbackEnv(self)

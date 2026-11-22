@@ -56,8 +56,10 @@ export interface QueueJob {
   /** `S01E04`; empty for a movie. */
   label: string;
   unit_id?: number;
-  /** `publish` (a translation; also when the field is absent), `variant`, `extract` (the facts of one episode) or `suggest`. */
+  /** `publish` (a translation; also when the field is absent), `variant`, `extract` (the facts of one episode), `suggest` or `judge`. */
   kind?: string;
+  /** `judge` jobs: the candidate version being judged. */
+  version?: number;
   source_code?: string;
   target_code?: string;
   subtitle_path?: string;
@@ -543,12 +545,36 @@ export interface VersionsAnswer {
   versions: Version[];
 }
 
+/** What the LLM judge thought of one cue: advice, never the admin's pick. */
+export interface JudgeVerdict {
+  winner: "variant" | "current" | "tie";
+  why: string;
+}
+
 export interface CompareRow {
   n: number;
   source: string;
   current: string | null;
   variant: string | null;
   differs: boolean;
+  /** Present only where the judge has looked at exactly these two texts. */
+  judge?: JudgeVerdict;
+}
+
+/** How the judge stands for one candidate (`judge` of `GET …/compare`; present when the worker has a judge). */
+export interface JudgeSummary {
+  /** `judge_enabled` in Settings: off by default, because every use spends model calls. */
+  enabled: boolean;
+  model: string;
+  prompt_version: string;
+  judged: number;
+  variant: number;
+  current: number;
+  tie: number;
+  /** Differing cues with no verdict yet. */
+  todo: number;
+  /** The open judge job of this candidate (queued, running or waiting), or null. */
+  job: { job_id: string; state: string; stage: string } | null;
 }
 
 /** `GET /api/units/{id}/versions/{v}/compare`: the current translation and one version, cue by cue. */
@@ -561,6 +587,7 @@ export interface CompareAnswer {
   aligned: boolean;
   differing: number;
   rows: CompareRow[];
+  judge?: JudgeSummary;
 }
 
 export interface DiffCue {

@@ -98,7 +98,8 @@ if ($Live) {
     $env:GEMINI_API_KEY = $liveKey
     # The cap is a setting, not an environment variable: config.json is imported on the first run of a state (use -Reset).
     # Written without a byte-order mark (Windows PowerShell's -Encoding utf8 adds one, and the worker's json.loads refuses it).
-    $json = @{ max_calls_per_day = $MaxCallsPerDay } | ConvertTo-Json
+    # job_settle_seconds 0: the seed has just written the source files and the default 600 s wait would hold the first job for ~10 minutes.
+    $json = @{ max_calls_per_day = $MaxCallsPerDay; job_settle_seconds = 0 } | ConvertTo-Json
     [System.IO.File]::WriteAllText($env:APP_CONFIG_PATH, $json, (New-Object System.Text.UTF8Encoding($false)))
     $env:BAZARR_URL = 'http://127.0.0.1:1'           # nothing to ask; fails at once instead of waiting on a name
     $env:GST_ONLY_PATHS = Join-Path $stateDir 'preview-media'

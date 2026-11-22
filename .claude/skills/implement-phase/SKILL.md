@@ -1,6 +1,6 @@
 ---
 name: implement-phase
-description: Implement a roadmap phase (P0–P16, including P0b–P0d) or a single FR/NFR from docs/design/SPEC.md and docs/design/ARCHITECTURE.md. Use when the user says "vào P1", "làm FR-3.3", "implement phase", or asks to build any feature of the redesigned translator (subcore engine, providers, glossary, memory, scheduler, SQLite store, console pages, Basic Auth).
+description: Implement a roadmap phase (P0–P16, including P0b–P0d) or a single FR/NFR from docs/design/SPEC.md and docs/design/ARCHITECTURE.md. Use when the user says "vào P1", "làm FR-3.3", "implement phase", or asks to build any feature of the redesigned translator (subcore engine, providers, glossary, memory, scheduler, SQLite store, console pages, Basic Auth). Unit tests (Python and web) are part of the phase, written with the code, never a follow-up request; the browser test hand-off is the separate `test-plan` skill.
 ---
 
 # Implement a design phase
@@ -24,14 +24,16 @@ The design docs are the contract. `docs/design/` wins over upstream docs; `docs/
 
 ## 3. Tests first, never the network
 
-- stdlib `unittest` only. New subcore tests go in `packages/subcore/tests/`, worker tests in `apps/server/tests/`.
+- Every phase ships its unit tests in the same change; a phase without them is not finished, and the user never has to ask.
+- stdlib `unittest` only for Python. New subcore tests go in `packages/subcore/tests/`, worker tests in `apps/server/tests/`. A screen or a web lib gets `vitest` tests next to it in `apps/web/src` (`*.test.ts(x)`).
 - LLM calls go through the `fake` provider (NFR-8). A test that would hit Gemini/TMDB/Bazarr is a bug.
 - Write the acceptance test for the phase (e.g. SPEC §6.4 "missing 3 cues → exactly one repair call with those 3 cues") before the implementation, and assert on prompts/call counts, not just outputs.
 - Mandatory invariants to keep covered: never overwrite a non-system subtitle; API keys/passwords never logged or returned; timecodes/indices never sent to the LLM; atomic writes.
 
 ## 4. Finish
 
-1. Run the `ci-check` skill; all steps must pass.
+1. Run the `ci-check` skill; all steps must pass. When `apps/web` changed, also run from `apps/web` (upper-case drive letter on Windows): `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`: what the CI `web` job runs.
 2. Update docs in the same change: `docs/API.md` for endpoints, `docs/CONFIGURATION.md` for env/settings, `CONTEXT.md` for new domain terms, `AGENTS.md` if commands or layout changed. Tick the finished items in `PLAN.md` and update the phase status in its overview table; only mark a phase `[x]` after CI on GitHub is green. Add a short "Đã làm ở Px" note in `docs/design/ARCHITECTURE.md` only when the implementation fixed a design choice the doc left open.
 3. Add a `CHANGELOG.md` entry under Unreleased.
-4. Report: what was built, which acceptance criteria are now covered by which tests, what is deferred. Distinguish repo changes from image builds and running-service state (AGENTS.md) — a phase being done in code does not mean it is deployed.
+4. Browser test: when the change touches a screen or what a job does, end the report by offering the `test-plan` skill (a plan for the light session). When the user says "viết test" or "test case" afterwards, that is what they mean; the unit tests were already part of step 3.
+5. Report: what was built, which acceptance criteria are now covered by which tests, what is deferred. Distinguish repo changes from image builds and running-service state (AGENTS.md) — a phase being done in code does not mean it is deployed.
