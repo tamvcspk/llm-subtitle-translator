@@ -31,7 +31,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P13** | `suggestions` + Review inbox lõi (FR-4.4, FR-11.1, FR-11.1.5) | Tiêu chí 21 c–h: chấp nhận/sửa/từ chối/hàng loạt ghi vào glossary trong DB, hiện số bản dịch stale, từ chối không bị sinh lại, `auto_accept` theo loại, badge nav; mọi `source` qua cùng use case | `[x]` CI GitHub xanh (440d0ca, run 44124589256); chạy ở `dev-llm-translator` trên homeserver từ 2026-11-17 |
 | **P14** | Bộ sinh đề xuất từ facts và thẻ nhân vật (FR-6, FR-18.3) | Tiêu chí 21 a–b: đề xuất `address_rule` và `term` `pending` kèm bằng chứng cue và timecode, chưa áp dụng vào bản dịch nào | `[~]` Code, test (tiêu chí 21 a–b) và CI xanh (2843ca3); đã thử trên Malcolm (2026-11-19, 5 đề xuất mới); còn chạy lại các sửa sau trên bản image mới ở `dev-llm-translator` |
 | **P15** | Insights và vòng phản hồi (FR-19.5–19.6): metrics, trang Insights, đề xuất rule từ cue đã sửa, bộ golden + `compare` | Tiêu chí 20 a–d và 17h | `[x]` Xong: code, test, docs (407c04b, 55ef4cd), CI xanh, test trình duyệt live PASS |
-| **P15b** | Sửa docs và skill đã cũ sau P15 (quyết định #27): `docs/ARCHITECTURE.md`, skill `implement-phase`, README, trạng thái của bảng này; script kiểm docs | Script kiểm docs không báo module hay route nào thiếu; không còn `FileJobQueue`, `gst_enqueue.sh` ngoài lịch sử của PLAN và CHANGELOG | `[~]` Xong trong repo, `doccheck.py` sạch; còn CI GitHub xanh |
+| **P15b** | Sửa docs và skill đã cũ sau P15 (quyết định #27): `docs/ARCHITECTURE.md`, skill `implement-phase`, README, trạng thái của bảng này; script kiểm docs | Script kiểm docs không báo module hay route nào thiếu; không còn `FileJobQueue`, `gst_enqueue.sh` ngoài lịch sử của PLAN và CHANGELOG | `[x]` Xong: `doccheck.py` sạch, CI GitHub xanh (de3cb01, run 45023113187) |
 | **P15c** | `subserver/` thành package theo lớp (ADR-18 phần 1): `domain`, `services`, `jobs`, `adapters`, `api`; tách `store.py`; không đổi hành vi | Toàn bộ test server pass, chỉ sửa import, số test không giảm; `test_core_boundary.py` kiểm theo package; HTTP API, schema DB và image không đổi | `[ ]` |
 | **P15d** | HTTP chuyển sang FastAPI (ADR-18 phần 2): middleware xác thực ASGI, router có schema pydantic, vòng nền trong `lifespan`; bỏ `http.server` | Tiêu chí 9 và 24c vẫn pass (danh sách route lấy từ app FastAPI); mọi route của `docs/API.md` trả cùng mã và payload như trước; một process, cổng 6789 | `[ ]` |
 | **P15e** | Kiểu API của `apps/web` sinh từ OpenAPI (ADR-18 phần 3) | Đổi một field ở schema Python mà không sinh lại thì CI đỏ; `npm run typecheck` pass trên bản sinh | `[ ]` |
@@ -403,7 +403,7 @@ FR-19.5–19.6; ADR-15; tiêu chí 17h, 20.
 - [x] Workflow **CI** trên GitHub xanh cho commit P15: run 45012622899 (`workflow_dispatch`, nhánh `p13-review`, `55ef4cd`). Commit sau đó (`344ebd1`) chỉ đổi script preview.
 - [x] **Test trình duyệt live** (2026-11-22, kế hoạch `2026-11-22-p15-insights-judge-live`, key Gemini thật, 3/12 lời gọi): S1–S8 PASS (Insights, vòng phản hồi, bộ golden, công tắc `suggest_from_edits` tới worker, dịch thật, biến thể, judge tắt → bật → một lượt phán 10 cue "5 variant / 5 current", judge không tính vào điểm Style trials, không sửa cue). Phát hiện và cách xử lý: F1 (liên kết series ở trang Unit) không phải lỗi, id của catalog khác id lưu trữ theo thiết kế (`seriesRoute`); F2 (accept hỏi lại impact của thẻ đã quyết, 400 trong console), F3 (term bị hạ chữ hoa thành `mom`) và F4 (job chờ `job_settle_seconds` 600 s trong preview live) đã sửa ở `55ef4cd`; F5 chỉ là câu chữ của kế hoạch. Chưa đo: mức khớp giữa judge và lựa chọn của admin (xem bên trên), nên judge vẫn chỉ là lời khuyên.
 
-## P15b — Sửa docs và skill đã cũ `[~]`
+## P15b — Sửa docs và skill đã cũ `[x]`
 
 Quyết định #27. Không đổi code chạy. Kiểm ngày 2026-11-22 trên 55ef4cd.
 
@@ -413,6 +413,7 @@ Quyết định #27. Không đổi code chạy. Kiểm ngày 2026-11-22 trên 55
 - [x] `README.md`, `docs/DEVELOPMENT.md`: Insights, judge, golden set. Cùng đợt sửa `docs/design/` (sơ đồ và cây thư mục còn `gst_enqueue.sh`, `FileJobQueue`); ADR và SPEC giữ nguyên chữ khi nó kể lại quyết định lúc đó.
 - [x] `docs/API.md`: `/api/queue/cancel` là route cũ còn trong code, không có nơi nào trong `apps/web` gọi; đã ghi (xoá một job `failed`). Có thể bỏ khi chuyển FastAPI (P15d).
 - [x] (`apps/server/tests/test_doccheck.py`, 9 test, một test chạy trên chính repo) `scripts/doccheck.py` (chỉ thư viện chuẩn): module của `subserver`/`subcore` không có trong `docs/ARCHITECTURE.md`, route `/api/*` trong code không có trong `docs/API.md`; chạy trong skill `ci-check`. Có unit test nhỏ cho script.
+- [x] Workflow **CI** trên GitHub xanh cho commit P15b: run 45023113187 (`workflow_dispatch`, nhánh `p13-review`, `de3cb01`; job Web và Python 3.14 đều success).
 
 ## P15c — `subserver/` thành package theo lớp `[ ]`
 
