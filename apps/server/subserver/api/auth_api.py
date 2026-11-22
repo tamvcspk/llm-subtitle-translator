@@ -12,6 +12,8 @@ from fastapi import APIRouter, Body, Request
 from starlette.responses import Response
 
 from ..services import auth as console_auth
+from .answers import console as ans
+from .answers.common import OkAnswer
 from .common import blocking, error_response, json_response, payload
 from .schemas import LoginBody, PasswordBody, RequestObject
 from .security import client_address, session_cookie
@@ -30,19 +32,19 @@ def _throttle(request: Request) -> console_auth.LoginThrottle | None:
 
 
 def register(router: APIRouter) -> None:
-    @router.get("/api/auth/me")
+    @router.get("/api/auth/me", response_model=ans.MeAnswer)
     async def me(request: Request) -> Response:
         auth = _auth(request)
         via = request.state.auth_via
         user = await blocking(lambda: auth.name) if via in {"session", "basic"} else None
         return json_response({"user": user, "via": via, "can_change_password": auth.can_change_password})
 
-    @router.post("/api/auth/login")
+    @router.post("/api/auth/login", response_model=ans.LoginAnswer)
     async def login(request: Request, body: LoginBody | None = Body(default=None)) -> Response:
         """The one call that runs without credentials (the form login)."""
         return await blocking(_login, request, payload(body))
 
-    @router.post("/api/auth/logout")
+    @router.post("/api/auth/logout", response_model=OkAnswer)
     async def logout(request: Request, body: RequestObject | None = Body(default=None)) -> Response:
         sessions = _sessions(request)
         if sessions is not None:
@@ -50,7 +52,7 @@ def register(router: APIRouter) -> None:
         request.state.refreshed_token = None
         return json_response({"ok": True}, headers={"Set-Cookie": session_cookie(request, "", max_age=0)})
 
-    @router.post("/api/auth/password")
+    @router.post("/api/auth/password", response_model=OkAnswer)
     async def password(request: Request, body: PasswordBody | None = Body(default=None)) -> Response:
         return await blocking(_change_password, request, payload(body))
 

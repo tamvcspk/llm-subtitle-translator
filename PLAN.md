@@ -438,16 +438,18 @@ ADR-18 phần 2, quyết định #27. Sau P15c.
 - [x] `docs/API.md` (mục Errors), `AGENTS.md`, `docs/ARCHITECTURE.md`, `CHANGELOG.md`. `docs/CONFIGURATION.md` không đổi (không có biến mới).
 - [x] Workflow **CI** trên GitHub xanh cho commit P15d: run 45037708716 (`workflow_dispatch`, nhánh `p13-review`, `3bc74bc`; job Web và Python 3.14 đều success). Chạy thử: `scripts/preview.ps1 -Reset` rồi `node scripts/smoke/smoke.mjs`: 11 màn, không lỗi console, không `/api` lỗi. Duyệt tay `local-state/handoff/TEST-PLAN.md` (fake, 7 kịch bản, session 1 tự chạy trong Edge): 7 PASS, một sửa nhỏ (thông báo body không phải JSON, `bfe2b46`; CI chạy lại run 45039791476, xanh). Image: `docker-image.yml` chỉ chạy khi vào `main`; Dockerfile không đổi, `uv sync --locked --no-dev` lấy `fastapi` và `uvicorn` từ `uv.lock` (`httpx2` ở nhóm dev, không vào image).
 
-## P15e — Kiểu API sinh từ OpenAPI `[ ]`
+## P15e — Kiểu API sinh từ OpenAPI `[ ]` (làm xong trong mã, chờ CI)
 
-- [ ] (chuyển từ P15d) Model pydantic cho câu trả lời của từng route (`response_model`), vì kiểu TS sinh ra cần chúng; làm từng nhóm, đối chiếu với `apps/web/src/api/types.ts` và với script so sánh cũ/mới.
+- [x] (chuyển từ P15d) Model pydantic cho câu trả lời của từng route: `api/answers/` (`common`, `console`, `catalog`, `library`, `style`, `suggestions`, `insights`), khai báo bằng `response_model=` hoặc bảng `ANSWERS` của router thuần; không chạy lúc phục vụ (chỉ vào OpenAPI), nên không câu trả lời nào hỏng vì mô hình. **Test hợp đồng** `tests/test_answer_contract.py` khởi động `worker.py` thật trên dữ liệu seed, gọi mọi route và kiểm nghiêm từng câu trả lời với mô hình của route; test cuối thất bại cho route không có mô hình hoặc không có ca gọi. 13 test, ~25 s.
 
 ADR-18 phần 3. Sau P15d.
 
-- [ ] Xuất `openapi.json` từ app (lệnh trong repo, không cần chạy server) và commit nó.
-- [ ] `openapi-typescript` (devDependency, `--save-exact`) sinh kiểu vào `apps/web/src/api/`; `types.ts` dùng kiểu sinh, chỉ giữ tay phần giao diện tự thêm.
-- [ ] CI: sinh lại và `git diff --exit-code` cho cả `openapi.json` lẫn kiểu TS.
-- [ ] `docs/API.md` giữ phần ngữ nghĩa (vì sao, khi nào, quy tắc), bỏ các bảng field trùng với schema; `AGENTS.md` đổi quy tắc "giữ `types.ts` bằng `docs/API.md`".
+- [x] Xuất `docs/openapi.json` từ app (`python -m subserver.api.openapi`, không cần server; `--check`) và commit nó; `tests/test_openapi.py` (7 test) so với mã. Bản xuất bỏ `422` của FastAPI và ghi lỗi thật của console (`ErrorAnswer`, `4XX`).
+- [x] `openapi-typescript` 7.13.0 (devDependency, `--save-exact`; `overrides` cho `typescript` 6) sinh `apps/web/src/api/schema.gen.ts` (`npm run gen:api`); `types.ts` chỉ còn tên các màn dùng và `JobsSelector`; các kiểu rời trong `queries.ts` (`ModelChoice`, `CleanupAnswer`, `BackupFile`, ...) cũng lấy từ kiểu sinh. Kiểu sinh lộ chỗ lỏng của kiểu viết tay (`bazarr_id` là chuỗi, `cancelled`, `provider`, fixture thiếu trường) và đã sửa; 324 test web pass.
+- [x] CI: job Python chạy `python -m subserver.api.openapi --check`; job Web sinh lại kiểu và `git diff --exit-code -- src/api/schema.gen.ts`. (`docs/openapi.json` lệch mã thì `test_openapi` đỏ; kiểu lệch tài liệu thì job Web đỏ.)
+- [x] `docs/API.md` thêm mục "The shape of an answer" và bỏ các danh sách trường dài trùng schema (giữ ngữ nghĩa); `AGENTS.md`, `docs/DEVELOPMENT.md`, `docs/ARCHITECTURE.md`, skill `ci-check`, ADR-18 ("Đã làm ở P15e"), `CHANGELOG.md`.
+- [x] (làm thêm khi đóng phase) Tham số truy vấn của mọi route trong `openapi.json` (55 tham số, `query(...)` / bảng `QUERIES`); ý nghĩa từng trường thành `description` rồi chú thích TS (`use_attribute_docstrings`); `AnswerOf<path, method>` trong `types.ts`, `queries.ts` lấy kiểu câu trả lời từ đường dẫn trong tài liệu (73 chỗ gọi; ~17 chỗ giữ kiểu hẹp có chủ ý).
+- [ ] Workflow **CI** trên GitHub xanh cho commit P15e.
 
 ## P15f — Một tài liệu kiến trúc; skill và agent theo vai `[ ]`
 

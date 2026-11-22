@@ -18,7 +18,8 @@ from starlette.responses import Response
 
 from ..services.feedback import FeedbackProposer
 from ..services.metrics import MAX_DAYS, Metrics
-from .common import path_parameters, blocking, ctx_of, download_response, error_response, json_response, query_of
+from .answers import insights as ans
+from .common import parameters_of, query, blocking, ctx_of, download_response, error_response, json_response, query_of
 
 Query = dict[str, list[str]]
 _GOLDEN = re.compile(r"^/api/series/(\d+)/golden/?$")
@@ -82,10 +83,14 @@ def register(router: APIRouter) -> None:
             return download_response(text, "application/json; charset=utf-8", name)
         return await metrics(request)
 
-    router.add_api_route("/api/metrics", metrics, methods=["GET"])
     router.add_api_route(
-        "/api/series/{series_id:int}/golden", golden, methods=["GET"],
-        openapi_extra={"parameters": path_parameters("/api/series/{series_id:int}/golden")},
+        "/api/metrics", metrics, methods=["GET"], response_model=ans.Insights,
+        openapi_extra=parameters_of("/api/metrics", [query("days", "integer")]),
+    )
+    # With `download=1` the same text is served as a file (an attachment): the model describes the JSON a plain GET gets.
+    router.add_api_route(
+        "/api/series/{series_id:int}/golden", golden, methods=["GET"], response_model=ans.GoldenSet,
+        openapi_extra=parameters_of("/api/series/{series_id:int}/golden", [query("lang", required=True), query("download")]),
     )
 
 

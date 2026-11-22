@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogStatus, StatusResponse } from "../api/types";
+import { catalogStatus, provider, queueCounts, settingsAnswer } from "../test/fixtures";
 import { deriveBanners } from "./banners";
 import { deriveStrip } from "./strip";
 
@@ -7,16 +8,19 @@ const NOW = 1_800_000_000_000;
 
 function status(overrides: Partial<StatusResponse> = {}): StatusResponse {
   return {
-    queue: { pending: 2, processing: 1, deferred: 3, done: 10, failed: 0 },
+    queue: queueCounts({ pending: 2, processing: 1, deferred: 3, done: 10 }),
     daily_quota_pause: null,
     providers: [],
-    settings: { key_warnings: [] },
+    settings: settingsAnswer(),
+    bazarr_url: "http://bazarr:6767",
+    bazarr: {},
+    model_layers: { by_model: {}, escalated: { total: 0, done: 0, failed: 0, waiting: 0 }, window: { done_days: 30, failed_days: 90 } },
     ...overrides,
   };
 }
 
 function catalog(overrides: Partial<CatalogStatus> = {}): CatalogStatus {
-  return { synced_at: NOW / 1000 - 120, attempted_at: NOW / 1000, status: "ok", warning: "", items: 40, ...overrides };
+  return catalogStatus({ synced_at: NOW / 1000 - 120, attempted_at: NOW / 1000, items: 40, listed: 40, ...overrides });
 }
 
 describe("deriveBanners", () => {
@@ -28,9 +32,7 @@ describe("deriveBanners", () => {
   it("turns a refused key into a red banner that opens Connections", () => {
     const banners = deriveBanners(
       status({
-        settings: {
-          key_warnings: [{ kind: "key-invalid", key_id: 3, message: "The primary key of gemini was refused." }],
-        },
+        settings: settingsAnswer([{ kind: "key-invalid", key_id: 3, message: "The primary key of gemini was refused." }]),
       }),
       catalog(),
       NOW,
@@ -43,9 +45,9 @@ describe("deriveBanners", () => {
   it("does not raise an alarm for a missing base URL or a spent quota", () => {
     const banners = deriveBanners(
       status({
-        settings: { key_warnings: [{ kind: "provider-unconfigured", message: "No base URL." }] },
+        settings: settingsAnswer([{ kind: "provider-unconfigured", message: "No base URL." }]),
         daily_quota_pause: { retry_at: NOW / 1000 + 3600 },
-        providers: [{ model: "m", state: "exhausted", reason: "quota", until: NOW / 1000 + 3600, failures: 0, usable: false }],
+        providers: [provider({ state: "exhausted", reason: "quota", until: NOW / 1000 + 3600, usable: false })],
       }),
       catalog(),
       NOW,
@@ -55,7 +57,7 @@ describe("deriveBanners", () => {
 
   it("falls back to one banner when a provider is invalid before any warning exists", () => {
     const banners = deriveBanners(
-      status({ providers: [{ model: "m", state: "invalid", reason: "", until: null, failures: 1, usable: false }] }),
+      status({ providers: [provider({ state: "invalid", failures: 1, usable: false })] }),
       catalog(),
       NOW,
     );
@@ -90,7 +92,7 @@ describe("deriveStrip", () => {
   it("names a provider that is out, and when it is back", () => {
     const until = NOW / 1000 + 600;
     const items = deriveStrip(
-      status({ providers: [{ model: "flash", state: "exhausted", reason: "", until, failures: 0, usable: false }] }),
+      status({ providers: [provider({ model: "flash", state: "exhausted", until, usable: false })] }),
       undefined,
       NOW,
     );

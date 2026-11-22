@@ -13,6 +13,8 @@ from typing import Any
 from fastapi import APIRouter
 
 from . import schemas
+from .answers import common as shared
+from .answers import console as ans
 from .common import add_table_routes
 
 _ONE = re.compile(r"^/api/keys/(\d+)(/test|/remove)?/?$")
@@ -39,10 +41,20 @@ BODIES = {
 }
 
 
+ANSWERS = {
+    ("GET", r"/api/keys"): ans.KeysAnswer,
+    ("POST", r"/api/keys"): ans.KeyView,
+    ("POST", r"/api/keys/(\d+)"): ans.KeyView,
+    ("PUT", r"/api/keys/(\d+)"): ans.KeyView,
+    ("POST", r"/api/keys/(\d+)/test"): ans.KeyTestAnswer,
+    ("POST", r"/api/keys/(\d+)/remove"): shared.OkAnswer,
+}
+
+
 def register(router: APIRouter) -> None:
     add_table_routes(
         router, ROUTES, "settings_service",
-        lambda ctx, service, method, path, query, body: handle(service, ctx["http"], method, path, body), BODIES,
+        lambda ctx, service, method, path, query, body: handle(service, ctx["http"], method, path, body), BODIES, ANSWERS,
     )
 
 

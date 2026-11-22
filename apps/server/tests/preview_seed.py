@@ -98,7 +98,7 @@ def write_old_queue(state: Path) -> None:
         path.write_text(json.dumps(job), encoding="utf-8")
 
 
-def seed(state: Path, translated: tuple[int, ...] = (1, 2), *, edit_demo: bool = False) -> str:
+def seed(state: Path, translated: tuple[int, ...] = (1, 2), *, edit_demo: bool = False, candidate: bool = False) -> str:
     media = state / "preview-media"
     show = media / "Arcane Demo" / "Season 1"
     show.mkdir(parents=True)
@@ -140,6 +140,20 @@ def seed(state: Path, translated: tuple[int, ...] = (1, 2), *, edit_demo: bool =
             title=f"Episode {episode}", video_path=str(show / f"Arcane.Demo.S01E{episode:02d}.mkv"),
             subtitles=tuple(subtitles), missing=() if episode in translated else ("vi",),
         ))
+
+    if candidate and 1 in translated:
+        # A variant of episode 1 in another voice, kept as a candidate (it never goes on disk): the contract test of the API
+        # needs one to compare, judge and choose. Not part of the preview: its text differs from the translation in every cue.
+        warm = FakeProvider(handler=lambda req, call_no: [{"i": i, "text": translate(req.meta["source"][i]) + " (warm)"} for i in req.meta["targets"]])
+        variant = TranslationAttempt(versions=versions, usage=store, library=library, provider_factory=lambda s, m, **kw: warm)
+        source = show / "Arcane.Demo.S01E01.en.srt"
+        variant.run({
+            "job_id": "seed-variant-1", "provider": "gemini-console", "media_type": "series", "series_id": "7",
+            "media_id": "101", "video_path": str(show / "Arcane.Demo.S01E01.mkv"), "subtitle_path": str(source),
+            "output_path": str(show / "Arcane.Demo.S01E01.vi.srt"), "source_code": "en", "target_code": "vi",
+            "target_language": "Vietnamese", "series_title": "Arcane Demo", "season": 1, "episode": 1,
+            "trigger": "variant", "variant": {"label": "warmer", "preset": "", "style": {"tone": "warm"}},
+        }, "", SETTINGS)
 
     # A second series that has a glossary of its own: something for "Copy from another series" to copy.
     store.upsert_series("bazarr-9", title="Second Demo", bazarr_id="9")

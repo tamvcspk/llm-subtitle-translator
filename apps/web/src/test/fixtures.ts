@@ -1,4 +1,62 @@
-import type { CatalogItem, CatalogSeries, CatalogTarget, SeriesPage } from "../api/types";
+import type {
+  CatalogItem,
+  CatalogSeries,
+  CatalogStatus,
+  CatalogTarget,
+  KeyWarning,
+  ProviderHealth,
+  QueueCounts,
+  SeriesPage,
+  SettingsAnswer,
+} from "../api/types";
+
+/** Jobs per console state: every state is always in the answer. */
+export function queueCounts(overrides: Partial<QueueCounts> = {}): QueueCounts {
+  return { pending: 0, processing: 0, deferred: 0, done: 0, failed: 0, cancelled: 0, ...overrides };
+}
+
+export function provider(overrides: Partial<ProviderHealth> = {}): ProviderHealth {
+  return { provider: "gemini", model: "m", state: "closed", reason: "", until: null, failures: 0, usable: true, ...overrides };
+}
+
+/** The settings of `GET /api/settings` the answer always names: keys never carry a value, only what to say about them. */
+export function settingsAnswer(keyWarnings: KeyWarning[] = [], overrides: Partial<SettingsAnswer> = {}): SettingsAnswer {
+  const key = (name: string) => ({
+    [name]: "",
+    [`${name}_configured`]: false,
+    [`${name}_last4`]: "",
+    [`${name}_status`]: "",
+  });
+  return {
+    bazarr_url: "http://bazarr:6767",
+    ...key("bazarr_api_key"),
+    ...key("tmdb_api_key"),
+    ...key("gemini_api_key"),
+    ...key("gemini_api_key2"),
+    ...key("openai_compat_api_key"),
+    llm_provider: "gemini",
+    llm_base_url: "",
+    source_languages: [],
+    target_languages: [],
+    media_roots: [],
+    key_warnings: keyWarnings,
+    ...overrides,
+  } as SettingsAnswer;
+}
+
+export function catalogStatus(overrides: Partial<CatalogStatus> = {}): CatalogStatus {
+  return {
+    synced_at: null,
+    attempted_at: null,
+    status: "ok",
+    warning: "",
+    items: 0,
+    listed: 0,
+    auto_request: false,
+    auto_request_daily_cap: 0,
+    ...overrides,
+  };
+}
 
 export function series(overrides: Partial<CatalogSeries> = {}): CatalogSeries {
   return {
@@ -38,7 +96,7 @@ export function episode(n: number, overrides: Partial<CatalogItem> = {}): Catalo
   return {
     id: 1000 + n,
     kind: "episode",
-    bazarr_id: n,
+    bazarr_id: String(n),
     title: `Episode ${n}`,
     season: 1,
     episode: n,
@@ -53,7 +111,7 @@ export function episode(n: number, overrides: Partial<CatalogItem> = {}): Catalo
 
 export function seriesPage(items: CatalogItem[], overrides: Partial<SeriesPage["series"]> = {}): SeriesPage {
   return {
-    status: { synced_at: null, attempted_at: null, status: "ok", warning: "", items: items.length },
+    status: catalogStatus({ items: items.length, listed: items.length }),
     languages: ["vi"],
     series: {
       id: 1,
@@ -73,7 +131,7 @@ export function movie(overrides: Partial<CatalogItem> = {}): CatalogItem {
   return {
     id: 100,
     kind: "movie",
-    bazarr_id: 7,
+    bazarr_id: "7",
     title: "Oppenheimer",
     season: null,
     episode: null,

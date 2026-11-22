@@ -7,8 +7,8 @@ import { sent, serve, show } from "../test/render";
 const report = (over: Partial<Insights> = {}): Insights => ({
   window: { days: 30, since: 1_700_000_000, until: 1_702_592_000 },
   operations: {
-    queue: { counts: { pending: 3, processing: 1, deferred: 2, done: 9, failed: 1 }, depth: 6 },
-    providers: [{ model: "gemini-3.1-flash-lite", state: "closed", reason: "", until: null, failures: 0, usable: true }],
+    queue: { counts: { pending: 3, processing: 1, deferred: 2, done: 9, failed: 1, cancelled: 0 }, depth: 6 },
+    providers: [{ provider: "gemini", model: "gemini-3.1-flash-lite", state: "closed", reason: "", until: null, failures: 0, usable: true }],
     daily_quota_pause: null,
     wait_seconds: { jobs: 4, median: 30, p90: 100 },
     usage: { calls_today: 7, calls_last_minute: 2, limits: { rpm: 10, tpm: 0, rpd: 250, max_calls_per_day: 100 } },

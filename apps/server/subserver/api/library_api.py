@@ -7,14 +7,18 @@ or ``None`` when the path is not one of these routes. ``register`` puts the tabl
 from __future__ import annotations
 
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 from fastapi import APIRouter, Request
 from starlette.responses import Response
 
 from ..services.units import UnitService
 from . import schemas
-from .common import add_table_routes, path_parameters, blocking, ctx_of, download_response, error_response, query_of
+from .answers import common as shared
+from .answers import library as ans
+from .common import (
+    add_table_routes, blocking, ctx_of, download_response, error_response, file_answer, parameters_of, query, query_of,
+)
 
 Query = dict[str, list[str]]
 Handler = Callable[[UnitService, re.Match[str], Query, dict[str, Any]], Any]
@@ -182,11 +186,80 @@ BODIES = {
 }
 
 
+ANSWERS = {
+    ("GET", r"/api/library/series"): ans.LibrarySeriesAnswer,
+    ("GET", r"/api/library/series/(\d+)/units"): ans.LibraryUnits,
+    ("GET", r"/api/library/movies"): ans.LibraryMovies,
+    ("GET", r"/api/units/(\d+)"): ans.UnitDetail,
+    ("GET", r"/api/units/(\d+)/cues"): ans.CuesPage,
+    ("GET", r"/api/units/(\d+)/corrections"): ans.CorrectionsAnswer,
+    ("POST", r"/api/units/(\d+)/corrections"): ans.CorrectionAdded,
+    ("POST", r"/api/units/(\d+)/corrections/(\d+)/remove"): shared.OkAnswer,
+    ("POST", r"/api/units/(\d+)/retranslate"): Union[ans.RetranslateQueued, ans.RetranslateEstimate],
+    ("POST", r"/api/units/(\d+)/variant"): Union[ans.VariantQueued, ans.VariantEstimate],
+    ("GET", r"/api/units/(\d+)/versions/(\d+)/compare"): ans.CompareAnswer,
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/choose"): ans.ChooseAnswer,
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/judge"): Union[ans.JudgeQueued, ans.JudgeEstimate],
+    ("GET", r"/api/units/(\d+)/versions"): ans.VersionsAnswer,
+    ("GET", r"/api/units/(\d+)/versions/(\d+)/diff"): ans.DiffAnswer,
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/revert"): ans.RevertAnswer,
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/adopt"): ans.AdoptAnswer,
+    ("POST", r"/api/units/(\d+)/output/remove"): ans.RemoveOutputAnswer,
+    ("GET", r"/api/units/(\d+)/context"): ans.UnitContextAnswer,
+    ("GET", r"/api/units/(\d+)/facts"): ans.UnitFacts,
+    ("POST", r"/api/units/(\d+)/context/extract"): ans.ExtractAnswer,
+    ("GET", r"/api/series/(\d+)/memory"): ans.SeriesMemory,
+    ("PUT", r"/api/series/(\d+)/memory"): ans.SeriesMemory,
+    ("POST", r"/api/series/(\d+)/memory/adopt"): ans.AdoptEpisodesAnswer,
+    ("GET", r"/api/series/(\d+)/glossary"): ans.GlossaryAnswer,
+    ("PUT", r"/api/series/(\d+)/glossary"): ans.GlossarySave,
+    ("GET", r"/api/series/(\d+)/glossary/history"): ans.GlossaryHistory,
+    ("POST", r"/api/series/(\d+)/glossary/restore"): ans.GlossaryRestore,
+    ("POST", r"/api/series/(\d+)/glossary/copy"): ans.GlossaryCopy,
+    ("GET", r"/api/movies/(\d+)/glossary"): ans.GlossaryAnswer,
+    ("PUT", r"/api/movies/(\d+)/glossary"): ans.GlossarySave,
+    ("GET", r"/api/movies/(\d+)/glossary/history"): ans.GlossaryHistory,
+    ("POST", r"/api/movies/(\d+)/glossary/restore"): ans.GlossaryRestore,
+}
+
+
+# What each route reads from the query, for the OpenAPI document. ``lang`` is a target language code: optional where the
+# unit has one target, required for a glossary (a glossary is written in one language).
+_STATUS = [query("status")]
+_LANG = [query("lang")]
+_GLOSSARY_LANG = [query("lang", required=True)]
+QUERIES = {
+    ("GET", r"/api/library/series/(\d+)/units"): _STATUS,
+    ("GET", r"/api/library/movies"): _STATUS,
+    ("GET", r"/api/units/(\d+)/cues"): [
+        query("lang"), query("at"), query("q"), query("offset", "integer"), query("limit", "integer"),
+    ],
+    ("GET", r"/api/units/(\d+)/corrections"): _LANG,
+    ("GET", r"/api/units/(\d+)/versions/(\d+)/compare"): _LANG,
+    ("GET", r"/api/units/(\d+)/versions"): _LANG,
+    ("GET", r"/api/units/(\d+)/versions/(\d+)/diff"): [query("against", "integer"), query("lang")],
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/revert"): _LANG,
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/adopt"): _LANG,
+    ("POST", r"/api/units/(\d+)/output/remove"): _LANG,
+    ("GET", r"/api/units/(\d+)/context"): _LANG,
+    ("GET", r"/api/series/(\d+)/glossary"): _GLOSSARY_LANG,
+    ("PUT", r"/api/series/(\d+)/glossary"): _GLOSSARY_LANG,
+    ("GET", r"/api/series/(\d+)/glossary/history"): _GLOSSARY_LANG,
+    ("POST", r"/api/series/(\d+)/glossary/restore"): _GLOSSARY_LANG,
+    ("POST", r"/api/series/(\d+)/glossary/copy"): _GLOSSARY_LANG,
+    ("GET", r"/api/movies/(\d+)/glossary"): _GLOSSARY_LANG,
+    ("PUT", r"/api/movies/(\d+)/glossary"): _GLOSSARY_LANG,
+    ("GET", r"/api/movies/(\d+)/glossary/history"): _GLOSSARY_LANG,
+    ("POST", r"/api/movies/(\d+)/glossary/restore"): _GLOSSARY_LANG,
+}
+
+
 def register(router: APIRouter) -> None:
     """The routes of this module on a FastAPI router: the table, and the glossary as a file. A body no model names is any
     JSON object: the use case validates it."""
     add_table_routes(
-        router, ROUTES, "units", lambda ctx, service, method, path, query, body: handle(service, method, path, query, body), BODIES,
+        router, ROUTES, "units", lambda ctx, service, method, path, query, body: handle(service, method, path, query, body),
+        BODIES, ANSWERS, QUERIES,
     )
 
     async def glossary_file(request: Request) -> Response:
@@ -201,7 +274,10 @@ def register(router: APIRouter) -> None:
 
     for kind in ("series", "movies"):
         template = f"/api/{kind}/{{unit_id:int}}/glossary.yaml"
-        router.add_api_route(template, glossary_file, methods=["GET"], openapi_extra={"parameters": path_parameters(template)})
+        router.add_api_route(
+            template, glossary_file, methods=["GET"], response_class=Response, responses=file_answer("application/x-yaml"),
+            openapi_extra=parameters_of(template, _GLOSSARY_LANG),
+        )
 
 
 def handle(

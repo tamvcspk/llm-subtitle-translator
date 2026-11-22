@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { movie, series, target } from "../test/fixtures";
+import { catalogStatus, movie, series, target } from "../test/fixtures";
 import { buildRows, filterRows, movieRow, seriesRow } from "./home";
 
 describe("seriesRow", () => {
@@ -76,7 +76,7 @@ describe("movieRow", () => {
 
 describe("buildRows and filterRows", () => {
   const overview = {
-    status: { synced_at: null, attempted_at: null, status: "" as const, warning: "", items: 0 },
+    status: catalogStatus({ status: "" }),
     languages: ["vi"],
     series: [
       series({ id: 2, title: "Severance", missing: { vi: 5 } }),

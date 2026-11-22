@@ -4,7 +4,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", "*.cjs"] },
+  { ignores: ["dist", "node_modules", "*.cjs", "src/api/schema.gen.ts"] }, // the generated types are not written by hand
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

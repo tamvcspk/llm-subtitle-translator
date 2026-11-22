@@ -1,4 +1,22 @@
 # Unreleased
+- **P15e: the types of the web console are generated from the server (ADR-18, part 3). Nothing a user sees changes.** Every
+  route that answers JSON now has a pydantic model of its answer (`api/answers`, one module a page); the models are exported
+  to `docs/openapi.json` (`python -m subserver.api.openapi`, no server needed), and `apps/web` generates
+  `src/api/schema.gen.ts` from it (`npm run gen:api`, `openapi-typescript` 7.13.0, a dev dependency). `types.ts` is now only
+  the names the screens use plus the shapes only the UI has; the hand-written copies of the answers (and the loose ones in
+  `queries.ts`) are gone. A model documents and does not run: a route still sends what its use case returned, so no answer
+  can fail because of its model. What keeps a model true is `tests/test_answer_contract.py`: it starts the real worker on
+  seeded data, calls every route and checks each answer strictly against the model of its route (a field the model does not
+  name, a number sent as text, a field that should be there and is not); the last test fails for a route with no model or no
+  case. CI fails when `docs/openapi.json` is not what the code says (`tests/test_openapi.py`, and `--check` in the Python
+  job) and when generating the types again changes them (the `web` job). The document says what the console really answers
+  (`{"error": "..."}` with a 4xx, never FastAPI's 422). Making the models showed where the hand-written types were loose:
+  `bazarr_id` is text, not a number; the counts of the queue always have `cancelled`; a provider's health names its
+  `provider`; test fixtures were missing fields the worker always sends (now complete). `docs/API.md` says what a field
+  means and leaves the list of fields to the document. The document also carries the query parameters of every route
+  (55) and the meaning of each field (the comment above it in the generated TypeScript), and `queries.ts` takes the answer
+  type of a call from the route's path in the document (`AnswerOf<"/api/…", "get">`), so a call cannot name a route the
+  server does not have.
 - **P15d: the console's HTTP server is FastAPI (ADR-18, part 2). The API, the sign-in and the console look the same.** `http.server`
   and `ConsoleHandler` are gone: the app (`api/web.py`) runs under uvicorn in the worker's own process, on the same port, and
   the queue worker, the catalog sync and the daily maintenance start in its lifespan. The auth gate is now an ASGI middleware

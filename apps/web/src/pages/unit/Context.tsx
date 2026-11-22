@@ -57,7 +57,7 @@ export function Context() {
       </Group>
       {missing.length > 0 && <Alert color="yellow">Missing earlier episodes: {missing.join(", ")}</Alert>}
       {used ? (
-        <Sections heading="Used for the current translation" sections={used.sections} />
+        <Sections heading="Used for the current translation" sections={used.sections ?? []} />
       ) : (
         <Alert color="blue">The current translation was made without story memory.</Alert>
       )}

@@ -23,7 +23,7 @@ const providers = [
 
 function queue(extra: Partial<QueueAnswer> = {}): QueueAnswer {
   return {
-    counts: { pending: 1, processing: 1, deferred: 2, done: 441, failed: 3 },
+    counts: { pending: 1, processing: 1, deferred: 2, done: 441, failed: 3, cancelled: 0 },
     total: 448,
     daily_quota_pause: null,
     providers: providers as QueueAnswer["providers"],
@@ -38,6 +38,7 @@ function queue(extra: Partial<QueueAnswer> = {}): QueueAnswer {
       job("fail-2", { title: "", label: "", unit_id: undefined, subtitle_path: "/media/Old/Old.en.srt", error: "bad" }),
     ],
     done: [job("done-1", { result: "translated", output_path: "/media/Arcane/S01E01.vi.srt" })],
+    cancelled: [],
     ...extra,
   };
 }
@@ -214,7 +215,7 @@ describe("Activity", () => {
   });
 
   it("has no Retry all failed when nothing failed", async () => {
-    serve(activity({}, queue({ counts: { pending: 0, processing: 0, deferred: 0, done: 1, failed: 0 }, failed: [], pending: [], processing: [], deferred: [] })));
+    serve(activity({}, queue({ counts: { pending: 0, processing: 0, deferred: 0, done: 1, failed: 0, cancelled: 0 }, failed: [], pending: [], processing: [], deferred: [] })));
     show("/activity");
     expect(await screen.findByRole("button", { name: "Retry all failed" })).toBeDisabled();
     expect(screen.getByRole("tab", { name: "Done 1" })).toHaveAttribute("aria-selected", "true");
@@ -270,7 +271,7 @@ describe("Activity", () => {
       job("x-1", { kind: "extract", mode: "extract", target_code: undefined, error: "The facts of S01E02 could not be read: not JSON" }),
       job("s-1", { kind: "suggest", mode: "suggest", title: "Arcane", label: "", unit_id: undefined, error: "boom" }),
     ];
-    serve(activity({}, queue({ failed: reading, counts: { pending: 0, processing: 0, deferred: 0, done: 0, failed: 2 } })));
+    serve(activity({}, queue({ failed: reading, counts: { pending: 0, processing: 0, deferred: 0, done: 0, failed: 2, cancelled: 0 } })));
     show("/activity?tab=failed");
     const list = await screen.findByRole("list", { name: "Failed jobs" });
     expect(within(list).getByRole("link", { name: "Extract facts · Arcane · S01E04" })).toHaveAttribute("href", "/unit/504/context");

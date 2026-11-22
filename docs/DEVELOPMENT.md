@@ -36,6 +36,19 @@ uv run --locked python -m compileall -q -f apps/server/worker.py apps/server/sub
 The console has its own checks, run from `apps/web` (Node 24, see `.nvmrc`):
 `npm ci && npm run typecheck && npm run lint && npm test && npm run build`.
 
+The types of the answers come from the server. Changing a model in `apps/server/subserver/api/answers` (or a request body
+in `api/schemas.py`) is two generated files, committed with the change:
+
+```bash
+uv run --locked --directory apps/server python -m subserver.api.openapi   # docs/openapi.json (no server needed)
+npm run gen:api                                                            # in apps/web: src/api/schema.gen.ts
+```
+
+`tests/test_openapi.py` and the `--check` step of CI fail when the first is out of date, the `web` job when the second is.
+`tests/test_answer_contract.py` is the test of a model: it starts the real worker on seeded data
+(`tests/contract_kit.py`, `tests/preview_seed.py`), calls every route and checks each answer strictly against its model.
+A new route needs its model and a case there, or the last test of that file fails.
+
 `python scripts/doccheck.py` (standard library only) fails when a `subserver` or
 `subcore` module is missing from [ARCHITECTURE.md](ARCHITECTURE.md) or an `/api/*`
 route is missing from [API.md](API.md). The server test suite runs it too

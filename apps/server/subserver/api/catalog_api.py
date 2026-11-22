@@ -11,6 +11,7 @@ from fastapi import APIRouter
 
 from ..services.catalog_actions import CatalogActions
 from . import schemas
+from .answers import catalog as ans
 from .common import add_table_routes
 
 Handler = Callable[[CatalogActions, re.Match[str], dict[str, Any]], Any]
@@ -45,9 +46,23 @@ BODIES = {
 }
 
 
+ANSWERS = {
+    ("GET", r"/api/catalog"): ans.CatalogOverview,
+    ("GET", r"/api/catalog/status"): ans.CatalogStatus,
+    ("GET", r"/api/catalog/movies"): ans.MoviesPage,
+    ("GET", r"/api/catalog/series/(\d+)"): ans.SeriesPage,
+    ("POST", r"/api/catalog/sync"): ans.SyncAnswer,
+    ("PUT", r"/api/catalog/series/(\d+)/policy"): ans.PolicyAnswer,
+    ("PUT", r"/api/catalog/series/(\d+)/bootstrap"): ans.BootstrapAnswer,
+    ("POST", r"/api/catalog/ignore"): ans.IgnoreAnswer,
+    ("POST", r"/api/catalog/unignore"): ans.IgnoreAnswer,
+    ("POST", r"/api/jobs"): ans.JobsAnswer,
+}
+
+
 def register(router: APIRouter) -> None:
     add_table_routes(
-        router, ROUTES, "catalog", lambda ctx, service, method, path, query, body: handle(service, method, path, body), BODIES,
+        router, ROUTES, "catalog", lambda ctx, service, method, path, query, body: handle(service, method, path, body), BODIES, ANSWERS,
     )
 
 

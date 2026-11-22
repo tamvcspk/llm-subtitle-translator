@@ -4,50 +4,50 @@ import { readsOnly } from "../lib/activity";
 import type { StyleDraft } from "../lib/style";
 import { api } from "./client";
 import type {
-  AuthMe,
-  BulkAnswer,
-  CatalogOverview,
-  CatalogStatus,
+  AdoptAnswer,
+  AnswerOf,
   CharacterCard,
-  CompareAnswer,
-  Correction,
-  CuesPage,
-  ExtractAnswer,
-  DiffAnswer,
   Estimate,
-  FromEditsAnswer,
+  EstimateAnswer,
   GlossaryAnswer,
-  GlossaryDoc,
-  GlossaryRevision,
   GlossaryChange,
+  GlossaryDoc,
+  GlossaryHistory,
   GlossarySave,
-  Insights,
-  JobsAnswer,
+  IgnoreAnswer,
   JobsSelector,
-  LibrarySeriesRow,
-  LibraryUnits,
   MemoryPolicy,
-  MoviesPage,
+  PrerequisitesRequested,
   QueueAnswer,
   QueueJob,
-  SeriesMemory,
-  SeriesPage,
-  StatusResponse,
   Style,
   StyleImpact,
   StyleOverview,
   StylePreview,
   Suggestion,
-  SuggestionDecision,
   SuggestionList,
   SuggestionPayload,
   SuggestionStatus,
-  SuggestionSummary,
-  UnitContextAnswer,
-  UnitDetail,
-  UnitFacts,
-  VersionsAnswer,
 } from "./types";
+
+export type {
+  BackupFile,
+  CleanupAnswer,
+  CleanupGroup,
+  ConnectionResult,
+  CorrectionAnswer,
+  ImportAnswer,
+  LanguageChoice,
+  LogEntry,
+  ModelChoice,
+  SettingsAnswer,
+} from "./types";
+
+/** What a route that can say a price answers with `estimate_only` (a retranslation, a variant, the judge). */
+type PriceAnswer = { estimate: Estimate };
+
+/** What adopting a variant with its style would flag stale in the other episodes (`dry_run`): the counts only. */
+type AdoptImpact = Required<Pick<AdoptAnswer, "stale_now" | "stale_after" | "would_stale">>;
 
 export const keys = {
   unit: (id: number) => ["unit", id] as const,
@@ -64,7 +64,7 @@ export const keys = {
 export function useStatus() {
   return useQuery({
     queryKey: keys.status,
-    queryFn: ({ signal }) => api<StatusResponse>("/api/status", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/status", "get">>("/api/status", { signal }),
     refetchInterval: 15_000,
   });
 }
@@ -74,7 +74,7 @@ export function useQueue() {
   const client = useQueryClient();
   const query = useQuery({
     queryKey: keys.queue,
-    queryFn: ({ signal }) => api<QueueAnswer>("/api/queue", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/queue", "get">>("/api/queue", { signal }),
     refetchInterval: 5_000,
   });
   // A job that reads (the facts of an episode, proposals for a series) stores its result where other pages look: when one
@@ -114,7 +114,7 @@ export function useJobSpec(jobId: string | null) {
 export function useCatalogStatus() {
   return useQuery({
     queryKey: keys.catalogStatus,
-    queryFn: ({ signal }) => api<CatalogStatus>("/api/catalog/status", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/catalog/status", "get">>("/api/catalog/status", { signal }),
     refetchInterval: 30_000,
   });
 }
@@ -122,7 +122,7 @@ export function useCatalogStatus() {
 export function useMe() {
   return useQuery({
     queryKey: keys.me,
-    queryFn: ({ signal }) => api<AuthMe>("/api/auth/me", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/auth/me", "get">>("/api/auth/me", { signal }),
     staleTime: Infinity,
   });
 }
@@ -137,7 +137,7 @@ export function useSyncCatalog() {
   const refresh = () => client.invalidateQueries({ queryKey: ["catalog"] });
   return useMutation({
     mutationFn: (options?: { acceptShrink?: boolean }) =>
-      api<unknown>("/api/catalog/sync", { method: "POST", body: options?.acceptShrink ? { accept_shrink: true } : {} }),
+      api<AnswerOf<"/api/catalog/sync", "post">>("/api/catalog/sync", { method: "POST", body: options?.acceptShrink ? { accept_shrink: true } : {} }),
     onSettled: () => {
       void refresh();
       window.setTimeout(() => void refresh(), 4_000);
@@ -147,7 +147,7 @@ export function useSyncCatalog() {
 
 export function useSignOut() {
   return useMutation({
-    mutationFn: () => api<unknown>("/api/auth/logout", { method: "POST", body: {} }),
+    mutationFn: () => api<AnswerOf<"/api/auth/logout", "post">>("/api/auth/logout", { method: "POST", body: {} }),
     onSuccess: () => window.location.assign("/login"),
   });
 }
@@ -155,7 +155,7 @@ export function useSignOut() {
 export function useCatalog() {
   return useQuery({
     queryKey: keys.catalog,
-    queryFn: ({ signal }) => api<CatalogOverview>("/api/catalog", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/catalog", "get">>("/api/catalog", { signal }),
     refetchInterval: 15_000,
   });
 }
@@ -163,7 +163,7 @@ export function useCatalog() {
 export function useMovies() {
   return useQuery({
     queryKey: keys.movies,
-    queryFn: ({ signal }) => api<MoviesPage>("/api/catalog/movies", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/catalog/movies", "get">>("/api/catalog/movies", { signal }),
     refetchInterval: 15_000,
   });
 }
@@ -199,22 +199,16 @@ export interface RetranslateBody {
   correction_ids?: number[];
 }
 
-interface RetranslateAnswer {
-  ok: boolean;
-  estimate_only?: boolean;
-  estimate: Estimate;
-}
-
 /** What a request would cost (UX §6.4): nothing is made, saved or called. */
 export function useEstimate(request: CostRequest | null) {
   return useQuery({
     queryKey: ["estimate", request],
-    queryFn: async ({ signal }): Promise<JobsAnswer> => {
+    queryFn: async ({ signal }): Promise<EstimateAnswer> => {
       if (request && "retry" in request) {
-        return api<JobsAnswer>("/api/queue/retry", { method: "POST", body: { ...request.retry, estimate_only: true }, signal });
+        return api<EstimateAnswer>("/api/queue/retry", { method: "POST", body: { ...request.retry, estimate_only: true }, signal });
       }
       if (request && "prerequisites" in request) {
-        return api<JobsAnswer>("/api/queue/request-prerequisites", {
+        return api<EstimateAnswer>("/api/queue/request-prerequisites", {
           method: "POST",
           body: { ...request.prerequisites, estimate_only: true },
           signal,
@@ -222,7 +216,7 @@ export function useEstimate(request: CostRequest | null) {
       }
       if (request && ("retranslate" in request || "variant" in request)) {
         const [path, call] = "retranslate" in request ? ["retranslate", request.retranslate] : ["variant", request.variant];
-        const answer = await api<RetranslateAnswer>(`/api/units/${call.unit_id}/${path}`, {
+        const answer = await api<PriceAnswer>(`/api/units/${call.unit_id}/${path}`, {
           method: "POST",
           body: { ...call.body, estimate_only: true },
           signal,
@@ -231,14 +225,14 @@ export function useEstimate(request: CostRequest | null) {
       }
       if (request && "judge" in request) {
         const { unit_id, version, body } = request.judge;
-        const answer = await api<RetranslateAnswer>(`/api/units/${unit_id}/versions/${version}/judge`, {
+        const answer = await api<PriceAnswer>(`/api/units/${unit_id}/versions/${version}/judge`, {
           method: "POST",
           body: { ...body, estimate_only: true },
           signal,
         });
         return { estimate_only: true, estimate: answer.estimate, planned_total: answer.estimate.jobs, skipped_total: 0, skipped_by_reason: {} };
       }
-      return api<JobsAnswer>("/api/jobs", { method: "POST", body: { ...request?.selector, estimate_only: true }, signal });
+      return api<AnswerOf<"/api/jobs", "post">>("/api/jobs", { method: "POST", body: { ...request?.selector, estimate_only: true }, signal });
     },
     enabled: request !== null,
     // A price is only true now: never reuse the one from the last time the box was open.
@@ -272,7 +266,7 @@ export function useRequestJobs() {
         return { count: answer.count ?? 1 };
       }
       if ("prerequisites" in request) {
-        const answer = await api<{ requested: string[] }>("/api/queue/request-prerequisites", { method: "POST", body: request.prerequisites });
+        const answer = await api<PrerequisitesRequested>("/api/queue/request-prerequisites", { method: "POST", body: request.prerequisites });
         return { count: answer.requested.length };
       }
       if ("retranslate" in request || "variant" in request) {
@@ -282,11 +276,11 @@ export function useRequestJobs() {
       }
       if ("judge" in request) {
         const { unit_id, version, body } = request.judge;
-        await api<{ ok: boolean }>(`/api/units/${unit_id}/versions/${version}/judge`, { method: "POST", body });
+        await api<AnswerOf<"/api/units/{p1}/versions/{p2}/judge", "post">>(`/api/units/${unit_id}/versions/${version}/judge`, { method: "POST", body });
         void client.invalidateQueries({ queryKey: keys.unit(unit_id) }); // the comparison now says a judge is at work
         return { count: 1 };
       }
-      const answer = await api<JobsAnswer>("/api/jobs", { method: "POST", body: request.selector });
+      const answer = await api<AnswerOf<"/api/jobs", "post">>("/api/jobs", { method: "POST", body: request.selector });
       return { count: answer.count ?? 0 };
     },
     onSettled: () => void refresh(),
@@ -297,7 +291,7 @@ export function useRequestJobs() {
 export function useStopJob() {
   const refresh = useRefreshJobs();
   return useMutation({
-    mutationFn: (jobId: string) => api<{ ok: boolean }>("/api/queue/stop", { method: "POST", body: { job_id: jobId } }),
+    mutationFn: (jobId: string) => api<AnswerOf<"/api/queue/stop", "post">>("/api/queue/stop", { method: "POST", body: { job_id: jobId } }),
     onSettled: () => void refresh(),
   });
 }
@@ -305,7 +299,7 @@ export function useStopJob() {
 export function useSeriesPage(id: number) {
   return useQuery({
     queryKey: keys.series(id),
-    queryFn: ({ signal }) => api<SeriesPage>(`/api/catalog/series/${id}`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/catalog/series/{p1}", "get">>(`/api/catalog/series/${id}`, { signal }),
     refetchInterval: 10_000,
   });
 }
@@ -314,7 +308,7 @@ export function useSeriesPage(id: number) {
 export function useSeriesUnits(storedId: number | null | undefined) {
   return useQuery({
     queryKey: keys.seriesUnits(storedId ?? 0),
-    queryFn: ({ signal }) => api<LibraryUnits>(`/api/library/series/${storedId}/units`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/library/series/{p1}/units", "get">>(`/api/library/series/${storedId}/units`, { signal }),
     enabled: typeof storedId === "number",
     refetchInterval: 30_000,
   });
@@ -325,7 +319,7 @@ export function useSeriesUnits(storedId: number | null | undefined) {
 export function useUnit(id: number) {
   return useQuery({
     queryKey: keys.unit(id),
-    queryFn: ({ signal }) => api<UnitDetail>(`/api/units/${id}`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}", "get">>(`/api/units/${id}`, { signal }),
     refetchInterval: 15_000,
   });
 }
@@ -345,7 +339,7 @@ export function useCues(id: number, query: CueQuery, enabled: boolean) {
   if (query.at.trim()) params.set("at", query.at.trim());
   return useQuery({
     queryKey: [...keys.unit(id), "cues", query] as const,
-    queryFn: ({ signal }) => api<CuesPage>(`/api/units/${id}/cues?${params}`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/cues", "get">>(`/api/units/${id}/cues?${params}`, { signal }),
     enabled,
     placeholderData: (previous) => previous,
   });
@@ -354,7 +348,7 @@ export function useCues(id: number, query: CueQuery, enabled: boolean) {
 export function useUnitContext(id: number, lang: string) {
   return useQuery({
     queryKey: [...keys.unit(id), "context", lang] as const,
-    queryFn: ({ signal }) => api<UnitContextAnswer>(`/api/units/${id}/context?lang=${encodeURIComponent(lang)}`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/context", "get">>(`/api/units/${id}/context?lang=${encodeURIComponent(lang)}`, { signal }),
     enabled: lang !== "",
   });
 }
@@ -362,7 +356,7 @@ export function useUnitContext(id: number, lang: string) {
 export function useVersions(id: number, lang: string) {
   return useQuery({
     queryKey: [...keys.unit(id), "versions", lang] as const,
-    queryFn: ({ signal }) => api<VersionsAnswer>(`/api/units/${id}/versions?lang=${encodeURIComponent(lang)}`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/versions", "get">>(`/api/units/${id}/versions?lang=${encodeURIComponent(lang)}`, { signal }),
     enabled: lang !== "",
   });
 }
@@ -372,7 +366,7 @@ export function useDiff(id: number, lang: string, version: number | null) {
   return useQuery({
     queryKey: [...keys.unit(id), "diff", lang, version] as const,
     queryFn: ({ signal }) =>
-      api<DiffAnswer>(`/api/units/${id}/versions/${version}/diff?lang=${encodeURIComponent(lang)}`, { signal }),
+      api<AnswerOf<"/api/units/{p1}/versions/{p2}/diff", "get">>(`/api/units/${id}/versions/${version}/diff?lang=${encodeURIComponent(lang)}`, { signal }),
     enabled: version !== null,
   });
 }
@@ -381,7 +375,7 @@ export function useCompare(id: number, lang: string, version: number) {
   return useQuery({
     queryKey: [...keys.unit(id), "compare", lang, version] as const,
     queryFn: ({ signal }) =>
-      api<CompareAnswer>(`/api/units/${id}/versions/${version}/compare?lang=${encodeURIComponent(lang)}`, { signal }),
+      api<AnswerOf<"/api/units/{p1}/versions/{p2}/compare", "get">>(`/api/units/${id}/versions/${version}/compare?lang=${encodeURIComponent(lang)}`, { signal }),
     enabled: lang !== "",
     // While a judge job is open its verdicts arrive batch by batch: look again every few seconds, and stop when it ends.
     // A job parked on the day's quota can wait for hours and changes nothing meanwhile: look only once a minute.
@@ -397,7 +391,7 @@ export function useAdoptImpact(id: number, lang: string, version: number, enable
   return useQuery({
     queryKey: ["adopt-impact", id, lang, version] as const,
     queryFn: ({ signal }) =>
-      api<StyleImpact>(`/api/units/${id}/versions/${version}/adopt`, {
+      api<AdoptImpact>(`/api/units/${id}/versions/${version}/adopt`, {
         method: "POST",
         body: { lang, apply_style: true, dry_run: true },
         signal,
@@ -420,7 +414,7 @@ export function useChoose(id: number, version: number) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (verdict: { lang: string; picks?: Record<string, Winner>; whole?: Winner; apply: boolean; apply_style?: boolean }) =>
-      api<{ ok: boolean; recorded: number; applied: Record<string, unknown> }>(`/api/units/${id}/versions/${version}/choose`, {
+      api<AnswerOf<"/api/units/{p1}/versions/{p2}/choose", "post">>(`/api/units/${id}/versions/${version}/choose`, {
         method: "POST",
         body: verdict,
       }),
@@ -436,7 +430,7 @@ export function useRevert(id: number) {
   const refresh = useRefreshUnit(id);
   return useMutation({
     mutationFn: (args: { version: number; lang: string }) =>
-      api<{ ok: boolean; version: number }>(`/api/units/${id}/versions/${args.version}/revert`, {
+      api<AnswerOf<"/api/units/{p1}/versions/{p2}/revert", "post">>(`/api/units/${id}/versions/${args.version}/revert`, {
         method: "POST",
         body: { lang: args.lang },
       }),
@@ -449,7 +443,7 @@ export function useAdopt(id: number) {
   const refresh = useRefreshUnit(id);
   return useMutation({
     mutationFn: (args: { version: number; lang: string }) =>
-      api<{ ok: boolean; version: number }>(`/api/units/${id}/versions/${args.version}/adopt`, {
+      api<AnswerOf<"/api/units/{p1}/versions/{p2}/adopt", "post">>(`/api/units/${id}/versions/${args.version}/adopt`, {
         method: "POST",
         body: { lang: args.lang },
       }),
@@ -477,7 +471,7 @@ export function useStyleSuggestions(seriesId: number | null) {
   return useQuery({
     queryKey: ["style", "suggestions", seriesId] as const,
     queryFn: ({ signal }) =>
-      api<{ genres: string[]; presets: Array<{ id: string; name: string }> }>(`/api/series/${seriesId}/style/suggestions`, { signal }),
+      api<AnswerOf<"/api/series/{p1}/style/suggestions", "get">>(`/api/series/${seriesId}/style/suggestions`, { signal }),
     enabled: seriesId !== null,
     staleTime: 10 * 60_000,
     retry: false,
@@ -490,7 +484,7 @@ export function useStyleImpact(owner: StyleOwner | { kind: "episode"; id: number
     queryKey: ["style-impact", owner, lang, draft] as const,
     queryFn: ({ signal }) =>
       owner.kind === "episode"
-        ? api<StyleImpact>(`/api/units/${owner.id}/style`, { method: "PUT", body: { lang, style: draft.style, dry_run: true }, signal })
+        ? api<AnswerOf<"/api/units/{p1}/style", "put">>(`/api/units/${owner.id}/style`, { method: "PUT", body: { lang, style: draft.style, dry_run: true }, signal })
         : api<StyleImpact>(`${ownerPath(owner)}/style?lang=${encodeURIComponent(lang)}`, {
             method: "PUT",
             body: { preset: draft.preset, style: draft.style, dry_run: true },
@@ -520,7 +514,7 @@ export function useSaveStyle(owner: StyleOwner | { kind: "episode"; id: number }
   return useMutation({
     mutationFn: (draft: StyleDraft) =>
       owner.kind === "episode"
-        ? api<StyleImpact>(`/api/units/${owner.id}/style`, { method: "PUT", body: { lang, style: draft.style } })
+        ? api<AnswerOf<"/api/units/{p1}/style", "put">>(`/api/units/${owner.id}/style`, { method: "PUT", body: { lang, style: draft.style } })
         : api<StyleImpact>(`${ownerPath(owner)}/style?lang=${encodeURIComponent(lang)}`, {
             method: "PUT",
             body: { preset: draft.preset, style: draft.style },
@@ -533,7 +527,7 @@ export function useSaveStyle(owner: StyleOwner | { kind: "episode"; id: number }
 export function useEpisodeStyle(unitId: number) {
   return useQuery({
     queryKey: ["style", "episode", unitId] as const,
-    queryFn: ({ signal }) => api<{ style: Style }>(`/api/units/${unitId}/style`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/style", "get">>(`/api/units/${unitId}/style`, { signal }),
   });
 }
 
@@ -554,13 +548,11 @@ export function usePreviewStyle(owner: StyleOwner) {
 
 // -- settings --------------------------------------------------------------------------------------------------------
 
-/** `GET /api/settings`: every setting by its API name; a key is `**********` with `<field>_configured`, `_last4` and `_status`. */
-export type SettingsAnswer = Record<string, unknown>;
 
 export function useSettings() {
   return useQuery({
     queryKey: ["settings"] as const,
-    queryFn: ({ signal }) => api<SettingsAnswer>("/api/settings", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/settings", "get">>("/api/settings", { signal }),
   });
 }
 
@@ -568,7 +560,7 @@ export function useSettings() {
 export function useSaveSettings(onSaved?: () => void) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (body: Record<string, unknown>) => api<SettingsAnswer>("/api/settings", { method: "POST", body }),
+    mutationFn: (body: Record<string, unknown>) => api<AnswerOf<"/api/settings", "post">>("/api/settings", { method: "POST", body }),
     onSuccess: (answer) => {
       client.setQueryData(["settings"], answer);
       onSaved?.(); // the form starts again from the new values: whoever holds "Saved" must not be the form itself
@@ -580,48 +572,30 @@ export function useSaveSettings(onSaved?: () => void) {
   });
 }
 
-export interface ModelChoice {
-  id: string;
-  name: string;
-}
-
 /** The models the provider in use offers (a bundled list when Gemini cannot be asked). */
 export function useModels(provider: string, baseUrl: string) {
   return useQuery({
     queryKey: ["models", provider, baseUrl] as const,
-    queryFn: ({ signal }) => api<{ items: ModelChoice[] }>("/api/gemini-models", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/gemini-models", "get">>("/api/gemini-models", { signal }),
     staleTime: 60_000,
   });
-}
-
-export interface LanguageChoice {
-  code: string;
-  name: string;
-  language: string;
 }
 
 /** The languages Bazarr supports; empty and an error when Bazarr cannot be reached. */
 export function useLanguages() {
   return useQuery({
     queryKey: ["languages"] as const,
-    queryFn: ({ signal }) => api<{ items: LanguageChoice[] }>("/api/languages", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/languages", "get">>("/api/languages", { signal }),
     staleTime: 5 * 60_000,
     retry: false,
   });
-}
-
-export interface ConnectionResult {
-  ok: boolean;
-  kind: string;
-  message: string;
-  auth_failed?: boolean;
 }
 
 /** Try a key (a typed one, or the stored one when the box is blank) without saving it; the stored key's status follows the answer. */
 export function useTestConnection() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (body: Record<string, unknown>) => api<ConnectionResult>("/api/test-connection", { method: "POST", body }),
+    mutationFn: (body: Record<string, unknown>) => api<AnswerOf<"/api/test-connection", "post">>("/api/test-connection", { method: "POST", body }),
     onSettled: () => {
       void client.invalidateQueries({ queryKey: ["settings"] });
       void client.invalidateQueries({ queryKey: keys.status });
@@ -629,29 +603,11 @@ export function useTestConnection() {
   });
 }
 
-export interface CleanupGroup {
-  name: string;
-  enabled: boolean;
-  window: number | null;
-  files: number;
-  rows: number;
-  bytes: number;
-  error: string;
-}
-
-export interface CleanupAnswer {
-  dry_run: boolean;
-  at: number;
-  groups: CleanupGroup[];
-  total: { files: number; rows: number; bytes: number };
-  media_temp: string[];
-}
-
 /** **Clean up now**: `dry_run: true` only counts; the worker deletes only when the body says `false` in so many words. */
 export function useCleanup() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (dryRun: boolean) => api<CleanupAnswer>("/api/cleanup", { method: "POST", body: { dry_run: dryRun } }),
+    mutationFn: (dryRun: boolean) => api<AnswerOf<"/api/cleanup", "post">>("/api/cleanup", { method: "POST", body: { dry_run: dryRun } }),
     onSuccess: (answer) => {
       if (!answer.dry_run) void client.invalidateQueries();
     },
@@ -661,23 +617,16 @@ export function useCleanup() {
 /** Change the console password: every session ends, and this one is given a fresh cookie. */
 export function useChangePassword() {
   return useMutation({
-    mutationFn: (body: { current: string; new: string }) => api<{ ok: boolean }>("/api/auth/password", { method: "POST", body }),
+    mutationFn: (body: { current: string; new: string }) => api<AnswerOf<"/api/auth/password", "post">>("/api/auth/password", { method: "POST", body }),
   });
 }
 
 // -- backups and logs -----------------------------------------------------------------------------------------------
 
-export interface BackupFile {
-  name: string;
-  size: number;
-  /** Unix seconds. */
-  created_at: number;
-}
-
 export function useBackups() {
   return useQuery({
     queryKey: ["backups"] as const,
-    queryFn: ({ signal }) => api<{ items: BackupFile[] }>("/api/backups", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/backups", "get">>("/api/backups", { signal }),
   });
 }
 
@@ -685,39 +634,24 @@ export function useBackups() {
 export function useCreateBackup() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (includeKeys: boolean) => api<{ backup: BackupFile }>("/api/backups", { method: "POST", body: { include_keys: includeKeys } }),
+    mutationFn: (includeKeys: boolean) => api<AnswerOf<"/api/backups", "post">>("/api/backups", { method: "POST", body: { include_keys: includeKeys } }),
     onSettled: () => void client.invalidateQueries({ queryKey: ["backups"] }),
   });
-}
-
-export interface ImportAnswer {
-  ok: boolean;
-  imported: string[];
-  pre_import_backup: BackupFile;
 }
 
 /** Restore a backup zip: the worker keeps one of the current settings first, and the running worker adopts the new ones at once. */
 export function useImportBackup() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (file: File) => api<ImportAnswer>("/api/backups/import", { method: "POST", body: file }),
+    mutationFn: (file: File) => api<AnswerOf<"/api/backups/import", "post">>("/api/backups/import", { method: "POST", body: file }),
     onSettled: () => void client.invalidateQueries(),
   });
-}
-
-export interface LogEntry {
-  /** `2026-11-17T21:58:01Z` (UTC); empty for a line before the first header. */
-  timestamp: string;
-  level: string;
-  message: string;
-  /** A trace that belongs to the line, if any. */
-  details: string;
 }
 
 export function useLogs() {
   return useQuery({
     queryKey: ["logs"] as const,
-    queryFn: ({ signal }) => api<{ entries: LogEntry[]; truncated: boolean }>("/api/logs", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/logs", "get">>("/api/logs", { signal }),
     refetchInterval: 10_000,
   });
 }
@@ -725,7 +659,7 @@ export function useLogs() {
 export function useClearLogs() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => api<{ ok: boolean }>("/api/logs/clear", { method: "POST", body: {} }),
+    mutationFn: () => api<AnswerOf<"/api/logs/clear", "post">>("/api/logs/clear", { method: "POST", body: {} }),
     onSettled: () => void client.invalidateQueries({ queryKey: ["logs"] }),
   });
 }
@@ -735,7 +669,7 @@ export function useClearLogs() {
 export function useSeriesMemory(storedId: number | null | undefined) {
   return useQuery({
     queryKey: ["memory", storedId ?? 0] as const,
-    queryFn: ({ signal }) => api<SeriesMemory>(`/api/series/${storedId}/memory`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/series/{p1}/memory", "get">>(`/api/series/${storedId}/memory`, { signal }),
     enabled: typeof storedId === "number",
     refetchInterval: 30_000,
   });
@@ -748,7 +682,7 @@ export function useSeriesMemory(storedId: number | null | undefined) {
 export function useAdoptEpisodes(storedId: number | null | undefined) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => api<{ ok: boolean; adopted: number }>(`/api/series/${storedId}/memory/adopt`, { method: "POST", body: {} }),
+    mutationFn: () => api<AnswerOf<"/api/series/{p1}/memory/adopt", "post">>(`/api/series/${storedId}/memory/adopt`, { method: "POST", body: {} }),
     onSuccess: (result) => {
       if (result.adopted > 0) void client.invalidateQueries({ queryKey: ["memory"] });
     },
@@ -772,7 +706,7 @@ export function useSaveMemory(storedId: number) {
   const refresh = useRefreshMemory();
   return useMutation({
     mutationFn: (body: { policy: MemoryPolicy; specials_after: string }) =>
-      api<SeriesMemory>(`/api/series/${storedId}/memory`, { method: "PUT", body }),
+      api<AnswerOf<"/api/series/{p1}/memory", "put">>(`/api/series/${storedId}/memory`, { method: "PUT", body }),
     onSettled: () => void refresh(),
   });
 }
@@ -785,7 +719,7 @@ export function useExtractFacts() {
   const refresh = useRefreshJobs();
   return useMutation({
     mutationFn: (request: { anchor: number; unitIds: number[] }) =>
-      api<ExtractAnswer>(`/api/units/${request.anchor}/context/extract`, { method: "POST", body: { unit_ids: request.unitIds } }),
+      api<AnswerOf<"/api/units/{p1}/context/extract", "post">>(`/api/units/${request.anchor}/context/extract`, { method: "POST", body: { unit_ids: request.unitIds } }),
     onSettled: () => void refresh(),
   });
 }
@@ -812,7 +746,7 @@ export function useStopJobs() {
   const refresh = useRefreshJobs();
   return useMutation({
     mutationFn: (jobIds: string[]) =>
-      Promise.all(jobIds.map((jobId) => api<{ ok: boolean }>("/api/queue/stop", { method: "POST", body: { job_id: jobId } }))),
+      Promise.all(jobIds.map((jobId) => api<AnswerOf<"/api/queue/stop", "post">>("/api/queue/stop", { method: "POST", body: { job_id: jobId } }))),
     onSettled: () => void refresh(),
   });
 }
@@ -821,7 +755,7 @@ export function useStopJobs() {
 export function useUnitFacts(unitId: number, enabled: boolean) {
   return useQuery({
     queryKey: ["unit-facts", unitId] as const,
-    queryFn: ({ signal }) => api<UnitFacts>(`/api/units/${unitId}/facts`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/facts", "get">>(`/api/units/${unitId}/facts`, { signal }),
     enabled,
   });
 }
@@ -869,7 +803,7 @@ export function useGlossaryHistory(owner: StyleOwner, lang: string, enabled: boo
   return useQuery({
     queryKey: ["glossary", owner, lang, "history"] as const,
     queryFn: ({ signal }) =>
-      api<{ lang: string; items: GlossaryRevision[] }>(`${ownerPath(owner)}/glossary/history?lang=${encodeURIComponent(lang)}`, { signal }),
+      api<GlossaryHistory>(`${ownerPath(owner)}/glossary/history?lang=${encodeURIComponent(lang)}`, { signal }),
     enabled,
     gcTime: 0,
   });
@@ -908,7 +842,7 @@ export function useCopyImpact(seriesId: number, lang: string, args: CopyArgs | n
   return useQuery({
     queryKey: ["glossary-copy-impact", seriesId, lang, args] as const,
     queryFn: ({ signal }) =>
-      api<GlossaryChange & { from: string }>(`/api/series/${seriesId}/glossary/copy`, {
+      api<AnswerOf<"/api/series/{p1}/glossary/copy", "post">>(`/api/series/${seriesId}/glossary/copy`, {
         method: "POST",
         body: { lang, ...args, dry_run: true },
         signal,
@@ -925,7 +859,7 @@ export function useCopyGlossary(seriesId: number, lang: string) {
   const refresh = useRefreshStyle();
   return useMutation({
     mutationFn: (args: CopyArgs) =>
-      api<GlossaryChange & { from: string }>(`/api/series/${seriesId}/glossary/copy`, { method: "POST", body: { lang, ...args } }),
+      api<AnswerOf<"/api/series/{p1}/glossary/copy", "post">>(`/api/series/${seriesId}/glossary/copy`, { method: "POST", body: { lang, ...args } }),
     onSettled: () => void refresh(),
   });
 }
@@ -981,7 +915,7 @@ export function useCueTotal(id: number, lang: string) {
 export function useCorrections(id: number, lang: string) {
   return useQuery({
     queryKey: [...keys.unit(id), "corrections", lang] as const,
-    queryFn: ({ signal }) => api<{ items: Correction[] }>(`/api/units/${id}/corrections?lang=${encodeURIComponent(lang)}`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/corrections", "get">>(`/api/units/${id}/corrections?lang=${encodeURIComponent(lang)}`, { signal }),
     enabled: lang !== "",
   });
 }
@@ -1002,7 +936,7 @@ export function useEditCue(id: number) {
   const refresh = useRefreshUnit(id);
   return useMutation({
     mutationFn: (edit: { lang: string; cue: number; text: string }) =>
-      api<{ version: number; warnings?: string[] }>(`/api/units/${id}/corrections`, {
+      api<AnswerOf<"/api/units/{p1}/corrections", "post">>(`/api/units/${id}/corrections`, {
         method: "POST",
         body: { lang: edit.lang, kind: "cue_edit", scope: "episode", payload: { cue: edit.cue, text: edit.text } },
       }),
@@ -1019,22 +953,12 @@ export interface NewCorrection {
   payload: Record<string, unknown>;
 }
 
-export interface CorrectionAnswer {
-  ok: boolean;
-  scope?: CorrectionScope;
-  ids?: number[];
-  version?: number;
-  warnings?: string[];
-  /** For a correction that writes the glossary: how many translations it flags stale. Nothing is retranslated. */
-  impact?: { stale_now: number; stale_after: number; would_stale: number };
-}
-
 /** Add a correction. It costs nothing now: it acts on the next retranslation (a cue edit writes a version at once). */
 export function useAddCorrection(id: number) {
   const refresh = useRefreshUnit(id);
   return useMutation({
     mutationFn: (correction: NewCorrection) =>
-      api<CorrectionAnswer>(`/api/units/${id}/corrections`, { method: "POST", body: correction }),
+      api<AnswerOf<"/api/units/{p1}/corrections", "post">>(`/api/units/${id}/corrections`, { method: "POST", body: correction }),
     onSettled: () => void refresh(),
   });
 }
@@ -1044,7 +968,7 @@ export function useRemoveCorrection(id: number) {
   const refresh = useRefreshUnit(id);
   return useMutation({
     mutationFn: (correctionId: number) =>
-      api<unknown>(`/api/units/${id}/corrections/${correctionId}/remove`, { method: "POST", body: {} }),
+      api<AnswerOf<"/api/units/{p1}/corrections/{p2}/remove", "post">>(`/api/units/${id}/corrections/${correctionId}/remove`, { method: "POST", body: {} }),
     onSettled: () => void refresh(),
   });
 }
@@ -1053,7 +977,7 @@ export function useRemoveCorrection(id: number) {
 export function useRemoveOutput(id: number) {
   const refresh = useRefreshUnit(id);
   return useMutation({
-    mutationFn: (lang: string) => api<{ ok: boolean }>(`/api/units/${id}/output/remove`, { method: "POST", body: { lang } }),
+    mutationFn: (lang: string) => api<AnswerOf<"/api/units/{p1}/output/remove", "post">>(`/api/units/${id}/output/remove`, { method: "POST", body: { lang } }),
     onSettled: () => void refresh(),
   });
 }
@@ -1063,7 +987,7 @@ export function useSetAutoRequest(id: number) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (auto_request: "" | "on" | "off") =>
-      api<unknown>(`/api/catalog/series/${id}/policy`, { method: "PUT", body: { auto_request } }),
+      api<AnswerOf<"/api/catalog/series/{p1}/policy", "put">>(`/api/catalog/series/${id}/policy`, { method: "PUT", body: { auto_request } }),
     onSettled: () => client.invalidateQueries({ queryKey: ["catalog"] }),
   });
 }
@@ -1073,7 +997,7 @@ export function useReleaseBootstrap(id: number) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (released: boolean) =>
-      api<{ ok: boolean; released: boolean }>(`/api/catalog/series/${id}/bootstrap`, { method: "PUT", body: { released } }),
+      api<AnswerOf<"/api/catalog/series/{p1}/bootstrap", "put">>(`/api/catalog/series/${id}/bootstrap`, { method: "PUT", body: { released } }),
     onSettled: () => client.invalidateQueries({ queryKey: ["catalog"] }),
   });
 }
@@ -1083,7 +1007,7 @@ export function useIgnore() {
   const refresh = useRefreshJobs();
   return useMutation({
     mutationFn: ({ ignore, ...selector }: { ignore: boolean } & JobsSelector) =>
-      api<{ ok: boolean; changed: number }>(ignore ? "/api/catalog/ignore" : "/api/catalog/unignore", {
+      api<IgnoreAnswer>(ignore ? "/api/catalog/ignore" : "/api/catalog/unignore", {
         method: "POST",
         body: selector,
       }),
@@ -1097,7 +1021,7 @@ export function useIgnore() {
 export function useSuggestionSummary() {
   return useQuery({
     queryKey: ["suggestions", "summary"] as const,
-    queryFn: ({ signal }) => api<SuggestionSummary>("/api/suggestions/summary", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/suggestions/summary", "get">>("/api/suggestions/summary", { signal }),
     refetchInterval: 30_000,
     retry: false,
   });
@@ -1109,10 +1033,10 @@ export function useSuggestions(status: SuggestionStatus | "decided", enabled = t
     queryKey: ["suggestions", "list", status] as const,
     enabled,
     queryFn: async ({ signal }): Promise<SuggestionList> => {
-      if (status !== "decided") return api<SuggestionList>(`/api/suggestions?status=${status}`, { signal });
+      if (status !== "decided") return api<AnswerOf<"/api/suggestions", "get">>(`/api/suggestions?status=${status}`, { signal });
       const [accepted, rejected] = await Promise.all([
-        api<SuggestionList>("/api/suggestions?status=accepted", { signal }),
-        api<SuggestionList>("/api/suggestions?status=rejected", { signal }),
+        api<AnswerOf<"/api/suggestions", "get">>("/api/suggestions?status=accepted", { signal }),
+        api<AnswerOf<"/api/suggestions", "get">>("/api/suggestions?status=rejected", { signal }),
       ]);
       const items: Suggestion[] = [...accepted.items, ...rejected.items].sort((a, b) => b.decided_at - a.decided_at);
       return { ...accepted, items };
@@ -1126,7 +1050,7 @@ export function useSuggestionImpact(id: number, payload: SuggestionPayload | nul
   return useQuery({
     queryKey: ["suggestion-impact", id, payload] as const,
     queryFn: ({ signal }) =>
-      api<SuggestionDecision>(`/api/suggestions/${id}/accept`, {
+      api<AnswerOf<"/api/suggestions/{p1}/accept", "post">>(`/api/suggestions/${id}/accept`, {
         method: "POST",
         body: { dry_run: true, ...(payload ? { payload } : {}) },
         signal,
@@ -1143,7 +1067,7 @@ export function useBulkImpact(seriesId: number, enabled: boolean) {
   return useQuery({
     queryKey: ["suggestion-bulk-impact", seriesId] as const,
     queryFn: ({ signal }) =>
-      api<BulkAnswer>("/api/suggestions/bulk", { method: "POST", body: { series_id: seriesId, dry_run: true }, signal }),
+      api<AnswerOf<"/api/suggestions/bulk", "post">>("/api/suggestions/bulk", { method: "POST", body: { series_id: seriesId, dry_run: true }, signal }),
     enabled,
     gcTime: 0,
     staleTime: 0,
@@ -1183,7 +1107,7 @@ export function useAcceptSuggestion() {
   const refresh = useRefreshSuggestions();
   return useMutation({
     mutationFn: (args: { id: number; payload?: SuggestionPayload }) =>
-      api<SuggestionDecision>(`/api/suggestions/${args.id}/accept`, { method: "POST", body: args.payload ? { payload: args.payload } : {} }),
+      api<AnswerOf<"/api/suggestions/{p1}/accept", "post">>(`/api/suggestions/${args.id}/accept`, { method: "POST", body: args.payload ? { payload: args.payload } : {} }),
     onSettled: (_answer, error, args) => void refresh(error ? undefined : args.id),
   });
 }
@@ -1192,7 +1116,7 @@ export function useAcceptSuggestion() {
 export function useRejectSuggestion() {
   const refresh = useRefreshSuggestions();
   return useMutation({
-    mutationFn: (id: number) => api<SuggestionDecision>(`/api/suggestions/${id}/reject`, { method: "POST", body: {} }),
+    mutationFn: (id: number) => api<AnswerOf<"/api/suggestions/{p1}/reject", "post">>(`/api/suggestions/${id}/reject`, { method: "POST", body: {} }),
     onSettled: (_answer, error, id) => void refresh(error ? undefined : id),
   });
 }
@@ -1201,7 +1125,7 @@ export function useRejectSuggestion() {
 export function useUndoSuggestion() {
   const refresh = useRefreshSuggestions();
   return useMutation({
-    mutationFn: (id: number) => api<SuggestionDecision>(`/api/suggestions/${id}/undo`, { method: "POST", body: {} }),
+    mutationFn: (id: number) => api<AnswerOf<"/api/suggestions/{p1}/undo", "post">>(`/api/suggestions/${id}/undo`, { method: "POST", body: {} }),
     onSettled: () => void refresh(),
   });
 }
@@ -1211,7 +1135,7 @@ export function useBulkAccept() {
   const refresh = useRefreshSuggestions();
   return useMutation({
     mutationFn: (args: { seriesId: number; expect: number }) =>
-      api<BulkAnswer>("/api/suggestions/bulk", { method: "POST", body: { series_id: args.seriesId, expect: args.expect } }),
+      api<AnswerOf<"/api/suggestions/bulk", "post">>("/api/suggestions/bulk", { method: "POST", body: { series_id: args.seriesId, expect: args.expect } }),
     onSettled: (_answer, error) => void refresh(error ? undefined : "all"),
   });
 }
@@ -1222,7 +1146,7 @@ export function useBulkAccept() {
 export function useInsights(days: number) {
   return useQuery({
     queryKey: ["insights", days] as const,
-    queryFn: ({ signal }) => api<Insights>(`/api/metrics?days=${days}`, { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/metrics", "get">>(`/api/metrics?days=${days}`, { signal }),
     refetchInterval: 30_000,
   });
 }
@@ -1231,7 +1155,7 @@ export function useInsights(days: number) {
 export function useLibrarySeries() {
   return useQuery({
     queryKey: ["library", "series"] as const,
-    queryFn: ({ signal }) => api<{ items: LibrarySeriesRow[] }>("/api/library/series", { signal }),
+    queryFn: ({ signal }) => api<AnswerOf<"/api/library/series", "get">>("/api/library/series", { signal }),
   });
 }
 
@@ -1240,7 +1164,7 @@ export function useFromEdits() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (args: { seriesId: number; lang: string }) =>
-      api<FromEditsAnswer>("/api/suggestions/from-edits", { method: "POST", body: { series_id: args.seriesId, lang: args.lang } }),
+      api<AnswerOf<"/api/suggestions/from-edits", "post">>("/api/suggestions/from-edits", { method: "POST", body: { series_id: args.seriesId, lang: args.lang } }),
     onSettled: () => client.invalidateQueries({ queryKey: ["suggestions"] }),
   });
 }

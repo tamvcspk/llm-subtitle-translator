@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Correction } from "../../api/types";
 import { buildPayload, describeCorrection, scopesFor } from "../../lib/corrections";
 import { sent, serve, show } from "../../test/render";
-import { base, cue, cues, episode } from "../../test/unit-fixtures";
+import { base, correction, cue, cues, episode } from "../../test/unit-fixtures";
 
 const routes = (items: Correction[] = [], extra: Record<string, unknown> = {}) => ({
   ...base,
@@ -35,7 +35,7 @@ describe("correction forms", () => {
   });
 
   it("read as one line", () => {
-    const make = (kind: Correction["kind"], payload: Record<string, unknown>): Correction => ({ id: 1, kind, payload, created_at: 1 });
+    const make = (kind: Correction["kind"], payload: Record<string, unknown>): Correction => correction(1, kind, payload);
     expect(describeCorrection(make("term", { source: "Enforcer", target: "Cảnh vệ" }))).toBe('"Enforcer" → "Cảnh vệ"');
     expect(describeCorrection(make("cue_edit", { cue: 143, text: "x" }))).toBe("Cue #143 locked");
     expect(describeCorrection(make("address", { a: "Vi", b: "Cait", a_to_b: "chị", b_to_a: "em" }))).toBe("Vi → Cait: chị · Cait → Vi: em");
@@ -47,8 +47,8 @@ describe("Corrections tab", () => {
     serve(
       routes(
         [
-          { id: 3, kind: "term", payload: { source: "Enforcer", target: "Cảnh vệ" }, created_at: 1 },
-          { id: 4, kind: "note", payload: { text: "Whispered scene" }, created_at: 1 },
+          correction(3, "term", { source: "Enforcer", target: "Cảnh vệ" }),
+          correction(4, "note", { text: "Whispered scene" }),
         ],
         { "/api/units/7/corrections/3/remove": { body: { ok: true } } },
       ),

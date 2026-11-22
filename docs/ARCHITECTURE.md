@@ -119,6 +119,19 @@ Domain code is split under `subserver/`:
   names only what the API layer itself reads; a flag that makes a call spend is `StrictBool`; a body no model names is
   `RequestObject`, any JSON object that the use case validates in its own words. A body that does not fit is a `400`
   `{"error": "field: reason"}`; the body is read as JSON whatever its `Content-Type`;
+- `answers/` (P15e): the pydantic model of what each route **answers**, one module a page: `answers/common.py`
+  (the confirmation, the price of a request, the count of what a change would flag stale, the error), `answers/console.py`
+  (account, status, queue, settings, keys, models, logs, events, backups, clean-up), `answers/catalog.py`,
+  `answers/library.py` (units, cues, corrections, versions and the comparison, story memory, glossaries),
+  `answers/style.py`, `answers/suggestions.py` and `answers/insights.py`. A model is a contract and is not run: a route
+  keeps sending what its use case returned, and `response_model` (or the `ANSWERS` table of a pure router) only puts the
+  model in the OpenAPI document. `Answer` forbids a field it does not name, `OpenAnswer` ignores one (a job is a stored
+  payload); `maybe()` marks a field the answer may leave out. `tests/test_answer_contract.py` is what keeps a model true:
+  it starts the real worker on seeded data (`tests/contract_kit.py`), calls every route and checks each answer strictly
+  against the model of its route;
+- `openapi.py`: exports the OpenAPI document from the routes alone (no server, no database) to `docs/openapi.json`, which
+  is committed; `apps/web` generates `src/api/schema.gen.ts` from it. `tests/test_openapi.py` fails when the file is not
+  what the code says, the `web` job when the generated types are not what the file says;
 - `auth_api.py` and `console_api.py`: the routes that are not a page's table: the account (`/api/auth/*`), and status,
   queue buttons, settings, languages, models, logs, events, backups, clean-up and the connection test;
 - `settings.py`: `SettingsService` (an adapter), the console settings and the API

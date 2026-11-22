@@ -40,6 +40,9 @@ jobs:
       - name: Check subcore CLI
         run: uv run --locked subcore --help
 
+      - name: Check the OpenAPI document is what the code says
+        run: uv run --locked --directory apps/server python -m subserver.api.openapi --check
+
   web:
     name: Web (Node 24)
     runs-on: ubuntu-latest
@@ -60,6 +63,13 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
+
+      # The types come from docs/openapi.json (which the Python job checks against the code): generating them again must
+      # change nothing, so a field changed in the server and not generated here turns this job red.
+      - name: Generate the API types again and ask for no difference
+        run: |
+          npm run gen:api
+          git diff --exit-code -- src/api/schema.gen.ts
 
       - name: Type check
         run: npm run typecheck

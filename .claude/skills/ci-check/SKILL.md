@@ -19,8 +19,11 @@ $U run --locked python -m unittest discover -s apps/server/tests -t apps/server 
 $U run --locked python -m unittest discover -s packages/subcore/tests -t packages/subcore -v
 $U run --locked python -m compileall -q -f apps/server/worker.py apps/server/subserver packages/subcore/src
 $U run --locked subcore --help
+$U run --locked --directory apps/server python -m subserver.api.openapi --check   # docs/openapi.json is what the code says
 python scripts/doccheck.py        # docs name every module and every /api route (standard library only; the server suite runs it too, tests/test_doccheck.py)
 ```
+
+The web job also runs `npm run gen:api` from `apps/web` and asks `git diff --exit-code -- src/api/schema.gen.ts` (typecheck, lint, test and build after it): when `apps/web` or `docs/openapi.json` changed, run the web checks too (upper-case drive letter on Windows for `npm test`).
 
 Each workspace member's tests run in a **separate** process: both folders are named `tests`, so one combined `discover` would collide.
 

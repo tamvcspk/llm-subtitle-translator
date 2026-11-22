@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
-from typing import Any
+from typing import Any, Union
 
 from fastapi import APIRouter, Body, Request
 from starlette.responses import Response
@@ -18,7 +18,9 @@ from ..adapters.http import describe_http_error
 from ..adapters.logs import clear_logs, read_log_snapshot
 from ..adapters.telemetry import events_page
 from ..domain.config import KEY_SLOTS, PROVIDER_OPENAI_COMPAT, SECRET_MASK, supported_languages
-from .common import binary_body, blocking, ctx_of, error_response, json_response, payload, query_of
+from .answers import common as shared
+from .answers import console as ans
+from .common import binary_body, blocking, ctx_of, error_response, file_answer, json_response, parameters_of, payload, query, query_of
 from .schemas import (
     BackupBody, CleanupBody, ConnectionBody, DeleteJobBody, JobBody, PrerequisitesBody, RequestObject, RetryBody,
 )
@@ -94,24 +96,26 @@ def retry(ctx: dict[str, Any], body: dict[str, Any]) -> Any:
 
 
 def register(router: APIRouter) -> None:
-    @router.get("/api/status")
+    # `response_model` documents what a route answers (the OpenAPI document, and from it the types of apps/web); the
+    # routes keep sending what the use case returned, so nothing is validated or rewritten here (api/answers).
+    @router.get("/api/status", response_model=ans.StatusAnswer)
     async def status(request: Request) -> Response:
         return json_response(await blocking(api_status, ctx_of(request)))
 
-    @router.get("/api/queue")
+    @router.get("/api/queue", response_model=ans.QueueAnswer)
     async def queue(request: Request) -> Response:
         return json_response(await blocking(ctx_of(request)["console"].snapshot))
 
-    @router.get("/api/jobs/{job_id:path}/spec")
+    @router.get("/api/jobs/{job_id:path}/spec", response_model=dict[str, Any])
     async def spec(request: Request, job_id: str) -> Response:
         return await blocking(job_spec, ctx_of(request), job_id)
 
-    @router.get("/api/settings")
+    @router.get("/api/settings", response_model=ans.SettingsAnswer)
     async def settings(request: Request) -> Response:
         ctx = ctx_of(request)
         return json_response(await blocking(lambda: ctx["settings_service"].public(live_settings(ctx))))
 
-    @router.post("/api/settings")
+    @router.post("/api/settings", response_model=ans.SettingsAnswer)
     async def save_settings(request: Request, body: RequestObject | None = Body(default=None)) -> Response:
         ctx, body = ctx_of(request), payload(body)
 
@@ -121,7 +125,7 @@ def register(router: APIRouter) -> None:
 
         return json_response(await blocking(save))
 
-    @router.get("/api/languages")
+    @router.get("/api/languages", response_model=ans.LanguagesAnswer)
     async def languages(request: Request) -> Response:
         ctx = ctx_of(request)
 
@@ -131,19 +135,25 @@ def register(router: APIRouter) -> None:
 
         return json_response(await blocking(read))
 
-    @router.get("/api/gemini-models")
+    @router.get("/api/gemini-models", response_model=ans.ModelsAnswer)
     async def models(request: Request) -> Response:
         return json_response(await blocking(models_payload, ctx_of(request)))
 
-    @router.get("/api/logs")
+    @router.get("/api/logs", response_model=ans.LogsAnswer)
     async def logs(request: Request) -> Response:
         return json_response(await blocking(read_log_snapshot, ctx_of(request)["log_dir"]))
 
-    @router.post("/api/logs/clear")
+    @router.post("/api/logs/clear", response_model=shared.OkAnswer)
     async def logs_clear(request: Request, body: RequestObject | None = Body(default=None)) -> Response:
         return json_response({"ok": await blocking(clear_logs, ctx_of(request)["log_dir"])})
 
-    @router.get("/api/events")
+    @router.get(
+        "/api/events", response_model=ans.EventsAnswer,
+        openapi_extra=parameters_of("/api/events", [
+            query("job"), query("unit", "integer"), query("kind"), query("level"), query("since", "number"),
+            query("before", "integer"), query("limit", "integer"),
+        ]),
+    )
     async def events(request: Request) -> Response:
         telemetry = ctx_of(request).get("telemetry")
         if telemetry is None or getattr(telemetry, "repo", None) is None:
@@ -152,41 +162,43 @@ def register(router: APIRouter) -> None:
 
     # --- the queue's own buttons ---------------------------------------------------------------------------------
 
-    @router.post("/api/queue/retry")
+    @router.post("/api/queue/retry", response_model=Union[ans.RetryEstimate, ans.RetryManyAnswer, shared.OkAnswer])
     async def queue_retry(request: Request, body: RetryBody | None = Body(default=None)) -> Response:
         ctx, body = ctx_of(request), payload(body)
         return json_response(await blocking(retry, ctx, body))
 
-    @router.post("/api/queue/cancel")
+    @router.post("/api/queue/cancel", response_model=shared.OkAnswer)
     async def queue_cancel(request: Request, body: JobBody | None = Body(default=None)) -> Response:
         ctx, body = ctx_of(request), payload(body)
         return json_response({"ok": await blocking(ctx["console"].cancel, str(body.get("job_id", "")))})
 
-    @router.post("/api/queue/request-prerequisites")
+    @router.post(
+        "/api/queue/request-prerequisites", response_model=Union[ans.PrerequisitesEstimate, ans.PrerequisitesRequested],
+    )
     async def queue_prerequisites(request: Request, body: PrerequisitesBody | None = Body(default=None)) -> Response:
         ctx, body = ctx_of(request), payload(body)
         return json_response(await blocking(
             ctx["units"].request_prerequisites, str(body.get("job_id", "")), estimate_only=body.get("estimate_only") is True,
         ))
 
-    @router.post("/api/queue/stop")
+    @router.post("/api/queue/stop", response_model=ans.StopAnswer)
     async def queue_stop(request: Request, body: JobBody | None = Body(default=None)) -> Response:
         ctx, body = ctx_of(request), payload(body)
         outcome = await blocking(ctx["console"].stop, str(body.get("job_id", "")))
         return json_response({"ok": outcome is not None, "outcome": outcome})
 
-    @router.post("/api/queue/delete")
+    @router.post("/api/queue/delete", response_model=shared.OkAnswer)
     async def queue_delete(request: Request, body: DeleteJobBody | None = Body(default=None)) -> Response:
         ctx, body = ctx_of(request), payload(body)
         return json_response({"ok": await blocking(ctx["console"].delete, str(body.get("state", "")), str(body.get("job_id", "")))})
 
     # --- backups, clean-up, connection test --------------------------------------------------------------------
 
-    @router.get("/api/backups")
+    @router.get("/api/backups", response_model=ans.BackupsAnswer)
     async def backups(request: Request) -> Response:
         return json_response({"items": await blocking(list_backups, ctx_of(request)["state_dir"])})
 
-    @router.post("/api/backups")
+    @router.post("/api/backups", response_model=ans.BackupCreated)
     async def backup_create(request: Request, body: BackupBody | None = Body(default=None)) -> Response:
         ctx, body = ctx_of(request), payload(body)
         backup = await blocking(
@@ -195,7 +207,10 @@ def register(router: APIRouter) -> None:
         )
         return json_response({"backup": backup})
 
-    @router.get("/api/backups/download")
+    @router.get(
+        "/api/backups/download", response_class=Response, responses=file_answer("application/zip"),
+        openapi_extra=parameters_of("/api/backups/download", [query("name", required=True)]),
+    )
     async def backup_download(request: Request) -> Response:
         backup = backup_file_path(ctx_of(request)["state_dir"], query_of(request).get("name", [""])[0])
         name = backup.name.replace('"', "")
@@ -204,7 +219,7 @@ def register(router: APIRouter) -> None:
             headers={"Content-Disposition": f'attachment; filename="{name}"'},
         )
 
-    @router.post("/api/backups/import")
+    @router.post("/api/backups/import", response_model=ans.ImportAnswer)
     async def backup_import(request: Request) -> Response:
         ctx, raw = ctx_of(request), await binary_body(request)
 
@@ -218,7 +233,7 @@ def register(router: APIRouter) -> None:
 
         return json_response(await blocking(restore))
 
-    @router.post("/api/cleanup")
+    @router.post("/api/cleanup", response_model=ans.CleanupAnswer)
     async def cleanup(request: Request, body: CleanupBody | None = Body(default=None)) -> Response:
         ctx, body = ctx_of(request), payload(body)
         service = ctx.get("cleanup")
@@ -228,7 +243,7 @@ def register(router: APIRouter) -> None:
         report = await blocking(service.run, dry_run=body.get("dry_run") is not False)
         return json_response(report.as_dict())
 
-    @router.post("/api/test-connection")
+    @router.post("/api/test-connection", response_model=ans.ConnectionResult)
     async def connection(request: Request, body: ConnectionBody | None = Body(default=None)) -> Response:
         ctx, body = ctx_of(request), payload(body)
         return json_response(await blocking(test_connection_payload, ctx, body))

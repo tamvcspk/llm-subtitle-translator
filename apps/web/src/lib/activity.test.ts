@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QueueJob } from "../api/types";
+import { provider, queueCounts } from "../test/fixtures";
 import { firstTab, jobLink, jobName, jobStatus, lastLine, layerRows, originLine, providerLine, reach, readsOnly, whenText } from "./activity";
 
 const NOW = Date.UTC(2026, 10, 17, 12, 0, 0);
@@ -74,7 +75,7 @@ describe("Activity", () => {
   });
 
   it("opens on what is running, then what is in line, then what needs a person", () => {
-    const counts = { pending: 0, processing: 0, deferred: 0, done: 5, failed: 0 };
+    const counts = queueCounts({ done: 5 });
     expect(firstTab(counts)).toBe("done");
     expect(firstTab({ ...counts, deferred: 2 })).toBe("waiting");
     expect(firstTab({ ...counts, deferred: 2, failed: 1 })).toBe("failed");
@@ -89,8 +90,8 @@ describe("Activity", () => {
   });
 
   it("describes a provider that is out, and one that is fine", () => {
-    expect(providerLine({ model: "m", state: "closed", reason: "", until: null, failures: 0, usable: true })).toEqual({ head: "closed · usable · failures 0", detail: "" });
-    expect(providerLine({ model: "m", state: "half_open", reason: "probing", until: null, failures: 2, usable: false })).toEqual({
+    expect(providerLine(provider())).toEqual({ head: "closed · usable · failures 0", detail: "" });
+    expect(providerLine(provider({ state: "half_open", reason: "probing", failures: 2, usable: false }))).toEqual({
       head: "half open · not usable · failures 2",
       detail: "probing",
     });

@@ -13,6 +13,7 @@ const version = (n: number, overrides: Partial<Version> = {}): Version => ({
   status: "superseded",
   parent_version: n > 1 ? n - 1 : null,
   model: "gemini-3.1-flash-lite",
+  sha256: "abc123",
   tokens_in: 100,
   tokens_out: 14200,
   created_at: 1_800_000_000,
@@ -22,7 +23,7 @@ const version = (n: number, overrides: Partial<Version> = {}): Version => ({
 });
 
 const list = [
-  version(4, { trigger: "variant", status: "candidate", params: { variant: { label: "gritty", preset: "" } } }),
+  version(4, { trigger: "variant", status: "candidate", params: { variant: { label: "gritty", preset: "", style: {} } } }),
   version(3, { trigger: "cue_edit", origin: "edit", status: "current", current: true }),
   version(2),
   version(1, { trigger: "auto" }),

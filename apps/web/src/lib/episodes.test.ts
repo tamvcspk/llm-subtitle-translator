@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { JobInfo } from "../api/types";
 import { episode, seriesPage, target } from "../test/fixtures";
+import { target as unitTarget } from "../test/unit-fixtures";
 import { buildSeasons, filterSeasons, parseFilter, rowLabel, type EpisodeRow } from "./episodes";
 
 const info = (overrides: Partial<JobInfo> = {}): JobInfo => ({
@@ -115,7 +116,7 @@ describe("what a row says under its label", () => {
     const now = 1_800_000_000_000;
     const [season] = buildSeasons(
       seriesPage([episode(1, { targets: [target({ content: "translated" })] })]),
-      [{ id: 501, season: 1, episode: 1, targets: [{ lang: "vi", status: "current", version: 2, model: "flash", updated_at: 1_800_000_000 - 7200, modified_outside: false }] }],
+      [{ id: 501, season: 1, episode: 1, targets: [unitTarget({ version: 2, model: "flash", updated_at: 1_800_000_000 - 7200 })] }],
       "vi",
       now,
     );
@@ -125,7 +126,7 @@ describe("what a row says under its label", () => {
   it("warns about a file changed outside the worker", () => {
     const [season] = buildSeasons(
       seriesPage([episode(1, { targets: [target({ content: "edited" })] })]),
-      [{ id: 501, season: 1, episode: 1, targets: [{ lang: "vi", status: "current", version: 3, model: "", updated_at: null, modified_outside: true }] }],
+      [{ id: 501, season: 1, episode: 1, targets: [unitTarget({ version: 3, model: "", updated_at: null, modified_outside: true })] }],
       "vi",
       0,
     );

@@ -30,7 +30,7 @@ export function firstTab(counts: QueueCounts): JobTab {
   return "done";
 }
 
-const baseName = (path: string | undefined) => (path ?? "").split(/[\\/]/).pop() ?? "";
+const baseName = (path: string | null | undefined) => (path ?? "").split(/[\\/]/).pop() ?? "";
 
 /** Jobs that read and do not translate: they have no subtitle to write and no bundle to export. */
 export const readsOnly = (job: Pick<QueueJob, "kind">): boolean =>
@@ -59,7 +59,7 @@ export function jobLink(job: QueueJob): string {
 }
 
 /** The last non-empty line of an error: the one that says what went wrong (the rest is the trace). */
-export function lastLine(text: string | undefined): string {
+export function lastLine(text: string | null | undefined): string {
   const lines = (text ?? "").split(/\r?\n/).filter((line) => line.trim() !== "");
   return lines.at(-1)?.trim() ?? "";
 }

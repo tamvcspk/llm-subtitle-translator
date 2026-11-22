@@ -226,7 +226,7 @@ function buildRow(
 /** Episodes of one series for one target language, grouped by season, in story order. */
 export function buildSeasons(
   page: SeriesPage | undefined,
-  units: LibraryUnit[] | undefined,
+  units: Array<Pick<LibraryUnit, "id" | "season" | "episode" | "targets">> | undefined,
   lang: string,
   nowMs: number = Date.now(),
 ): Season[] {

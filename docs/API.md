@@ -4,6 +4,17 @@ The web console uses these endpoints. They are intentionally small and local to
 the worker; do not expose them directly to the internet without a trusted
 reverse proxy that adds TLS.
 
+## The shape of an answer
+
+Every route that answers JSON has a model of its answer (`apps/server/subserver/api/answers`), and the models are exported
+as an OpenAPI document, [`openapi.json`](openapi.json), which is committed. That document is the one place that says which
+fields an answer has, which can be left out (`maybe()` in the model, `?:` in TypeScript) and which can be `null`;
+`apps/web` generates its types from it (`npm run gen:api` makes `apps/web/src/api/schema.gen.ts`), and CI fails when the
+document is not what the code says or the types are not what the document says. The pages below say what a route is for
+and what its fields **mean**; where they list fields, the list is for orientation, and the document wins.
+
+Export the document with `uv run --locked --directory apps/server python -m subserver.api.openapi` (no server needed).
+
 ## Authentication
 
 Every endpoint, and every static file, needs the console account, either as a
@@ -63,56 +74,7 @@ a bad new password is `400`; with `CONSOLE_AUTH=off` it is `409`.
 
 ## GET /api/status
 
-Returns queue counts, current settings, Bazarr URL, and Bazarr ping status.
-
-```json
-{
-  "queue": {"pending": 0, "processing": 0, "done": 1, "failed": 0},
-  "settings": {
-    "source_languages": [
-      {"code": "en", "language": "English", "enabled": true}
-    ],
-    "target_languages": [
-      {"code": "zh", "language": "Simplified Chinese", "enabled": true}
-    ],
-    "media_roots": ["/media"],
-    "bazarr_url": "http://bazarr:6767",
-    "bazarr_api_key": "**********",
-    "bazarr_api_key_configured": true,
-    "bazarr_api_key_last4": "",
-    "bazarr_api_key_status": "ok",
-    "gemini_api_key": "**********",
-    "gemini_api_key_configured": true,
-    "gemini_api_key_last4": "Lq3k",
-    "gemini_api_key_status": "ok",
-    "gemini_api_key2": "",
-    "gemini_api_key2_configured": false,
-    "gemini_api_key2_last4": "",
-    "gemini_api_key2_status": "",
-    "tmdb_api_key": "**********",
-    "tmdb_api_key_configured": true,
-    "tmdb_api_key_last4": "",
-    "tmdb_api_key_status": "ok",
-    "openai_compat_api_key": "",
-    "openai_compat_api_key_configured": false,
-    "openai_compat_api_key_last4": "",
-    "openai_compat_api_key_status": "",
-    "llm_provider": "gemini",
-    "llm_base_url": "",
-    "key_warnings": []
-  },
-  "bazarr_url": "http://bazarr:6767",
-  "bazarr": {"status": "OK"},
-  "model_layers": {
-    "by_model": {
-      "gemini-3.1-flash-lite": {"done": 41, "failed": 1},
-      "gemini-3.5-flash": {"done": 3, "failed": 1}
-    },
-    "escalated": {"total": 5, "done": 3, "failed": 1, "waiting": 1},
-    "window": {"done_days": 30, "failed_days": 90}
-  }
-}
-```
+Returns queue counts, current settings (as `GET /api/settings`), the Bazarr URL and Bazarr's answer to a ping (`{"error": "..."}` when it cannot be asked), `providers` and `model_layers`.
 
 `model_layers` is read from the job rows and shows whether the strong model is
 worth having. File cleanup deletes finished jobs past `retention_done_days` and
@@ -208,37 +170,14 @@ Empty when all is well.
 
 ## GET /api/languages
 
-Returns Bazarr-supported language choices normalized for the web console.
-
-```json
-{
-  "items": [
-    {
-      "code": "zh",
-      "code3": "zho",
-      "name": "Chinese Simplified",
-      "language": "Simplified Chinese",
-      "enabled_in_bazarr": true
-    }
-  ]
-}
-```
+Returns Bazarr-supported language choices normalized for the web console: `{"items": [{"code", "code3", "name", "language", "enabled_in_bazarr"}]}`. A fallback list is returned when Bazarr cannot be asked.
 
 ## GET /api/gemini-models
 
 Returns the model choices for the Settings dropdown (the name is from before the second provider). With
 `llm_provider` `gemini`: if the Gemini API cannot be reached or no key is configured, the worker returns a bundled
 fallback list. With `openai_compat`: the models the server lists at `{llm_base_url}/models` (asked with the stored
-key, if any), or an empty list when the address is unset or the server cannot be reached.
-
-```json
-{
-  "items": [
-    {"id": "gemini-3.1-flash-lite", "name": "gemini-3.1-flash-lite"},
-    {"id": "gemini-3.5-flash", "name": "gemini-3.5-flash"}
-  ]
-}
-```
+key, if any), or an empty list when the address is unset or the server cannot be reached. The answer is `{"items": [{"id", "name"}]}`.
 
 ## POST /api/settings
 
@@ -375,20 +314,7 @@ Query (all optional):
 | `before` | an event id; only older events (the `next_before` of the previous page) |
 | `limit` | 1-1000, default 100 |
 
-```json
-{
-  "items": [
-    {
-      "id": 412, "at": 1763175010.4, "level": "INFO", "kind": "job.skipped",
-      "job_id": "7fefefb6...", "unit_id": 12,
-      "reason": "target subtitle already exists",
-      "data": {"subtitle": "Episode.en.srt", "target": "vi"}
-    }
-  ],
-  "next_before": 389,
-  "telemetry": {"written": 5120, "dropped": 0, "queued": 0}
-}
-```
+An event is `{"id", "at", "level", "kind", "job_id", "unit_id", "reason", "data"}`; the answer is `{"items", "next_before", "telemetry": {"written", "dropped", "queued"}}`.
 
 `next_before` is `null` on the last page. `telemetry.dropped` counts records that were not
 written because the writer's queue was full or a write failed (the job is never affected).
@@ -432,21 +358,7 @@ File cleanup by the `retention_*` settings (FR-13; see "File Clean-up" in `docs/
 `{"dry_run": true}` or `{"dry_run": false}`. **It is a preview unless the body says `"dry_run": false`**: an empty
 body, `true`, `"false"` or anything else deletes nothing. Reply:
 
-```json
-{
-  "dry_run": true,
-  "at": 1784000000.0,
-  "groups": [
-    {"name": "jobs_done", "enabled": true, "window": 30, "files": 0, "rows": 412, "bytes": 1832040, "error": ""},
-    {"name": "jobs_failed", "enabled": true, "window": 90, "files": 0, "rows": 3, "bytes": 8120, "error": ""},
-    {"name": "versions", "enabled": true, "window": 5, "files": 87, "rows": 0, "bytes": 5402112, "error": ""},
-    {"name": "glossary", "enabled": true, "window": 20, "files": 0, "rows": 6, "bytes": 3190, "error": ""},
-    {"name": "temp", "enabled": true, "window": null, "files": 1, "rows": 0, "bytes": 2048, "error": ""}
-  ],
-  "total": {"files": 88, "rows": 415, "bytes": 7244320},
-  "media_temp": ["/media/Show/.Ep1.vi.srt.publish.tmp"]
-}
-```
+The reply is `{"dry_run", "at", "groups": [{"name", "enabled", "window", "files", "rows", "bytes", "error"}], "total": {"files", "rows", "bytes"}, "media_temp"}` with the groups `jobs_done`, `jobs_failed`, `versions`, `glossary` and `temp`.
 
 `window` is the setting of the group (days, or how many copies to keep; `null` for temporary files), and `enabled` is
 `false` when it is `0`. `files` are files on disk, `rows` are database rows (finished jobs), `bytes` is what they hold.
@@ -470,13 +382,7 @@ the **stored** key is tested (even one marked `invalid`) and its status follows 
 }
 ```
 
-Returns:
-
-```json
-{"ok": true, "kind": "gemini_api_key", "message": "Gemini API key is valid"}
-```
-
-A failure carries `"ok": false`, a `message`, and `"auth_failed": true` when the service refused the key.
+Returns `{"ok", "kind", "message"}`; a failure carries `"ok": false` and `"auth_failed": true` when the service refused the key.
 
 ## API keys: /api/keys
 
@@ -522,9 +428,9 @@ glossary review`.
 
 | Method and path | Answer |
 |---|---|
-| `GET /api/catalog` | `{"status", "languages", "series": [{"id", "title", "key", "episodes", "gone", "missing": {"vi": 3}, "open_jobs": {"requested": 1}, "failed": {"vi": 2}, "ignored": {"vi": 1}, "auto_request", "series_id"}], "movies": {"count", "missing", "failed", "ignored"}}`. Counts come from the catalog, the jobs and the decisions in a few queries (no per-item work). `failed` and `ignored` are per target language and equal what the `Failed` and `Ignored` labels of the series page (or the movies page) add up to: `failed` counts units with no open job whose newest finished job for that language is `failed` (so a failure asked for again, or followed by a success, is not counted); `ignored` counts the "do not translate" decisions. They feed the Failed and Ignored chips of Home. A series (or movie) Bazarr stopped listing stays in the list with `gone: true` while the worker keeps a unit of it (its translations and history are still there): nothing is missing and nothing can be requested for it; `episodes` counts what its page lists, listed or kept. One the worker never kept anything of is not listed. |
-| `GET /api/catalog/status` | `{"synced_at", "attempted_at", "status": "ok" \| "kept" \| "", "warning", "items", "listed", "auto_request", "auto_request_daily_cap"}`. `synced_at` is the last accepted read; `status: "kept"` means the last read was set aside and `warning` says why (Bazarr unreachable, empty, or shrunk by more than `catalog_shrink_guard`). `shrink` is `{"listed", "dropped"}` when the guard was the reason (otherwise null; kept in memory, so it is empty again after a restart until the next read): the console offers to accept that read. |
-| `GET /api/catalog/series/{id}` | `{"status", "languages", "series": {"id", "title", "key", "auto_request", "series_id", "gone", "bootstrap": {"locked", "limit", "pending", "released", "held"}}, "items": [{"id", "kind", "bazarr_id", "title", "season", "episode", "unit_id", "source", "has_source", "gone", "targets": [<target>]}]}`. `unit_id` is set once the worker keeps a unit for the item (it opens the Episode page). |
+| `GET /api/catalog` | The series (with counts per target language: `missing`, `failed`, `ignored`, and `open_jobs` by state) and the movies' counts. Counts come from the catalog, the jobs and the decisions in a few queries (no per-item work). `failed` and `ignored` are per target language and equal what the `Failed` and `Ignored` labels of the series page (or the movies page) add up to: `failed` counts units with no open job whose newest finished job for that language is `failed` (so a failure asked for again, or followed by a success, is not counted); `ignored` counts the "do not translate" decisions. They feed the Failed and Ignored chips of Home. A series (or movie) Bazarr stopped listing stays in the list with `gone: true` while the worker keeps a unit of it (its translations and history are still there): nothing is missing and nothing can be requested for it; `episodes` counts what its page lists, listed or kept. One the worker never kept anything of is not listed. |
+| `GET /api/catalog/status` | The age and state of the cache. `synced_at` is the last accepted read; `status: "kept"` means the last read was set aside and `warning` says why (Bazarr unreachable, empty, or shrunk by more than `catalog_shrink_guard`). `shrink` is `{"listed", "dropped"}` when the guard was the reason (otherwise null; kept in memory, so it is empty again after a restart until the next read): the console offers to accept that read. |
+| `GET /api/catalog/series/{id}` | One series: its `bootstrap` state and every episode with its targets. `unit_id` is set once the worker keeps a unit for the item (it opens the Episode page). |
 | `GET /api/catalog/movies` | The same `items` for movies. |
 | `POST /api/catalog/sync` | **Sync now**: asks the background loop to read Bazarr at once (within a few seconds) and answers immediately with the status plus `"requested": true`; the read, and the `auto_request` policy after an accepted one, run in that loop, never in the request. Poll `GET /api/catalog/status` for the result. Body `{"accept_shrink": true}` lets that one read past the shrink guard when the status said `shrink` (the admin confirmed how many items go). A read never creates a job by itself. |
 | `PUT /api/catalog/series/{id}/policy` | `{"auto_request": "" \| "on" \| "off"}`: follow the global `auto_request` setting, force it on, or off for this series. |
@@ -571,11 +477,10 @@ changed since translation; never retranslated automatically), `incomplete`
 `missing_units` such as `["S01E03"]`), `untranslated`.
 
 ### GET /api/library/series
-`{"items": [{"id", "key", "title", "stale_policy", "units", "counts": {"current", "stale", "incomplete", "untranslated"}}]}`
+The series the worker keeps, each with its `units` and how many are `current`, `stale`, `incomplete` and `untranslated`.
 
 ### GET /api/library/series/{id}/units?status=
-`{"series": {...}, "languages": ["vi"], "units": [{"id", "season", "episode", "title", "status", "targets": [{"lang", "status", "version", "trigger", "model", "missing_units", "updated_at", "exists", "modified_outside"}]}]}`.
-`modified_outside` is true when the file on disk is not the version the worker wrote.
+The series, its target `languages` and its units, each with a `status` (the worst of its targets) and its `targets`. `modified_outside` is true when the file on disk is not the version the worker wrote.
 
 ### GET /api/library/movies?status=
 `{"items": [<unit>...]}` in the same shape as the units above.
@@ -590,11 +495,7 @@ sets `focus` to the cue playing then, or the nearest one, and returns the page
 containing it. `q` keeps cues whose source or translation contains the text.
 Default `limit` and maximum is 5000.
 
-```json
-{"lang": "vi", "total": 531, "offset": 0, "focus": 112, "aligned": true, "has_target": true,
- "rows": [{"n": 112, "index": 112, "start": "00:23:10", "start_ms": 1390000, "end_ms": 1392500,
-           "source": "...", "target": "...", "locked": false}]}
-```
+The answer has `lang`, `total`, `offset`, `focus`, `aligned` (the target has as many cues as the source), `has_target` and `rows`; a row is `{"n", "index", "start", "start_ms", "end_ms", "source", "target", "locked"}`.
 
 ### GET /api/units/{id}/corrections?lang=
 Active episode-scope corrections: `{"items": [{"id", "kind", "payload", "created_at"}]}`.
@@ -644,7 +545,7 @@ unknown correction, a retranslation already queued or a job running are the same
 The whole-episode retranslation is also estimated by `POST /api/jobs` with `mode: "replace"`.
 
 ### GET /api/units/{id}/versions?lang=
-`{"lang", "modified_outside", "versions": [{"version", "trigger", "origin", "status", "parent_version", "model", "sha256", "tokens_in", "tokens_out", "created_at", "current", "params"}]}`, newest first.
+Newest first.
 `trigger` is `auto`, `retranslate`, `variant`, `cue_edit`, `revert`, `external` (a hand edit kept before an overwrite) or `remove`.
 `params` says how a version was made when its other fields do not: `{"range": {"first", "last"}}` for a retranslated range
 (the version is still stamped with the rules and context of the whole episode, so only the other episodes stay stale,
@@ -657,7 +558,7 @@ removed by file cleanup, FR-13.3: the line stays, there is no copy to restore or
 
 ### GET /api/units/{id}/versions/{v}/diff?against=&lang=
 Cue-level changes from `against` (default: the previous version) to `v`:
-`{"version", "against", "changed_cues", "changes": [{"op", "before": [{n, index, time, text}], "after": [...]}]}`.
+The answer lists each `change` (`op`, the cues `before` and `after`) and `changed_cues`.
 
 ### POST /api/units/{id}/versions/{v}/revert
 Body `{"lang": "vi"}`. Restores version `v` byte for byte as a new version (what
@@ -684,16 +585,8 @@ it again; only a manual request does. Needs a current version (`404` otherwise).
 The story memory behind a translation (episodes of a series only; a movie gets
 `{"applicable": false, "enabled": false}`). Reads stored facts only and never calls a model.
 
-```json
-{"applicable": true, "enabled": true, "policy": "", "specials_after": "", "label": "S01E06",
- "special": false, "lang": "vi",
- "used": {"version": 2, "complete": false, "missing": ["S01E03"], "changed": true,
-          "sections": [{"title": "Story so far", "body": "..."}]},
- "now": {"fingerprint": "...", "approximate": false,
-         "sections": [{"title": "Relationship state", "body": "..."}],
-         "prior": [{"label": "S01E01", "has_source": true, "has_facts": true}],
-         "missing": ["S01E03"], "own_facts": {"summary": "...", "...": "..."}, "own_has_source": true}}
-```
+The answer says whether memory `applicable`/`enabled` is for the unit, its series `policy`, the `label` and whether it is `special` (season 0), the context `used` by the current translation and the context `now`.
+
 `used` is the context of the current version of the target (`null` when it was made
 without memory); `changed` means the facts it was built from differ from the ones
 stored now, which is why the translation is `stale`. `now` is what a translation
@@ -720,13 +613,11 @@ breaker and `max_calls_per_day` apply, **Stop** works between episodes, a restar
 - There is no `background` parameter and no synchronous path any more.
 
 ### GET /api/units/{id}/facts
-What the stored facts of this episode say, for the console to show (reads only, never a model call):
-`{"label": "S01E02", "has_source": true, "stored": true, "facts": {"characters": [{"name", "aliases", "gender", "age_hint", "role"}], "relationship_events": [{"a", "b", "relation", "intimacy", "hierarchy", "cue", "evidence", "confidence", "detail"}], "terms": [{"source", "kind"}], "summary"}}`.
+What the stored facts of this episode say, for the console to show (reads only, never a model call): its `characters`, who stands how to whom (`relationship_events`), its `terms` and its `summary`.
 `stored` is `false` and `facts` is `null` until the facts were read. `400` for a movie, `404` for an unknown unit.
 
 ### GET /api/series/{id}/memory
-`{"series", "policy", "specials_after", "global_enabled", "units": [{"id", "label", "season", "episode", "has_source", "has_facts", "facts_hash"}]}`,
-in story order.
+The series, its `policy` and `specials_after`, whether memory is on globally, and its episodes (`units`) in story order with whether each has a source and stored facts.
 
 ### PUT /api/series/{id}/memory
 Body `{"policy": "" | "on" | "off", "specials_after": "S02E05"}`, both optional.
@@ -911,8 +802,7 @@ character also writes its card, in the same transaction) and flags the translati
 retranslates (FR-5.6). Errors are `{"error": "..."}` with `400` (a payload the glossary refuses names the offending path,
 `address_rules[0]: needs 'a_to_b' and/or 'b_to_a'`; a suggestion already decided) or `404`.
 
-A suggestion is
-`{"id", "series_id", "series", "lang", "kind", "source", "payload", "evidence", "sources", "status", "auto_accepted", "decided_at", "created_at", "undoable", "edited"}`:
+A suggestion has an `id`, its series and language, a `kind`, a `source`, the `payload` it would write, its `evidence` and `sources`, a `status` and what was decided about it (`auto_accepted`, `decided_at`, `undoable`, `edited`):
 
 - `kind` is `term` (`payload` is a glossary term: `source`, `target`, optional `aliases`, `locked`, `note`, `from`, `until`),
   `address_rule` (`a`, `b`, `a_to_b`, `b_to_a`, `from`, `until`, `note`) or `character` (`name`, `target`, `gender`,
@@ -931,7 +821,7 @@ A suggestion is
 
 | Method and path | Answer |
 |---|---|
-| `GET /api/suggestions?status=&series=&source=&lang=&limit=` | `{"items": [<suggestion>], "counts": {"pending", "accepted", "rejected"}, "pending", "series": [{"series_id", "series", "pending"}]}`. Grouped by series (oldest first inside; newest first when `status` is `accepted` or `rejected`). `limit` is at most 1000 (default 500). |
+| `GET /api/suggestions?status=&series=&source=&lang=&limit=` | The suggestions, the `counts` of each status, the `pending` total and the pending number of each series. Grouped by series (oldest first inside; newest first when `status` is `accepted` or `rejected`). `limit` is at most 1000 (default 500). |
 | `GET /api/suggestions/summary` | The counts and the per-series pending numbers, without the items: what the badge on the nav shows (the nav hides Review while all three counts are 0). |
 | `POST /api/suggestions/{id}/accept` | Apply a pending one. Optional `"payload"`: the content as the admin edited it (**Edit, then accept**; it is checked like a glossary save, and the stored suggestion becomes the edited one). Optional `"dry_run": true`: nothing is written, the answer only counts. Reply `{"ok", "saved", "unchanged", "stale_now", "stale_after", "would_stale", "suggestion"}`: `would_stale` is how many translations accepting makes stale (the same number the Glossary page shows before it saves), `unchanged` that the glossary already says it. |
 | `POST /api/suggestions/{id}/reject` | Reject: the row stays and the same content is never proposed again. Reply `{"ok", "suggestion"}`. |

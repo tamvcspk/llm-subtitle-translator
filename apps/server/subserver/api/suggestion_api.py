@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 from fastapi import APIRouter
 
 from ..services.suggestions import SuggestionService
 from . import schemas
-from .common import add_table_routes
+from .answers import suggestions as ans
+from .common import add_table_routes, query
 
 Query = dict[str, list[str]]
 Handler = Callable[[SuggestionService, re.Match[str], Query, dict[str, Any]], Any]
@@ -82,9 +83,29 @@ BODIES = {
 }
 
 
+ANSWERS = {
+    ("GET", r"/api/suggestions"): ans.SuggestionList,
+    ("GET", r"/api/suggestions/summary"): ans.SuggestionSummary,
+    ("POST", r"/api/suggestions/bulk"): ans.BulkAnswer,
+    ("POST", r"/api/suggestions/generate"): Union[ans.GenerateQueued, ans.GenerateEstimate],
+    ("POST", r"/api/suggestions/from-edits"): ans.FromEditsAnswer,
+    ("POST", r"/api/suggestions/(\d+)/accept"): ans.SuggestionDecision,
+    ("POST", r"/api/suggestions/(\d+)/reject"): ans.SuggestionRejected,
+    ("POST", r"/api/suggestions/(\d+)/undo"): ans.SuggestionDecision,
+}
+
+
+QUERIES = {
+    ("GET", r"/api/suggestions"): [
+        query("status"), query("series", "integer"), query("source"), query("lang"), query("limit", "integer"),
+    ],
+}
+
+
 def register(router: APIRouter) -> None:
     add_table_routes(
-        router, ROUTES, "suggestions", lambda ctx, service, method, path, query, body: handle(service, method, path, query, body), BODIES,
+        router, ROUTES, "suggestions", lambda ctx, service, method, path, query, body: handle(service, method, path, query, body),
+        BODIES, ANSWERS, QUERIES,
     )
 
 

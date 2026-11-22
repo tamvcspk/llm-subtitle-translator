@@ -4,14 +4,14 @@ import { describe, expect, it } from "vitest";
 import type { Correction } from "../../api/types";
 import { buildRange, overwriteLine } from "../../lib/retranslate";
 import { sent, serve, show } from "../../test/render";
-import { base, cue, cues, episode } from "../../test/unit-fixtures";
+import { base, correction, cue, cues, episode } from "../../test/unit-fixtures";
 
 const estimate = { jobs: 1, cues: 31, calls: 2, calls_left_today: null, paused_until: null, minutes: null, finish_at: null };
 
 const items: Correction[] = [
-  { id: 3, kind: "term", payload: { source: "Enforcer", target: "Cảnh vệ" }, created_at: 1 },
-  { id: 4, kind: "note", payload: { text: "Whispered" }, created_at: 1 },
-  { id: 5, kind: "cue_edit", payload: { cue: 120, text: "x" }, created_at: 1 },
+  correction(3, "term", { source: "Enforcer", target: "Cảnh vệ" }),
+  correction(4, "note", { text: "Whispered" }),
+  correction(5, "cue_edit", { cue: 120, text: "x" }),
 ];
 
 const routes = (extra: Record<string, unknown> = {}) => ({

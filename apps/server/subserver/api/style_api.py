@@ -5,12 +5,14 @@ call and returns ``(status, payload)``, or ``None`` when the path is not one of 
 from __future__ import annotations
 
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 from fastapi import APIRouter
 
 from ..services.style_service import StyleService
-from .common import add_table_routes
+from .answers import style as ans
+from .answers.common import StyleImpact
+from .common import add_table_routes, query
 
 Query = dict[str, list[str]]
 Handler = Callable[[StyleService, re.Match[str], Query, dict[str, Any]], Any]
@@ -59,8 +61,51 @@ def handles(path: str) -> bool:
     return path.startswith("/api/style/") or path.endswith(("/style", "/style/suggestions", "/style/preview", "/cards", "/cards/delete", "/characters"))
 
 
+ANSWERS = {
+    ("GET", r"/api/series/(\d+)/style"): ans.StyleOverview,
+    ("PUT", r"/api/series/(\d+)/style"): StyleImpact,
+    ("GET", r"/api/series/(\d+)/style/suggestions"): ans.StyleSuggestions,
+    ("POST", r"/api/series/(\d+)/style/preview"): ans.StylePreview,
+    ("PUT", r"/api/series/(\d+)/cards"): ans.CardSaved,
+    ("POST", r"/api/series/(\d+)/cards/delete"): ans.CardDeleted,
+    ("PUT", r"/api/series/(\d+)/characters"): ans.CharacterSaved,
+    ("PUT", r"/api/movies/(\d+)/characters"): ans.CharacterSaved,
+    ("GET", r"/api/movies/(\d+)/style"): ans.StyleOverview,
+    ("PUT", r"/api/movies/(\d+)/style"): StyleImpact,
+    ("POST", r"/api/movies/(\d+)/style/preview"): ans.StylePreview,
+    ("PUT", r"/api/movies/(\d+)/cards"): ans.CardSaved,
+    ("POST", r"/api/movies/(\d+)/cards/delete"): ans.CardDeleted,
+    ("GET", r"/api/style/presets"): ans.PresetsAnswer,
+    ("PUT", r"/api/style/presets/([a-z0-9-]+)"): Union[ans.PresetSaved, ans.PresetImpact],
+    ("POST", r"/api/style/presets/([a-z0-9-]+)/clone"): ans.Preset,
+    ("POST", r"/api/style/presets/([a-z0-9-]+)/delete"): ans.PresetImpact,
+    ("GET", r"/api/units/(\d+)/style"): ans.UnitStyleAnswer,
+    ("PUT", r"/api/units/(\d+)/style"): ans.UnitStyleSaved,
+}
+
+
+_LANG = [query("lang")]
+QUERIES = {
+    ("GET", r"/api/series/(\d+)/style"): _LANG,
+    ("PUT", r"/api/series/(\d+)/style"): _LANG,
+    ("POST", r"/api/series/(\d+)/style/preview"): _LANG,
+    ("PUT", r"/api/series/(\d+)/cards"): _LANG,
+    ("POST", r"/api/series/(\d+)/cards/delete"): _LANG,
+    ("PUT", r"/api/series/(\d+)/characters"): _LANG,
+    ("PUT", r"/api/movies/(\d+)/characters"): _LANG,
+    ("GET", r"/api/movies/(\d+)/style"): _LANG,
+    ("PUT", r"/api/movies/(\d+)/style"): _LANG,
+    ("POST", r"/api/movies/(\d+)/style/preview"): _LANG,
+    ("PUT", r"/api/movies/(\d+)/cards"): _LANG,
+    ("POST", r"/api/movies/(\d+)/cards/delete"): _LANG,
+}
+
+
 def register(router: APIRouter) -> None:
-    add_table_routes(router, ROUTES, "style", lambda ctx, service, method, path, query, body: handle(service, method, path, query, body))
+    add_table_routes(
+        router, ROUTES, "style", lambda ctx, service, method, path, query, body: handle(service, method, path, query, body),
+        answers=ANSWERS, queries=QUERIES,
+    )
 
 
 def handle(

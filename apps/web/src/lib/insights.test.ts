@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { FromEditsAnswer } from "../api/types";
 import { abLabel, against, barWidth, dailyLimit, duration, fromEditsLine, millis, outcomeLabel, percent } from "./insights";
 
+const noReport = { added: 0, auto_accepted: 0, pending_already: 0, accepted_before: 0, rejected_before: 0, in_glossary: 0, invalid: [], failed_to_apply: [] };
+
 describe("insights formatting", () => {
   it("writes a rate as a percentage and no data as a dash", () => {
     expect(percent(null)).toBe("—");
@@ -59,14 +61,14 @@ describe("insights formatting", () => {
     });
 
     it("counts what is new in Review", () => {
-      const report = { added: 1, pending_already: 0, accepted_before: 0, rejected_before: 0, in_glossary: 0 };
+      const report = { ...noReport, added: 1 };
       expect(fromEditsLine(answer({ patterns: 1, proposed: 1, report }))).toBe(
         "Looked at 12 corrected cues. 1 repeated change; 1 new suggestion in Review.",
       );
     });
 
     it("says why a pattern became no suggestion", () => {
-      const line = fromEditsLine(answer({ patterns: 2, proposed: 1, unnamed: 1, report: { added: 0, pending_already: 1, accepted_before: 0, rejected_before: 0, in_glossary: 0 } }));
+      const line = fromEditsLine(answer({ patterns: 2, proposed: 1, unnamed: 1, report: { ...noReport, pending_already: 1 } }));
       expect(line).toContain("1 already waiting in Review");
       expect(line).toContain("1 without a word of the source in common");
     });

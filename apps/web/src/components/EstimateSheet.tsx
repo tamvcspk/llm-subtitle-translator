@@ -1,6 +1,6 @@
 import { Alert, Button, Drawer, Group, Loader, Stack, Text } from "@mantine/core";
 import { useRequestJobs, useEstimate, type CostRequest } from "../api/queries";
-import type { Estimate, JobsAnswer } from "../api/types";
+import type { Estimate, EstimateAnswer } from "../api/types";
 import { clock } from "../lib/format";
 
 /** `action` is "Translate missing · Arcane": what the person is about to pay for. */
@@ -41,7 +41,7 @@ function withoutAction(request: EstimateRequest): CostRequest {
   return { selector: request.selector };
 }
 
-function skippedNote(answer: JobsAnswer): string | null {
+function skippedNote(answer: EstimateAnswer): string | null {
   if (answer.skipped_total === 0) return null;
   const reasons = Object.entries(answer.skipped_by_reason).map(([reason, n]) => `${n} ${reason}`);
   return `Left out: ${reasons.join(", ")}.`;
