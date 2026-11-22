@@ -30,8 +30,13 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P12b** | Giao diện mới (FR-10.4, FR-10.5, ADR-17, quyết định #26, UX.md v0.14): wireframe v2, `apps/web` (React + Vite + Mantine), Dockerfile nhiều tầng, các màn hình của đường đi chính, banner toàn cục, hộp Estimate, Style có Inherit và cấp tập, variant lưu style, Settings 7 nhóm | Tiêu chí 24 a–j: image cuối không có Node; build lặp lại được; chưa đăng nhập chỉ tải được trang đăng nhập; `#hash` trong iframe; 820 px không cuộn ngang; mọi nút tốn quota qua Estimate; tác động stale hiện từ `dry_run`; Inherit; variant lưu style; banner và lớp phủ hết phiên | `[ ]` |
 | **P13** | `suggestions` + Review inbox lõi (FR-4.4, FR-11.1, FR-11.1.5) | Tiêu chí 21 c–h: chấp nhận/sửa/từ chối/hàng loạt ghi vào glossary trong DB, hiện số bản dịch stale, từ chối không bị sinh lại, `auto_accept` theo loại, badge nav; mọi `source` qua cùng use case | `[x]` CI GitHub xanh (440d0ca, run 44124589256); chạy ở `dev-llm-translator` trên homeserver từ 2026-11-17 |
 | **P14** | Bộ sinh đề xuất từ facts và thẻ nhân vật (FR-6, FR-18.3) | Tiêu chí 21 a–b: đề xuất `address_rule` và `term` `pending` kèm bằng chứng cue và timecode, chưa áp dụng vào bản dịch nào | `[~]` |
-| **P15** | Insights và vòng phản hồi (FR-19.5–19.6): metrics, trang Insights, đề xuất rule từ cue đã sửa, bộ golden + `compare` | Tiêu chí 20 a–d và 17h | `[ ]` |
-| **P16** | Research grounding (FR-7), làm cuối cùng nhưng vẫn bắt buộc của v1 (FR-7.4) | Tiêu chí 23: một lần mỗi series, URL từ grounding metadata, kết quả vào `suggestions`, `term` ≥ 2 nguồn tự áp dụng khi bật, provider không có `web_search` thì bỏ qua, có ngân sách lời gọi | `[ ]` |
+| **P15** | Insights và vòng phản hồi (FR-19.5–19.6): metrics, trang Insights, đề xuất rule từ cue đã sửa, bộ golden + `compare` | Tiêu chí 20 a–d và 17h | `[~]` Code, test và docs xong (407c04b, 55ef4cd); còn CI GitHub xanh |
+| **P15b** | Sửa docs và skill đã cũ sau P15 (quyết định #27): `docs/ARCHITECTURE.md`, skill `implement-phase`, README, trạng thái của bảng này; script kiểm docs | Script kiểm docs không báo module hay route nào thiếu; không còn `FileJobQueue`, `gst_enqueue.sh` ngoài lịch sử của PLAN và CHANGELOG | `[ ]` |
+| **P15c** | `subserver/` thành package theo lớp (ADR-18 phần 1): `domain`, `services`, `jobs`, `adapters`, `api`; tách `store.py`; không đổi hành vi | Toàn bộ test server pass, chỉ sửa import, số test không giảm; `test_core_boundary.py` kiểm theo package; HTTP API, schema DB và image không đổi | `[ ]` |
+| **P15d** | HTTP chuyển sang FastAPI (ADR-18 phần 2): middleware xác thực ASGI, router có schema pydantic, vòng nền trong `lifespan`; bỏ `http.server` | Tiêu chí 9 và 24c vẫn pass (danh sách route lấy từ app FastAPI); mọi route của `docs/API.md` trả cùng mã và payload như trước; một process, cổng 6789 | `[ ]` |
+| **P15e** | Kiểu API của `apps/web` sinh từ OpenAPI (ADR-18 phần 3) | Đổi một field ở schema Python mà không sinh lại thì CI đỏ; `npm run typecheck` pass trên bản sinh | `[ ]` |
+| **P15f** | Một tài liệu kiến trúc "như đã dựng"; skill và agent theo vai (backend, frontend, designer, architect, QA) (quyết định #27) | Script kiểm docs sạch; `AGENTS.md` không còn chép lại Seams/Invariants; mỗi skill mới đã dùng thử một lần trên một thay đổi nhỏ | `[ ]` |
+| **P16** | Research grounding (FR-7), làm cuối cùng nhưng vẫn bắt buộc của v1 (FR-7.4); làm **sau P15f**, trên cấu trúc mới | Tiêu chí 23: một lần mỗi series, URL từ grounding metadata, kết quả vào `suggestions`, `term` ≥ 2 nguồn tự áp dụng khi bật, provider không có `web_search` thì bỏ qua, có ngân sách lời gọi | `[ ]` |
 
 **Thứ tự làm là thứ tự số.** Mỗi phase chỉ cần các phase đứng trước nó:
 
@@ -41,6 +46,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 - **P10** (Bazarr kéo, Library/Missing) cần `jobs` và `versions` của P8 để dẫn xuất nhãn, và là lúc gỡ script Bazarr và `hold`. **P11** (bundle) đứng trước **P12** (style, xem thử, variant) vì mọi thứ đó chạy trên bundle.
 - **P12b** (giao diện mới) cần API của P12 (style, variant, glossary trong DB, Compare) và làm **trước P13** để trang Review dựng thẳng bằng React, không viết hai lần. Phần backend của P13 và P14 không phụ thuộc P12b nên có thể làm trước nếu cần.
 - **P13** (`suggestions` + Review inbox) cần glossary và thẻ nhân vật trong DB (P12) để "chấp nhận" ghi vào đó. **P14** (đề xuất từ facts) là nguồn đầu tiên của inbox. **P15** (Insights, vòng phản hồi) cắm cue sửa lặp lại vào cùng inbox và cần số liệu tích luỹ từ P5 và A/B của P12. **P16** (research) làm cuối vì không phase nào phụ thuộc nó và nó tốn quota có tìm kiếm, nhưng vẫn bắt buộc của v1 (FR-7.4).
+- **P15b → P15f** (tái cấu trúc sau P15, quyết định #27, ADR-18) chen giữa P15 và P16: cần một code base dễ theo dõi trước khi thêm tính năng cuối, nên P16 viết một lần theo cấu trúc mới thay vì chuyển lại. Chỉ bắt đầu khi P15 có CI xanh. **P15b** (sửa docs cũ) nhỏ và làm ngay; **P15c** (dời file thành package, không đổi hành vi) trước **P15d** (FastAPI) để mỗi bước chỉ đổi một thứ; **P15e** (kiểu sinh từ OpenAPI) cần schema của P15d; **P15f** (gộp docs, skill theo vai) làm khi cấu trúc đã đứng yên để không phải viết lại.
 
 Triển khai lên homeserver là bước riêng khi bạn yêu cầu (AGENTS.md).
 
@@ -396,9 +402,62 @@ FR-19.5–19.6; ADR-15; tiêu chí 17h, 20.
 - [x] **Làm:** 17h `test_17h_*` và 20d `test_20d_*`, 20c `test_20c_*`, 20a `test_20a_*` trong `apps/server/tests/test_insights.py`; 20b `test_20b_*` trong `packages/subcore/tests/test_feedback_golden.py`; giao diện `Insights.test.tsx`, `insights.test.ts`; docs `API.md`, `CONFIGURATION.md`, `CONTEXT.md`, `AGENTS.md`, `UX.md`, `QUALITY.md`, `CHANGELOG.md`. Test tiêu chí 17h và 20 a–d; docs; `CHANGELOG.md`.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P15.
 
+## P15b — Sửa docs và skill đã cũ `[ ]`
+
+Quyết định #27. Không đổi code chạy. Kiểm ngày 2026-11-22 trên 55ef4cd.
+
+- [ ] `docs/ARCHITECTURE.md` (code hiện tại): không nhắc gì P13–P15; thiếu 19 module server (`suggestions`, `judge`, `metrics`, `feedback`, `proposals`, `read_jobs`, `provider_guard`, `bootstrap`, `intake`, `ports`, `runtime`, `auth`, …) và gần hết module `subcore`; còn tên `FileJobQueue` (không còn trong code), "stdlib HTTP server", `console.py` "enqueue a scan result" (route đã bỏ ở R10-8). Sửa cho đúng ở mức đủ dùng; bản viết lại đầy đủ ở P15f.
+- [ ] Skill `implement-phase`: bỏ quy tắc cập nhật `bazarr-postprocess/gst_enqueue.sh` và định dạng queue file (đã gỡ ở P10).
+- [ ] `PLAN.md`: trạng thái bảng tổng quan khớp với mục chi tiết (P2, P12, P12b, P14), tiêu đề P13 sai định dạng.
+- [ ] `README.md`, `docs/DEVELOPMENT.md`: Insights, judge, golden set.
+- [ ] `docs/API.md`: kiểm `/api/queue/cancel` (có trong code, không thấy ghi nguyên văn).
+- [ ] `scripts/doccheck.py` (chỉ thư viện chuẩn): module của `subserver`/`subcore` không có trong `docs/ARCHITECTURE.md`, route `/api/*` trong code không có trong `docs/API.md`; chạy trong skill `ci-check`. Có unit test nhỏ cho script.
+
+## P15c — `subserver/` thành package theo lớp `[ ]`
+
+ADR-18 phần 1, quyết định #27. Chỉ dời file và sửa import, **không đổi hành vi**, schema DB hay HTTP API.
+
+- [ ] Package con: `domain/` (thuần: `queue_policy`, `rules`, `suggestion_keys`, `bootstrap`, `estimates`, …), `services/` (use case: `units`, `console`, `catalog_actions`, `suggestions`, `judge`, `metrics`, `feedback`, `proposals`, `style_service`, `memory`, …), `jobs/` (`queue`, `jobs`, `read_jobs`, `translation_attempt`, `provider_guard`, `intake`), `adapters/` (`store`, `bazarr`, `tmdb`, `llm`, `gemini`, `backups`, `settings`, `telemetry`, …), `api/` (`web.py` và các router `*_api.py`). Danh sách cuối chốt khi làm, ghi vào ADR-18.
+- [ ] Tách `store.py` (~2000 dòng) thành repository theo nhóm bảng (jobs, versions, catalog, glossary/style, suggestions, telemetry, settings/auth); `Store` giữ làm facade, test vẫn chạy trên `Store(":memory:")` (ADR-12 không đổi). Tách `units.py` (~1150 dòng) nếu tách được theo trang.
+- [ ] Không giữ module cũ làm alias: sửa mọi import trong code, test, `worker.py`, `scripts/`, `preview_seed.py`.
+- [ ] `tests/test_core_boundary.py`: quy tắc theo package (`domain`, `services`, `jobs` không import `adapters`, `api`; `domain` không import gì ngoài `subcore` và thư viện chuẩn) thay danh sách module tay.
+- [ ] `Dockerfile` (vẫn `/app/subserver`), lệnh `compileall` của CI, `AGENTS.md`, `docs/ARCHITECTURE.md`: đường dẫn mới.
+- [ ] CI GitHub xanh; image build xanh.
+
+## P15d — HTTP chuyển sang FastAPI `[ ]`
+
+ADR-18 phần 2, quyết định #27. Sau P15c.
+
+- [ ] Phụ thuộc `fastapi`, `uvicorn` (và `httpx` cho `TestClient`) chỉ vào `llm-subtitle-server` (`uv add --package llm-subtitle-server`); `subcore` không đổi. Phiên bản ghim qua `uv.lock`.
+- [ ] Bước 1: app FastAPI chạy trong process của worker, cổng 6789; một route bắt mọi đường dẫn `/api/*` gọi các `handle()` thuần hiện có (đã trả `(status, payload)`), nên hành vi giữ nguyên. Middleware xác thực ASGI chạy trước mọi đường dẫn, kể cả tệp tĩnh; ngoại lệ vẫn chỉ `GET /login` và `POST /api/auth/login`. Vòng worker và vòng sync danh mục khởi động trong `lifespan` (không `BackgroundTasks`, D7). Log của uvicorn đi qua `redaction.py` hoặc tắt access log.
+- [ ] Bước 2: chuyển từng nhóm route sang router có schema pydantic (auth, keys, settings, catalog và jobs, library, style, suggestions, insights, queue, backups và logs). Lỗi validate trả cùng dạng lỗi JSON như hiện nay, để `apps/web` không đổi.
+- [ ] Bước 3: xoá `ConsoleHandler` và `http.server`; 18 file test dùng `ConsoleHandler` chuyển sang `TestClient` (vẫn `unittest`).
+- [ ] Kiểm `Store` dưới threadpool của handler đồng bộ (connection theo thread, khoá ghi).
+- [ ] Test: tiêu chí 9 và 24c (danh sách route lấy từ app, không từ danh sách tay); so mã và payload của mọi route trong `docs/API.md` trước/sau trên cùng dữ liệu; cookie `SameSite`, `CONSOLE_AUTH=off`, Basic Auth giữ nguyên; không có mật khẩu, cookie, khoá trong log.
+- [ ] `docs/API.md`, `docs/CONFIGURATION.md` (nếu có biến mới), `AGENTS.md`, `CHANGELOG.md`; CI và image xanh; chạy thử bằng `scripts/preview.ps1` và hand-off `test-plan`.
+
+## P15e — Kiểu API sinh từ OpenAPI `[ ]`
+
+ADR-18 phần 3. Sau P15d.
+
+- [ ] Xuất `openapi.json` từ app (lệnh trong repo, không cần chạy server) và commit nó.
+- [ ] `openapi-typescript` (devDependency, `--save-exact`) sinh kiểu vào `apps/web/src/api/`; `types.ts` dùng kiểu sinh, chỉ giữ tay phần giao diện tự thêm.
+- [ ] CI: sinh lại và `git diff --exit-code` cho cả `openapi.json` lẫn kiểu TS.
+- [ ] `docs/API.md` giữ phần ngữ nghĩa (vì sao, khi nào, quy tắc), bỏ các bảng field trùng với schema; `AGENTS.md` đổi quy tắc "giữ `types.ts` bằng `docs/API.md`".
+
+## P15f — Một tài liệu kiến trúc; skill và agent theo vai `[ ]`
+
+Quyết định #27. Sau P15e, khi cấu trúc đã đứng yên.
+
+- [ ] `docs/ARCHITECTURE.md` viết lại "như đã dựng", theo package của P15c: lớp, luồng job, luồng HTTP, seam, bất biến. `docs/design/ARCHITECTURE.md` chỉ còn ADR và phần đích chưa làm (P16); phần đã dựng ở §2–§6 chuyển sang `docs/ARCHITECTURE.md` hoặc trỏ tới đó.
+- [ ] `AGENTS.md` rút gọn: giữ quy tắc chung, lệnh và liên kết; "Seams" và "Invariants" chuyển sang `docs/ARCHITECTURE.md` và skill `backend-dev`, không chép hai nơi.
+- [ ] Skill mới: `backend-dev` (đặt route, service, method `Store`, kind job mới vào đâu; `mapped_errors`; test), `frontend-dev` (quy tắc `apps/web`, kiểu sinh, `settings.ts`, `draft.ts`, Estimate, ≥ 44 px, lỗi chữ ổ đĩa của Vitest), `designer` (UX.md, wireframe v2, khổ dọc, cảm ứng; ra wireframe và spec trước khi code), `architect` (ADR, ranh giới package, chạy `scripts/doccheck.py`; dùng cùng `design-docs`).
+- [ ] QA: không tạo skill trùng `test-plan`/`web-test`; thêm phần đối chiếu tiêu chí SPEC §6 với test. Vai có quyền hạn riêng thành agent trong `.claude/agents/` (`qa` chỉ đọc, `designer` không sửa code).
+- [ ] `implement-phase` trỏ tới đúng skill theo vai; dùng thử mỗi skill một lần trên một thay đổi nhỏ.
+
 ## P16 — Research grounding `[ ]`
 
-FR-7, FR-7.4; ARCHITECTURE §3.5; tiêu chí 23. **Làm cuối cùng của lộ trình v1, sau P15, nhưng vẫn bắt buộc.**
+FR-7, FR-7.4; ARCHITECTURE §3.5; tiêu chí 23. **Làm cuối cùng của lộ trình v1, sau P15f (trên cấu trúc mới của ADR-18), nhưng vẫn bắt buộc.**
 
 - [ ] `subcore.glossary.research`: lời gọi 1 có tìm kiếm (không schema), lời gọi 2 structured output; URL nguồn lấy từ grounding metadata, không tin URL model tự viết.
 - [ ] Chạy một lần mỗi series và khi có term mới; ngân sách `research_max_calls_per_series`; tác vụ `research` ghi riêng trong `llm_calls`.
@@ -545,4 +604,5 @@ Review mức `high`, từng phase một, trên khoảng commit của phase. **Qu
 ## Sau v1 (backlog)
 
 - **v1.1:** thông báo ntfy/Apprise/Telegram khi có mục `pending` mới hoặc job fail, kèm link trang duyệt (SPEC quyết định #6); hỗ trợ VTT; policy tự yêu cầu theo đường dẫn hoặc ngôn ngữ (FR-15.4); `dry_run` cho `PUT /api/series/{id}/memory` để hiện dòng impact của Memory và Specials after (cần hàm tính stale theo chính sách ứng viên trong `StoryMemory`; ở v1 hai trường đó lưu bằng Apply không có impact, quyết định 2026-11-16).
+- **Sau P15f, tuỳ chọn:** gom các module ở gốc `subcore` (`quality/`: compare, golden, judge, feedback; `rules/`: glossary, style, matching, fewshot). Giữ layout `src/` (thư viện được build). Lợi ích thấp, đổi import của mọi bên dùng (quyết định #27).
 - Ngoài v1: plugin Jellyfin/Plex "báo câu sai"; ASS/SSA giữ style; liên kết bối cảnh franchise; multi-user.

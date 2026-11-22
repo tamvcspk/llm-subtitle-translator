@@ -1,6 +1,6 @@
 # ARCHITECTURE — LLM Subtitle Translator for Bazarr
 
-> Trạng thái: **Draft v0.17** · 2026-11-16 (v0.17: theo SPEC, §5 thêm route glossary/style/cards cấp phim và số `failed`/`ignored` theo series (đã kiểm là đếm rẻ được), không đổi ADR; v0.16: theo SPEC, khổ chính của giao diện là dọc ~820 px, không đổi ADR; v0.15: theo SPEC, không đổi ADR, chỉ UX.md v0.15 và quyết định #26 điểm 12; v0.14: giao diện React (Vite + Mantine) build nhiều tầng, image cuối vẫn chỉ Python — ADR-17 mới, sửa ADR-7 và ADR-2, §5 API dự kiến cho P12b, §8 rủi ro, xem [UX.md](UX.md) v0.14; v0.13: yêu cầu UI của ADR-7 — chạy trong iframe của Organizr trên iPad, cookie `SameSite`, tiếng Anh, xem [UX.md](UX.md); v0.12: bundle thuần và few-shot ngoài hash stale (ADR-14, ADR-16), bootstrap của `auto_request` (ADR-10), dịch lại theo dải đóng dấu hash cả tập (ADR-14), đổi tên `apps/server` và `subserver` (ADR-2); v0.11: đánh số lại phase P5–P16 theo thứ tự làm — §3.5 research làm cuối, §3.6 đề xuất và Review inbox, §4 `suggestions` thêm `source`; v0.10: thiết kế lại luồng job — ADR-10 đến ADR-16, §2 sơ đồ đích, §4 schema đích, §5, §6, §8; ADR-8 được điều chỉnh bởi ADR-12, ADR-9 bị thay bởi ADR-10/11, ADR-5 điều chỉnh, quy tắc upstream của ADR-2 bỏ; v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8; v0.9: ADR-8 ranh giới và port chuyển từ SPEC mục 9 sang §1 và §2, theo số phiên bản của SPEC; thêm ADR-9 chế độ `hold` ở §1, P0d phần 2) · Hiện thực hoá [SPEC.md](SPEC.md)
+> Trạng thái: **Draft v0.18** · 2026-11-22 (v0.18: theo SPEC quyết định #27, ADR-18 mới (`subserver/` thành package theo lớp, HTTP sang FastAPI, kiểu API sinh từ OpenAPI), sửa bố cục `subserver/` của ADR-2, PLAN P15b–P15f; v0.17: theo SPEC, §5 thêm route glossary/style/cards cấp phim và số `failed`/`ignored` theo series (đã kiểm là đếm rẻ được), không đổi ADR; v0.16: theo SPEC, khổ chính của giao diện là dọc ~820 px, không đổi ADR; v0.15: theo SPEC, không đổi ADR, chỉ UX.md v0.15 và quyết định #26 điểm 12; v0.14: giao diện React (Vite + Mantine) build nhiều tầng, image cuối vẫn chỉ Python — ADR-17 mới, sửa ADR-7 và ADR-2, §5 API dự kiến cho P12b, §8 rủi ro, xem [UX.md](UX.md) v0.14; v0.13: yêu cầu UI của ADR-7 — chạy trong iframe của Organizr trên iPad, cookie `SameSite`, tiếng Anh, xem [UX.md](UX.md); v0.12: bundle thuần và few-shot ngoài hash stale (ADR-14, ADR-16), bootstrap của `auto_request` (ADR-10), dịch lại theo dải đóng dấu hash cả tập (ADR-14), đổi tên `apps/server` và `subserver` (ADR-2); v0.11: đánh số lại phase P5–P16 theo thứ tự làm — §3.5 research làm cuối, §3.6 đề xuất và Review inbox, §4 `suggestions` thêm `source`; v0.10: thiết kế lại luồng job — ADR-10 đến ADR-16, §2 sơ đồ đích, §4 schema đích, §5, §6, §8; ADR-8 được điều chỉnh bởi ADR-12, ADR-9 bị thay bởi ADR-10/11, ADR-5 điều chỉnh, quy tắc upstream của ADR-2 bỏ; v0.4: lộ trình §7 chuyển sang [PLAN.md](../../PLAN.md); v0.5: xác thực bằng form đăng nhập + Basic Auth, đổi mật khẩu trong Settings — ADR-7, §4, §5, §6, §8; v0.9: ADR-8 ranh giới và port chuyển từ SPEC mục 9 sang §1 và §2, theo số phiên bản của SPEC; thêm ADR-9 chế độ `hold` ở §1, P0d phần 2) · Hiện thực hoá [SPEC.md](SPEC.md)
 > Tài liệu này mô tả kiến trúc **đích**. Kiến trúc hiện tại kế thừa từ upstream nằm ở [docs/ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ---
@@ -365,6 +365,40 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 **Đã chốt khi vào P12b (2026-11-17):** **TypeScript** (strict; kiểu của `docs/API.md` thành mã trong `src/api/types.ts`), **React Router** ở chế độ hash, **TanStack Query** lấy dữ liệu, **Tabler icons** (`@tabler/icons-react`, đi kèm Mantine, đóng gói trong bản build), **Vitest** + Testing Library + jsdom làm runner test, ESLint (typescript-eslint, react-hooks), Node 24 (`.nvmrc`, `engines`, tầng `web` của Dockerfile), font Inter đóng gói (`@fontsource-variable/inter`, có bộ Latin mở rộng và tiếng Việt). `.npmrc` đặt `ignore-scripts=true` và `save-exact=true`: không chạy script cài đặt, phiên bản ghim đúng.
 
 **Rủi ro chấp nhận:** chuỗi cung ứng npm (lockfile bắt buộc, Dependabot, không chạy script cài đặt không cần); thời gian build image lâu hơn; hai bộ công cụ (uv và npm) trong một repo; phải viết lại test giao diện. Khổ chính ~820 px (iPad cầm dọc) theo lời admin, chưa thử trên iPad thật.
+
+### ADR-18 · `subserver/` theo lớp và HTTP bằng FastAPI (quyết định #27)
+
+**Quyết định (v0.18):** sau P15 và trước P16, server được tổ chức lại để dễ theo dõi. (1) `apps/server/subserver/` từ ~60 module phẳng thành package theo lớp; (2) adapter HTTP chuyển từ `http.server` (`ConsoleHandler` và chuỗi `x_route() or y_route()`) sang **FastAPI** chạy bằng uvicorn trong cùng process; (3) kiểu TS của `apps/web` sinh từ OpenAPI của app. Sửa bố cục `subserver/` của ADR-2. ADR-4 (một container, một process, một cổng), ADR-12 (SQLite không sau port) và ADR-17 (trang đăng nhập tĩnh, `/app/static`) **không đổi**. Làm ở PLAN P15c (dời file), P15d (FastAPI), P15e (kiểu sinh).
+
+| Phương án | Đánh giá |
+|---|---|
+| Giữ `http.server`, chỉ chia package | Không thêm phụ thuộc. Nhưng request và response không có schema: 51 route giữ khớp bằng tay ở ba nơi (code, `docs/API.md`, `types.ts`); kiểm đầu vào rải trong từng router regex. |
+| MVC | Không hợp: server không có view (React là view); controller–model không nói gì về port, use case hay job. |
+| **FastAPI, tổ chức theo lớp (chọn)** | Schema pydantic cho kiểm đầu vào và OpenAPI, từ đó sinh kiểu TS và CI bắt lệch; `Depends` thay việc tra `RuntimeContext` bằng tay. Chi phí: ba phụ thuộc mới ở server, viết lại middleware xác thực, chuyển 18 file test sang `TestClient`. |
+
+**Lớp (P15c):**
+
+| Package | Chứa | Được import |
+|---|---|---|
+| `domain/` | quyết định thuần (`queue_policy`, `rules`, `suggestion_keys`, `bootstrap`, …) | `subcore`, thư viện chuẩn |
+| `services/` | use case (`UnitService`, `ConsoleActions`, `CatalogActions`, `SuggestionService`, `JudgeService`, `Metrics`, …) | `domain`, `jobs`, `ports`, `Store` |
+| `jobs/` | hàng đợi và các job (`JobQueue`, `JobStore`, handler đọc, `TranslationAttempt`, `provider_guard`, importer) | `domain`, `ports`, `Store` |
+| `adapters/` | thứ chạm hạ tầng (`Store` và repository theo nhóm bảng, Bazarr, TMDB, LLM, backup, settings, telemetry) | mọi lớp trên |
+| `api/` | router mỏng, schema, middleware xác thực | `services` (không gọi thẳng `Store` hay `JobQueue`) |
+
+`worker.py` (và `RuntimeContext`) vẫn là composition root. `tests/test_core_boundary.py` kiểm quy tắc theo package thay danh sách module tay; `worker.py` vẫn không import `sqlite3`, socket hay server HTTP trực tiếp. Không giữ module cũ làm alias.
+
+**Cơ chế HTTP (P15d):**
+1. App FastAPI chạy trong process của worker, cổng 6789. Vòng worker và vòng sync danh mục khởi động và dừng trong `lifespan`; không dùng `BackgroundTasks` (D7: việc dài là job, chờ không tốn lời gọi thì đánh thức vòng có sẵn).
+2. Xác thực là middleware ASGI chạy trước mọi đường dẫn, kể cả tệp tĩnh `/app/static`; ngoại lệ vẫn chỉ `GET /login` và `POST /api/auth/login` (NFR-5, tiêu chí 9, 24c). Cookie, Basic Auth, `CONSOLE_AUTH=off` giữ nguyên. Test liệt kê route từ app, không từ danh sách tay.
+3. Chuyển dần: trước hết một route bắt mọi đường dẫn gọi các `handle()` thuần có sẵn (hành vi giữ nguyên), rồi từng nhóm route thành router có schema, cuối cùng xoá `ConsoleHandler`. Dạng lỗi JSON giữ như cũ để `apps/web` không đổi.
+4. Log của uvicorn đi qua `redaction.py` (hoặc tắt access log); không có mật khẩu, cookie hay khoá trong log.
+5. Handler đồng bộ chạy trên threadpool: kiểm `Store` theo thread trước khi bỏ `ThreadingHTTPServer`.
+6. `fastapi`, `uvicorn`, `httpx` (test) chỉ thuộc `llm-subtitle-server`; `subcore` không đổi phụ thuộc và vẫn không biết HTTP (ADR-2).
+
+**Kiểu sinh (P15e):** `openapi.json` xuất bằng một lệnh trong repo (không cần server chạy) và được commit; `openapi-typescript` sinh kiểu vào `apps/web/src/api/`; CI sinh lại và đòi không có diff. `docs/API.md` giữ phần ngữ nghĩa, bỏ bảng field trùng với schema.
+
+**Rủi ro chấp nhận:** thêm phụ thuộc và chuỗi cung ứng ở server (ghim bằng `uv.lock`); một đợt dời file lớn làm lịch sử `git blame` khó đọc (dời riêng một commit, không kèm sửa logic); middleware xác thực viết lại là chỗ dễ hở nhất, nên test tiêu chí 9 và 24c phải xanh trước khi xoá `ConsoleHandler`.
 
 ---
 
