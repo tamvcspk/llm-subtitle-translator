@@ -651,28 +651,21 @@ class HttpRoutingTests(unittest.TestCase):
     def test_library_routes_are_served_over_http_and_need_credentials(self):
         import base64
         import http.client
-        import threading
-        from http.server import ThreadingHTTPServer
-
-        import worker
         from subserver.services.auth import ConsoleAuth
+        from tests.web_harness import serve_console
 
         env = Env(self)
         env.translate(1)
         unit = env.unit(1)
         series = env.store.list_series()[0].id
-        server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
-        server.ctx = {"units": env.service, "static_dir": str(env.root), "queue_dir": env.queue_dir}
-        server.auth = ConsoleAuth.from_env({"CONSOLE_USER": "u", "CONSOLE_PASSWORD": "p"})
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
+        port = serve_console(
+            self, {"units": env.service, "static_dir": str(env.root), "queue_dir": env.queue_dir},
+            ConsoleAuth.from_env({"CONSOLE_USER": "u", "CONSOLE_PASSWORD": "p"}),
+        ).port
         auth = {"Authorization": "Basic " + base64.b64encode(b"u:p").decode()}
 
         def request(method, path, body=None, headers=auth):
-            conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             try:
                 payload = None if body is None else json.dumps(body)
                 conn.request(method, path, body=payload, headers=dict(headers))

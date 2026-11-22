@@ -26,6 +26,17 @@ need nothing are `GET /login` and `POST /api/auth/login`. See
 curl -u "$CONSOLE_USER:$CONSOLE_PASSWORD" http://<host>:6789/api/status
 ```
 
+## Errors
+
+Every error answer of `/api/*` is JSON, `{"error": "<message>"}`, with the status that says what went wrong: `400` for
+input the worker refuses (a field out of range, a body that is not a JSON object, a glossary that does not read), `404`
+for an id nobody has and for a `/api/...` path that is not a route (it is never the console's page), `405` for a route
+called with a method it does not have, `409` for a state that forbids the call, and `500` (also written to the worker
+log) for anything unexpected. The server is a FastAPI app (uvicorn, one process, port `6789`); it serves no `/docs`,
+`/redoc` or `/openapi.json`, and a route that is not in this document does not exist.
+
+A request body is a JSON object, read as JSON whatever its `Content-Type` (the one file upload, `POST /api/backups/import`, is the exception: its body is the zip). A body that is not an object, or a field of the wrong type, is a `400` that names the field: `{"error": "estimate_only: Input should be a valid boolean"}`. Fields the worker does not know are ignored. A flag that makes a call spend (`estimate_only`, and `dry_run` of the bulk calls) must be a real boolean: `"true"` or `1` is refused, not read as no. The two flags whose safe side is the default keep their rule: `dry_run` of `POST /api/cleanup` is `false` only when it is exactly `false`, and `include_keys` of `POST /api/backups` is `true` only when it is exactly `true`.
+
 ### POST /api/auth/login
 
 `{"user": "...", "password": "..."}` → `200 {"ok": true, "user": "..."}` and a

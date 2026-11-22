@@ -1,10 +1,30 @@
 """Runtime composition seam for the worker process."""
+import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Iterable
 from .services.console import ConsoleActions
 from .adapters.http import HTTPClient, HTTPTransport
 from .adapters.bazarr import BazarrIntegration
 from .adapters.backups import BackupMaintenance
+
+
+@dataclass(frozen=True)
+class BackgroundLoop:
+    """A loop the process runs for as long as it serves: the queue worker, the catalog sync, the daily maintenance.
+    ``worker.py`` lists them; the web app starts them in its ``lifespan`` and ``--worker-only`` starts them itself."""
+
+    name: str
+    target: Callable[..., None]
+    args: tuple[Any, ...] = ()
+
+
+def start_loops(loops: Iterable[BackgroundLoop]) -> list[threading.Thread]:
+    """Each loop on its own daemon thread (a loop never returns, and the process may end while one sleeps)."""
+    threads = [threading.Thread(target=loop.target, args=loop.args, name=loop.name, daemon=True) for loop in loops]
+    for thread in threads:
+        thread.start()
+    return threads
+
 
 @dataclass
 class RuntimeContext:

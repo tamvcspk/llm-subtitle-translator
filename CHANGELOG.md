@@ -1,4 +1,16 @@
 # Unreleased
+- **P15d: the console's HTTP server is FastAPI (ADR-18, part 2). The API, the sign-in and the console look the same.** `http.server`
+  and `ConsoleHandler` are gone: the app (`api/web.py`) runs under uvicorn in the worker's own process, on the same port, and
+  the queue worker, the catalog sync and the daily maintenance start in its lifespan. The auth gate is now an ASGI middleware
+  (`api/security.py`) in front of every path, the static files included, with the same rules (session cookie, Basic Auth,
+  lockout, same-origin check on cookie writes; `GET /login` and `POST /api/auth/login` stay the only open requests). Every
+  route is a real route of the app (`app.routes` is the list; the tests take it from there), served by the same pure routers
+  as before, so statuses and payloads did not move: the same 1,100 requests were sent to the old and the new server over
+  copies of one database and only timestamps differed. Differences: an unknown `GET /api/...` is now a `404`
+  `{"error": "not found"}` instead of the console's page; the response header names are lower-case; no `Server` header; a
+  method a route does not have is a `405` instead of `501`. New dependencies of the server (not of `subcore`): `fastapi`,
+  `uvicorn`; `httpx2` for tests. Handlers still run synchronously, on the thread pool, over the one `Store`; the new tests send
+  parallel requests while another thread writes to it. Every request body has a pydantic model (`api/schemas.py`): unknown fields pass, a body that does not fit is a `400` that names the field (`estimate_only: Input should be a valid boolean`), and a flag that makes a call spend (`estimate_only`) must be a real boolean (`"true"` used to fall through to the call that spends). The body is still read as JSON whatever its `Content-Type`. `app.openapi()` describes every route and body; response schemas come with P15e.
 - **P15c: `subserver/` is organised in layers (ADR-18, part 1). Nothing a user sees changes.** The ~60 flat modules are now
   five packages, `domain/` (pure decisions and the port types), `services/` (use cases), `jobs/` (the queue and the handlers
   that run a job), `adapters/` (Bazarr, TMDB, HTTP client, providers, settings, log, telemetry, the SQLite store) and `api/`

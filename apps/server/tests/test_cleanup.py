@@ -9,12 +9,10 @@ import http.client
 import json
 import os
 import tempfile
-import threading
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-import worker
+from tests.web_harness import serve_console
 from subserver.services.auth import ConsoleAuth
 from subserver.services.cleanup import GLOSSARY, JOBS_DONE, JOBS_FAILED, TEMP, VERSIONS, Cleanup, orphan_temp_files
 from subserver.services.glossaries import Glossaries
@@ -528,15 +526,7 @@ class HttpApi(unittest.TestCase):
         (self.env.root / "index.html").write_text("<html></html>", encoding="utf-8")
         ctx = {"static_dir": str(self.env.root), "queue_dir": str(self.env.queue), "log_dir": str(self.env.root / "logs"),
                "cleanup": self.env.cleanup}
-        server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
-        server.ctx = ctx
-        server.auth = ConsoleAuth.from_env({"CONSOLE_AUTH": "off"})
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        self.port = server.server_address[1]
+        self.port = serve_console(self, ctx, ConsoleAuth.from_env({"CONSOLE_AUTH": "off"})).port
 
     def post(self, body):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)

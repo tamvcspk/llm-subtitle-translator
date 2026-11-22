@@ -35,8 +35,11 @@ SQLite or HTTP-server module itself (`tests/test_core_boundary.py`). In normal m
 - a background worker loop that consumes one job at a time (`--no-worker` leaves it out, `--no-queue` keeps the
   loop from claiming);
 - the catalog sync loop (`run_catalog_sync`, the only caller of `sync_and_request`) and the backup and clean-up
-  scheduler thread;
-- a small stdlib (`http.server`) server for the console and JSON API (`subserver/api/web.py`).
+  scheduler;
+- a FastAPI app, served by uvicorn on the one port, for the console and the JSON API (`subserver/api/web.py`,
+  ADR-18, P15d). The three loops above are `BackgroundLoop`s (`runtime.py`) that `main()` hands to
+  `start_web_server`; the app starts them on daemon threads in its `lifespan` (with `--worker-only`, which has no
+  console, `main()` starts them itself). There is no `BackgroundTasks` and no other background mechanism (D7).
 
 ### Layers of `subserver/` (ADR-18, P15c)
 
@@ -49,8 +52,8 @@ direction of imports is checked by `tests/test_core_boundary.py`:
 | `services/` | the use cases: `units`, `console`, `library`, `versions`, `memory`, `suggestions`, `judge`, `metrics`, `cleanup`, `catalog*`, `job_requests`, `auto_request`, `glossaries`, `styles`, `style_service`, `proposals`, `feedback`, `estimates`, `bootstrap`, `auth` | `domain`, `jobs`, the `Store` and the `Telemetry` sink |
 | `jobs/` | the queue and what runs a job: `jobs` (`JobStore`), `queue` (`JobQueue`), `provider_guard`, `read_jobs`, `translation_attempt`, `intake` | the same as `services/` |
 | `adapters/` | what touches infrastructure: `bazarr`, `tmdb`, `http`, `gemini`, `llm`, `backups`, `connection_tests`, `settings`, `logs`, `bodies`, `telemetry` and the `store/` package | `domain` and other adapters |
-| `api/` | the HTTP handler `web` and the pure routers `*_api`, `keys_api` | everything below, but never the `Store`, `JobQueue` or `JobStore` directly: a route asks a service |
-| `runtime.py` | `RuntimeContext`, the typed composition seam (with `worker.py`, the composition root) | any layer |
+| `api/` | the FastAPI app `web` (`create_app`, the pages, the lifespan), the gate `security`, the shared pieces `common`, the routes of the account `auth_api` and of the rest `console_api`, and the page routers `*_api` (`library`, `style`, `suggestion`, `catalog`, `insight`, `keys`) | everything below, but never the `Store`, `JobQueue` or `JobStore` directly: a route asks a service |
+| `runtime.py` | `RuntimeContext` (the typed composition seam) and `BackgroundLoop` (with `worker.py`, the composition root) | any layer |
 
 Where a new file goes: a pure function or a type that crosses layers is `domain/`; a class a route or a job calls to do
 something is `services/`; code that runs a kind of job is `jobs/`; a module that opens a socket, a file the worker does
@@ -89,7 +92,7 @@ Domain code is split under `subserver/`:
 - `ports.py`: the ports (`MediaLibrary`, `Metadata`, `ProviderFactory`, the `Telemetry` sink) and the named types the
   `Store` returns (`tests/test_core_boundary.py` keeps a `dict` or `sqlite3.Row` from leaking out of it);
 - `auth.py`: `ConsoleAuth`, the single console account (a scrypt hash in the `auth` table, sessions, Basic Auth),
-  checked in `ConsoleHandler.parse_request` before any route;
+  checked by `AuthGate` (`security.py`) before any route;
 - `estimates.py`: `Estimator`, what an action that spends model calls would cost, said before it runs (the price box);
 - `gather.py`: gathers one `TranslationBundle` from the episode's rules, story memory and metadata (the worker's half
   of the bundle contract; pure);
@@ -100,17 +103,32 @@ Domain code is split under `subserver/`:
 - `bootstrap.py`: the first episodes `auto_request` is allowed to ask for while a series has nothing approved;
 - `connection_tests.py` and `gemini.py`: the Settings "Test" buttons (a typed key against Bazarr, TMDB or the
   provider) and the lists of models the Settings pickers show;
-- `web.py`: the console's HTTP handler (`ConsoleHandler`, `start_web_server`):
-  authentication before any route, request parsing, calls into the use cases,
-  response formatting. An adapter; `worker.py` re-exports `ConsoleHandler`;
+- `web.py`: the console's HTTP adapter: `create_app` builds the FastAPI app from the runtime context (the gate, every
+  router, the sign-in page and the static files as the last route, the `lifespan` that starts the loops), and
+  `start_web_server` runs it with uvicorn (no uvicorn log configuration and no access log: the worker's own redacting
+  log formatter is the only one, and the gate logs a failed request). A route parses, calls a use case and formats;
+  `worker.py` imports `create_app` and `start_web_server`;
+- `security.py`: `AuthGate`, a pure ASGI middleware in front of every path (routes, the fallback and the static
+  files): a session cookie or Basic Auth, the login lockout, the same-origin check on cookie writes, a re-issued
+  session cookie on the way out; the only open requests are `GET /login` and `POST /api/auth/login`;
+- `common.py`: what routes share: the JSON answer and the `{"error": ...}` shape, `ConsoleRoute` (a `ValueError` is
+  a 400, anything else a logged 500), `blocking` (synchronous work runs on the thread pool, never on the event loop)
+  and `add_table_routes`, which gives each row of a pure router's regex table a real FastAPI route (so `app.routes`
+  is the list of routes) and serves it with that router's own `handle`;
+- `schemas.py`: the pydantic models of the request bodies (P15d, step 2). Every model lets unknown fields through and
+  names only what the API layer itself reads; a flag that makes a call spend is `StrictBool`; a body no model names is
+  `RequestObject`, any JSON object that the use case validates in its own words. A body that does not fit is a `400`
+  `{"error": "field: reason"}`; the body is read as JSON whatever its `Content-Type`;
+- `auth_api.py` and `console_api.py`: the routes that are not a page's table: the account (`/api/auth/*`), and status,
+  queue buttons, settings, languages, models, logs, events, backups, clean-up and the connection test;
 - `settings.py`: `SettingsService` (an adapter), the console settings and the API
   keys in SQLite (P6, FR-20): one-time import of `config.json`, one-time seeding of
   the keys from the environment, precedence stored value > environment > default,
   the runtime settings mapping (`settings()`), the masked public view, key
   management and tests, subscribers told of every change, and the warnings Settings
   shows (a refused key, a model the provider does not know);
-- `keys_api.py`: the pure router of `/api/keys` over `SettingsService` (like
-  `library_api` for the library pages);
+- `keys_api.py`: the router of `/api/keys` over `SettingsService` (like `library_api` for the library pages: a regex
+  table and a pure `handle`, plus `register`, which puts the table on the app);
 - `translation_attempt.py`: `TranslationAttempt`, the execution seam for one
   translation job: it reads the source, calls `subcore` in-process, maps typed
   provider errors to the queue's exceptions, and publishes the result;

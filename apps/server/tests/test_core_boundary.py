@@ -159,6 +159,15 @@ class LayerBoundaryTests(unittest.TestCase):
         direct = external_hits(imported_modules(source))
         self.assertFalse(direct, f"worker.py imports infrastructure directly; put it behind an adapter: {sorted(direct)}")
 
+    def test_nothing_serves_http_with_the_standard_library_any_more(self):
+        """P15d: the console is a FastAPI app; ``http.server`` and its handler classes are gone from the whole package."""
+        found = sorted(
+            module_name(path) for path in package_files()
+            if any(name == "http.server" or name.startswith("http.server.")
+                   for name in imported_modules(path.read_text(encoding="utf-8"), module_name(path)))
+        )
+        self.assertEqual(found, [])
+
     def test_composition_root_modules_are_real(self):
         names = {path.stem for path in PACKAGE_DIR.glob("*.py")}
         self.assertFalse(COMPOSITION_ROOT - names)
@@ -289,7 +298,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(self.hits("from ..services.units import UnitService", "api.web"), set())
         self.assertEqual(self.hits("from ..adapters.store import Store", "api.web"), {"subserver.adapters.store"})
         self.assertEqual(self.hits("from ..jobs.queue import JobQueue", "api.web"), {"subserver.jobs.queue"})
-        self.assertEqual(self.hits("import http.server", "api.web"), set())  # the HTTP handler is the adapter until P15d
+        self.assertEqual(self.hits("import fastapi\nimport uvicorn", "api.web"), set())  # the HTTP adapter is FastAPI (P15d)
 
     def test_a_layer_is_told_from_a_stranger(self):
         self.assertEqual(layer_of("subserver.services.units"), "services")

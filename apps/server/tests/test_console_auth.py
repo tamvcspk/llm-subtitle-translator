@@ -3,9 +3,7 @@ import http.client
 import logging
 import os
 import tempfile
-import threading
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +12,7 @@ from subserver.services.console import ConsoleActions
 from subserver.jobs.queue import JobQueue
 from subserver.adapters.store import Store
 from subserver.services.auth import ALLOW, UNAUTHORIZED, UNCONFIGURED, ConsoleAuth
+from tests.web_harness import serve_console
 
 USER = "admin"
 PASSWORD = "s3cret-pässword:with:colons"
@@ -75,7 +74,7 @@ class ConsoleAuthPolicyTests(unittest.TestCase):
 
 
 class ConsoleAuthServerTests(unittest.TestCase):
-    """Drive the real ConsoleHandler over a socket so every route is covered."""
+    """Drive the real app (uvicorn on a loopback port) so every route is covered."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -90,23 +89,14 @@ class ConsoleAuthServerTests(unittest.TestCase):
         }
 
     def serve(self, auth):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
-        server.ctx = self.ctx
-        if auth is not None:
-            server.auth = auth
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        return server.server_address[1]
+        return serve_console(self, self.ctx, auth).port
 
     def request(self, port, method, path, headers=None, body=None):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         try:
             conn.request(method, path, body=body, headers=headers or {})
             response = conn.getresponse()
-            return response.status, dict(response.getheaders()), response.read().decode("utf-8")
+            return response.status, response.headers, response.read().decode("utf-8")  # header names are case-insensitive
         finally:
             conn.close()
 
@@ -191,7 +181,7 @@ class ConsoleAuthStartupTests(unittest.TestCase):
         """Run main() with the web server stubbed; ``probe(ctx, auth)`` runs while the store is still open."""
         results = []
 
-        def fake_server(ctx, host, port, auth):
+        def fake_server(ctx, host, port, auth, loops=()):
             results.append(probe(ctx, auth) if probe else None)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -208,7 +198,6 @@ class ConsoleAuthStartupTests(unittest.TestCase):
                 patch.dict(os.environ, env, clear=True),
                 patch("sys.argv", ["worker.py", "--no-worker"]),
                 patch.object(worker, "configure_logging"),
-                patch.object(worker.threading, "Thread"),
                 patch.object(worker, "start_web_server", side_effect=fake_server),
             ):
                 self.assertEqual(worker.main(), 0)

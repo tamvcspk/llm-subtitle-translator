@@ -7,7 +7,10 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from fastapi import APIRouter
+
 from ..services.style_service import StyleService
+from .common import add_table_routes
 
 Query = dict[str, list[str]]
 Handler = Callable[[StyleService, re.Match[str], Query, dict[str, Any]], Any]
@@ -54,6 +57,10 @@ _COMPILED = [(method, re.compile(rf"^{pattern}/?$"), handler) for method, patter
 
 def handles(path: str) -> bool:
     return path.startswith("/api/style/") or path.endswith(("/style", "/style/suggestions", "/style/preview", "/cards", "/cards/delete", "/characters"))
+
+
+def register(router: APIRouter) -> None:
+    add_table_routes(router, ROUTES, "style", lambda ctx, service, method, path, query, body: handle(service, method, path, query, body))
 
 
 def handle(

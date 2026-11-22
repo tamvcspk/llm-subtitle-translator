@@ -572,9 +572,9 @@ class BackgroundTasksAreGoneTests(unittest.TestCase):
         self.assertNotIn("tasks", RuntimeContext.__dataclass_fields__)
 
     def test_no_route_serves_tasks_and_nothing_takes_a_background_flag(self):
-        from subserver.api import web
+        from subserver.api.web import create_app
 
-        self.assertFalse(hasattr(web.ConsoleHandler, "tasks_route"))
+        self.assertEqual([route.path for route in create_app({}, None).routes if "/tasks" in route.path], [])
         env = ProposalEnv(self, suggest_from_facts=False)
         env.translate(6)
         self.assertFalse(hasattr(env.suggestions, "tasks"))

@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -43,7 +42,7 @@ from subserver.services.metrics import Metrics
 from subserver.jobs.translation_attempt import TranslationAttempt
 from subserver.services.units import UnitService
 from subserver.services.versions import TranslationVersions
-from subserver.runtime import RuntimeContext
+from subserver.runtime import BackgroundLoop, RuntimeContext, start_loops
 from subserver.domain.ports import MediaLibrary, Metadata, Telemetry
 from subserver.adapters.bodies import BodyLog
 from subserver.domain.redaction import DEFAULT as DEFAULT_REDACTOR, SECRET_SETTING_KEYS
@@ -51,7 +50,7 @@ from subserver.adapters.telemetry import NULL as NULL_TELEMETRY, Telemetry as Te
 from subserver.adapters.tmdb import TmdbMetadata
 # The settings service and the HTTP adapter live in their own modules; they stay importable from here.
 from subserver.adapters.settings import SettingsService
-from subserver.api.web import ConsoleHandler, start_web_server  # noqa: F401
+from subserver.api.web import create_app, start_web_server  # noqa: F401
 
 # Used when `process_job` is called without an explicit attempt (no history, no library): the legacy entry point.
 DEFAULT_ATTEMPT = TranslationAttempt(provider_factory=build_provider)
@@ -408,18 +407,16 @@ def main() -> int:
             worker.process_once()
             return 0
 
-        threading.Thread(
-            target=run_backup_scheduler,
-            args=(state_dir, config_path, postprocess_targets_path, backup_check_seconds, settings_service, cleanup),
-            daemon=True,
-        ).start()
-
+        # The loops of the process. With the console they start and stop in the web app's lifespan; without it they start here.
+        loops = [BackgroundLoop(
+            "backup-scheduler", run_backup_scheduler,
+            (state_dir, config_path, postprocess_targets_path, backup_check_seconds, settings_service, cleanup),
+        )]
         if not args.no_worker:
-            threading.Thread(
-                target=run_catalog_sync, args=(catalog_sync, auto_request), name="catalog-sync", daemon=True,
-            ).start()
+            loops.append(BackgroundLoop("catalog-sync", run_catalog_sync, (catalog_sync, auto_request)))
 
         if args.worker_only:
+            start_loops(loops)
             worker.run_forever(args.sleep)
             return 0
 
@@ -447,8 +444,8 @@ def main() -> int:
             insights=insights,
         ).as_handler_context()
         if not args.no_worker and not args.no_queue:
-            threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()
-        start_web_server(ctx, args.host, args.port, ConsoleAuth.from_env(os.environ, store))
+            loops.append(BackgroundLoop("queue-worker", worker.run_forever, (args.sleep,)))
+        start_web_server(ctx, args.host, args.port, ConsoleAuth.from_env(os.environ, store), loops=loops)
         return 0
     finally:
         telemetry.close()

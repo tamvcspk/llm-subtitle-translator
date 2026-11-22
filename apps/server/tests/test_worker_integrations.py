@@ -1,3 +1,4 @@
+import http.client
 import json
 import io
 import os
@@ -9,6 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import worker
+from tests.web_harness import serve_console
+from subserver.services.auth import ConsoleAuth
 from subserver.adapters import backups as gst_backups
 from subserver.adapters import bazarr as gst_bazarr
 from subserver.domain import config as gst_config
@@ -133,55 +136,53 @@ class TestWorkerIntegrationsTests(unittest.TestCase):
             self.assertEqual(log_path.read_text(encoding="utf-8"), "")
 
 
-    def test_console_handler_suppresses_routine_http_access_logs(self):
-        handler = object.__new__(worker.ConsoleHandler)
-        handler.client_address = ("127.0.0.1", 12345)
-        handler.requestline = "GET /api/status HTTP/1.1"
+    def serve_static_folder(self, tmp):
+        (Path(tmp) / "index.html").write_text("<html>console</html>", encoding="utf-8")
+        (Path(tmp) / "js").mkdir()
+        (Path(tmp) / "js" / "main.js").write_text("export {};", encoding="utf-8")
+        auth = ConsoleAuth.from_env({"CONSOLE_AUTH": "off"})
+        return serve_console(self, {"static_dir": tmp}, auth).port
 
-        with self.assertNoLogs(level="INFO"):
-            handler.log_request(200)
-
-
-    def test_console_handler_keeps_failed_http_access_logs(self):
-        handler = object.__new__(worker.ConsoleHandler)
-        handler.client_address = ("127.0.0.1", 12345)
-        handler.requestline = "POST /api/settings HTTP/1.1"
-
-        with self.assertLogs(level="INFO") as captured:
-            handler.log_request(400)
-
-        self.assertEqual(captured.output, ['INFO:root:web 127.0.0.1 - "POST /api/settings HTTP/1.1" 400 -'])
+    def get(self, port, path):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("GET", path)
+            response = conn.getresponse()
+            return response.status, response.headers, response.read()
+        finally:
+            conn.close()
 
 
-    def test_console_handler_keeps_http_protocol_error_logs(self):
-        handler = object.__new__(worker.ConsoleHandler)
-        handler.client_address = ("127.0.0.1", 12345)
-
-        with self.assertLogs(level="INFO") as captured:
-            handler.log_error("code %d, message %s", 400, "Bad request syntax")
-
-        self.assertEqual(captured.output, ["INFO:root:web 127.0.0.1 - code 400, message Bad request syntax"])
+    def test_the_console_logs_a_failed_request_and_not_a_routine_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            port = self.serve_static_folder(tmp)
+            with self.assertNoLogs(level="INFO"):
+                self.assertEqual(self.get(port, "/")[0], 200)
+            with self.assertLogs(level="INFO") as captured:
+                self.assertEqual(self.get(port, "/api/nope")[0], 404)
+        self.assertEqual(captured.output, ['INFO:root:web 127.0.0.1 - "GET /api/nope" 404'])
 
 
     def test_console_serves_module_scripts_as_javascript_without_caching(self):
         with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "js").mkdir()
-            (Path(tmp) / "js" / "main.js").write_text("export {};", encoding="utf-8")
-            handler = object.__new__(worker.ConsoleHandler)
-            handler.server = type("Server", (), {"ctx": {"static_dir": tmp}})()
-            handler.wfile = io.BytesIO()
-            headers: dict[str, str] = {}
-            handler.send_response = lambda status: headers.setdefault("status", str(status))
-            handler.send_header = lambda key, value: headers.__setitem__(key, value)
-            handler.end_headers = lambda: None
-
+            port = self.serve_static_folder(tmp)
             # Windows registries can map .js to text/plain; module scripts would then fail to load.
             with patch("subserver.api.web.mimetypes.guess_type", return_value=("text/plain", None)):
-                handler.serve_static("/js/main.js")
+                status, headers, body = self.get(port, "/js/main.js")
 
+        self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")
         self.assertEqual(headers["Cache-Control"], "no-cache")
-        self.assertEqual(handler.wfile.getvalue(), b"export {};")
+        self.assertEqual(body, b"export {};")
+
+
+    def test_a_path_that_is_not_a_file_is_the_consoles_entry_page_but_never_an_api_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            port = self.serve_static_folder(tmp)
+            status, _, body = self.get(port, "/library/series/3")  # a client-side route
+            self.assertEqual((status, b"console" in body), (200, True))
+            status, _, body = self.get(port, "/api/nothing-here")
+            self.assertEqual((status, json.loads(body)), (404, {"error": "not found"}))
 
 
     def test_movie_description_prefers_tmdb_id_from_path(self):

@@ -5,16 +5,14 @@ import base64
 import http.client
 import json
 import tempfile
-import threading
 import unittest
 from datetime import datetime, timezone
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from subcore import golden
 from subcore.feedback import MIN_REPEATS
 
-import worker
+from tests.web_harness import serve_console
 from subserver.api import insight_api
 from subserver.api import suggestion_api
 from subserver.services.auth import ConsoleAuth
@@ -511,17 +509,7 @@ class HttpTests(unittest.TestCase):
             "insights": Insights(metrics(self.env.store), self.env.feedback), "suggestions": self.env.suggestions,
         }
         auth = ConsoleAuth.from_env({"CONSOLE_USER": "admin", "CONSOLE_PASSWORD": "correct horse battery"})
-        server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
-        server.ctx, server.auth = ctx, auth
-        from subserver.services.auth import LoginThrottle, SessionStore
-
-        server.sessions, server.throttle = SessionStore.for_auth(auth), LoginThrottle()
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        self.port = server.server_address[1]
+        self.port = serve_console(self, ctx, auth, sessions=True).port
 
     def get(self, path, login=True, method="GET", body=None):
         headers = {"Authorization": "Basic " + base64.b64encode(b"admin:correct horse battery").decode()} if login else {}

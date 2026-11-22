@@ -1,17 +1,14 @@
 """Form login (P0c POC): cookie session beside Basic Auth, lockout, CSRF check, no leaks."""
 import base64
 import http.client
-import inspect
 import json
 import logging
 import re
 import tempfile
-import threading
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-import worker
+from tests.web_harness import serve_console
 from subserver.services.console import ConsoleActions
 from subserver.jobs.queue import JobQueue
 from subserver.services.auth import (
@@ -244,18 +241,9 @@ class LoginServerTests(unittest.TestCase):
             "console": ConsoleActions(JobQueue(Store(":memory:"))),
             "log_dir": str(static / "logs"),
         }
-        server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
-        server.ctx = self.ctx
-        server.auth = self.make_auth()
-        server.sessions = SessionStore.for_auth(server.auth)
-        server.throttle = LoginThrottle()
-        self.server = server
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        self.port = server.server_address[1]
+        self.served = serve_console(self, self.ctx, self.make_auth(), sessions=True)
+        self.server = self.served.app.state  # .auth, .sessions and .throttle: what the running process keeps there
+        self.port = self.served.port
 
     def request(self, method, path, headers=None, body=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -324,11 +312,12 @@ class LoginServerTests(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertTrue(headers["WWW-Authenticate"].startswith("Basic realm="))
 
-    def test_every_route_in_the_handler_is_closed_without_a_session(self):
-        paths = set(re.findall(r'"(/api/[A-Za-z0-9_/-]+)"', inspect.getsource(worker.ConsoleHandler)))
+    def test_every_route_of_the_app_is_closed_without_a_session(self):
+        # The routes come from the app itself, so a route added tomorrow is checked tomorrow (UX 24c, SPEC criterion 9).
+        paths = {re.sub(r"\{[^}]*\}", "1", route.path) for route in self.served.app.routes if route.path.startswith("/api/")}
         paths |= {"/", "/index.html", "/login.html", "/styles.css", "/js/main.js", "/favicon.svg", "/api/nope"}
         paths -= {"/api/auth/login"}  # the one documented exception (POST)
-        self.assertGreater(len(paths), 15)
+        self.assertGreater(len(paths), 80)  # the whole API, not a handful
         for path in sorted(paths):
             for method in ("GET", "POST", "PUT", "DELETE"):
                 with self.subTest(method=method, path=path):

@@ -1,7 +1,7 @@
 """HTTP routes for the library, episodes, corrections, versions and glossaries (docs/API.md).
 
 Pure routing: ``handle`` maps a request to a ``UnitService`` call and returns ``(status, payload)``,
-or ``None`` when the path is not one of these routes. The stdlib handler stays a thin adapter.
+or ``None`` when the path is not one of these routes. ``register`` puts the table on the FastAPI app (one route per row).
 """
 
 from __future__ import annotations
@@ -9,7 +9,12 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from fastapi import APIRouter, Request
+from starlette.responses import Response
+
 from ..services.units import UnitService
+from . import schemas
+from .common import add_table_routes, path_parameters, blocking, ctx_of, download_response, error_response, query_of
 
 Query = dict[str, list[str]]
 Handler = Callable[[UnitService, re.Match[str], Query, dict[str, Any]], Any]
@@ -165,6 +170,38 @@ def download(service: UnitService, path: str, query: Query) -> tuple[int, str, s
 
 def handles(path: str) -> bool:
     return path.startswith(("/api/library/", "/api/units/", "/api/series/", "/api/movies/"))
+
+
+BODIES = {
+    ("PUT", r"/api/series/(\d+)/glossary"): schemas.GlossarySaveBody,
+    ("PUT", r"/api/movies/(\d+)/glossary"): schemas.GlossarySaveBody,
+    ("POST", r"/api/series/(\d+)/glossary/restore"): schemas.GlossaryRestoreBody,
+    ("POST", r"/api/movies/(\d+)/glossary/restore"): schemas.GlossaryRestoreBody,
+    ("POST", r"/api/series/(\d+)/glossary/copy"): schemas.GlossaryCopyBody,
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/adopt"): schemas.AdoptBody,
+}
+
+
+def register(router: APIRouter) -> None:
+    """The routes of this module on a FastAPI router: the table, and the glossary as a file. A body no model names is any
+    JSON object: the use case validates it."""
+    add_table_routes(
+        router, ROUTES, "units", lambda ctx, service, method, path, query, body: handle(service, method, path, query, body), BODIES,
+    )
+
+    async def glossary_file(request: Request) -> Response:
+        service = ctx_of(request).get("units")
+        exported = None if service is None else await blocking(download, service, request.url.path, query_of(request))
+        if exported is None:
+            return error_response("not found", status=404)
+        status, name, text = exported
+        if status != 200:
+            return error_response(text, status=status)
+        return download_response(text, "application/x-yaml; charset=utf-8", name)
+
+    for kind in ("series", "movies"):
+        template = f"/api/{kind}/{{unit_id:int}}/glossary.yaml"
+        router.add_api_route(template, glossary_file, methods=["GET"], openapi_extra={"parameters": path_parameters(template)})
 
 
 def handle(

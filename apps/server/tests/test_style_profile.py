@@ -647,26 +647,19 @@ class HttpWiringTests(unittest.TestCase):
     def test_the_style_routes_are_served_over_http_and_need_credentials(self):
         import base64
         import http.client
-        import threading
-        from http.server import ThreadingHTTPServer
-
-        import worker
         from subserver.services.auth import ConsoleAuth
+        from tests.web_harness import serve_console
 
         env = Env(self)
         series = env.translated(1)
-        server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
-        server.ctx = {"units": env.service, "style": env.style, "static_dir": str(env.root), "queue_dir": env.queue_dir}
-        server.auth = ConsoleAuth.from_env({"CONSOLE_USER": "u", "CONSOLE_PASSWORD": "p"})
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
+        port = serve_console(
+            self, {"units": env.service, "style": env.style, "static_dir": str(env.root), "queue_dir": env.queue_dir},
+            ConsoleAuth.from_env({"CONSOLE_USER": "u", "CONSOLE_PASSWORD": "p"}),
+        ).port
         auth = {"Authorization": "Basic " + base64.b64encode(b"u:p").decode()}
 
         def request(method, path, body=None, headers=auth):
-            conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
             try:
                 conn.request(method, path, body=None if body is None else json.dumps(body), headers=dict(headers))
                 response = conn.getresponse()

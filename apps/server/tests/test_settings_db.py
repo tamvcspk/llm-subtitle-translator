@@ -7,17 +7,16 @@ import io
 import json
 import os
 import tempfile
-import threading
 import unittest
 import urllib.error
 import zipfile
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
 from subcore.providers import AuthError, FakeProvider, LLMRequest, ModelNotFound
 
 import worker
+from tests.web_harness import serve_console
 from subserver.adapters import backups as gst_backups
 from subserver.services.auth import ConsoleAuth
 from subserver.adapters.llm import KeyedProvider, LiveProviderFactory, build_provider
@@ -614,15 +613,7 @@ class HttpApiTests(unittest.TestCase):
             "state_dir": str(root / "state"), "config_path": str(root / "config.json"),
             "postprocess_targets_path": str(root / "targets.json"),
         }
-        server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
-        server.ctx = self.ctx
-        server.auth = ConsoleAuth.from_env({"CONSOLE_AUTH": "off"})
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        self.port = server.server_address[1]
+        self.port = serve_console(self, self.ctx, ConsoleAuth.from_env({"CONSOLE_AUTH": "off"})).port
 
     def call(self, method, path, body=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -696,7 +687,7 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(self.call("PUT", "/api/keys/99", {"label": "x"})[0], 404)
         self.assertEqual(self.call("POST", "/api/keys/99/test")[0], 404)
         self.assertEqual(self.call("POST", "/api/keys/99/remove")[0], 404)
-        self.assertEqual(self.call("GET", "/api/keys/99")[0], 200)  # not a route of its own: the static fallback
+        self.assertEqual(self.call("GET", "/api/keys/99")[0], 404)  # not a route: an /api path never falls back to the page
 
     def test_testing_a_stored_key_from_the_form_settles_its_status(self):
         self.call("POST", "/api/settings", {"gemini_api_key": KEY_A})
@@ -741,8 +732,7 @@ class StartupTests(unittest.TestCase):
                 patch.dict(os.environ, full, clear=True),
                 patch("sys.argv", ["worker.py", "--no-worker"]),
                 patch.object(worker, "configure_logging"),
-                patch.object(worker.threading, "Thread"),
-                patch.object(worker, "start_web_server", side_effect=lambda ctx, host, port, auth: results.append(probe(ctx))),
+                patch.object(worker, "start_web_server", side_effect=lambda ctx, host, port, auth, **kw: results.append(probe(ctx))),
             ):
                 self.assertEqual(worker.main(), 0)
         return results[0]
@@ -787,9 +777,8 @@ class StartupTests(unittest.TestCase):
                 patch.dict(os.environ, full, clear=True),
                 patch("sys.argv", ["worker.py", "--no-worker"]),
                 patch.object(worker, "configure_logging"),
-                patch.object(worker.threading, "Thread"),
                 patch.object(worker, "start_web_server",
-                             side_effect=lambda ctx, host, port, auth: seen.append(
+                             side_effect=lambda ctx, host, port, auth, **kw: seen.append(
                                  (ctx["worker"].settings["gst_model"], ctx["worker"].settings["gemini_api_key"]))),
             ):
                 worker.main()

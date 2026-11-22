@@ -4,7 +4,9 @@ version = "0.0.0"
 description = "Subtitle translation server: HTTP API and console, queue, Bazarr catalog, and translation runtime"
 requires-python = ">=3.12,<3.15"
 dependencies = [
+    "fastapi>=0.165.0",
     "subcore",
+    "uvicorn>=0.54.0",
 ]
 
 [tool.uv]
@@ -13,3 +15,8 @@ package = false
 
 [tool.uv.sources]
 subcore = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.2",
+]

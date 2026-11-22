@@ -6,7 +6,11 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from fastapi import APIRouter
+
 from ..services.suggestions import SuggestionService
+from . import schemas
+from .common import add_table_routes
 
 Query = dict[str, list[str]]
 Handler = Callable[[SuggestionService, re.Match[str], Query, dict[str, Any]], Any]
@@ -67,6 +71,21 @@ _COMPILED = [(method, re.compile(rf"^{pattern}/?$"), handler) for method, patter
 
 def handles(path: str) -> bool:
     return path == "/api/suggestions" or path.startswith("/api/suggestions/")
+
+
+BODIES = {
+    ("POST", r"/api/suggestions/bulk"): schemas.BulkBody,
+    ("POST", r"/api/suggestions/generate"): schemas.GenerateBody,
+    ("POST", r"/api/suggestions/from-edits"): schemas.GenerateBody,
+    ("POST", r"/api/suggestions/(\d+)/accept"): schemas.AcceptBody,
+    ("POST", r"/api/suggestions/(\d+)/undo"): schemas.DryRunBody,
+}
+
+
+def register(router: APIRouter) -> None:
+    add_table_routes(
+        router, ROUTES, "suggestions", lambda ctx, service, method, path, query, body: handle(service, method, path, query, body), BODIES,
+    )
 
 
 def handle(

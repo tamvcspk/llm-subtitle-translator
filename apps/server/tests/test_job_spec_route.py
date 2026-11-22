@@ -4,13 +4,10 @@ bundle document only (P11, FR-21.2)."""
 import http.client
 import json
 import tempfile
-import threading
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock
 
-import worker
 from subcore import srt
 from subcore.bundle import TranslationBundle
 from subcore.translate import PromptContext
@@ -18,6 +15,8 @@ from subcore.translate.engine import make_bundle
 from subserver.services.auth import ConsoleAuth
 from subserver.services.console import ConsoleActions
 from subserver.domain.ports import JobBundle
+
+from tests.web_harness import serve_console
 
 from .test_console_auth import PASSWORD, USER, basic
 
@@ -45,15 +44,7 @@ class JobSpecRouteTests(unittest.TestCase):
         }
 
     def serve(self):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
-        server.ctx = self.ctx
-        server.auth = ConsoleAuth.from_env({"CONSOLE_USER": USER, "CONSOLE_PASSWORD": PASSWORD})
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        return server.server_address[1]
+        return serve_console(self, self.ctx, ConsoleAuth.from_env({"CONSOLE_USER": USER, "CONSOLE_PASSWORD": PASSWORD})).port
 
     def get(self, port, path, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)

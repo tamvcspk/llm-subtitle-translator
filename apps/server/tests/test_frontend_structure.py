@@ -100,8 +100,13 @@ class DeploymentConfigTests(unittest.TestCase):
         pyproject = tomllib.loads((APP_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         dependencies = pyproject["project"]["dependencies"]
 
-        self.assertEqual(dependencies, ["subcore"])
+        # The engine, and the HTTP stack of the console (ADR-18): nothing else, and the engine knows none of it.
+        self.assertEqual(sorted(re.split(r"[<>=!~ ]", dependency)[0] for dependency in dependencies), ["fastapi", "subcore", "uvicorn"])
         self.assertEqual(pyproject["tool"]["uv"]["sources"]["subcore"], {"workspace": True})
+        subcore = tomllib.loads((APP_ROOT.parent.parent / "packages" / "subcore" / "pyproject.toml").read_text(encoding="utf-8"))
+        engine_dependencies = " ".join(subcore["project"].get("dependencies", [])).lower()
+        for web in ("fastapi", "uvicorn", "starlette", "httpx"):
+            self.assertNotIn(web, engine_dependencies)
 
 
 if __name__ == "__main__":

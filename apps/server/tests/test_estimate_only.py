@@ -4,9 +4,7 @@ can keep the variant's style in the same request. ``estimate_only`` reads and co
 import base64
 import http.client
 import json
-import threading
 import unittest
-from http.server import ThreadingHTTPServer
 
 from subserver.api import library_api
 from subserver.services.console import ConsoleActions
@@ -255,25 +253,21 @@ class Routes(unittest.TestCase):
         self.assertEqual((status, set(body)), (200, {"ok", "version", "adopted"}))  # a string is not a yes
 
     def test_the_retry_route_estimates_only_when_asked_and_otherwise_retries(self):
-        import worker
         from subserver.services.auth import ConsoleAuth
+        from tests.web_harness import serve_console
 
         env = Env(self)
         env.translated(1)
         job = failed_retranslation(env, 1)
-        server = ThreadingHTTPServer(("127.0.0.1", 0), worker.ConsoleHandler)
-        server.ctx = {"units": env.service, "console": ConsoleActions(env.jobs), "static_dir": str(env.root),
-                      "queue_dir": env.queue_dir}
-        server.auth = ConsoleAuth.from_env({"CONSOLE_USER": "u", "CONSOLE_PASSWORD": "p"})
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
+        port = serve_console(
+            self, {"units": env.service, "console": ConsoleActions(env.jobs), "static_dir": str(env.root),
+                   "queue_dir": env.queue_dir},
+            ConsoleAuth.from_env({"CONSOLE_USER": "u", "CONSOLE_PASSWORD": "p"}),
+        ).port
         auth = {"Authorization": "Basic " + base64.b64encode(b"u:p").decode()}
 
         def post(body):
-            conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
             try:
                 conn.request("POST", "/api/queue/retry", body=json.dumps(body), headers=auth)
                 response = conn.getresponse()

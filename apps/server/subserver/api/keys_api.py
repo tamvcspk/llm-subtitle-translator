@@ -10,11 +10,40 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from fastapi import APIRouter
+
+from . import schemas
+from .common import add_table_routes
+
 _ONE = re.compile(r"^/api/keys/(\d+)(/test|/remove)?/?$")
 
 
 def handles(path: str) -> bool:
     return path == "/api/keys" or path.startswith("/api/keys/")
+
+
+ROUTES = [
+    ("GET", r"/api/keys", None),
+    ("POST", r"/api/keys", None),
+    ("POST", r"/api/keys/(\d+)", None),
+    ("PUT", r"/api/keys/(\d+)", None),
+    ("POST", r"/api/keys/(\d+)/test", None),
+    ("POST", r"/api/keys/(\d+)/remove", None),
+]
+
+
+BODIES = {
+    ("POST", r"/api/keys"): schemas.KeyBody,
+    ("POST", r"/api/keys/(\d+)"): schemas.KeyBody,
+    ("PUT", r"/api/keys/(\d+)"): schemas.KeyBody,
+}
+
+
+def register(router: APIRouter) -> None:
+    add_table_routes(
+        router, ROUTES, "settings_service",
+        lambda ctx, service, method, path, query, body: handle(service, ctx["http"], method, path, body), BODIES,
+    )
 
 
 def handle(

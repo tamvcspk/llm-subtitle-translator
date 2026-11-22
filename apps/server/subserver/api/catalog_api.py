@@ -7,7 +7,11 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from fastapi import APIRouter
+
 from ..services.catalog_actions import CatalogActions
+from . import schemas
+from .common import add_table_routes
 
 Handler = Callable[[CatalogActions, re.Match[str], dict[str, Any]], Any]
 
@@ -29,6 +33,22 @@ _COMPILED = [(method, re.compile(rf"^{pattern}/?$"), handler) for method, patter
 
 def handles(path: str) -> bool:
     return path.startswith("/api/catalog") or path == "/api/jobs"
+
+
+BODIES = {
+    ("POST", r"/api/catalog/sync"): schemas.SyncBody,
+    ("PUT", r"/api/catalog/series/(\d+)/policy"): schemas.PolicyBody,
+    ("PUT", r"/api/catalog/series/(\d+)/bootstrap"): schemas.BootstrapBody,
+    ("POST", r"/api/catalog/ignore"): schemas.SelectionBody,
+    ("POST", r"/api/catalog/unignore"): schemas.SelectionBody,
+    ("POST", r"/api/jobs"): schemas.SelectionBody,
+}
+
+
+def register(router: APIRouter) -> None:
+    add_table_routes(
+        router, ROUTES, "catalog", lambda ctx, service, method, path, query, body: handle(service, method, path, body), BODIES,
+    )
 
 
 def handle(actions: CatalogActions, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any] | None:
