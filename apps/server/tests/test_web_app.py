@@ -105,6 +105,7 @@ class ErrorShapeTests(Kit):
                 response = client.post("/api/queue/stop", content=body)
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(set(response.json()), {"error"})
+        self.assertEqual(client.post("/api/queue/stop", content=b"{not json").json(), {"error": "the request body is not valid JSON"})
         self.assertEqual(client.post("/api/queue/stop", content=b"").status_code, 200)  # no body is {}
 
     def test_an_unexpected_exception_is_a_logged_500_with_the_error_shape(self):

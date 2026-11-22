@@ -51,6 +51,9 @@ def validation_message(exc: RequestValidationError) -> str:
     """A refused body in the console's words: the field and what is wrong with it (``dry_run: Input should be a valid boolean``)."""
     parts = []
     for error in exc.errors():
+        if error.get("type") == "json_invalid":  # its location is a character position, which tells a person nothing
+            parts.append("the request body is not valid JSON")
+            continue
         where = ".".join(str(part) for part in error.get("loc", ())[1:])  # the first part is "body"
         parts.append(f"{where}: {error.get('msg', 'invalid')}" if where else str(error.get("msg", "invalid request")))
     return "; ".join(parts) or "invalid request"
