@@ -9,7 +9,14 @@ param(
     [ValidateRange(1, 65535)]
     [int]$BazarrPort = 6791,
     [string]$KeyFile = '',   # Live: file holding the key; default local-state\secrets\gemini.key, else $env:GEMINI_API_KEY
-    [int]$MaxCallsPerDay = 60  # Live: a hard cap on model calls for the whole run (MAX_CALLS_PER_DAY)
+    # Live: a hard cap on model calls for the whole run (max_calls_per_day). Free tier: Flash 10K/day, Flash Lite 150K/day,
+    # so 1000 leaves room for other users of the same project and still stops a runaway loop.
+    [int]$MaxCallsPerDay = 1000,
+    [int]$MaxCallsPerJob = 20,  # Live: a hard cap on model calls of one job (max_calls_per_job, same as the code default)
+    # Live: the light model does every task; the strong one only takes hard jobs (gst_fallback_model) and the judge.
+    # Pick models with free-tier quota on the key's project (AI Studio rate-limit page): gemini-3.5-flash has none there.
+    [string]$LightModel = 'gemini-3.1-flash-lite',
+    [string]$StrongModel = 'gemini-3.8-flash'
 )
 
 # One command to look at the console with real rows and no key, no Bazarr, no network (the worker runs with
@@ -99,7 +106,15 @@ if ($Live) {
     # The cap is a setting, not an environment variable: config.json is imported on the first run of a state (use -Reset).
     # Written without a byte-order mark (Windows PowerShell's -Encoding utf8 adds one, and the worker's json.loads refuses it).
     # job_settle_seconds 0: the seed has just written the source files and the default 600 s wait would hold the first job for ~10 minutes.
-    $json = @{ max_calls_per_day = $MaxCallsPerDay; job_settle_seconds = 0 } | ConvertTo-Json
+    # Models are pinned here, not left to the code defaults: extract, summarize and research run on the light model, the
+    # strong one is only the fallback layer and the judge. suggest_from_facts off: the look for proposals after a job is a
+    # spend nobody clicked; turn it on in Settings when the plan's Money section allows it (the judge is off by default).
+    $json = @{
+        max_calls_per_day = $MaxCallsPerDay; max_calls_per_job = $MaxCallsPerJob; job_settle_seconds = 0
+        gst_model = $LightModel; memory_model = $LightModel; summarize_model = $LightModel; research_model = $LightModel
+        gst_fallback_model = $StrongModel; judge_model = $StrongModel
+        suggest_from_facts = $false
+    } | ConvertTo-Json
     [System.IO.File]::WriteAllText($env:APP_CONFIG_PATH, $json, (New-Object System.Text.UTF8Encoding($false)))
     $env:BAZARR_URL = 'http://127.0.0.1:1'           # nothing to ask; fails at once instead of waiting on a name
     $env:GST_ONLY_PATHS = Join-Path $stateDir 'preview-media'
@@ -128,7 +143,7 @@ if ($Bazarr) {
     Write-Host "Stand-in Bazarr: http://127.0.0.1:$BazarrPort  (/__fake/shrink, /__fake/restore, /__fake/state)" -ForegroundColor Cyan
 }
 
-$mode = if ($Live) { "LIVE (real Gemini key, cap $MaxCallsPerDay model calls/day)" } elseif ($Bazarr) { 'fake, with a stand-in Bazarr and an older queue (no model calls, the queue never runs)' } else { 'fake (no model calls)' }
+$mode = if ($Live) { "LIVE (real Gemini key, $LightModel, strong $StrongModel, cap $MaxCallsPerDay calls/day, $MaxCallsPerJob/job; settings are read on the first run of a state: use -Reset)" } elseif ($Bazarr) { 'fake, with a stand-in Bazarr and an older queue (no model calls, the queue never runs)' } else { 'fake (no model calls)' }
 Write-Host "Preview console: http://127.0.0.1:$Port  [$mode]  (state: $stateDir)" -ForegroundColor Cyan
 try {
     & $python (Join-Path $projectRoot 'apps\server\worker.py') @workerArgs
