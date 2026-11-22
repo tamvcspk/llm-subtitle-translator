@@ -105,6 +105,8 @@ SUGGESTION_BOOL_CONFIG_KEYS = {
     "auto_accept_address_rules": False,
     "auto_accept_characters": False,
     "suggest_from_facts": True,
+    # P15 (FR-19.6): after a cue edit, look for what the admin keeps correcting. No model call; the suggestions wait in Review.
+    "suggest_from_edits": True,
 }
 # Logging and measurement (P5, FR-19). `log_prompt_bodies` is what is kept of the prompts and answers of model
 # calls: `off`, `errors` (failed calls only), `sample` (failed calls and one call in ten) or `all`.

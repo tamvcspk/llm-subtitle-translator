@@ -679,3 +679,107 @@ export interface BulkAnswer {
   failed?: Array<{ id: number; error: string }>;
   series?: string;
 }
+
+// -- Insights (`/api/metrics`, `/api/series/{id}/golden`, P15) -------------------------------------------------------------
+
+/** A share (0 to 1), or `null` when there was nothing to divide by: "no data" is not "0 %". */
+export type Rate = number | null;
+
+export interface InsightsOperations {
+  queue: { counts: QueueCounts; depth: number };
+  providers: ProviderHealth[];
+  daily_quota_pause: { retry_at: number } | null;
+  wait_seconds: { jobs: number; median: number | null; p90: number | null };
+  usage: {
+    calls_today: number;
+    calls_last_minute: number;
+    /** `0` means no limit. */
+    limits: { rpm: number; tpm: number; rpd: number; max_calls_per_day: number };
+  };
+  calls: {
+    total: number;
+    by_outcome: Record<string, number>;
+    failed: number;
+    rate_429: Rate;
+    rate_503: Rate;
+  };
+  escalation: { jobs: number; escalated: number; rescued: number; rate: Rate; rescue_rate: Rate; window_days: number | null };
+  per_episode: { episodes: number; tokens_in: number | null; tokens_out: number | null; cost: number | null };
+  tokens: { in: number; out: number; cost: number };
+  latency_ms: { calls: number; mean: number | null; median: number | null; p90: number | null };
+}
+
+export interface InsightsQuality {
+  cues_translated: number;
+  episodes: number;
+  repair: { calls: number; translate_calls: number; rate: Rate; cues: number; cue_rate: Rate };
+  cue_edits: { cues: number; rate: Rate };
+  retranslations: { count: number; rate: Rate; reverts: number };
+  review: { by_kind: Record<string, number>; cps: number; cps_rate: Rate; too_long: number; too_long_rate: Rate };
+  validate: Record<string, number>;
+}
+
+/** One model, or one prompt version: what it did and how much of it the admin corrected. */
+export interface InsightsBreakdown {
+  model?: string;
+  prompt_version?: string;
+  calls: number;
+  episodes: number;
+  cues: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost: number;
+  repair_rate: Rate;
+  cue_edits: number;
+  cue_edit_rate: Rate;
+  /** Only by model: a retranslation names the model it replaces, not a prompt version. */
+  retranslations: number | null;
+}
+
+export interface InsightsAb {
+  style: string;
+  prompt_version: string;
+  variant: number;
+  current: number;
+  tie: number;
+  judged: number;
+  score: Rate;
+}
+
+export interface InsightsDay {
+  day: string;
+  calls: number;
+  failed: number;
+  tokens: number;
+  cost: number;
+  cues_translated: number;
+  cue_edits: number;
+}
+
+export interface Insights {
+  window: { days: number; since: number; until: number };
+  operations: InsightsOperations;
+  quality: InsightsQuality;
+  by_model: InsightsBreakdown[];
+  by_prompt_version: InsightsBreakdown[];
+  ab: InsightsAb[];
+  daily: InsightsDay[];
+}
+
+/** `POST /api/suggestions/from-edits`: what the admin's corrections of a series suggested. No model call. */
+export interface FromEditsAnswer {
+  cues: number;
+  without_before: number;
+  patterns: number;
+  proposed: number;
+  unnamed: number;
+  report: { added: number; pending_already: number; accepted_before: number; rejected_before: number; in_glossary: number } | null;
+}
+
+/** An entry of `GET /api/library/series`. */
+export interface LibrarySeriesRow {
+  id: number;
+  key: string;
+  title: string;
+  units: number;
+}

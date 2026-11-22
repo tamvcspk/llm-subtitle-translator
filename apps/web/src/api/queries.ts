@@ -14,13 +14,16 @@ import type {
   ExtractAnswer,
   DiffAnswer,
   Estimate,
+  FromEditsAnswer,
   GlossaryAnswer,
   GlossaryDoc,
   GlossaryRevision,
   GlossaryChange,
   GlossarySave,
+  Insights,
   JobsAnswer,
   JobsSelector,
+  LibrarySeriesRow,
   LibraryUnits,
   MemoryPolicy,
   MoviesPage,
@@ -1169,5 +1172,34 @@ export function useBulkAccept() {
     mutationFn: (args: { seriesId: number; expect: number }) =>
       api<BulkAnswer>("/api/suggestions/bulk", { method: "POST", body: { series_id: args.seriesId, expect: args.expect } }),
     onSettled: () => void refresh(),
+  });
+}
+
+// -- Insights and the feedback loop (P15) -----------------------------------------------------------------------------------
+
+/** The figures of FR-19.5 for the last `days` days, worked out by the worker from its own records. */
+export function useInsights(days: number) {
+  return useQuery({
+    queryKey: ["insights", days] as const,
+    queryFn: ({ signal }) => api<Insights>(`/api/metrics?days=${days}`, { signal }),
+    refetchInterval: 30_000,
+  });
+}
+
+/** The series the worker keeps, for the golden sets. */
+export function useLibrarySeries() {
+  return useQuery({
+    queryKey: ["library", "series"] as const,
+    queryFn: ({ signal }) => api<{ items: LibrarySeriesRow[] }>("/api/library/series", { signal }),
+  });
+}
+
+/** Look at the corrections of one series for a word the admin keeps changing. Free: no model is asked. */
+export function useFromEdits() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { seriesId: number; lang: string }) =>
+      api<FromEditsAnswer>("/api/suggestions/from-edits", { method: "POST", body: { series_id: args.seriesId, lang: args.lang } }),
+    onSettled: () => client.invalidateQueries({ queryKey: ["suggestions"] }),
   });
 }

@@ -75,6 +75,8 @@ def _correction_json(c: Correction) -> dict[str, Any]:
 
 
 class UnitService:
+    feedback: Any = None  # ``FeedbackProposer``: told after cue edits, wired by the composition root (P15)
+
     def __init__(
         self,
         library: Library,
@@ -350,26 +352,50 @@ class UnitService:
             glossary_hash=current.glossary_hash if current else "",
         )
         ids = []
+        # Edits made by hand carry no job; the one that wrote the text is the newest version a job made.
+        written_by = next((v.job_id for v in reversed(self.version_repo.versions(output_path)) if v.job_id), "")
         for ordinal, text in sorted(parsed.items()):
-            for old in self.catalog.corrections(unit.id, lang):
-                if old.kind == "cue_edit" and int(old.payload["cue"]) == ordinal:
-                    self.catalog.deactivate_correction(old.id)
+            replaced = [
+                old for old in self.catalog.corrections(unit.id, lang)
+                if old.kind == "cue_edit" and int(old.payload["cue"]) == ordinal
+            ]
+            # What the machine wrote stays with the correction through later edits of the same cue: it is the "before" of
+            # the feedback loop (FR-19.6). An older correction that never kept it leaves it unknown.
+            if replaced:
+                before = str(replaced[-1].payload.get("before_text") or "")
+            else:
+                before = target[ordinal - 1].text
+            for old in replaced:
+                self.catalog.deactivate_correction(old.id)
             ids.append(self.catalog.add_correction(
                 unit.id, lang, "cue_edit",
-                {"cue": ordinal, "text": text, "source_text": source[ordinal - 1].text},
+                {"cue": ordinal, "text": text, "source_text": source[ordinal - 1].text,
+                 **({"before_text": before} if before else {})},
             ))
             # What the admin changed in a cue is the clearest sign of what the machine got wrong (FR-19.4).
             self.telemetry.signal(
                 "cue_edit", unit_id=unit.id, version=published.version, cue=ordinal,
                 before=target[ordinal - 1].text, after=text, lang=lang, source=source[ordinal - 1].text,
                 model=current.model if current else "", context_hash=current.context_hash if current else "",
+                job_id=written_by,  # the job that wrote the cue: it names the prompt version (Insights)
             )
         self.telemetry.event(
             "version.cue_edit", unit_id=unit.id, reason=f"{len(parsed)} cue(s) edited by the admin",
             target=Path(output_path).name, version=published.version, cues=sorted(parsed),
         )
+        self._after_edit(unit, lang)
         self._bazarr_refresh(unit)
         return {"ok": True, "scope": "episode", "ids": ids, "version": published.version, "warnings": warnings}
+
+    def _after_edit(self, unit: Unit, lang: str) -> None:
+        """Let the feedback loop look at the series' edits (FR-19.6). It costs no model call and never fails the edit."""
+        hook = self.feedback
+        if hook is None:
+            return
+        try:
+            hook.after_edit(unit, lang)
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Looking for patterns in the edits of %s failed: %s", unit.title, exc)
 
     # -- a job waiting for earlier episodes (FR-15.11) ------------------------------------
     def request_prerequisites(self, job_id: str, *, estimate_only: bool = False) -> dict[str, Any]:

@@ -167,6 +167,21 @@ rejects it, or `auto_accept_*` applies it. Accepting writes the glossary and fla
 it stale, never retranslates; the same entry is never proposed again once decided (its *identity*: the term's source,
 the pair of an address rule, the character's name, however the model words it).
 **Review** is the page that lists them, with a badge of the pending ones on the nav.
+
+**Feedback loop** (`feedback.py`, `subcore.feedback`):
+What the admin's own corrections teach the worker. A word the admin keeps swapping for another in three or more
+different corrected cues, where those cues share a word of the source, becomes a `term` suggestion (`source`
+`feedback`) with the cues as evidence. It asks no model and applies nothing by itself.
+
+**Golden set** (`subcore.golden`, `GET /api/series/{id}/golden`):
+The cues of a series the admin corrected, as the text they should have, in a file `subcore compare --golden` scores
+a configuration against: measure before changing a prompt or a style, then again after. Only the corrected cues are
+scored, and an entry counts only while its source line is still the one that was corrected.
+
+**Insights** (`metrics.py`, `GET /api/metrics`):
+The figures of how the worker is doing and how good its translations are, worked out from its own records and
+rolled up per UTC day into `metrics_daily`. The one to watch is the share of cues the admin had to correct, by model
+and prompt version. A rate with nothing to divide by is "no data", never 0.
 The first generator (`proposals.py`, `FactsProposer`, with the pure `subcore.suggest`) reads the stored facts of a series:
 a pair of characters whose relationship the facts show becomes an `address_rule` per stretch of the story (`from`/`until`
 at the cue where it turned), a name in two or more episodes and not in the glossary a `term` (both `facts`), a character in

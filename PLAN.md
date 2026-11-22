@@ -385,15 +385,15 @@ FR-6, FR-18.3; tiêu chí 21 a–b. Làm ngay sau P13.
      - [x] Hal–Lois "anh–em" cho vợ chồng: đúng quy ước tiếng Việt (chồng "anh", vợ "em"); không đổi. Cặp vợ chồng lớn tuổi có thể dùng "ông–bà" hay "mình", để người duyệt sửa.
      - [x] Đọc lại chất lượng sau lần chạy mới trên Malcolm (2026-11-19, `sha-9e22aac`, `POST /api/suggestions/generate` với `background`, task `ac207a82d1dc`, 3 lời gọi model, ~58 giây, không lỗi). Kết quả: 5 đề xuất mới (id 23–27): 3 cặp xưng hô (Francis–Malcolm anh–em, Francis–Lois con–mẹ, Beebee–Francis em–anh), 1 thuật ngữ (Krelboyne → "lớp năng khiếu"), 1 thẻ nhân vật (Stanley). Không đề xuất nào gộp nhiều người, đúng như đã sửa. Đề xuất cũ id 1–22 vẫn `pending`; chưa duyệt. Cần quyết định: từ chối id 7 và 8 (gộp "Malcolm, Reese and Dewey", từ lượt trước). Xem kết quả: `GET /api/suggestions?series=1&status=pending`, hoặc thẻ Background work ở Activity; trang Review chưa dựng.
 
-## P15 — Insights và vòng phản hồi `[ ]`
+## P15 — Insights và vòng phản hồi `[~]`
 
 FR-19.5–19.6; ADR-15; tiêu chí 17h, 20.
 
-- [ ] `metrics_daily`, `GET /api/metrics`, trang **Insights** dựng bằng React trong `apps/web` (vận hành và chất lượng; theo model, prompt version, style; trạng thái khoá, breaker, quota đã dùng trong ngày: UX A.7 ghi là còn thiếu dữ liệu), cùng quy tắc giao diện như P12b (khổ dọc, cảm ứng, không CDN).
-- [ ] `subserver/feedback.py`: cue sửa lặp theo một mẫu → đề xuất correction hoặc rule vào `suggestions` (`source = feedback`, `pending`); hiện trong Review inbox của P13, không có chỗ hiển thị tạm trong Insights.
-- [ ] Bộ golden theo series từ cue đã sửa; `subcore compare` với golden; quy trình "đo trước khi đổi prompt hoặc style" ghi vào `docs/`.
-- [ ] LLM-as-judge tuỳ chọn, mặc định tắt.
-- [ ] Test tiêu chí 17h và 20 a–d; docs; `CHANGELOG.md`.
+- [x] **Làm (chưa có SHA và CI):** migration 15 (`metrics_daily`), `Metrics` (`metrics.py`: cuộn từ `llm_calls`, `quality_signals` và sự kiện `translation.finished` vào `metrics_daily`, báo cáo cộng các dòng đó; tỉ lệ không có mẫu số là `null`), `GET /api/metrics?days=`, trang **Insights** (`pages/Insights.tsx`, mục nav Insights; chất lượng, theo model và prompt version, thử style, bây giờ, tốc độ và chi phí, độ tin cậy, từng ngày). `translation.finished` thêm `cues` và `review`; tín hiệu `cue_edit` mang `job_id`. Đã dựng đúng theo: `metrics_daily`, `GET /api/metrics`, trang **Insights** dựng bằng React trong `apps/web` (vận hành và chất lượng; theo model, prompt version, style; trạng thái khoá, breaker, quota đã dùng trong ngày: UX A.7 ghi là còn thiếu dữ liệu), cùng quy tắc giao diện như P12b (khổ dọc, cảm ứng, không CDN).
+- [x] **Làm:** `subcore.feedback` (thuần: `replacements`, `find_patterns`, từ nguồn chung của các cue) và `subserver/feedback.py` (`FeedbackProposer`: sau mỗi lần sửa cue và `POST /api/suggestions/from-edits`; công tắc `suggest_from_edits`); mẫu thành một `term` (không thêm loại `correction`), `source = feedback`, không có `sources` nên không tự áp dụng; payload `cue_edit` giữ `before_text`. Gốc: `subserver/feedback.py`: cue sửa lặp theo một mẫu → đề xuất correction hoặc rule vào `suggestions` (`source = feedback`, `pending`); hiện trong Review inbox của P13, không có chỗ hiển thị tạm trong Insights.
+- [x] **Làm:** `subcore.golden` (`golden.json`), `GET /api/series/{id}/golden?lang=` (và `download=1`), `subcore compare --golden x.json` chỉ chấm các cue đã sửa của tập trong bundle; quy trình ở `docs/QUALITY.md`. Bộ golden theo series từ cue đã sửa; `subcore compare` với golden; quy trình "đo trước khi đổi prompt hoặc style" ghi vào `docs/`.
+- [ ] LLM-as-judge tuỳ chọn, mặc định tắt. *(Chưa làm, có chủ ý: tốn quota nên phải là một kind job riêng qua hàng đợi (F7) và cần quyết định về rubric; không chặn các mục khác của P15.)*
+- [x] **Làm:** 17h `test_17h_*` và 20d `test_20d_*`, 20c `test_20c_*`, 20a `test_20a_*` trong `apps/server/tests/test_insights.py`; 20b `test_20b_*` trong `packages/subcore/tests/test_feedback_golden.py`; giao diện `Insights.test.tsx`, `insights.test.ts`; docs `API.md`, `CONFIGURATION.md`, `CONTEXT.md`, `AGENTS.md`, `UX.md`, `QUALITY.md`, `CHANGELOG.md`. Test tiêu chí 17h và 20 a–d; docs; `CHANGELOG.md`.
 - [ ] Workflow **CI** trên GitHub xanh cho commit P15.
 
 ## P16 — Research grounding `[ ]`

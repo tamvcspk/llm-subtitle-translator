@@ -133,6 +133,43 @@ class QualitySignal:
 
 
 @dataclass(frozen=True)
+class CallDay:
+    """The model calls of one UTC day, one row per (model, prompt version, task, kind, outcome): what ``metrics_daily``
+    is rolled up from (FR-19.5)."""
+
+    day: str
+    model: str
+    prompt_version: str
+    task: str
+    kind: str
+    outcome: str
+    calls: int
+    tokens_in: int
+    tokens_out: int
+    cost: float
+    latency_ms: int
+    repairs: int
+
+
+@dataclass(frozen=True)
+class JobPrompt:
+    """The prompt version a job's model calls used (the first call that names one)."""
+
+    job_id: str
+    prompt_version: str
+
+
+@dataclass(frozen=True)
+class MetricRow:
+    """One figure of ``metrics_daily``: a count or a sum for a UTC day, split by ``labels`` (model, prompt version...)."""
+
+    day: str
+    name: str
+    labels: tuple[tuple[str, str], ...]
+    value: float
+
+
+@dataclass(frozen=True)
 class BodyRef:
     """Where the prompt and answer of one call are kept (FR-19.2). ``file`` is the segment name without its
     ``.jsonl``/``.jsonl.gz`` ending; ``rotated`` is True once cleanup removed the file (the index outlives it)."""
@@ -389,6 +426,20 @@ class CueEdit:
     cue: int
     source_text: str
     text: str
+
+
+@dataclass(frozen=True)
+class CuePair:
+    """A cue an admin corrected, with where it is: the machine's text (``before``, empty when it was not kept), the source
+    line and the admin's text. What the feedback loop and the golden set are made of (FR-19.6)."""
+
+    unit_id: int
+    season: int | None
+    episode: int | None
+    cue: int
+    source: str
+    before: str
+    after: str
 
 
 @runtime_checkable

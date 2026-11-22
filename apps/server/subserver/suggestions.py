@@ -188,6 +188,17 @@ class SuggestionService:
         self._lock = threading.RLock()  # a glossary is read, changed and written back: one change at a time
         # The generator the admin can ask for by hand (P14, ``FactsProposer``); wired by the composition root.
         self.generator: Any = None
+        # What the admin's own corrections suggest (P15, ``FeedbackProposer``); also wired by the composition root.
+        self.feedback: Any = None
+
+    def from_edits(self, series_id: int, lang: str) -> dict[str, Any]:
+        """Look for what the admin keeps correcting in this series (``POST /api/suggestions/from-edits``). It spends no
+        model call, so it runs at once and answers with what it found."""
+        if self.feedback is None:
+            raise ValueError("no feedback loop is wired into this worker")
+        if not _LANG.match(lang or ""):
+            raise ValueError(f"invalid language code {lang!r}")
+        return self.feedback.run(series_id, lang)
 
     def generate(self, series_id: int, lang: str, *, estimate_only: bool = False) -> dict[str, Any]:
         """Ask the facts generator for proposals (``POST /api/suggestions/generate``). ``estimate_only`` says what a run

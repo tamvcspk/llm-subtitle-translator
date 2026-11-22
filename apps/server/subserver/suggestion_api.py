@@ -51,6 +51,10 @@ ROUTES: list[tuple[str, str, Handler]] = [
     ("POST", r"/api/suggestions/generate", lambda s, m, q, b: s.generate(
         _series_id(b, "generating"), str(b.get("lang") or ""), estimate_only=bool(b.get("estimate_only")),
     )),
+    # What the admin keeps correcting, as suggestions (P15): no model call, so it answers with what it found.
+    ("POST", r"/api/suggestions/from-edits", lambda s, m, q, b: s.from_edits(
+        _series_id(b, "looking at the edits"), str(b.get("lang") or ""),
+    )),
     ("POST", r"/api/suggestions/(\d+)/accept", lambda s, m, q, b: s.accept(
         int(m[1]), payload=b.get("payload"), dry_run=bool(b.get("dry_run")),
     )),

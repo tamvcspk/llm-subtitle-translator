@@ -25,6 +25,7 @@ from pathlib import Path
 
 from . import compare as compare_mod
 from . import glossary as glossary_mod
+from . import golden as golden_mod
 from . import srt
 from .bundle import BundleError, TranslationBundle
 from .memory import FactsError
@@ -113,6 +114,15 @@ def _load_glossary(path: str) -> glossary_mod.Glossary:
         raise _Fail(str(exc)) from None
     except (OSError, ValueError) as exc:
         raise _Fail(f"glossary {path}: {_describe(exc)}") from None
+
+
+def _load_golden(path: str) -> list[golden_mod.GoldenCue]:
+    try:
+        return golden_mod.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except golden_mod.GoldenError as exc:
+        raise _Fail(f"{path}: {exc}") from None
+    except (OSError, ValueError) as exc:
+        raise _Fail(f"golden {path}: {_describe(exc)}") from None
 
 
 def _inputs(args: argparse.Namespace, cues: list[srt.Cue] | None):
@@ -357,27 +367,34 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 def _cmd_compare(args: argparse.Namespace) -> int:
     cues = _read_srt(args.file)
-    golden = None
-    if args.golden:
+    golden = None  # an .srt of every cue reviewed, or a golden.json of the corrected cues of a series (FR-19.6b)
+    golden_set = None
+    if args.golden and args.golden.lower().endswith(".json"):
+        golden_set = _load_golden(args.golden)
+    elif args.golden:
         golden = [c.text for c in _read_srt(args.golden)]
         if len(golden) != len(cues):
             raise _Fail(f"the golden file has {len(golden)} cues, the source has {len(cues)}")
     bundle_paths = args.bundle or []
-    if not (1 <= len(bundle_paths) <= 2) or (len(bundle_paths) == 1 and golden is None):
+    if not (1 <= len(bundle_paths) <= 2) or (len(bundle_paths) == 1 and golden is None and golden_set is None):
         raise _Fail("compare needs two --bundle, or one --bundle with --golden")
     # Everything that can fail without a call (a bad bundle, a missing key) fails here, before the first paid run.
     plan = []
     for number, path in enumerate(bundle_paths, start=1):
         args.bundle = path
         bundle = _bundle_for(args, cues)
+        if golden_set is not None:
+            golden = golden_mod.for_episode(golden_set, bundle.season, bundle.episode, list(bundle.cues))
+            if not golden:
+                raise _Fail(f"the golden set has no corrected cue for this episode that still matches {args.file}")
         provider = _build_provider(args, bundle.params.model or None, bundle.target_lang)
         name = Path(path).stem if len(bundle_paths) > 1 else "result"
-        plan.append((f"{number}:{name}", bundle, provider))
+        plan.append((f"{number}:{name}", bundle, provider, golden))
     if args.provider != "fake":
         print(f"note: this makes {len(plan)} translation(s) of {len(cues)} cues, each billed by the provider",
               file=sys.stderr)
     summaries, results, failures = [], [], []
-    for label, bundle, provider in plan:
+    for label, bundle, provider, scored in plan:
         try:
             result = run(bundle, provider)
         except TranslationError as exc:
@@ -387,7 +404,7 @@ def _cmd_compare(args: argparse.Namespace) -> int:
             failures.append(f"{label}: provider failed: {type(exc).__name__}: {exc}")
             continue
         findings = review(list(bundle.cues), result.cues, bundle.glossary)
-        summaries.append(compare_mod.summarize(label, result, findings, bundle_hash=bundle.bundle_hash(), golden=golden))
+        summaries.append(compare_mod.summarize(label, result, findings, bundle_hash=bundle.bundle_hash(), golden=scored))
         results.append(result)
     if summaries:  # what was paid for is shown even when the other side failed
         changed = compare_mod.changed_cues(results[0], results[1]) if len(results) == 2 else None
@@ -556,7 +573,7 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("compare", help="run two bundles (or one against a golden set) and print the numbers")
     c.add_argument("file", help="source .srt file")
     c.add_argument("--bundle", action="append", help="a bundle JSON; give it twice to compare two")
-    c.add_argument("--golden", help="reviewed .srt to compare the output against")
+    c.add_argument("--golden", help="reviewed .srt of every cue, or a golden.json of a series' corrected cues, to score the output against")
     _context_flags(c, bundle_flag=False)
     _provider_flags(c)
     c.set_defaults(func=_cmd_compare)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from .translate.engine import TranslationResult
 
@@ -43,8 +43,10 @@ def summarize(
     findings: Sequence,
     *,
     bundle_hash: str = "",
-    golden: Sequence[str] | None = None,
+    golden: Sequence[str] | Mapping[int, str] | None = None,
 ) -> Summary:
+    """``golden`` is the reviewed text of every cue (a sequence), or of some cues by their 1-based number (a mapping,
+    from :func:`subcore.golden.for_episode`): only the cues it names are scored."""
     by_kind: dict[str, int] = {}
     for f in findings:
         by_kind[f.kind] = by_kind.get(f.kind, 0) + 1
@@ -62,7 +64,10 @@ def summarize(
     )
     if golden is not None:
         texts = [c.text for c in result.cues]
-        pairs = list(zip(texts, golden))
+        if isinstance(golden, Mapping):
+            pairs = [(texts[n - 1], text) for n, text in sorted(golden.items()) if 1 <= n <= len(texts)]
+        else:
+            pairs = list(zip(texts, golden))
         out.golden_exact = sum(1 for a, b in pairs if a.strip() == b.strip())
         out.golden_similarity = (
             sum(similarity(a, b) for a, b in pairs) / len(pairs) if pairs else None

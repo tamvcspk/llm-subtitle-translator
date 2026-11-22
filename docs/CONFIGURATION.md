@@ -365,6 +365,11 @@ style*, live without a restart:
   counted in the call records as prompt `suggest-…`), made after the translation is published, and an error in it never fails
   or delays the job. Anything already in Review (in any status) or in the glossary is not asked about again, so a run over
   unchanged facts costs nothing. Off, only `POST /api/suggestions/generate` (your own request) does it.
+- `suggest_from_edits` (default **on**): after you edit a cue, the worker looks in the cues you have corrected in that series
+  for a word you keep swapping for another (the same change in three or more different cues, which share a word of the
+  source) and puts it in Review as a `term` suggestion of source *Your edits*. It reads the database and asks no model, so
+  it costs nothing and never fails the edit. Off, only `POST /api/suggestions/from-edits` (the **Look at my edits** button
+  on Insights) does it. It is never applied by itself: a suggestion made from your edits has no research sources.
 - `auto_accept_terms` (default **on**): a `term` is applied the moment it is proposed, but only when two independent sources
   (different hosts) agree on it, so until a generator that cites sources exists every term waits for you. A term found in the
   facts has no such sources and always waits.

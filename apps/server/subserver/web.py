@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import auth as console_auth
-from . import catalog_api, keys_api, library_api, style_api, suggestion_api
+from . import catalog_api, insight_api, keys_api, library_api, style_api, suggestion_api
 from .auth import ConsoleAuth
 from .backups import backup_file_path, create_backup, list_backups, restore_backup_archive
 from .config import KEY_SLOTS, PROVIDER_OPENAI_COMPAT, SECRET_MASK, supported_languages
@@ -319,6 +319,26 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_json(result[1], status=result[0])
         return True
 
+    def insight_route(self, parsed: urllib.parse.ParseResult) -> bool:
+        """Serve Insights (``/api/metrics``) and a series' golden set; False when the path is not one of them."""
+        service = self.ctx.get("insights")
+        if service is None or not insight_api.handles(parsed.path):
+            return False
+        query = urllib.parse.parse_qs(parsed.query)
+        exported = insight_api.download(service, parsed.path, query)
+        if exported is not None:
+            status, name, text = exported
+            if status != 200:
+                self.send_error_json(text, status=status)
+            else:
+                self.send_text(text, "application/json; charset=utf-8", filename=name)
+            return True
+        result = insight_api.handle(service, "GET", parsed.path, query)
+        if result is None:
+            return False
+        self.send_json(result[1], status=result[0])
+        return True
+
     def catalog_route(self, method: str, parsed: urllib.parse.ParseResult, body: dict[str, Any] | None = None) -> bool:
         """Serve the Library page's catalog routes and ``POST /api/jobs``; False when the path is not one of them."""
         actions = self.ctx.get("catalog")
@@ -366,7 +386,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         try:
-            if (self.library_api("GET", parsed) or self.style_route("GET", parsed) or self.keys_route("GET", parsed)
+            if (self.insight_route(parsed) or self.library_api("GET", parsed) or self.style_route("GET", parsed) or self.keys_route("GET", parsed)
                     or self.catalog_route("GET", parsed) or self.suggestion_route("GET", parsed)):
                 return
             if parsed.path == "/login":

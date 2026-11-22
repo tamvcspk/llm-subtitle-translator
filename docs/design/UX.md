@@ -35,7 +35,7 @@ Một admin duy nhất (chủ homelab). Mở console **trong Organizr, trong m�
 ## 4. Cấu trúc trang (đích)
 
 ```
-Home (search + list of series and movies)          nav: Library · Activity · Settings   (+ Review khi P13)
+Home (search + list of series and movies)          nav: Library · Activity · Insights · Settings   (+ Review khi P13)
  ├─ filter chips: All · Missing Vietnamese · Running · Failed · Ignored
  ├─ [TV] row → Series page
  │    ├─ Episodes     (per-episode status + next action; Translate season / series)
@@ -47,6 +47,9 @@ Home (search + list of series and movies)          nav: Library · Activity · S
  └─ [MV] row → Unit page (cùng layout Episode page; không có bộ chọn tập, không có tab Context)
 Activity  = Queue + provider health + quota   (dải trạng thái chạy cũng hiện trên Home)
 Review    = suggestions inbox (P13, xong 2026-11-17), badge on nav; mục nav ẩn cho tới khi máy đã đề xuất gì đó
+Insights  = số đo của worker (P15): chất lượng (tỉ lệ cue bạn phải sửa, repair, dịch lại, CPS, dòng dài), theo model và prompt version,
+            điểm A/B theo style, hàng đợi, quota, chi phí mỗi tập, độ tin cậy, từng ngày; cuối trang là "Your corrections":
+            Look at my edits và tải bộ golden của từng series. Chỉ đọc, không tốn lời gọi model; khổ dọc, thẻ xếp chồng, không CDN
 Settings  = 7 nhóm gập (mục 4.1); Backups và Logs là hai trang riêng, mở từ nhóm Maintenance
 Login     = trang tĩnh riêng, ngoài giao diện chính (mục 7)
 ```

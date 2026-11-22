@@ -899,6 +899,7 @@ A suggestion is
 | `POST /api/suggestions/{id}/undo` | Put back exactly what accepting replaced (the entry it overwrote, the character's earlier card or none) and return the suggestion to `pending`. `400` when the glossary or the card was changed after the accept: a later edit is never overwritten. `"dry_run": true` counts the translations undoing would flag stale. |
 | `POST /api/suggestions/bulk` | Accept every pending suggestion of **one** series: `{"series_id", "lang"?, "expect", "dry_run"?}`. `expect` is the number the admin confirmed; if the inbox has changed (`400` "the list changed"), nothing is applied, and a real request without it is refused. `dry_run` returns `{"ok", "saved": false, "count", "stale_now", "stale_after", "would_stale"}` for all of them together. A real request returns `{"ok", "saved", "count", "failed": [{"id", "error"}], "series", "would_stale"}`; one that cannot be applied stays pending and does not stop the rest. |
 | `POST /api/suggestions/generate` | Ask the facts generator (P14) for proposals of **one** series and language: `{"series_id", "lang", "estimate_only"?}`. It makes a `suggest` job and answers at once with `{"ok": true, "job_ids": [...], "queued": 1, "merged": 0}` (an open job for the same series and language is not made twice: `merged` is 1 and it is lifted to the admin's class); the queue runs it under the day's quota and the breaker, and the report (`added`, `errors`, …) is the finished job's `report`. It reads the stored facts of the series (it never extracts any), leaves out what the glossary or the inbox already has (any status), and asks the Memory model: one call each for forms of address, terms and characters, at most three. `estimate_only` spends nothing: `{"ok", "estimate_only": true, "episodes", "address_rules", "terms", "characters", "calls"}`. A finished job's `report` has the same numbers plus `"added"`, `"auto_accepted"`, `"errors"` (a kind whose answer was unusable; the others are still stored) and `"outcomes"` (the `propose` report per source); each kind is stored as soon as it comes back, so a job that waits or fails midway keeps what it found and runs again only for the rest. A translation that read new facts leaves one such job behind (origin `facts`, the lowest class). The proposals have `source` `facts` (`address_rule`, `term`) or `memory` (`character`, with a card when the lines show how they speak), `pending`, with `evidence` of `{"episode", "cue", "timecode", "text", "unit_id", "note"}`; an address rule carries `from`/`until` where the relationship changed. `400` without `series_id` or `lang`; `404` for an unknown series. |
+| `POST /api/suggestions/from-edits` | Look at what the admin keeps correcting in **one** series and language: `{"series_id", "lang"}` (P15, FR-19.6). It spends no model call, so it runs at once. A swap of one to three words for one to three others that shows in at least three different corrected cues, and whose cues share a word of the source line, becomes a `term` (`source` that word, `target` the admin's wording, `source` of the suggestion `feedback`), `pending`, with the cues as `evidence` (`{"episode", "cue", "unit_id", "text": "<machine> → <yours>"}`) and no research `sources`, so `auto_accept_terms` never applies it. What the series already decided about that term is kept, like for any generator. Reply `{"cues", "without_before", "patterns", "proposed", "unnamed", "report"}`: `cues` the corrected cues it could compare (`without_before`: older corrections that never kept what the machine wrote), `patterns` the repeated swaps, `proposed` those turned into suggestions, `unnamed` those whose cues share no source word (no term to suggest), `report` the `propose` counts (`null` when nothing was proposed). The worker also looks by itself after each cue edit (`suggest_from_edits`, default on; it never fails the edit). `400` without `series_id` or with a bad `lang`; `404` for an unknown series. |
 
 The worker makes the same proposals by itself after a job has extracted facts (`suggest_from_facts`, default on; it never
 fails the job).
@@ -907,3 +908,38 @@ fails the job).
 of that kind the moment it is proposed ([CONFIGURATION](CONFIGURATION.md#review-and-auto-accept)); it then shows in
 `status=accepted` with `auto_accepted: true` and can be undone. A `term` is applied by itself only when two independent
 sources (different hosts) agree on it.
+
+## Insights: measures and the golden set
+
+Insights reads the worker's own records (calls, events, quality signals), never a file (P15, FR-19.5, FR-19.6). Both routes only read.
+
+### GET /api/metrics?days=30
+
+`days` is 1 to 365 (default 30; the page offers 7, 30 and 90); `400` for anything else. Days are UTC days and the window ends now.
+The answer is `{"window": {"days", "since", "until"}, "operations", "quality", "by_model", "by_prompt_version", "ab", "daily"}`.
+A rate is a number from 0 to 1, or `null` when there was nothing to divide by (**no data is not 0**).
+
+- `operations.queue` `{"counts", "depth"}` (live; `depth` is requested + running + waiting) · `providers` (the health of each model, as `/api/status`) ·
+  `daily_quota_pause` · `wait_seconds` `{"jobs", "median", "p90"}` (from being asked for to starting, jobs started in the window) ·
+  `usage` `{"calls_today", "calls_last_minute", "limits": {"rpm", "tpm", "rpd", "max_calls_per_day"}}` (`0` = no limit; today is the provider's day, UTC) ·
+  `calls` `{"total", "by_outcome", "failed", "rate_429", "rate_503"}` (`rate_429` counts `rate_limited` and `quota_exhausted`, `rate_503` counts `unavailable`) ·
+  `escalation` `{"jobs", "escalated", "rescued", "rate", "rescue_rate", "window_days"}` (from the job rows, so it reaches back only as far as `retention_*_days`) ·
+  `per_episode` `{"episodes", "tokens_in", "tokens_out", "cost"}` (the translation task only; `cost` needs the prices in Settings) · `tokens` · `latency_ms` `{"calls", "mean", "median", "p90"}`.
+- `quality.cues_translated`, `episodes` · `repair` `{"calls", "translate_calls", "rate", "cues", "cue_rate"}` (repair and split calls over translate calls) ·
+  `cue_edits` `{"cues", "rate"}` (**the share of cues the admin corrected**: distinct cues corrected in the window over cues translated in it) ·
+  `retranslations` `{"count", "rate", "reverts"}` · `review` `{"by_kind", "cps", "cps_rate", "too_long", "too_long_rate"}` (what the review of each finished translation found:
+  over 20 characters a second, over 42 a line) · `validate` (what the validator saw in a model's reply, by issue).
+- `by_model` and `by_prompt_version`: one row each, `{"model"|"prompt_version", "calls", "episodes", "cues", "tokens_in", "tokens_out", "cost", "repair_rate", "cue_edits", "cue_edit_rate", "retranslations"}`.
+  A corrected cue belongs to the model and prompt version of the job that wrote it. `retranslations` is `null` by prompt version (a retranslation names the model it replaces).
+  There is no split by style for translations (a call records only the hash of its style); styles are compared through `ab`.
+- `ab`: the cue-by-cue verdicts on variants by style label and prompt version, `{"style", "prompt_version", "variant", "current", "tie", "judged", "score"}`; `score` = (variant wins + ties / 2) / judged.
+- `daily`: one row for each day of the window (zeros included): `{"day", "calls", "failed", "tokens", "cost", "cues_translated", "cue_edits"}`.
+
+The figures are rolled up from the raw tables into `metrics_daily` (one row per UTC day, name and labels) each time they are asked for, so they survive the clean-up of the events they came from
+(`events_retention_days`); a day the clean-up has begun to prune is never recomputed from what is left.
+
+### GET /api/series/{id}/golden?lang=vi
+
+The corrected cues of the series in that language (cue edits that still stand: an undone one is not in it), as a **golden set** for `subcore compare --golden`:
+`{"golden_version": 1, "series", "lang", "cues": [{"season", "episode", "cue", "source", "text"}]}`, in story order. `lang` is required (`400` without it), `404` for an unknown series.
+With `&download=1` the same text is served as a file (`<series-key>.<lang>.golden.json`, an attachment), the link the console offers.

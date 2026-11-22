@@ -1,4 +1,26 @@
 # Unreleased
+- **P15: Insights and the feedback loop (FR-19.5, FR-19.6; criteria 17h, 20 a-d).** Measure before you change a prompt or a style.
+  - **Insights page and `GET /api/metrics?days=`.** The worker's figures from its own records: queue depth and wait, calls
+    today against the limits, the share of calls answered 429 and 503, escalation and rescue, tokens and cost per episode,
+    latency, and for quality the repair rate, **the share of cues you corrected**, retranslations and reverts, cues read too
+    fast or with a line too long, all by model and by prompt version, plus the style trials (A/B) added up by style and prompt
+    version. A rate with nothing to divide by is shown as a dash, never 0 %. The figures are rolled up per UTC day into the
+    new table `metrics_daily` (migration 15), so cleaning up old events does not forget them.
+  - **`translation.finished` events say how many cues the model was asked for and what the review found, by kind**
+    (`cues`, `review`), and a cue-edit signal names the job that wrote the cue: the corrected cue is blamed on the prompt
+    version that wrote it.
+  - **A cue edit keeps what the machine wrote** (`before_text` in its correction), through later edits of the same cue.
+    Corrections made before this have none and are left out of the feedback loop; the golden set has them all.
+  - **What you keep correcting becomes a suggestion.** The same swap of one to three words in three different corrected
+    cues that share a word of the source is proposed as a term (source *Your edits*) with those cues as evidence, after each
+    cue edit (`suggest_from_edits`, default on) or on **Look at my edits**. No model call; it is never applied by itself.
+    `POST /api/suggestions/from-edits`.
+  - **A golden set per series and language** (`GET /api/series/{id}/golden?lang=`, **Download golden set** on Insights): the
+    cues you corrected. `subcore compare file.srt --bundle a.json --bundle b.json --golden golden.json` scores both
+    configurations on exactly those cues (`golden: exact cues`, `golden: similarity`); an entry whose source line changed is
+    left out. The way to use it is in [docs/QUALITY.md](docs/QUALITY.md).
+  - **Not done:** the optional LLM-as-judge (off by default, it would spend quota); the per-style split of translation calls
+    (a call records only the hash of its style).
 - **Review wave W6: the old queue settles safely, and the Library page reads less (F8, R10-2, R10-5, R10-9).**
   - **A refusal of the old queue is written down before what held it goes (R10-2).** The start-up used to delete the script's
     `rejected` rows first and record the Ignored decision after, and moved the folders even when it could not (no library, a

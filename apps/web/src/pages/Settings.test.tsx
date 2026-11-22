@@ -61,6 +61,7 @@ const defaults: Record<string, unknown> = {
   glossary_filter_threshold: 50,
   edit_coalesce_minutes: 10,
   suggest_from_facts: true,
+  suggest_from_edits: true,
   auto_accept_terms: true,
   auto_accept_address_rules: false,
   auto_accept_characters: false,

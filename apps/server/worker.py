@@ -35,7 +35,10 @@ from subserver.library import Library, enrich_job_identity
 from subserver.memory import StoryMemory
 from subserver.queue_policy import configured_models
 from subserver.store import Store
-from subserver.llm import LiveProviderFactory, build_provider
+from subserver.llm import LiveProviderFactory, build_provider, rate_limits
+from subserver.feedback import FeedbackProposer
+from subserver.insight_api import Insights
+from subserver.metrics import Metrics
 from subserver.translation_attempt import TranslationAttempt
 from subserver.units import UnitService
 from subserver.versions import TranslationVersions
@@ -357,6 +360,14 @@ def main() -> int:
         memory=memory, settings_source=live_settings, usage=store,
         telemetry=telemetry, source_languages=lambda: enabled_source_languages(settings_service.app_config()),
     )
+    # What the admin keeps correcting becomes suggestions, and what they corrected is the golden set (P15, FR-19.6).
+    feedback = FeedbackProposer(suggestion_service, settings_source=live_settings, telemetry=telemetry)
+    suggestion_service.feedback = feedback
+    units.feedback = feedback
+    insights = Insights(
+        Metrics(store, console=worker.console, settings_source=live_settings, limits=lambda: rate_limits(live_settings())),
+        feedback,
+    )
     style_service = StyleService(
         library, styles, metadata=metadata, settings_source=live_settings, provider_factory=provider_factory,
         telemetry=telemetry, usage=store,
@@ -425,6 +436,7 @@ def main() -> int:
             catalog=CatalogActions(store, library, catalog_sync, auto_request, job_requests, catalog_view),
             style=style_service,
             suggestions=suggestion_service,
+            insights=insights,
         ).as_handler_context()
         if not args.no_worker and not args.no_queue:
             threading.Thread(target=worker.run_forever, args=(args.sleep,), daemon=True).start()

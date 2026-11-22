@@ -17,6 +17,8 @@ Roadmap: `PLAN.md`, design: `docs/design/ARCHITECTURE.md`.
 | `translate` | engine: `make_bundle` → `run` (planner, prompt renderer, validate → repair → split), `render_requests`, `review` (shared with the worker) |
 | `matching` | the one test of "does this line mention that name" (CJK and Korean anywhere in the text, other names as whole words with up to two letters of ending); the glossary filter, character cards, locked terms and the console all ask it |
 | `compare` | side-by-side numbers for two configurations or a golden set |
+| `golden` | the golden set of a series (`golden.json`: the cues an admin corrected and the text they should have), read by `compare --golden` |
+| `feedback` | what an admin keeps correcting: the same swap of words in several corrected cues, and the source word they share (pure; the worker turns it into a suggestion) |
 | `glossary` | YAML load/merge/dump/validate, `from_doc`/`to_doc` (the document the worker stores), locked terms, timed address rules |
 | `cli` | manual translation and debugging |
 
@@ -35,6 +37,7 @@ uv run subcore render-prompt --bundle job.json           # the requests it would
 uv run subcore validate Movie.en.srt Movie.vi.srt --glossary glossary.yaml   # exit 1 on review errors
 uv run subcore compare Movie.en.srt --bundle a.json --bundle b.json --provider fake
 uv run subcore compare Movie.en.srt --bundle a.json --golden reviewed.vi.srt
+uv run subcore compare Movie.en.srt --bundle a.json --bundle b.json --golden show.vi.golden.json   # scores only the cues the admin corrected
 uv run subcore check-glossary glossary.yaml
 ```
 

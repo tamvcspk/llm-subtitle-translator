@@ -5,6 +5,7 @@ import { Logs } from "./pages/Logs";
 import { Episodes } from "./pages/Episodes";
 import { Compare } from "./pages/Compare";
 import { Home } from "./pages/Home";
+import { Insights } from "./pages/Insights";
 import { MovieGlossary } from "./pages/MovieGlossary";
 import { Review } from "./pages/Review";
 import { Series } from "./pages/Series";
@@ -50,6 +51,7 @@ export function AppRoutes() {
           <Route path="*" element={<Navigate to="subtitles" replace />} />
         </Route>
         <Route path="review" element={<Review />} />
+        <Route path="insights" element={<Insights />} />
         <Route path="activity" element={<Activity />} />
         <Route path="settings" element={<Settings />} />
         <Route path="backups" element={<Backups />} />

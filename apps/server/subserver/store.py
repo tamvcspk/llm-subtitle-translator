@@ -24,8 +24,8 @@ from dataclasses import asdict
 
 from .ports import (
     JobBundle,
-    Account, ApiKey, SettingRow, BodyRef, CardRow, CatalogApplied, CatalogEntry, CatalogState, CatalogSubtitle,
-    Correction, CueEdit, EventRecord, GlossaryRevision, LlmCall, Output, QualitySignal, Reclaimed, Series, StoredFacts,
+    Account, ApiKey, SettingRow, BodyRef, CallDay, CardRow, JobPrompt, MetricRow, CatalogApplied, CatalogEntry, CatalogState, CatalogSubtitle,
+    Correction, CueEdit, CuePair, EventRecord, GlossaryRevision, LlmCall, Output, QualitySignal, Reclaimed, Series, StoredFacts,
     SeriesSeed, StoredGlossary, StyleRow, Suggestion, SuggestionCount, TokenTotals, TranslationVersion, Unit,
     SUGGESTION_ACCEPTED, SUGGESTION_PENDING, SUGGESTION_REJECTED,
 )
@@ -443,6 +443,19 @@ _MIGRATIONS: tuple[str, ...] = (
         at REAL NOT NULL,
         PRIMARY KEY (series_id, target_lang, identity)
     );
+    """,
+    # Migration 15 (P15, FR-19.5, ADR-15): ``metrics_daily`` keeps the figures of Insights per UTC day, split by labels
+    # (model, prompt version...), so the long-term numbers outlive the events that are cleaned up. Rolled up from the
+    # raw tables by ``Metrics.rollup``; the rows of day '0000-00-00' are its markers, not figures.
+    """
+    CREATE TABLE metrics_daily (
+        day TEXT NOT NULL,
+        name TEXT NOT NULL,
+        labels_json TEXT NOT NULL DEFAULT '{}',
+        value REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, name, labels_json)
+    );
+    CREATE INDEX quality_signals_at ON quality_signals (at);
     """,
 )
 
@@ -899,7 +912,11 @@ class Store:
             )
             return int(cursor.lastrowid)
 
-    def signals(self, *, kind: str | None = None, unit_id: int | None = None, limit: int = 100) -> list[QualitySignal]:
+    def signals(
+        self, *, kind: str | None = None, unit_id: int | None = None, since: float | None = None,
+        before_id: int | None = None, limit: int = 100,
+    ) -> list[QualitySignal]:
+        """The newest signals first; ``before_id`` pages backwards the way ``events`` does."""
         clauses: list[str] = []
         args: list[Any] = []
         if kind:
@@ -908,6 +925,12 @@ class Store:
         if unit_id is not None:
             clauses.append("unit_id = ?")
             args.append(unit_id)
+        if since is not None:
+            clauses.append("at >= ?")
+            args.append(since)
+        if before_id is not None:
+            clauses.append("id < ?")
+            args.append(before_id)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._lock:
             rows = self._db.execute(
@@ -957,6 +980,88 @@ class Store:
                 (since,),
             ).fetchone()
         return TokenTotals(calls=int(row["calls"]), tokens_in=int(row["tokens_in"]), tokens_out=int(row["tokens_out"]))
+
+    # -- figures for Insights (P15, FR-19.5) -------------------------------------------------------
+    def call_days(self, since: float) -> list[CallDay]:
+        """Model calls since ``since`` grouped by UTC day, model, prompt version, task, kind and outcome."""
+        rows = self.query(
+            "SELECT strftime('%Y-%m-%d', at, 'unixepoch') AS day, model, prompt_version, task, kind, outcome,"
+            " COUNT(*) AS calls, COALESCE(SUM(tokens_in), 0) AS tokens_in, COALESCE(SUM(tokens_out), 0) AS tokens_out,"
+            " COALESCE(SUM(cost_est), 0) AS cost, COALESCE(SUM(latency_ms), 0) AS latency_ms,"
+            " COALESCE(SUM(repairs), 0) AS repairs FROM llm_calls WHERE at >= ?"
+            " GROUP BY day, model, prompt_version, task, kind, outcome ORDER BY day", (since,),
+        )
+        return [
+            CallDay(
+                day=r["day"], model=r["model"], prompt_version=r["prompt_version"], task=r["task"], kind=r["kind"],
+                outcome=r["outcome"], calls=int(r["calls"]), tokens_in=int(r["tokens_in"]), tokens_out=int(r["tokens_out"]),
+                cost=float(r["cost"]), latency_ms=int(r["latency_ms"]), repairs=int(r["repairs"]),
+            )
+            for r in rows
+        ]
+
+    def job_prompts(self, job_ids: Iterable[str]) -> list[JobPrompt]:
+        """The prompt version each of these jobs made its calls with (an event or a signal names only the job)."""
+        wanted = sorted({j for j in job_ids if j})
+        out: list[JobPrompt] = []
+        for start in range(0, len(wanted), self._PATH_CHUNK):
+            chunk = wanted[start:start + self._PATH_CHUNK]
+            rows = self.query(
+                "SELECT job_id, MIN(prompt_version) AS prompt_version FROM llm_calls"
+                f" WHERE job_id IN ({','.join('?' * len(chunk))}) AND prompt_version <> '' GROUP BY job_id", chunk,
+            )
+            out.extend(JobPrompt(job_id=r["job_id"], prompt_version=r["prompt_version"]) for r in rows)
+        return out
+
+    def latencies(self, since: float, limit: int = 20_000) -> list[int]:
+        """Milliseconds the answered calls took since ``since``, the newest ``limit`` of them."""
+        rows = self.query(
+            "SELECT latency_ms FROM llm_calls WHERE at >= ? AND outcome = 'ok' AND latency_ms > 0"
+            " ORDER BY id DESC LIMIT ?", (since, int(limit)),
+        )
+        return [int(r["latency_ms"]) for r in rows]
+
+    def job_waits(self, since: float, kinds: Iterable[str]) -> list[float]:
+        """Seconds each job of these kinds waited between being asked for and starting, for jobs started since ``since``."""
+        names = list(kinds)
+        if not names:
+            return []
+        marks = ",".join("?" * len(names))
+        rows = self.query(
+            f"SELECT started_at - created_at AS waited FROM jobs WHERE started_at >= ? AND kind IN ({marks})"
+            " AND started_at >= created_at", (since, *names),
+        )
+        return [float(r["waited"]) for r in rows]
+
+    def metric_rows(self, since_day: str) -> list[MetricRow]:
+        rows = self.query(
+            "SELECT day, name, labels_json, value FROM metrics_daily WHERE day >= ? ORDER BY day, name, labels_json",
+            (since_day,),
+        )
+        return [
+            MetricRow(
+                day=r["day"], name=r["name"], labels=tuple(sorted(json.loads(r["labels_json"] or "{}").items())),
+                value=float(r["value"]),
+            )
+            for r in rows
+        ]
+
+    def metrics_replace(self, first_day: str, names: Iterable[str], rows: Iterable[MetricRow]) -> None:
+        """Replace the figures called ``names`` from ``first_day`` on with ``rows``, in one transaction: a half-rolled day is
+        never seen."""
+        wanted = list(names)
+        marks = ",".join("?" * len(wanted))
+        with self.transaction() as db:
+            db.execute(f"DELETE FROM metrics_daily WHERE day >= ? AND name IN ({marks})", (first_day, *wanted))
+            db.executemany(
+                "INSERT OR REPLACE INTO metrics_daily (day, name, labels_json, value) VALUES (?, ?, ?, ?)",
+                [(r.day, r.name, json.dumps(dict(r.labels), sort_keys=True, ensure_ascii=False), r.value) for r in rows],
+            )
+
+    def metric_marker(self, name: str) -> float:
+        """How far a roll-up has got (epoch seconds), 0 before the first one."""
+        rows = self.query("SELECT value FROM metrics_daily WHERE day = '0000-00-00' AND name = ?", (name,))
+        return float(rows[0]["value"]) if rows else 0.0
 
     # -- translations ------------------------------------------------------
     def current_version(self, output_path: str) -> TranslationVersion | None:
@@ -1297,6 +1402,26 @@ class Store:
             source, text = str(payload.get("source_text") or ""), str(payload.get("text") or "")
             if source.strip() and text.strip():
                 out.append(CueEdit(unit_id=row["unit_id"], cue=int(payload.get("cue") or 0), source_text=source, text=text))
+        return out
+
+    def series_cue_edit_pairs(self, series_id: int, target_lang: str) -> list[CuePair]:
+        """Every cue of a series that an admin corrected and whose correction still stands, in story order. ``before`` is
+        what the machine wrote (kept with the correction since P15; empty for an older one)."""
+        rows = self.query(
+            "SELECT c.unit_id, u.season, u.episode, c.payload_json FROM corrections c JOIN units u ON u.id = c.unit_id"
+            " WHERE u.series_id = ? AND c.target_lang = ? AND c.kind = 'cue_edit' AND c.active = 1"
+            " ORDER BY u.season, u.episode, c.id", (series_id, target_lang),
+        )
+        out: list[CuePair] = []
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            source, text = str(payload.get("source_text") or ""), str(payload.get("text") or "")
+            if not (source.strip() and text.strip()):
+                continue
+            out.append(CuePair(
+                unit_id=row["unit_id"], season=row["season"], episode=row["episode"], cue=int(payload.get("cue") or 0),
+                source=source, before=str(payload.get("before_text") or ""), after=text,
+            ))
         return out
 
     # -- glossaries, style profiles, character cards (P12, ADR-14) -----------------------------------

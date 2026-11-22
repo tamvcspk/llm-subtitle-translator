@@ -52,6 +52,14 @@ def context_hash(
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+def _count_kinds(findings: Any) -> dict[str, int]:
+    """``{kind: how many}`` of the review's findings, for the event Insights reads."""
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding.kind] = counts.get(finding.kind, 0) + 1
+    return counts
+
+
 def _temperature(settings: dict[str, Any]) -> float | None:
     try:
         return float(str(settings.get("gst_temperature") or "").strip())
@@ -226,6 +234,9 @@ class TranslationAttempt:
             issues=len(result.issues), trigger=trigger,
             review_errors=sum(1 for f in findings if f.severity == "error"),
             review_warnings=sum(1 for f in findings if f.severity == "warning"),
+            # What Insights counts (FR-19.5): the cues the model was asked for, and what the review found by kind.
+            cues=sum(c.targets for c in result.calls if c.kind == "translate"),
+            review=_count_kinds(findings),
         )
 
         for warning in result.warnings:

@@ -80,6 +80,12 @@ export const STORY_FIELDS: Field[] = [
     hint: "After a job reads a new episode, ask the Memory model for terms, forms of address and characters. They wait in Review.",
   },
   {
+    key: "suggest_from_edits",
+    label: "Suggest from my edits",
+    kind: "switch",
+    hint: "After you edit a cue, look for a word you keep changing in three or more cues. It waits in Review. No model call.",
+  },
+  {
     key: "auto_accept_terms",
     label: "Auto-accept terms",
     kind: "switch",
