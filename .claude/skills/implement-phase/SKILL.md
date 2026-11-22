@@ -5,7 +5,7 @@ description: Implement a roadmap phase (P0–P16, including P0b–P0d) or a sing
 
 # Implement a design phase
 
-The design docs are the contract. `docs/design/` wins over upstream docs; `docs/ARCHITECTURE.md` + `CONTEXT.md` describe the inherited worker you are changing.
+The design docs are the contract. `docs/design/` wins over upstream docs; `docs/ARCHITECTURE.md` + `CONTEXT.md` describe the worker as built so far.
 
 ## 1. Scope it from the docs
 
@@ -19,7 +19,8 @@ The design docs are the contract. `docs/design/` wins over upstream docs; `docs/
 - `packages/subcore` = pure engine: no Bazarr, no queue, no HTTP, no filesystem layout of the worker. The worker imports subcore; subcore never imports the worker.
 - Provider errors become typed exceptions (`RateLimited`, `QuotaExhausted`, `Unavailable`, `BadOutput`) inside the adapter. Nothing above the provider layer parses error strings.
 - Worker seams from AGENTS.md still hold: `RuntimeContext` for wiring, `queue_policy.py` pure, HTTP reaches the queue only via `ConsoleActions`.
-- Queue file format changes must update `bazarr-postprocess/gst_enqueue.sh` (embedded Python payload) **and** its tests in the same change.
+- The queue is the `jobs` table (`JobStore`, `JobQueue`, `queue_policy.py` pure); a new kind of job goes in the lists of readers that say which kinds they mean, with a test (AGENTS.md, "Long work is a job"). There is no queue file format and no Bazarr script any more (P10).
+- Docs that follow the code are checked by `scripts/doccheck.py` (run by `ci-check`): a new `subserver` module is named in `docs/ARCHITECTURE.md` as `<name>.py`, a new `subcore` module as `subcore.<module>`, a new `/api/*` route appears in `docs/API.md`.
 - The console is the React app in `apps/web` (ADR-17): no CDN, touch-first, hash routes, every button that spends model calls goes through the price box; see AGENTS.md "Frontend". The old `apps/server/static/` no longer exists.
 
 ## 3. Tests first, never the network

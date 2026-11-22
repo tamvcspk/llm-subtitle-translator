@@ -20,12 +20,13 @@ Focus on files the fork still shares with upstream (upstream path → fork path)
 | Upstream | Fork |
 |---|---|
 | `subserver/bazarr.py`, `subserver/tmdb.py` | `apps/server/subserver/…` |
-| `subserver/queue*.py` | `apps/server/subserver/…` |
-| `bazarr-postprocess/gst_enqueue.sh` | same |
-| `worker.py`, `tests/` | `apps/server/…` (upstream's `static/` console has no counterpart: the console is `apps/web`, so skip such changes) |
+| `subserver/queue*.py` | `apps/server/subserver/…` (the queue is the `jobs` table now, so a queue fix is usually ported by hand) |
+| `worker.py`, `tests/` | `apps/server/…` (the HTTP handler that was in `worker.py` is `subserver/web.py` here: re-apply a fix there; upstream's `static/` console has no counterpart: the console is `apps/web`, so skip such changes) |
+
+Nothing is shared any more with upstream's `bazarr-postprocess/gst_enqueue.sh` (Bazarr pushes nothing since P10): skip changes to it.
 
 ```bash
-git log --oneline --no-merges main..upstream-sync -- subserver/bazarr.py subserver/tmdb.py 'subserver/queue*.py' bazarr-postprocess/
+git log --oneline --no-merges main..upstream-sync -- subserver/bazarr.py subserver/tmdb.py 'subserver/queue*.py'
 ```
 
 Skip: changes to the gst/Gemini translation path that P2 replaces (`translation.py`, gst CLI flags) unless they fix a live bug, Chinese-default UX tweaks, upstream deployment details (their host, image name, Dependabot assignee).
@@ -43,7 +44,6 @@ Git's rename detection usually maps `subserver/x.py` → `apps/server/subserver/
 
 ```bash
 git format-patch -1 <sha> --stdout | git apply --3way --directory=apps/server --include='subserver/*' --include='worker.py' --include='tests/*'
-git format-patch -1 <sha> --stdout | git apply --3way --include='bazarr-postprocess/*'
 ```
 
 then commit with `(cherry picked from commit <sha>)` in the message. Test files that read repo-level files use `REPO_ROOT`/`APP_ROOT` (see `apps/server/tests/test_frontend_structure.py`); fix upstream `ROOT` paths accordingly.

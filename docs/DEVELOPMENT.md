@@ -33,6 +33,43 @@ uv run --locked python -m unittest discover -s packages/subcore/tests -t package
 uv run --locked python -m compileall -q -f apps/server/worker.py apps/server/subserver packages/subcore/src
 ```
 
+The console has its own checks, run from `apps/web` (Node 24, see `.nvmrc`):
+`npm ci && npm run typecheck && npm run lint && npm test && npm run build`.
+
+`python scripts/doccheck.py` (standard library only) fails when a `subserver` or
+`subcore` module is missing from [ARCHITECTURE.md](ARCHITECTURE.md) or an `/api/*`
+route is missing from [API.md](API.md). The server test suite runs it too
+(`tests/test_doccheck.py`), so a new module or route needs its line in the docs
+in the same change.
+
+## Judging Translation Quality
+
+The `subcore` command works without the worker, the database or the queue (it
+needs only a key in `GEMINI_API_KEY`, or `--provider fake` for a dry run):
+
+```bash
+uv run subcore translate file.srt --glossary g.yaml   # translate and write the result
+uv run subcore bundle ...                              # write the bundle of a translation
+uv run subcore render-prompt ...                       # print the requests, no model call
+uv run subcore validate ...                            # review a translation against its source
+uv run subcore compare file.srt --bundle a.json --bundle b.json --golden gold.json   # two bundles against a golden set
+```
+
+The cues an admin corrects form a **golden set** per series and language
+(`GET /api/series/{id}/golden?lang=vi`); measure a change of prompt or style
+against it before adopting it. The procedure is in [QUALITY.md](QUALITY.md). The
+optional LLM judge (`judge_enabled`, off by default) only advises on the Compare
+page; it is never a score of its own.
+
+## Trying a Change in the Browser
+
+`scripts/preview.ps1` (Windows) seeds an isolated `local-state/preview`, builds
+`apps/web` when it is stale and serves the console on `127.0.0.1:6790` without
+consuming queue jobs; `-Live` uses a real Gemini key from
+`local-state/secrets/gemini.key` with hard caps on calls. See `AGENTS.md`
+("Development Commands") for the flags and for how a browser test is handed over
+(`test-plan` and `web-test` skills).
+
 ## Dependencies
 
 The translation engine is the workspace package `packages/subcore`; its only
@@ -64,9 +101,9 @@ uv run python apps/server/worker.py --no-worker --host 127.0.0.1 --port 6789
 
 - Keep the Bazarr integration read-only (the catalog read) and behind the
   `MediaLibrary` port; a read never creates a job.
-- Keep Gemini calls in the worker app (`subserver/translation.py`); do not
-  install dependencies into the Bazarr image. (`apps/server/subserver/translation.py`
-  until P2 replaces it with `subcore`.)
+- Keep model calls inside `subcore` providers, reached through
+  `subserver/translation_attempt.py` and the job handlers; do not install
+  dependencies into the Bazarr image.
 - Never log Gemini, TMDB, or Bazarr API keys.
 - Preserve the no-overwrite rule for existing target subtitle files.
 - Prefer focused unittest coverage around path handling, queue transitions,

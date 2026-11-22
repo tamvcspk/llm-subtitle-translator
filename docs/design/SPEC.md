@@ -61,7 +61,7 @@ Tự động dịch phụ đề phim/series trong thư viện Bazarr sang ngôn 
 | **Context complete** | Mọi unit đứng trước N (có trong thư viện) đều đã có facts. |
 | **Stale translation** | Bản dịch đã xuất mà `context_hash` hiện tại khác `context_hash` lúc dịch. |
 | **Port** | Interface (`Protocol`) do core của worker định nghĩa cho thứ nó cần từ bên ngoài: lưu trữ, hàng đợi, Bazarr, TMDB, provider. Trả kiểu có tên, không trả `dict` (ADR-8). |
-| **Adapter** | Cài đặt cụ thể của một port (SQLite, hàng đợi file, Bazarr HTTP…), hoặc điểm vào gọi vào core (HTTP handler, CLI, `gst_enqueue.sh`). |
+| **Adapter** | Cài đặt cụ thể của một port (SQLite, Bazarr HTTP…), hoặc điểm vào gọi vào core (HTTP handler, CLI). |
 | **Use case** | Một hành động của hệ thống ở tầng ứng dụng (enqueue, retranslate, revert, edit cue, cancel…). HTTP và CLI cùng gọi một use case, không chứa nghiệp vụ riêng. |
 | **Held job** | Job do script Bazarr tạo khi `admission_mode = hold`: đã nhận, chưa gọi model, chờ admin duyệt (FR-12). Bị thay bởi trạng thái Missing và policy tự yêu cầu (FR-14, FR-15.4); gỡ ở P10. |
 | **Job** | Việc dịch một unit sang một ngôn ngữ đích: một bản ghi SQLite có `mode` (`fill` \| `replace` \| `variant`), lớp ưu tiên và trạng thái (FR-15). "Yêu cầu dịch" chính là tạo một job; không có thực thể request riêng. |

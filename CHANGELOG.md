@@ -1,4 +1,12 @@
 # Unreleased
+- **P15b: the docs follow the code again; a script checks it.** `scripts/doccheck.py` (standard library only) fails when a
+  `subserver` module or a `subcore` module is not named in `docs/ARCHITECTURE.md`, or an `/api/*` route in the code is not
+  in `docs/API.md`; the server suite runs it (`tests/test_doccheck.py`) and the `ci-check` skill lists it. `docs/ARCHITECTURE.md`
+  now covers every module, the jobs that read (F7), suggestions and the Review inbox, Insights and the judge, and the
+  `subcore` engine, and no longer mentions `FileJobQueue`. `docs/API.md` documents `POST /api/queue/cancel` (an older route, kept)
+  and spells out the movie routes it had abbreviated. README, `docs/DEVELOPMENT.md` and the design docs say what exists now
+  (Insights, golden set, judge, the pull model); the `implement-phase` and `upstream-sync` skills no longer mention the removed
+  Bazarr script. `PLAN.md` states match their sections (P2, P12, P12b, P13, P14). No code that runs changed.
 - **Fixes from the P15 code review (the judge).** A judge job run again after a stop, quota pause or restart no longer asks
   twice for the cues it already judged (`again` skips the verdicts of the same job). Verdicts are written straight to the
   database, not through the best-effort telemetry sink, and the stored and live texts are compared through the same

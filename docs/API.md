@@ -146,6 +146,12 @@ asked to stop and does so at the next batch boundary, so a subtitle being writte
 finished first. Returns `{"ok": true, "outcome": "cancelled"}` or
 `{"ok": true, "outcome": "stopping"}`; `ok` is false when there was nothing to stop.
 
+## POST /api/queue/cancel
+
+`{"job_id": "..."}`. Removes a **failed** job for good and returns `{"ok": true}` (`false` when the job is not in `failed`).
+An older route, kept for scripts: the console uses `POST /api/queue/delete` (same effect for a failed job) and
+`POST /api/queue/stop` (the way to end a job that has not finished).
+
 ## POST /api/queue/request-prerequisites
 
 `{"job_id": "..."}` for a job with `wait_reason` `context`. Queues the earlier episodes the
@@ -814,10 +820,10 @@ for the movie's one unit. A unit id that is missing or belongs to an episode is 
 | Method and path | Same as |
 |---|---|
 | `GET /api/movies/{unit_id}/glossary?lang=` · `PUT …` | `GET`/`PUT /api/series/{id}/glossary` |
-| `GET /api/movies/{unit_id}/glossary/history?lang=` · `POST …/glossary/restore` | the series' history and restore (with `dry_run`) |
+| `GET /api/movies/{unit_id}/glossary/history?lang=` · `POST /api/movies/{unit_id}/glossary/restore` | the series' history and restore (with `dry_run`) |
 | `GET /api/movies/{unit_id}/style?lang=` · `PUT …` | the series' style; the reply names the movie under `"movie": {"id", "title"}` instead of `"series"` |
 | `POST /api/movies/{unit_id}/style/preview` | "Thử style" on the movie's own source subtitle (`unit_id` in the body, if given, must be the movie's); spends model calls, writes nothing |
-| `PUT /api/movies/{unit_id}/cards?lang=` · `POST …/cards/delete` | the series' cards |
+| `PUT /api/movies/{unit_id}/cards?lang=` · `POST /api/movies/{unit_id}/cards/delete` | the series' cards |
 
 There is no `…/glossary/copy` (a glossary is copied between series) and no `…/style/suggestions`. The style of the movie's
 unit itself (the "episode" override) stays at `GET`/`PUT /api/units/{id}/style`.

@@ -20,8 +20,25 @@ backup, so a retranslation can be reverted.
   Translated, Edited, External, Requested, Ignored, and so on. Nothing is
   translated until you ask in the Library, or switch on auto-request for a
   series (or everything).
-- Web console for the library, status, wanted items, local scans, queue
-  management, settings, system backups, and logs.
+- Web console (React, built for a tablet held upright) for the library,
+  activity and the queue, settings, system backups, and logs.
+- Glossary, style and character cards per series or movie, kept in the database.
+  Story memory reads each episode's facts so later episodes know the earlier
+  ones; a translation made without the current rules is flagged Stale, never
+  redone by itself.
+- A **Review** inbox of suggestions (forms of address, names, characters) drawn
+  from the facts and from your own corrections; nothing is applied until you
+  accept it.
+- **Insights**: how the worker is doing and how good its translations are, above
+  all the share of cues you had to correct, per model, prompt version and style
+  trial. Cues you corrected form a **golden set** per series and language
+  (`GET /api/series/{id}/golden`), and `subcore compare --golden` scores a
+  change of prompt or style against it before you adopt it. Words you correct
+  the same way in three cues become a suggestion (no model call).
+- An optional **LLM judge** (off by default, `judge_enabled`): on the Compare
+  page of a candidate it says cue by cue which text reads better. It is advice
+  only: it ticks nothing, edits nothing, and does not count in the style-trial
+  scores, which only your own picks feed.
 - Settings page shows configured secrets as `**********` and provides API-key
   test buttons for Bazarr, Gemini, and TMDB.
 - Translation options are configurable in the web console, including model
@@ -241,7 +258,7 @@ command when upgrading.
 
 ## Languages
 
-The default source is English and the default target is Simplified Chinese:
+The default source is English and the default target is Vietnamese:
 
 ```json
 {
@@ -249,7 +266,7 @@ The default source is English and the default target is Simplified Chinese:
     {"code": "en", "language": "English", "enabled": true}
   ],
   "target_languages": [
-    {"code": "zh", "language": "Simplified Chinese", "enabled": true}
+    {"code": "vi", "language": "Vietnamese", "enabled": true}
   ]
 }
 ```
@@ -258,15 +275,15 @@ Use the web console settings page to choose source and target languages from
 Bazarr's supported language list. Each language has:
 
 - `code`: filename language code, such as `zh`, `ja`, `ko`, `es`.
-- `language`: value passed to `gst translate -l`, such as `Japanese`.
+- `language`: the language name given to the model, such as `Japanese`.
 - `enabled`: `true` or `false`.
 
 Example output:
 
 ```text
-Movie.en.srt -> Movie.zh.srt
-Movie.ja.srt -> Movie.zh.srt
-Movie.zh.srt -> Movie.en.srt
+Movie.en.srt -> Movie.vi.srt
+Movie.ja.srt -> Movie.vi.srt
+Movie.vi.srt -> Movie.en.srt
 ```
 
 ## Documentation
@@ -275,21 +292,24 @@ Movie.zh.srt -> Movie.en.srt
 - [Bazarr integration](docs/BAZARR.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [HTTP API](docs/API.md)
+- [Measuring translation quality](docs/QUALITY.md) (golden set, `subcore compare`, the judge)
 - [Development](docs/DEVELOPMENT.md)
 - [Security](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 
 ## Project Status
 
-This project is focused on one workflow: use gemini-srt-translator to translate
-SRT files that Bazarr can already see or extract. It is not a full
-subtitle provider replacement and it does not install anything inside the Bazarr
-image.
+This project is focused on one workflow: translate SRT files that Bazarr can
+already see or extract, with the `subcore` engine in `packages/subcore` (also
+usable on its own through the `subcore` command). It is not a full subtitle
+provider replacement and it does not install anything inside the Bazarr image.
+The roadmap and its state are in [PLAN.md](PLAN.md).
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
-Runtime translation depends on
-[`gemini-srt-translator`](https://github.com/MaKTaiL/gemini-srt-translator),
-which is licensed separately by its upstream authors.
+This is a fork of
+[`gemini-srt-translator-bazarr`](https://github.com/kingzleshe/gemini-srt-translator-bazarr).
+Translation runs through the `google-genai` SDK (or an OpenAI-compatible
+endpoint), which are licensed separately by their authors.

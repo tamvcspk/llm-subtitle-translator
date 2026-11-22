@@ -40,7 +40,6 @@ llm-subtitle-translator/            # fork
 │     ├─ store.py                   # MỚI: SQLite
 │     ├─ http/ + static/            # console hiện có + trang glossary/state
 │     └─ worker.py
-├─ bazarr-postprocess/gst_enqueue.sh  # giữ nguyên giao thức thả file
 ├─ docs/  (tài liệu upstream) + docs/design/ (SPEC.md, ARCHITECTURE.md đích)
 └─ Dockerfile, docker-compose.yml
 ```
@@ -64,7 +63,7 @@ llm-subtitle-translator/            # fork
 - Giữ 2 repo upstream trong monorepo (git subtree/submodule) chỉ đáng khi định **merge upstream thường xuyên**. Ở đây fork sẽ phân kỳ mạnh (thay toàn bộ lớp dịch, thêm SQLite) nên merge tự động gần như không khả thi; thực tế sẽ là **cherry-pick** các fix tích hợp Bazarr. Remote `upstream` là đủ cho việc đó.
 - Tách `subcore` thành package riêng trong workspace để: test không cần Bazarr, có CLI dịch tay, và sau này có thể publish riêng nếu muốn.
 
-**Quy tắc làm việc với upstream:** branch `upstream-sync` theo dõi `upstream/main`; mỗi tháng xem diff các file `bazarr.py`, `gst_enqueue.sh`, `queue*.py`, cherry-pick fix liên quan.
+**Quy tắc làm việc với upstream:** branch `upstream-sync` theo dõi `upstream/main`; mỗi tháng xem diff các file `bazarr.py`, `tmdb.py`, `queue*.py` (`gst_enqueue.sh` đã bỏ ở P10), cherry-pick fix liên quan.
 
 **Bỏ từ v0.10 (SPEC quyết định #22):** fork đã thay hàng đợi, script và store (ADR-10, ADR-11), nên cherry-pick định kỳ không còn ý nghĩa; không còn đồng bộ upstream, skill `upstream-sync` không dùng nữa. Remote `upstream` giữ để đọc tham khảo.
 
@@ -174,13 +173,13 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 
 **Quyết định:** kiến trúc cổng–adapter có chọn lọc cho `apps/server`; `subcore` giữ nguyên (đã đúng hướng: `Provider` là port, core thuần, không biết Bazarr/queue/HTTP). Lý do: `Store` từng là một class hơn 30 method trộn sáu mối quan tâm (tài khoản, log lời gọi LLM, phiên bản bản dịch, catalog, facts/summary của memory, cache), trả `dict[str, Any]` nên người gọi biết tên cột; use case `units.py` import thẳng `queue.enqueue_retranslation` và `llm.build_provider`. Đã làm xong ở P0d phần 1, hành vi không đổi.
 
-1. **Ba lớp.** Adapter vào (HTTP handler `web.py`, `gst_enqueue.sh`, CLI) → **use case** + domain thuần (`ConsoleActions`, `UnitService`, `rules`, `queue_policy`, story memory, quy tắc phiên bản) → **port** (`Protocol` trong `subserver/ports.py`) ← adapter ra (SQLite, hàng đợi file, Bazarr, TMDB, `subcore.providers`).
+1. **Ba lớp.** Adapter vào (HTTP handler `web.py`, CLI; trước P10 cả script thả file của Bazarr) → **use case** + domain thuần (`ConsoleActions`, `UnitService`, `rules`, `queue_policy`, story memory, quy tắc phiên bản) → **port** (`Protocol` trong `subserver/ports.py`) ← adapter ra (SQLite, hàng đợi file, Bazarr, TMDB, `subcore.providers`).
 2. **Port hẹp theo nơi dùng, không có một `Store` Protocol chung.** Mỗi nơi chỉ thấy phần nó cần, nên test dựng fake nhỏ. `Store` (SQLite) vẫn là một class cài năm port lưu trữ, vì chúng dùng chung một kết nối và một chuỗi migration; không ai ngoài `worker.py` biết nó là `Store`.
 3. **Chỉ tạo port ở ranh giới thật:** lưu trữ bền, hàng đợi, dịch vụ ngoài, provider. Filesystem (`pathlib`, ghi atomic) không bọc port; test dùng thư mục tạm.
 4. **Port trả kiểu có tên** (dataclass bất biến: `Account`, `LlmCall`, `TokenTotals`, `TranslationVersion`, `StoredFacts`, `Series`, `Unit`, `Output`, `Correction`, `MediaDetails`, `EpisodeListing`), không trả `dict`/`sqlite3.Row`. Tên cột chỉ tồn tại trong adapter SQLite. Test 10c quét kiểu trả về trong `ports.py`.
 5. **Port nằm ở core, adapter nằm riêng; core không import adapter.** Việc nối dây ở `worker.py` và `RuntimeContext` (composition root). Adapter là các module liệt kê trong `tests/test_core_boundary.py` (`store`, `queue`, `http`, `bazarr`, `tmdb`, `gemini`, `llm`, `backups`, `connection_tests`, `settings`, `web`); module nào không có trong danh sách là core và bị kiểm mặc định. `worker.py` được phép import adapter nhưng không được import `sqlite3`, socket hay `http.server` trực tiếp.
 6. **Hai đường vào, một tầng use case.** HTTP và CLI gọi cùng use case; handler chỉ parse, xác thực, gọi use case, định dạng phản hồi (việc dựng job của `/api/enqueue` nằm ở `ConsoleActions`, không ở handler). CLI `subcore` giữ nguyên (adapter vào của engine). Nếu thêm CLI cho worker: khi worker đang chạy, thao tác **ghi** đi qua HTTP API, không mở SQLite trực tiếp (ADR-4: một writer); lệnh chỉ đọc có thể đọc trực tiếp. Các route quản trị không thuộc miền (cài đặt, trạng thái, backup, log, test kết nối) vẫn gọi thẳng module từ handler.
-7. **Hàng đợi vẫn là cây thư mục JSON** (giao thức `gst_enqueue.sh` không đổi), chỉ được bọc bằng port `JobQueue` ở phía gửi và quản lý job. Phía tiêu thụ (claim, hoãn, quota, recover) là lớp `queue.JobQueue` của adapter, cùng tên nhưng khác module, và `process_job` vẫn ở `worker.py` vì dùng `skip_reason` của adapter. Bảng `jobs` vẫn hoãn (PLAN P2); khi làm thì chỉ thêm adapter, không sửa core.
+7. **(Lúc quyết định; từ P8 hàng đợi là bảng `jobs`, ADR-11.) Hàng đợi vẫn là cây thư mục JSON** (giao thức của script Bazarr không đổi), chỉ được bọc bằng port `JobQueue` ở phía gửi và quản lý job. Phía tiêu thụ (claim, hoãn, quota, recover) là lớp `queue.JobQueue` của adapter, cùng tên nhưng khác module, và `process_job` vẫn ở `worker.py` vì dùng `skip_reason` của adapter. Bảng `jobs` vẫn hoãn (PLAN P2); khi làm thì chỉ thêm adapter, không sửa core.
 
 | Port | Phụ trách | Adapter |
 |---|---|---|
@@ -189,7 +188,7 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 | `VersionRepo` | phiên bản bản dịch, cache theo `context_hash` (NFR-3) | `Store` (`translations`) |
 | `CatalogRepo` | series, unit, output, correction, cấu hình memory theo series | `Store` |
 | `MemoryRepo` | facts, summary nén, snapshot context | `Store` |
-| `JobQueue` | enqueue, enqueue dịch lại, retry, cancel, delete; job `held`/`rejected` (ADR-9) | `queue.FileJobQueue` (cây thư mục JSON) |
+| `JobQueue` | enqueue, enqueue dịch lại, retry, cancel, delete; job `held`/`rejected` (ADR-9) | cây thư mục JSON lúc quyết định; từ P8 là `JobStore` (bảng `jobs`) |
 | `MediaLibrary` | mô tả tập, liệt kê tập và source subtitle, `missing_subtitles`, yêu cầu scan lại | `bazarr.BazarrMedia` (đọc settings sống) |
 | `Metadata` | mô tả phim/series cho prompt | `tmdb.TmdbMetadata` (đọc settings sống) |
 | `ProviderFactory` | dựng provider theo model và key | `llm.build_provider` (`subcore.providers`) |
@@ -406,13 +405,10 @@ Tài khoản nằm trong `app.db` (bảng `auth`, một dòng): tên đăng nh�
 
 ```mermaid
 flowchart LR
-  subgraph BazarrC[Bazarr container]
-    B[Bazarr] -->|custom post-processing| E[gst_enqueue.sh]
-  end
-  E -->|JSON file| Q[(/queue/incoming)]
+  B[Bazarr]
 
   subgraph W[subtitle-translator container]
-    I[Queue importer] --> S[Scheduler]
+    CS[CatalogSync] --> S[Scheduler]
     S --> X[Extract facts]
     S --> T[Translate]
     S --> R[Research]
@@ -426,7 +422,7 @@ flowchart LR
     H[HTTP API + Console]
   end
 
-  Q --> I
+  B -->|API: worker kéo danh mục| CS
   P -->|HTTPS| LLM[(Gemini / OpenAI-compat)]
   O -->|.vi.srt| MEDIA[(/media)]
   O -->|scan-disk| B
@@ -442,7 +438,6 @@ Ranh giới của worker (ADR-8) nằm trong khối `subtitle-translator contain
 flowchart LR
   subgraph IN[Adapter vào]
     WEB[web.py: HTTP handler + auth]
-    SH[gst_enqueue.sh]
   end
   subgraph CORE[Core: use case + domain thuần]
     UC[ConsoleActions · UnitService]
@@ -453,7 +448,6 @@ flowchart LR
   end
   subgraph OUT[Adapter ra]
     ST[Store / SQLite]
-    FQ[FileJobQueue]
     BZ[BazarrMedia]
     TM[TmdbMetadata]
     LL[llm.build_provider]
@@ -462,12 +456,11 @@ flowchart LR
   UC --> DOM
   UC --> P
   DOM --> P
-  P -.-> ST & FQ & BZ & TM & LL
-  SH -->|JSON file| FQ
+  P -.-> ST & BZ & TM & LL
   ROOT[worker.py + RuntimeContext] -. nối dây .-> OUT
 ```
 
-**Đích (v0.10, từ P10):** Bazarr không còn đẩy gì vào; worker kéo danh mục, mọi việc đi qua bảng `jobs` trong SQLite (ADR-10, ADR-11). Sơ đồ ở trên mô tả code hiện tại cho đến lúc đó.
+**Từ P10 (v0.10):** Bazarr không còn đẩy gì vào; worker kéo danh mục, mọi việc đi qua bảng `jobs` trong SQLite (ADR-10, ADR-11). Hai sơ đồ ở trên đã vẽ lại cho đúng điều đó; sơ đồ dưới đây chi tiết luồng kéo.
 
 ```mermaid
 flowchart LR
@@ -754,7 +747,7 @@ Trạng thái hiển thị (Missing, Requested, Translated, Edited, External, Re
 |---|---|
 | Trích quan hệ từ SRT không có người nói kém chính xác | `confidence` + đề xuất pending + glossary người viết luôn thắng; đo trên 2–3 series quen thuộc ở P4 trước khi tin. |
 | Prerequisite làm tốn quota khi lần đầu thêm series dài (vd 100 tập) | Extract dùng model rẻ nhất; giới hạn `max_prereq_per_day`; cho phép bật memory theo từng series. |
-| Fork phân kỳ, khó lấy fix Bazarr của upstream | Giữ `bazarr.py`/`gst_enqueue.sh` ít sửa nhất có thể; sync hàng tháng (ADR-2). |
+| Fork phân kỳ, khó lấy fix Bazarr của upstream | Giữ `bazarr.py` và `tmdb.py` ít sửa nhất có thể; sync hàng tháng (ADR-2). |
 | Model đổi hành vi structured output | Adapter + test hợp đồng với fake; validate chặt ở engine, không tin provider. |
 | Console ghi được mà không có auth | Xác thực bật mặc định từ P0b (NFR-5); tắt phải tường minh. Basic Auth và form đăng nhập đều gửi mật khẩu không mã hoá ⇒ khuyến nghị chỉ expose trong LAN / sau reverse proxy có TLS. Từ P0c: khoá sau 5 lần sai, cookie `HttpOnly`/`SameSite=Strict`, kiểm `Origin` cho thao tác ghi. |
 | Form đăng nhập là ngoại lệ duy nhất của middleware (CSRF, brute force, lộ tài nguyên) | Ngoại lệ chỉ gồm `GET /login`, tài nguyên tĩnh của trang đó và `POST /api/auth/login`; test bắt buộc: mọi đường dẫn khác không cookie → `401`/chuyển hướng (liệt kê đường dẫn từ router, không từ danh sách tay). |

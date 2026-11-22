@@ -6,6 +6,11 @@
 > The image keeps the old runtime layout (`/app/worker.py`, `/app/subserver`) and serves the
 > console build from `/app/static`.
 > Target design: [design/ARCHITECTURE.md](design/ARCHITECTURE.md).
+>
+> Kept in step with the code by `scripts/doccheck.py` (run it with `ci-check`): every module of `subserver/` is named
+> here as `<name>.py`, every module of `packages/subcore` as `subcore.<module>`, and every `/api/*` route is in
+> [API.md](API.md). That is a floor, not a design: the reasons for the seams are in `AGENTS.md`, the order of the work
+> in `PLAN.md`. P15f replaces this file with one document written for the structure ADR-18 gives the code.
 
 ## Components
 
@@ -22,12 +27,15 @@ the `auto_request` policy (`auto_request.py`), which runs after an accepted read
 ### Worker
 
 `worker.py` is the runtime entrypoint and composition root: it builds the adapters
-(`Store`, `BazarrMedia`, `TmdbMetadata`, `FileJobQueue`, the HTTP client), passes them
+(`Store`, `JobStore`, `BazarrMedia`, `TmdbMetadata`, the HTTP client), passes them
 down as ports, and holds `process_job` and `QueueWorker`. It imports no socket,
 SQLite or HTTP-server module itself (`tests/test_core_boundary.py`). In normal mode it starts:
 
-- a background worker loop that consumes one pending job at a time;
-- a small stdlib HTTP server for the console and JSON API (`subserver/web.py`).
+- a background worker loop that consumes one job at a time (`--no-worker` leaves it out, `--no-queue` keeps the
+  loop from claiming);
+- the catalog sync loop (`run_catalog_sync`, the only caller of `sync_and_request`) and the backup and clean-up
+  scheduler thread;
+- a small stdlib (`http.server`) server for the console and JSON API (`subserver/web.py`).
 
 Domain code is split under `subserver/`:
 
@@ -47,10 +55,26 @@ Domain code is split under `subserver/`:
 - `job_requests.py`: `JobRequests`, the planning, estimate and creation of requests (`POST /api/jobs`);
   `auto_request.py`: `AutoRequest`, the policy; `catalog_actions.py` / `catalog_api.py`: the Library page's
   use cases and their pure router;
-- `console.py`: `ConsoleActions`, the queue use cases used by the HTTP adapter
-  (retry, cancel, delete, and enqueueing a picked subtitle or a scan result: it
-  builds the job and chooses the targets). It keeps request routing separate from
-  queue orchestration;
+- `console.py`: `ConsoleActions`, the queue use cases used by the HTTP adapter (retry, cancel, delete, stop, the
+  snapshot, the job's spec and the layer report). Jobs are not made here (`job_requests.py` and `auto_request.py`
+  make them); it keeps request routing separate from queue orchestration;
+- `jobs.py`: `JobStore`, the `jobs` table: every state change of a job is a method here (claim, wait, finish,
+  stop, retry, delete of a finished row); `queue.py` decides, this stores;
+- `runtime.py`: `RuntimeContext`, the typed composition seam of the running process (see below);
+- `ports.py`: the ports (`MediaLibrary`, `Metadata`, `ProviderFactory`, the `Telemetry` sink) and the named types the
+  `Store` returns (`tests/test_core_boundary.py` keeps a `dict` or `sqlite3.Row` from leaking out of it);
+- `auth.py`: `ConsoleAuth`, the single console account (a scrypt hash in the `auth` table, sessions, Basic Auth),
+  checked in `ConsoleHandler.parse_request` before any route;
+- `estimates.py`: `Estimator`, what an action that spends model calls would cost, said before it runs (the price box);
+- `gather.py`: gathers one `TranslationBundle` from the episode's rules, story memory and metadata (the worker's half
+  of the bundle contract; pure);
+- `provider_guard.py`: what every job that calls the model shares: the time limit, the call budget
+  (`JobProviders`), and `mapped_errors`, the one place a provider's typed failure becomes the queue's class;
+- `read_jobs.py`: the handlers of the jobs that read and do not translate (`ExtractJob`, `SuggestJob`, `JudgeJob`);
+- `intake.py`: the one-time settling of an older queue (folders and the P8 rows) at start-up;
+- `bootstrap.py`: the first episodes `auto_request` is allowed to ask for while a series has nothing approved;
+- `connection_tests.py` and `gemini.py`: the Settings "Test" buttons (a typed key against Bazarr, TMDB or the
+  provider) and the lists of models the Settings pickers show;
 - `web.py`: the console's HTTP handler (`ConsoleHandler`, `start_web_server`):
   authentication before any route, request parsing, calls into the use cases,
   response formatting. An adapter; `worker.py` re-exports `ConsoleHandler`;
@@ -137,8 +161,8 @@ kept, so there are no work files to resume from.
 The SQLite store (`DATA_DIR/app.db`, default `STATE_DIR`) holds machine-owned
 state. `translations` keeps every version published for a target path with its
 sha256, input hash, and a copy under `DATA_DIR/backups/subtitles/`; `llm_calls`
-records every model attempt (tokens, latency, outcome). The queue itself is
-still the JSON file layout below; moving it into a `jobs` table is a later step.
+records every model attempt (tokens, latency, outcome). The queue is the `jobs` table
+(see Queue Layout below).
 
 A target file is *system-made* when the store's current version for its path has
 the file's sha256. An automatic job never overwrites any existing target. A
@@ -238,7 +262,8 @@ The worker leaves three kinds of trace, all in `app.db`, plus the prompt bodies 
   attempt number, cues repaired and an estimated cost. `subcore`'s `CallLog` carries what
   the provider layer knows; the worker adds the hashes.
 - **Quality signals** (`quality_signals`): `cue_edit` (before and after), `revert`,
-  `retranslate` and `validate` (one per problem the validator found, repaired or not).
+  `retranslate`, `validate` (one per problem the validator found, repaired or not), `ab` (the admin's pick between
+  a variant and the current text) and `judge` (the LLM judge's opinion, never counted as `ab`).
 - **Bodies**: `DATA_DIR/logs/llm/<day>.<n>.jsonl`, gzipped when closed; `llm_bodies`
   indexes `(call, segment, offset, length)` with offsets into the uncompressed stream, and
   keeps the row (marked `rotated`) after cleanup removes the file.
@@ -264,6 +289,72 @@ complete queue lifecycle tests.
 Bazarr is only read: `tests/test_catalog.py` runs the catalog, the labels, the requests and the policy against a
 fake `MediaLibrary`, and `tests/test_media_library_contract.py` checks `BazarrMedia.catalog()` (paging, failures)
 against a fake Bazarr HTTP.
+
+### Jobs that read (F7)
+
+Every task that spends model calls is a row of `jobs` and goes through the one queue, so the daily quota,
+`max_calls_per_day`, the breaker, Stop and a restart apply to all of it. `kind` says what a job does: `publish` and
+`variant` translate a subtitle (`TRANSLATING_KINDS`); `extract` reads the facts of one episode (key `extract:<unit>`);
+`suggest` looks for proposals for one series and language (`suggest:<series>:<lang>`, at most three calls); `judge`
+asks the LLM judge about one candidate (`judge:<unit>:<lang>:<version>`, calls of 30 cues). `READING_KINDS` have no
+subtitle, no bundle and no strong model. `QueueWorker.run_job` runs a job by its kind through the handlers `worker.py`
+registers (`translate_job`, and `ExtractJob`, `SuggestJob`, `JudgeJob` in `read_jobs.py`). A handler does its work and
+lets typed provider errors through `provider_guard.mapped_errors`; it takes its providers from
+`provider_guard.JobProviders` (deadline, `max_calls_per_job`, `max_calls_per_day`, one provider per model). The admin's
+request only queues; `estimate_only` stays synchronous because it spends nothing. Every reader of jobs says which kinds
+it means, and a new kind is added to those lists with a test.
+
+### Suggestions and the Review inbox (P13, P14)
+
+One table (`suggestions`), one use case. `SuggestionService` (`suggestions.py`, routes in `suggestion_api.py`) is the only
+place that stores a generator's proposals (`propose`), decides them (`accept`, `reject`, `undo`, `bulk`) and applies them;
+a generator hands it a list of proposals and has no review logic of its own. Accepting goes through
+`Glossaries.save_doc` (and the character card when a character carries its voice, in one transaction) and counts the
+translations it would flag stale with `Library.impact_units`; it never retranslates. `suggestion_keys.py` is the pure
+*identity* of a suggestion (kind, name or pair, `from`; case and spacing folded): a decided suggestion is kept and the
+same entry is never proposed again. Generators: `proposals.py` (`FactsProposer`) draws on story facts through
+`subcore.suggest` and reaches the model through a `suggest` job; `feedback.py` (`FeedbackProposer`, over
+`subcore.feedback`) turns a swap of words repeated in corrected cues into a term with no model call; research grounding
+(P16) will be a third. A proposal with no research `sources` is never applied by `auto_accept_terms`.
+
+### Insights, the golden set and the judge (P15)
+
+`metrics.py` (`Metrics`) is the one place that works out the figures of FR-19.5: it rolls `llm_calls`,
+`quality_signals` and the `translation.finished` events into `metrics_daily` (one row per UTC day, name and labels)
+and the report only adds those rows, so a figure outlives its events; a rate with nothing to divide by is `null`.
+`insight_api.py` serves `GET /api/metrics` and a series' golden set (`subcore.golden`, scored by
+`subcore compare --golden`). `judge.py` (`JudgeService`, over `subcore.judge`) queues, runs and reads the optional LLM
+judge (`judge_enabled`, off by default): a verdict is advice bound to the exact pair of texts it saw, never an `ab`
+signal, never a cue edit.
+
+### The engine: `subcore`
+
+`packages/subcore` is the translation engine, pure of Bazarr, the queue, HTTP and the worker's database
+(`tests/test_core_boundary.py` and the package's own tests keep it so). Its modules:
+
+- `subcore.srt`: parse and serialise SRT; a cue keeps its original index and timing line, so output reproduces the
+  timecodes byte for byte. The model never sees an index or a timecode;
+- `subcore.bundle`: `TranslationBundle`, everything one translation reads, as plain data (the worker builds it in
+  `gather.py`, the CLI loads it with `--bundle`; the same bundle gives the same prompt);
+- `subcore.glossary`: the glossary model (terms, characters, address rules with `from`/`until` windows), its YAML
+  exchange format, merging, and the check of locked terms; `subcore.style`: the style layers and `resolve_style`;
+  `subcore.matching`: the one place that decides whether a line mentions a name; `subcore.fewshot`: examples chosen from
+  corrected cues;
+- `subcore.translate.planner` (how many parts a unit is translated in), `subcore.translate.prompt` (the system and
+  request text), `subcore.translate.engine` (`run`, `render_requests`, `compose_request`: batches, repair of missing
+  cues, splitting, the review pass), `subcore.translate.validate` (parse and check a reply),
+  `subcore.translate.alignment` (reply text attached to the wrong cue number), `subcore.translate.review` (a finished
+  translation against its source: the `validate` command and the worker share it);
+- `subcore.providers.base` (the `Provider` interface and the typed errors), `subcore.providers.gemini`,
+  `subcore.providers.openai_compat` (standard library only), `subcore.providers.fake` (deterministic, for tests and dry
+  runs) and `subcore.providers.limiter` (`RateLimiter`, `ResilientProvider`: RPM/TPM/RPD windows, retry with backoff,
+  key failover);
+- `subcore.memory.facts`, `subcore.memory.fold` and `subcore.memory.compress` (see Story memory), `subcore.suggest`
+  (candidates from facts, then one call per kind), `subcore.feedback` (repeated corrections to a term),
+  `subcore.golden`, `subcore.compare` (numbers for two configurations or one against a golden set) and `subcore.judge`
+  (rubric, request, parse; pure);
+- `subcore.cli`: the declarative `subcore` command (`translate`, `bundle`, `render-prompt`, `validate`, `compare`);
+  it knows no database, queue or HTTP.
 
 ### Web Console
 
@@ -298,6 +389,9 @@ written yet (no library, a job that cannot be placed) stays, with its folder, an
 start-up. Running it again changes nothing.
 
 ## Job Shape
+
+The fields of a job, as they were in the queue files; since P8 they are the `jobs` row (`jobs.py` has the columns,
+`kind` says what the job does, see "Jobs that read") and the old files only matter to `intake.py`.
 
 ```json
 {
