@@ -85,7 +85,7 @@ Dưới thanh nav, trên mọi trang:
 | Danh mục ở trạng thái `kept` (Bazarr không đọc được, trả rỗng hoặc ít hơn bất thường) | *"Bazarr could not be read. Showing the library as of {synced_at}. {warning}"* (vàng) | **Sync now** |
 | Phiên hết hạn (một lời gọi `/api/*` trả `401`) | Lớp phủ chặn, không phải banner: *"Your session expired."* Giữ nguyên bản nháp đang sửa | **Sign in** (mục 7) |
 
-Dải trạng thái (thay Dashboard, nhỏ, không phải cảnh báo): số job Running/Waiting, tuổi catalog (`Synced 2m ago`), và provider đang `exhausted` hoặc breaker mở (kèm `until`). Hết quota ngày là trạng thái bình thường (job `Waiting · quota`), không lên banner.
+Dải trạng thái (thay Dashboard, nhỏ, không phải cảnh báo): số job Running/Requested/Waiting (cùng tên và cùng cách đếm với các tab của Activity: Requested là job đang xếp hàng, Waiting là job chờ một điều kiện), tuổi catalog (`Synced 2m ago`), và provider đang `exhausted` hoặc breaker mở (kèm `until`). Hết quota ngày là trạng thái bình thường (job `Waiting · quota`), không lên banner.
 
 ## 5. Trạng thái và việc kế tiếp (một nhãn một nghĩa)
 
@@ -126,7 +126,7 @@ Nhãn lấy **nguyên văn từ SPEC FR-14.5** và ghép từ ba trục độc l
 
 **Tên trạng thái của hàng đợi trên Activity** dùng cùng nhãn: *Requested · Running · Waiting · Failed · Done · Cancelled* (không dùng `pending`, `deferred`, `processing`). *Cancelled* gom job admin hủy khi chưa chạy và job Stop khi đang chạy: worker giữ một trạng thái `cancelled` cho cả hai.
 
-**Mục Bazarr không còn liệt kê:** series hoặc phim mà Bazarr ngừng liệt kê vẫn hiện trong Library khi worker còn giữ unit của nó (bản dịch, lịch sử), với nhãn *No longer in Bazarr*. Nó không bao giờ được tính là Missing và không có nút Translate. Mục mà worker chưa giữ gì thì không hiện.
+**Mục Bazarr không còn liệt kê:** series hoặc phim mà Bazarr ngừng liệt kê vẫn hiện trong Library khi worker còn giữ unit của nó (bản dịch, lịch sử), với nhãn *No longer in Bazarr*. Nó không bao giờ được tính là Missing và không có nút Translate. Mục mà worker chưa giữ gì thì không hiện. Trên trang series, một tập Bazarr không còn liệt kê mà chưa có file ghi *Not translated* (không bao giờ *Missing*) và chú thích *no longer in Bazarr*; trang tập không nhắc điều này (nó chỉ nằm ở danh sách).
 
 Chưa nói được "Missing vì sao" ở phía Bazarr (không tìm thấy, đang tải, vượt hạn mức): worker chưa đọc lịch sử hay trạng thái provider của Bazarr (SPEC #25.6).
 

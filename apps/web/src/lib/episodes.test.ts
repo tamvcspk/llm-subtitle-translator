@@ -95,6 +95,13 @@ describe("the one button of a row", () => {
     expect(row.actions).toEqual([]);
     expect(row.askable).toBe(false);
   });
+
+  it("does not call a gone episode Missing: it is Not translated, and not counted as missing", () => {
+    const row = rowOf(episode(1, { gone: true }));
+    expect(row.label).toBe("Not translated");
+    expect(row.missing).toBe(false);
+    expect(row.details).toContain("no longer in Bazarr");
+  });
 });
 
 describe("what a row says under its label", () => {

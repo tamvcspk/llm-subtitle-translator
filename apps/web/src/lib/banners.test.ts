@@ -82,9 +82,9 @@ describe("deriveBanners", () => {
 });
 
 describe("deriveStrip", () => {
-  it("counts running and waiting (queued plus deferred) and the catalog age", () => {
+  it("counts running, requested (in line) and waiting (deferred) as the tabs of Activity do, and the catalog age", () => {
     const items = deriveStrip(status(), catalog(), NOW);
-    expect(items.map((item) => item.text)).toEqual(["Running 1", "Waiting 5", "Synced 2m ago"]);
+    expect(items.map((item) => item.text)).toEqual(["Running 1", "Requested 2", "Waiting 3", "Synced 2m ago"]);
   });
 
   it("names a provider that is out, and when it is back", () => {

@@ -74,9 +74,13 @@ function jobText(target: CatalogTarget): string | null {
   }
 }
 
-export function rowLabel(target: CatalogTarget): string {
+/**
+ * `gone`: Bazarr no longer lists the episode. Its `missing` comes from the cache of an older read, so a gone episode
+ * with no file is "Not translated", never "Missing" (nothing is missing from a library that no longer has it).
+ */
+export function rowLabel(target: CatalogTarget, gone = false): string {
   return [
-    CONTENT[target.content],
+    gone && (target.content === "missing" || target.content === "outside") ? "Not translated" : CONTENT[target.content],
     target.removed ? "Removed" : null,
     target.stale ? "Stale" : null,
     jobText(target),
@@ -206,13 +210,13 @@ function buildRow(
     code,
     title: item.title,
     to: item.unit_id === null ? null : `/unit/${item.unit_id}`,
-    label: rowLabel(target),
+    label: rowLabel(target, item.gone),
     details,
     warning: file?.modified_outside ? "File changed outside the worker" : null,
     actions: actionsOf(item, target, code, seriesId, lang, byCode),
     gone: item.gone,
     askable: target.content === "missing" && !open && !target.ignored && item.has_source && !item.gone,
-    missing: target.content === "missing",
+    missing: target.content === "missing" && !item.gone,
     running: open,
     failed: target.job === "failed",
     stale: target.stale,

@@ -17,7 +17,9 @@ export function deriveStrip(
   const items: StripItem[] = [];
   if (status) {
     items.push({ id: "running", text: `Running ${status.queue.processing}` });
-    items.push({ id: "waiting", text: `Waiting ${status.queue.pending + status.queue.deferred}` });
+    // The same words as the tabs of Activity: Requested is what is in line, Waiting is what waits for something.
+    items.push({ id: "requested", text: `Requested ${status.queue.pending}` });
+    items.push({ id: "waiting", text: `Waiting ${status.queue.deferred}` });
   }
   if (catalog) items.push({ id: "synced", text: `Synced ${ago(catalog.synced_at, nowMs)}` });
   for (const provider of status?.providers ?? []) {
