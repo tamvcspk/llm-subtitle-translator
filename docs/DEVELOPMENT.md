@@ -81,7 +81,9 @@ page; it is never a score of its own.
 consuming queue jobs; `-Live` uses a real Gemini key from
 `local-state/secrets/gemini.key` with hard caps on calls. See `AGENTS.md`
 ("Development Commands") for the flags and for how a browser test is handed over
-(`test-plan` and `web-test` skills).
+(`test-plan` and `web-test` skills). How the code is laid out, and which rules a
+change must keep, is [ARCHITECTURE.md](ARCHITECTURE.md); the skills by role
+(`backend-dev`, `frontend-dev`, `designer`, `architect`) say where a new piece goes.
 
 ## Dependencies
 

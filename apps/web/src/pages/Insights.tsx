@@ -2,6 +2,7 @@ import { Alert, Anchor, Badge, Button, Card, Group, Loader, SegmentedControl, Si
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useCatalog, useFromEdits, useInsights, useLibrarySeries, useSeriesUnits } from "../api/queries";
+import { routeUrl } from "../api/route";
 import type { InsightsBreakdown, InsightsDay, LibrarySeriesRow } from "../api/types";
 import {
   abLabel,
@@ -148,7 +149,7 @@ function SeriesCorrections({ series, href }: { series: LibrarySeriesRow; href: s
           <Button
             component="a"
             variant="default"
-            href={`/api/series/${series.id}/golden?lang=${encodeURIComponent(lang)}&download=1`}
+            href={routeUrl("/api/series/{series_id}/golden", { path: { series_id: series.id }, query: { lang, download: "1" } })}
             aria-label={`Download the ${lang} golden set of ${series.title}`}
           >
             Download golden set

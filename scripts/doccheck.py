@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Check that the docs name what the code has (standard library only).
 
-Two checks, both one-directional (code -> docs; a doc may keep history):
+Three checks, all one-directional (code -> docs; a doc may keep history):
 
 * every module of ``apps/server/subserver`` (all layer packages, ADR-18) is named in ``docs/ARCHITECTURE.md`` as ``<name>.py``, and every module of
   ``packages/subcore/src/subcore`` as ``subcore.<dotted.name>`` (a package as ``subcore.<package>``);
 * every ``/api/...`` route found as a string literal in ``apps/server/subserver`` and ``worker.py`` appears in
-  ``docs/API.md`` (``{name}`` and a regex group are the same placeholder; a query string is ignored).
+  ``docs/API.md`` (``{name}`` and a regex group are the same placeholder; a query string is ignored);
+* every repository path that ``AGENTS.md``, a skill or an agent names in backticks (``docs/...``, ``scripts/...``, ``apps/...``,
+  ``packages/...``, ``.claude/...``) exists.
 
 Run from anywhere: ``python scripts/doccheck.py``. Exit status 1 and one line per gap when something is missing.
 """
@@ -123,6 +125,32 @@ def missing_routes(routes: set[str], documented: set[str]) -> list[str]:
     return [f"docs/API.md does not mention {route}" for route in sorted(routes - documented)]
 
 
+#: Files that tell a person or an agent where things are (P15f): every repository path they name must exist.
+INSTRUCTION_GLOBS = ("AGENTS.md", ".claude/skills/*/SKILL.md", ".claude/agents/*.md")
+_PATH = re.compile(r"`((?:docs|scripts|apps|packages|\.claude|\.github)/[^`\s]*)`")
+
+
+def instruction_paths(text: str) -> set[str]:
+    """The repository paths a text names in backticks; a pattern or a placeholder (``*``, ``<page>``, ``{id}``, ``...``) is not a path."""
+    found: set[str] = set()
+    for match in _PATH.finditer(text):
+        path = match.group(1).rstrip(".,;:)")
+        if any(mark in path for mark in "*<>{}…") or "..." in path or "(" in path:
+            continue
+        found.add(path)
+    return found
+
+
+def missing_references(root: Path = ROOT) -> list[str]:
+    problems = []
+    for pattern in INSTRUCTION_GLOBS:
+        for file in sorted(root.glob(pattern)):
+            for path in sorted(instruction_paths(file.read_text(encoding="utf-8"))):
+                if not (root / path).exists():
+                    problems.append(f"{file.relative_to(root).as_posix()} names {path}, which does not exist")
+    return problems
+
+
 def check(root: Path = ROOT) -> list[str]:
     architecture = (root / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     api_doc = (root / "docs" / "API.md").read_text(encoding="utf-8")
@@ -139,6 +167,7 @@ def check(root: Path = ROOT) -> list[str]:
         subcore_modules(root / "packages" / "subcore" / "src" / "subcore"),
     )
     problems += missing_routes(routes, doc_routes(api_doc))
+    problems += missing_references(root)
     return problems
 
 

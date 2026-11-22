@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { readsOnly } from "../lib/activity";
 import type { StyleDraft } from "../lib/style";
 import { api } from "./client";
+import { apiGet, ownerUrl } from "./route";
 import type {
   AdoptAnswer,
   AnswerOf,
@@ -334,12 +335,16 @@ export interface CueQuery {
 }
 
 export function useCues(id: number, query: CueQuery, enabled: boolean) {
-  const params = new URLSearchParams({ lang: query.lang, offset: String(query.offset), limit: String(query.limit) });
-  if (query.q.trim()) params.set("q", query.q.trim());
-  if (query.at.trim()) params.set("at", query.at.trim());
+  const q = query.q.trim();
+  const at = query.at.trim();
   return useQuery({
     queryKey: [...keys.unit(id), "cues", query] as const,
-    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/cues", "get">>(`/api/units/${id}/cues?${params}`, { signal }),
+    queryFn: ({ signal }) =>
+      apiGet(
+        "/api/units/{p1}/cues",
+        { path: { p1: id }, query: { lang: query.lang, offset: query.offset, limit: query.limit, q: q || undefined, at: at || undefined } },
+        signal,
+      ),
     enabled,
     placeholderData: (previous) => previous,
   });
@@ -348,7 +353,7 @@ export function useCues(id: number, query: CueQuery, enabled: boolean) {
 export function useUnitContext(id: number, lang: string) {
   return useQuery({
     queryKey: [...keys.unit(id), "context", lang] as const,
-    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/context", "get">>(`/api/units/${id}/context?lang=${encodeURIComponent(lang)}`, { signal }),
+    queryFn: ({ signal }) => apiGet("/api/units/{p1}/context", { path: { p1: id }, query: { lang } }, signal),
     enabled: lang !== "",
   });
 }
@@ -356,7 +361,7 @@ export function useUnitContext(id: number, lang: string) {
 export function useVersions(id: number, lang: string) {
   return useQuery({
     queryKey: [...keys.unit(id), "versions", lang] as const,
-    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/versions", "get">>(`/api/units/${id}/versions?lang=${encodeURIComponent(lang)}`, { signal }),
+    queryFn: ({ signal }) => apiGet("/api/units/{p1}/versions", { path: { p1: id }, query: { lang } }, signal),
     enabled: lang !== "",
   });
 }
@@ -366,7 +371,7 @@ export function useDiff(id: number, lang: string, version: number | null) {
   return useQuery({
     queryKey: [...keys.unit(id), "diff", lang, version] as const,
     queryFn: ({ signal }) =>
-      api<AnswerOf<"/api/units/{p1}/versions/{p2}/diff", "get">>(`/api/units/${id}/versions/${version}/diff?lang=${encodeURIComponent(lang)}`, { signal }),
+      apiGet("/api/units/{p1}/versions/{p2}/diff", { path: { p1: id, p2: version! }, query: { lang } }, signal),
     enabled: version !== null,
   });
 }
@@ -375,7 +380,7 @@ export function useCompare(id: number, lang: string, version: number) {
   return useQuery({
     queryKey: [...keys.unit(id), "compare", lang, version] as const,
     queryFn: ({ signal }) =>
-      api<AnswerOf<"/api/units/{p1}/versions/{p2}/compare", "get">>(`/api/units/${id}/versions/${version}/compare?lang=${encodeURIComponent(lang)}`, { signal }),
+      apiGet("/api/units/{p1}/versions/{p2}/compare", { path: { p1: id, p2: version }, query: { lang } }, signal),
     enabled: lang !== "",
     // While a judge job is open its verdicts arrive batch by batch: look again every few seconds, and stop when it ends.
     // A job parked on the day's quota can wait for hours and changes nothing meanwhile: look only once a minute.
@@ -456,12 +461,10 @@ export function useAdopt(id: number) {
 /** Whose style it is: a series, or a movie (reached by the movie's unit id). */
 export type StyleOwner = { kind: "series" | "movie"; id: number };
 
-const ownerPath = (owner: StyleOwner) => (owner.kind === "series" ? `/api/series/${owner.id}` : `/api/movies/${owner.id}`);
-
 export function useOwnerStyle(owner: StyleOwner | null, lang: string) {
   return useQuery({
     queryKey: ["style", owner, lang] as const,
-    queryFn: ({ signal }) => api<StyleOverview>(`${ownerPath(owner!)}/style?lang=${encodeURIComponent(lang)}`, { signal }),
+    queryFn: ({ signal }) => api<StyleOverview>(ownerUrl(owner!, "style", { lang }), { signal }),
     enabled: owner !== null && lang !== "",
   });
 }
@@ -485,7 +488,7 @@ export function useStyleImpact(owner: StyleOwner | { kind: "episode"; id: number
     queryFn: ({ signal }) =>
       owner.kind === "episode"
         ? api<AnswerOf<"/api/units/{p1}/style", "put">>(`/api/units/${owner.id}/style`, { method: "PUT", body: { lang, style: draft.style, dry_run: true }, signal })
-        : api<StyleImpact>(`${ownerPath(owner)}/style?lang=${encodeURIComponent(lang)}`, {
+        : api<StyleImpact>(ownerUrl<"style", "put">(owner, "style", { lang }), {
             method: "PUT",
             body: { preset: draft.preset, style: draft.style, dry_run: true },
             signal,
@@ -515,7 +518,7 @@ export function useSaveStyle(owner: StyleOwner | { kind: "episode"; id: number }
     mutationFn: (draft: StyleDraft) =>
       owner.kind === "episode"
         ? api<AnswerOf<"/api/units/{p1}/style", "put">>(`/api/units/${owner.id}/style`, { method: "PUT", body: { lang, style: draft.style } })
-        : api<StyleImpact>(`${ownerPath(owner)}/style?lang=${encodeURIComponent(lang)}`, {
+        : api<StyleImpact>(ownerUrl<"style", "put">(owner, "style", { lang }), {
             method: "PUT",
             body: { preset: draft.preset, style: draft.style },
           }),
@@ -542,7 +545,7 @@ export interface PreviewRequest {
 /** "Try 20 lines": one model call on the draft, written nowhere. */
 export function usePreviewStyle(owner: StyleOwner) {
   return useMutation({
-    mutationFn: (request: PreviewRequest) => api<StylePreview>(`${ownerPath(owner)}/style/preview`, { method: "POST", body: request }),
+    mutationFn: (request: PreviewRequest) => api<StylePreview>(ownerUrl<"style/preview", "post">(owner, "style/preview"), { method: "POST", body: request }),
   });
 }
 
@@ -765,7 +768,7 @@ export function useUnitFacts(unitId: number, enabled: boolean) {
 export function useGlossary(owner: StyleOwner | null, lang: string) {
   return useQuery({
     queryKey: ["glossary", owner, lang] as const,
-    queryFn: ({ signal }) => api<GlossaryAnswer>(`${ownerPath(owner!)}/glossary?lang=${encodeURIComponent(lang)}`, { signal }),
+    queryFn: ({ signal }) => api<GlossaryAnswer>(ownerUrl(owner!, "glossary", { lang }), { signal }),
     enabled: owner !== null && lang !== "",
   });
 }
@@ -778,7 +781,7 @@ export function useGlossaryDryRun(owner: StyleOwner, lang: string, body: Glossar
   return useQuery({
     queryKey: ["glossary-impact", owner, lang, body] as const,
     queryFn: ({ signal }) =>
-      api<GlossarySave>(`${ownerPath(owner)}/glossary?lang=${encodeURIComponent(lang)}`, {
+      api<GlossarySave>(ownerUrl<"glossary", "put">(owner, "glossary", { lang }), {
         method: "PUT",
         body: { ...body, dry_run: true },
         signal,
@@ -794,7 +797,7 @@ export function useSaveGlossary(owner: StyleOwner, lang: string) {
   const refresh = useRefreshStyle();
   return useMutation({
     mutationFn: (body: GlossaryBody) =>
-      api<GlossarySave>(`${ownerPath(owner)}/glossary?lang=${encodeURIComponent(lang)}`, { method: "PUT", body }),
+      api<GlossarySave>(ownerUrl<"glossary", "put">(owner, "glossary", { lang }), { method: "PUT", body }),
     onSettled: () => void refresh(),
   });
 }
@@ -803,7 +806,7 @@ export function useGlossaryHistory(owner: StyleOwner, lang: string, enabled: boo
   return useQuery({
     queryKey: ["glossary", owner, lang, "history"] as const,
     queryFn: ({ signal }) =>
-      api<GlossaryHistory>(`${ownerPath(owner)}/glossary/history?lang=${encodeURIComponent(lang)}`, { signal }),
+      api<GlossaryHistory>(ownerUrl(owner, "glossary/history", { lang }), { signal }),
     enabled,
     gcTime: 0,
   });
@@ -814,7 +817,7 @@ export function useRestoreImpact(owner: StyleOwner, lang: string, version: numbe
   return useQuery({
     queryKey: ["glossary-restore-impact", owner, lang, version] as const,
     queryFn: ({ signal }) =>
-      api<GlossaryChange>(`${ownerPath(owner)}/glossary/restore`, { method: "POST", body: { lang, version, dry_run: true }, signal }),
+      api<GlossaryChange>(ownerUrl<"glossary/restore", "post">(owner, "glossary/restore"), { method: "POST", body: { lang, version, dry_run: true }, signal }),
     enabled: version !== null,
     gcTime: 0,
     staleTime: 0,
@@ -827,7 +830,7 @@ export function useRestoreGlossary(owner: StyleOwner, lang: string) {
   const refresh = useRefreshStyle();
   return useMutation({
     mutationFn: (version: number) =>
-      api<GlossaryChange & { restored: number }>(`${ownerPath(owner)}/glossary/restore`, { method: "POST", body: { lang, version } }),
+      api<GlossaryChange & { restored: number }>(ownerUrl<"glossary/restore", "post">(owner, "glossary/restore"), { method: "POST", body: { lang, version } }),
     onSettled: () => void refresh(),
   });
 }
@@ -869,7 +872,7 @@ export function useCardImpact(owner: StyleOwner, lang: string, request: { card: 
   return useQuery({
     queryKey: ["card-impact", owner, lang, request] as const,
     queryFn: ({ signal }) =>
-      api<StyleImpact>(`${ownerPath(owner)}/cards?lang=${encodeURIComponent(lang)}`, {
+      api<StyleImpact>(ownerUrl<"cards", "put">(owner, "cards", { lang }), {
         method: "PUT",
         body: { ...request, dry_run: true },
         signal,
@@ -886,7 +889,7 @@ export function useSaveCharacter(owner: StyleOwner, lang: string) {
   const refresh = useRefreshStyle();
   return useMutation({
     mutationFn: (parts: { glossary: GlossaryDoc | null; card: { card: CharacterCard; replaces?: string } | null }) =>
-      api<{ ok: boolean }>(`${ownerPath(owner)}/characters?lang=${encodeURIComponent(lang)}`, {
+      api<{ ok: boolean }>(ownerUrl<"characters", "put">(owner, "characters", { lang }), {
         method: "PUT",
         body: { ...(parts.glossary ? { glossary: parts.glossary } : {}), ...(parts.card ? { card: parts.card } : {}) },
       }),
@@ -899,7 +902,7 @@ export function useDeleteCharacter(owner: StyleOwner, lang: string) {
   const refresh = useRefreshStyle();
   return useMutation({
     mutationFn: (parts: { glossary: GlossaryDoc | null; card: string | null }) =>
-      api<{ ok: boolean }>(`${ownerPath(owner)}/characters?lang=${encodeURIComponent(lang)}`, {
+      api<{ ok: boolean }>(ownerUrl<"characters", "put">(owner, "characters", { lang }), {
         method: "PUT",
         body: { ...(parts.glossary ? { glossary: parts.glossary } : {}), ...(parts.card !== null ? { delete_card: parts.card } : {}) },
       }),
@@ -915,7 +918,7 @@ export function useCueTotal(id: number, lang: string) {
 export function useCorrections(id: number, lang: string) {
   return useQuery({
     queryKey: [...keys.unit(id), "corrections", lang] as const,
-    queryFn: ({ signal }) => api<AnswerOf<"/api/units/{p1}/corrections", "get">>(`/api/units/${id}/corrections?lang=${encodeURIComponent(lang)}`, { signal }),
+    queryFn: ({ signal }) => apiGet("/api/units/{p1}/corrections", { path: { p1: id }, query: { lang } }, signal),
     enabled: lang !== "",
   });
 }
@@ -1033,10 +1036,10 @@ export function useSuggestions(status: SuggestionStatus | "decided", enabled = t
     queryKey: ["suggestions", "list", status] as const,
     enabled,
     queryFn: async ({ signal }): Promise<SuggestionList> => {
-      if (status !== "decided") return api<AnswerOf<"/api/suggestions", "get">>(`/api/suggestions?status=${status}`, { signal });
+      if (status !== "decided") return apiGet("/api/suggestions", { query: { status } }, signal);
       const [accepted, rejected] = await Promise.all([
-        api<AnswerOf<"/api/suggestions", "get">>("/api/suggestions?status=accepted", { signal }),
-        api<AnswerOf<"/api/suggestions", "get">>("/api/suggestions?status=rejected", { signal }),
+        apiGet("/api/suggestions", { query: { status: "accepted" } }, signal),
+        apiGet("/api/suggestions", { query: { status: "rejected" } }, signal),
       ]);
       const items: Suggestion[] = [...accepted.items, ...rejected.items].sort((a, b) => b.decided_at - a.decided_at);
       return { ...accepted, items };
@@ -1146,7 +1149,7 @@ export function useBulkAccept() {
 export function useInsights(days: number) {
   return useQuery({
     queryKey: ["insights", days] as const,
-    queryFn: ({ signal }) => api<AnswerOf<"/api/metrics", "get">>(`/api/metrics?days=${days}`, { signal }),
+    queryFn: ({ signal }) => apiGet("/api/metrics", { query: { days } }, signal),
     refetchInterval: 30_000,
   });
 }

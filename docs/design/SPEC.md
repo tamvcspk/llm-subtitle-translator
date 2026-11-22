@@ -1,6 +1,6 @@
 # SPEC — LLM Subtitle Translator for Bazarr (tên tạm)
 
-> Trạng thái: **Draft v0.18** · 2026-11-22
+> Trạng thái: **Draft v0.19** · 2026-11-22
 > Thay thế bản SRS ban đầu. Những chỗ khác SRS gốc được đánh dấu **[Đổi]** kèm lý do.
 > v0.2: chốt các câu hỏi mở của v0.1 (mục 7), thêm FR-11 (duyệt, dịch lại, correction).
 > v0.3: chốt 2 câu hỏi mở của v0.2 — thông báo để v1.1; Basic Auth bật ngay từ đầu (NFR-5).
@@ -18,6 +18,7 @@
 > v0.16: admin dùng iPad cầm dọc: khổ chính của giao diện là dọc ~820 px, ngang chỉ là khổ phụ (quyết định #26 điểm 13, FR-10.5, tiêu chí 24e); Import YAML của glossary chốt là bottom sheet dán hoặc chọn tệp (#26 điểm 12). Wireframe v2.1 ([wireframe-v2.md](wireframe-v2.md)) vẽ lại theo khổ dọc và sửa các sai lệch của v2. Không đổi FR, NFR hay ADR. ARCHITECTURE lên v0.16 theo SPEC.
 > v0.17: kiểm code sáu điểm còn mở của UX §8 (kết quả ở PLAN P12b): quyết định #26 thêm điểm 14 (Memory và Specials after không có dòng impact ở v1; `dry_run` cho memory để v1.1, ghi ở Non-goals). Không đổi FR, NFR, ADR hay tiêu chí. ARCHITECTURE lên v0.17 theo SPEC (§5 thêm route phim và số `failed`/`ignored`); UX.md v0.17.
 > v0.18: tái cấu trúc sau P15, trước P16 (quyết định #27, PLAN P15b–P15f): `subserver/` thành package theo lớp, HTTP chuyển sang FastAPI trong cùng process, kiểu của `apps/web` sinh từ OpenAPI, một tài liệu kiến trúc "như đã dựng", skill và agent theo vai. P16 làm sau đợt này. Không đổi FR, NFR hay tiêu chí. ARCHITECTURE lên v0.18 theo SPEC (ADR-18 mới, sửa bố cục `subserver/` của ADR-2).
+> v0.19: P15f (quyết định #27): phần "như đã dựng" của ARCHITECTURE chuyển sang `docs/ARCHITECTURE.md` (kèm Seams và Invariants lấy từ `AGENTS.md`), `docs/design/ARCHITECTURE.md` còn ADR và phần đích chưa làm; skill `backend-dev`, `frontend-dev`, `designer`, `architect` và agent `qa`, `designer`. Không đổi FR, NFR, ADR hay tiêu chí. ARCHITECTURE lên v0.19 theo SPEC.
 
 ---
 

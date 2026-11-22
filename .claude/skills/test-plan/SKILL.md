@@ -49,6 +49,18 @@ The file: `local-state/handoff/TEST-PLAN.md` (git-ignored; one current plan). Te
    (session on the light model: `/model`). For live: remind them that `local-state/secrets/gemini.key` must exist and that the
    run can spend up to the stated budget. Do not start the preview or run gates here. Do not commit the plan.
 
+## C. Cross-check the criteria (before writing the plan, or when closing a phase)
+
+The plan is only as good as the list of what must hold. Before step A.3, and again when a phase is closed:
+
+1. Open `docs/design/SPEC.md` section 6 (the numbered acceptance criteria) and the "Kết quả kiểm chứng" cell of the phase in
+   `PLAN.md`. Pick the criteria the change can affect.
+2. For each, name the test that covers it (`apps/server/tests/`, `packages/subcore/tests/`, `apps/web/src/**/*.test.ts(x)`).
+   A criterion with no test is either missing a unit test (add it to the change) or something only a browser can see (put it in
+   the plan as a scenario). Say which, in one line each; do not leave a criterion unaccounted for.
+3. The read-only `qa` agent (`.claude/agents/qa.md`) does steps 1-2 on a diff and returns the table; use it when the change is
+   large. It does not replace the browser run.
+
 ## B. Read the findings ("đọc kết quả test")
 
 1. Read the plan file. `pending`/`running`: session 2 has not finished, say so.

@@ -40,7 +40,7 @@ git switch -c sync/upstream-$(date +%Y-%m) main
 git cherry-pick -x <sha>
 ```
 
-Git's rename detection usually maps `subserver/x.py` → `apps/server/subserver/x.py`. If it does not (conflict "deleted in HEAD"), apply with a path prefix instead:
+Git's rename detection usually maps `subserver/<name>.py` → `apps/server/subserver/<name>.py`. If it does not (conflict "deleted in HEAD"), apply with a path prefix instead:
 
 ```bash
 git format-patch -1 <sha> --stdout | git apply --3way --directory=apps/server --include='subserver/*' --include='worker.py' --include='tests/*'

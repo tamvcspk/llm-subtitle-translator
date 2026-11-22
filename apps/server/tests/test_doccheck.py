@@ -86,10 +86,53 @@ class ModuleTests(unittest.TestCase):
             self.assertEqual(doccheck.subcore_modules(root), ["pkg", "pkg.inner", "srt"])
 
 
+class ReferenceTests(unittest.TestCase):
+    def test_paths_are_read_from_backticks_and_patterns_are_left_out(self) -> None:
+        text = (
+            "see `docs/API.md`, `scripts/smoke/` and `apps/server/subserver/api/answers/<page>.py` "
+            "or `apps/web/src/**/*.test.ts` and `docs/design/ARCHITECTURE.md`. Plain docs/NOPE.md is not in backticks; "
+            "`uv run --locked` is not a path."
+        )
+        self.assertEqual(doccheck.instruction_paths(text), {"docs/API.md", "scripts/smoke/", "docs/design/ARCHITECTURE.md"})
+
+    def test_a_path_that_does_not_exist_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs").mkdir()
+            (root / "docs" / "API.md").write_text("", encoding="utf-8")
+            (root / ".claude" / "skills" / "x").mkdir(parents=True)
+            (root / ".claude" / "skills" / "x" / "SKILL.md").write_text("`docs/API.md` and `docs/GONE.md`", encoding="utf-8")
+            (root / "AGENTS.md").write_text("`scripts/gone.py`", encoding="utf-8")
+            self.assertEqual(
+                doccheck.missing_references(root),
+                [
+                    "AGENTS.md names scripts/gone.py, which does not exist",
+                    ".claude/skills/x/SKILL.md names docs/GONE.md, which does not exist",
+                ],
+            )
+
+
 class RepositoryTests(unittest.TestCase):
     def test_the_docs_name_every_module_and_every_route(self) -> None:
         """Adding a module or a route without saying so in docs/ARCHITECTURE.md or docs/API.md fails here."""
         self.assertEqual(doccheck.check(REPO_ROOT), [])
+
+    def test_agents_md_points_at_the_architecture_instead_of_copying_it(self) -> None:
+        """P15f: the seams and invariants live in docs/ARCHITECTURE.md only."""
+        agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        architecture = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        self.assertIn("## 10. Seams", architecture)
+        self.assertIn("## 11. Invariants", architecture)
+        self.assertNotIn("Seams to respect", agents)
+        self.assertNotIn("Invariants:", agents)
+        self.assertIn("docs/ARCHITECTURE.md", agents)
+        self.assertLess(len(agents), 20_000)  # it held the seams and invariants too once
+
+    def test_every_role_has_a_skill_or_an_agent(self) -> None:
+        for name in ("backend-dev", "frontend-dev", "designer", "architect"):
+            self.assertTrue((REPO_ROOT / ".claude" / "skills" / name / "SKILL.md").is_file(), name)
+        for name in ("qa", "designer"):
+            self.assertTrue((REPO_ROOT / ".claude" / "agents" / f"{name}.md").is_file(), name)
 
 
 if __name__ == "__main__":

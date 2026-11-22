@@ -1,4 +1,15 @@
 # Unreleased
+- **P15f: one architecture document, and skills and agents by role. Nothing a user sees changes.** `docs/ARCHITECTURE.md` is
+  rewritten as the system is built (layers, module reference, how a request and a job travel, the subsystems, and the
+  **Seams** and **Invariants** that used to be copied into `AGENTS.md`); `docs/design/ARCHITECTURE.md` keeps the ADRs and the
+  design not built yet (research, P16) and a table saying where each old section went. `AGENTS.md` is down to the general
+  rules, the commands and links. New skills `backend-dev`, `frontend-dev`, `designer`, `architect`; new agents `qa`
+  (read-only, matches the criteria of SPEC section 6 to tests) and `designer` (edits the design docs only); `test-plan` has a
+  part C that cross-checks the criteria; `implement-phase` points to the right skill by role. `scripts/doccheck.py` also fails
+  when `AGENTS.md`, a skill or an agent names a repository path that is not there. The query strings of `apps/web` are no
+  longer written by hand: `src/api/route.ts` builds a URL from a route of the OpenAPI document, so a path parameter or a query
+  name the server does not read stops the build (`routeUrl`, `apiGet`, `ownerUrl`; the 22 calls of `queries.ts` that built a
+  path or a query now use it, and so does the golden-set link of Insights).
 - **P15e: the types of the web console are generated from the server (ADR-18, part 3). Nothing a user sees changes.** Every
   route that answers JSON now has a pydantic model of its answer (`api/answers`, one module a page); the models are exported
   to `docs/openapi.json` (`python -m subserver.api.openapi`, no server needed), and `apps/web` generates

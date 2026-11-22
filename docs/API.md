@@ -797,7 +797,7 @@ then has `style`). `400` when the version is not a candidate. Reply `{"ok", "rec
 ## Review: suggestions for the glossary and the character cards
 
 What a generator proposes (story facts, story memory, the feedback loop, research: the `source`) waits here until the admin
-decides (FR-4.4, FR-11.1; [ARCHITECTURE §3.6](design/ARCHITECTURE.md)). Accepting writes the glossary in the database (a
+decides (FR-4.4, FR-11.1; [ARCHITECTURE section 6](ARCHITECTURE.md)). Accepting writes the glossary in the database (a
 character also writes its card, in the same transaction) and flags the translations made without it as stale; it never
 retranslates (FR-5.6). Errors are `{"error": "..."}` with `400` (a payload the glossary refuses names the offending path,
 `address_rules[0]: needs 'a_to_b' and/or 'b_to_a'`; a suggestion already decided) or `404`.
