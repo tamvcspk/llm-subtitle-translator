@@ -460,6 +460,7 @@ Quyết định #27. Sau P15e, khi cấu trúc đã đứng yên.
 - [ ] Skill mới: `backend-dev` (đặt route, service, method `Store`, kind job mới vào đâu; `mapped_errors`; test), `frontend-dev` (quy tắc `apps/web`, kiểu sinh, `settings.ts`, `draft.ts`, Estimate, ≥ 44 px, lỗi chữ ổ đĩa của Vitest), `designer` (UX.md, wireframe v2, khổ dọc, cảm ứng; ra wireframe và spec trước khi code), `architect` (ADR, ranh giới package, chạy `scripts/doccheck.py`; dùng cùng `design-docs`).
 - [ ] QA: không tạo skill trùng `test-plan`/`web-test`; thêm phần đối chiếu tiêu chí SPEC §6 với test. Vai có quyền hạn riêng thành agent trong `.claude/agents/` (`qa` chỉ đọc, `designer` không sửa code).
 - [ ] `implement-phase` trỏ tới đúng skill theo vai; dùng thử mỗi skill một lần trên một thay đổi nhỏ.
+- [ ] (còn lại của P15e) Chuỗi truy vấn trong `apps/web/src/api/queries.ts` (`?lang=…&offset=…`) vẫn ghép tay, nên tên tham số chưa được kiểm lúc biên dịch dù tài liệu OpenAPI đã có 55 tham số truy vấn. Làm một hàm dựng truy vấn có kiểu từ `paths[...]["parameters"]["query"]` (ví dụ `api(path, { query })`), rồi chuyển các chỗ gọi sang; ghi vào skill `frontend-dev`.
 
 ## P16 — Research grounding `[ ]`
 
