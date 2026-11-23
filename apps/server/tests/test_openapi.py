@@ -102,6 +102,35 @@ class WhatTheDocumentSaysTests(unittest.TestCase):
         self.assertTrue(query("/api/backups/download")["name"]["required"])
         self.assertEqual(set(query("/api/metrics")), {"days"})
 
+    def test_a_series_and_a_movie_read_the_same_query_for_a_part_they_share(self):
+        """``apps/web/src/api/route.ts`` (``ownerUrl``) checks a part's query names against the series route only, so the
+        movie route must read the same names, with the same types, and answer the same way."""
+        prefix = {"series": "/api/series/{p1}/", "movies": "/api/movies/{p1}/"}
+        parts = {
+            kind: {path[len(start):] for path in self.document["paths"] if path.startswith(start)}
+            for kind, start in prefix.items()
+        }
+        shared = parts["series"] & parts["movies"]
+        self.assertIn("glossary", shared)
+        self.assertIn("style/preview", shared)
+        self.assertNotIn("glossary/copy", parts["movies"])  # series only, and not a part `ownerUrl` offers
+
+        def shape(path: str, method: str) -> tuple[object, object]:
+            operation = self.document["paths"][path][method]
+            query = {
+                p["name"]: (p["schema"], bool(p.get("required")))
+                for p in operation.get("parameters", []) if p["in"] == "query"
+            }
+            return json.dumps(query, sort_keys=True), operation["responses"]["200"]["content"]
+
+        for part in sorted(shared):
+            series, movie = self.document["paths"][prefix["series"] + part], self.document["paths"][prefix["movies"] + part]
+            self.assertEqual(set(series), set(movie), f"{part}: the two routes allow different methods")
+            for method in series:
+                self.assertEqual(
+                    shape(prefix["series"] + part, method), shape(prefix["movies"] + part, method), f"{method.upper()} {part}",
+                )
+
     def test_what_a_field_means_reaches_the_document(self):
         schemas = self.document["components"]["schemas"]
         self.assertIn("Unix seconds", schemas["QueueJob"]["properties"]["retry_at"]["description"])

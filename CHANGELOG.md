@@ -8,7 +8,7 @@
   part C that cross-checks the criteria; `implement-phase` points to the right skill by role. `scripts/doccheck.py` also fails
   when `AGENTS.md`, a skill or an agent names a repository path that is not there. The query strings of `apps/web` are no
   longer written by hand: `src/api/route.ts` builds a URL from a route of the OpenAPI document, so a path parameter or a query
-  name the server does not read stops the build (`routeUrl`, `apiGet`, `ownerUrl`; the 22 calls of `queries.ts` that built a
+  name the server does not read stops the build (`test_openapi.py` keeps the series and movie routes reading the same query) (`routeUrl`, `apiGet`, `ownerUrl`; the 22 calls of `queries.ts` that built a
   path or a query now use it, and so does the golden-set link of Insights).
 - **P15e: the types of the web console are generated from the server (ADR-18, part 3). Nothing a user sees changes.** Every
   route that answers JSON now has a pydantic model of its answer (`api/answers`, one module a page); the models are exported

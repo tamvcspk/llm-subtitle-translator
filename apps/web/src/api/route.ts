@@ -79,7 +79,7 @@ export type OwnerPart = SeriesPart & MoviePart;
 
 /**
  * The URL of a part of an owner. The query names are checked against the series route (the movie route has the same ones;
- * `tests/test_answer_contract.py` and the document keep the two together).
+ * `tests/test_openapi.py` keeps the two together).
  */
 export function ownerUrl<S extends OwnerPart, M extends HttpMethod & keyof paths[`/api/series/{p1}/${S}`] = "get">(
   owner: { kind: "series" | "movie"; id: number },

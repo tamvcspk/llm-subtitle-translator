@@ -1,7 +1,7 @@
 # UX — luồng dùng và nguyên tắc giao diện
 
-> Trạng thái: **Draft v0.17** · 2026-11-16 · Nền cho dựng giao diện. Nguồn: lời mô tả của admin ngày 2026-11-16 (mục 1–2), các bất biến trong `AGENTS.md`, và các quyết định ở SPEC #26. Quyết định: SPEC #25, #26, FR-10.4, FR-10.5; ADR-17. Wireframe: [wireframe-v2.md](wireframe-v2.md) (v2.1); prompt vẽ: [wireframe-prompt.md](wireframe-prompt.md). **Khi wireframe và tài liệu này khác nhau, tài liệu này thắng.**
-> v0.14: sau review wireframe v1: giao diện React, bỏ Stale khỏi Home, bỏ nút Check, Estimate/Confirm, banner toàn cục, Inherit và Style cấp tập, Settings 7 nhóm. v0.15: các mặc định đã vẽ thành quy tắc (SPEC #26 điểm 12). v0.16: iPad cầm dọc nên khổ chính là dọc (SPEC #26 điểm 13); Import YAML chốt; wireframe v2.1 đã sửa các sai lệch của v2 nên bỏ Phụ lục C. v0.17: đã kiểm code cho sáu điểm còn mở (kết quả ở PLAN P12b); mục 8 chỉ còn ý tưởng chưa quyết; Memory và Specials after không có dòng impact ở v1 (SPEC #26 điểm 14).
+> Trạng thái: **Draft v0.18** · 2026-11-23 · Nền cho dựng giao diện. Nguồn: lời mô tả của admin ngày 2026-11-16 (mục 1–2), các bất biến trong `AGENTS.md`, và các quyết định ở SPEC #26. Quyết định: SPEC #25, #26, FR-10.4, FR-10.5; ADR-17. Wireframe: [wireframe-v2.md](wireframe-v2.md) (v2.1); prompt vẽ: [wireframe-prompt.md](wireframe-prompt.md). **Khi wireframe và tài liệu này khác nhau, tài liệu này thắng.**
+> v0.14: sau review wireframe v1: giao diện React, bỏ Stale khỏi Home, bỏ nút Check, Estimate/Confirm, banner toàn cục, Inherit và Style cấp tập, Settings 7 nhóm. v0.15: các mặc định đã vẽ thành quy tắc (SPEC #26 điểm 12). v0.16: iPad cầm dọc nên khổ chính là dọc (SPEC #26 điểm 13); Import YAML chốt; wireframe v2.1 đã sửa các sai lệch của v2 nên bỏ Phụ lục C. v0.17: đã kiểm code cho sáu điểm còn mở (kết quả ở PLAN P12b); mục 8 chỉ còn ý tưởng chưa quyết; Memory và Specials after không có dòng impact ở v1 (SPEC #26 điểm 14). v0.18: ghi lại nút **Download golden set** của trang Insights (đã có trong code): mục 6.6 và Phụ lục A.6b; không đổi hành vi.
 > Giao diện viết bằng **tiếng Anh** (khớp arr stack); tài liệu này bằng tiếng Việt, các nhãn UI giữ nguyên tiếng Anh.
 
 ## 1. Người dùng và bối cảnh
@@ -213,6 +213,8 @@ Hộp Estimate là dialog hoặc bottom sheet có **Cancel** và **Confirm** (kh
 
 Tải bằng `blob:` có thể bị iOS chặn trong iframe (mục 7). Mọi thao tác xuất (**Export YAML** của glossary, **Export job spec**, tải backup) dùng **liên kết do server phục vụ** (có `Content-Disposition`), không tạo `blob:`. Bản xuất dạng chữ (YAML, job spec) có thêm nút **Copy** (nếu iframe không cho ghi clipboard thì hiện ô văn bản chọn-tất-cả để chép tay); backup `.zip` chỉ có liên kết tải, không có Copy.
 
+**Bộ golden** của một series (nút **Download golden set** trong "Your corrections" ở cuối trang Insights, mỗi ngôn ngữ của series một nút) theo cùng quy tắc: là một liên kết `<a>` tới `GET /api/series/{id}/golden?lang=<lang>&download=1`, server trả file đính kèm `<series-key>.<lang>.golden.json`; không tạo `blob:`; cao ít nhất 44 px như mọi nút. Chỉ đọc, không tốn lời gọi model nên không có Estimate/Confirm. Hiện chỉ có liên kết tải, chưa có nút Copy (câu hỏi mở ở bàn giao, không phải hành vi mới).
+
 ## 7. Ràng buộc kỹ thuật cho iframe, đăng nhập và hết phiên
 
 - Console không gửi `X-Frame-Options` hay `frame-ancestors`, nên nhúng được.
@@ -292,6 +294,20 @@ Ký hiệu: **Có** = đã có endpoint; **Mới** = cần backend nhỏ (P12b);
 ### A.6 Review (P13)
 
 Nhóm theo series; mỗi mục: `source`, nội dung đề xuất, bằng chứng (cue + timecode hoặc URL), số bản dịch sẽ stale; Accept · Edit · Reject; Accept all in series (kèm số lượng). Đã làm ở P13: hai tab **Pending** và **History** (đã chấp nhận, kèm nhãn *Auto* và *Edited*, và đã từ chối); số stale đọc từ `POST /api/suggestions/{id}/accept` với `dry_run` (không có nút Check); Edit là bottom sheet có số stale theo bản sửa; Accept all hỏi trong bottom sheet kèm số và số stale của cả nhóm (`POST /api/suggestions/bulk`, `dry_run`); sau mỗi quyết định có dòng thông báo kèm **Undo**. Accept một mục không hỏi lại vì số stale đã hiện trên thẻ. Series bị `auto_request` giữ lại (FR-15.12) có khung **Continue** ở đầu trang series và nhãn *Waiting for glossary review*.
+
+### A.6b Insights: "Your corrections" (P15)
+
+Phần cuối trang Insights, chỉ đọc. Mỗi series có ít nhất một ngôn ngữ thì có một thẻ; series chưa có ngôn ngữ nào thì không hiện. Mỗi ngôn ngữ một dòng gồm huy hiệu ngôn ngữ và hai nút cao ít nhất 44 px, xếp xuống dòng khi hẹp. Khổ dọc: thẻ xếp chồng.
+
+| Hiển thị | Nguồn |
+|---|---|
+| Danh sách series; tên series là liên kết tới tab Glossary của series (chỉ khi series có trong catalog; nếu không thì chữ thường) | `GET /api/library/series`, `GET /api/catalog` |
+| Các ngôn ngữ của series (một dòng mỗi ngôn ngữ) | `GET /api/library/series/{id}/units` → `languages` |
+| Nút **Look at my edits** (tên truy cập: "Look at my <lang> edits of <series>"): tìm mẫu sửa lặp lại trong cue đã sửa và đề xuất vào Review (`pending`). Không tốn lời gọi model, không qua Estimate. Khi chạy nút hiện trạng thái loading; xong thì một dòng kết quả `<lang>: <câu tóm tắt>` (`role="status"`) dưới thẻ; lỗi hiện `Alert` đỏ | `POST /api/suggestions/from-edits` (`series_id`, `lang`) |
+| Nút **Download golden set** (tên truy cập: "Download the <lang> golden set of <series>"): liên kết tải bộ golden, xem 6.6. Không có trạng thái loading (trình duyệt tải) | `GET /api/series/{id}/golden?lang=&download=1` → file `<series-key>.<lang>.golden.json` (`golden_version`, `series`, `lang`, `cues[]`: `season`, `episode`, `cue`, `source`, `text`) |
+| Đang tải danh sách series: vòng quay "Loading the series"; không có series: "The worker keeps no series yet." | `GET /api/library/series` |
+
+Phần còn lại của trang Insights (số đo, theo model, từng ngày) chưa có bảng ở đây.
 
 ### A.7 Còn thiếu (Mới, làm ở P12b hoặc để sau)
 

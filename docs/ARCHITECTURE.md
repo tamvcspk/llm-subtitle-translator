@@ -216,15 +216,18 @@ queue and job-building logic belongs in `services/console.py` (or the page's ser
 row of a table or a function in `console_api.py`, a model in `schemas.py` / `answers/`, a line in `docs/API.md` and a
 case in `tests/test_answer_contract.py`.
 
-**A job.** Made by exactly two places: an admin's request (`JobRequests`, origin `manual`, interactive class) and the
-policy (`AutoRequest`, origin `policy`, automatic class). It is a row of `jobs` (states `queued`, `running`, `waiting`
+**A job.** A translation of a missing language is requested by exactly two deciders: an admin's request (`JobRequests`,
+origin `manual`, interactive class) and the policy (`AutoRequest`, origin `policy`, automatic class). The other jobs are
+queued by `JobQueue` helpers under an admin's own action or a finished job: a retranslation (origin `retranslate`), a variant
+(`variant`), extract facts and judge (`manual`), a put-back of a failed job (`retry`), and the `suggest` job that
+`TranslationAttempt` queues after a job settles (`facts`). A read of Bazarr and a GET never make one. It is a row of `jobs` (states `queued`, `running`, `waiting`
 with a `wait_reason` of `quota`, `provider`, `context`, `settle` or `rate`, `done`, `skipped`, `failed`, `cancelled`).
 `QueueWorker` claims one at a time (priority by class, round-robin over series, aging) and `run_job` runs it by `kind`
 through the handlers `worker.py` registers (`register_handler`):
 
 | `kind` | What it does | Handler | Key |
 |---|---|---|---|
-| `publish`, `variant` (`TRANSLATING_KINDS`) | translate a subtitle; `variant` always ends as a `candidate` | `translate_job` -> `TranslationAttempt` | unit + language |
+| `publish`, `variant` (`TRANSLATING_KINDS`) | translate a subtitle; `variant` always ends as a `candidate` | `translate_job` -> `TranslationAttempt` | a sha1 of source path, output path and target code (a variant and a retranslation hash a prefix too) |
 | `extract` | the facts of one episode | `ExtractJob` | `extract:<unit_id>` |
 | `suggest` | proposals for one series and language, at most three calls | `SuggestJob` | `suggest:<series>:<lang>` |
 | `judge` | the LLM judge on one candidate, 30 cues a call | `JudgeJob` | `judge:<unit>:<lang>:<version>` |
@@ -271,9 +274,12 @@ A translation job, in `TranslationAttempt` (`translation_attempt.py`, the only p
    after 300 seconds and a job has a 30 minute watchdog (`JOB_TIMEOUT_SECONDS`). Progress reaches the queue through the
    status callback (`progress_done`, `progress_total`). A failed attempt starts again from the beginning: only a finished
    result is kept.
-5. Provider failures are typed exceptions, never parsed text. A `503` or rate limit that outlasts the retries makes the job
-   `waiting` for 5, 15, 30, then 60 minutes; while it waits out an outage no other job starts. After four delayed retries
-   the job moves to the strong model once; without one, or when it is also unavailable, it fails. `AuthError` marks the key
+5. Provider failures are typed exceptions, never parsed text. A `503` or rate limit that outlasts the in-process retries is
+   counted by a breaker per model (`queue_policy.py`): the first two consecutive failures make the job `waiting` (`rate`)
+   for 30 seconds; the third (`breaker_threshold`) opens the breaker, which rests 5 minutes and, each time a trial fails,
+   15, 30, then 60. When the breaker opens and the other model is usable the job is requeued on it at once; otherwise it
+   waits (`provider`) until the rest ends, and no job needing that model starts meanwhile. A provider outage does not fail
+   a job. `AuthError` marks the key
    `invalid` and passes over it (the next call uses another key if there is one); an unknown model (`ModelNotFound`) is a
    Settings warning; an exceeded watchdog fails the job. Output that stays invalid after repair and splitting
    (`HardJobError`) is a hard job and moves once to the strong model, recording `escalated_from`.
@@ -471,7 +477,7 @@ Dockerfile builds it in a pinned Node stage and copies only `dist/` into the fin
 never holds Node, `node_modules` or the sources. The sign-in page `apps/web/public/login.html` is the one file outside the
 bundle (self-contained, `GET /login`, the only static file served without a session). The code is organised as `api/`
 (typed calls and queries; `schema.gen.ts` generated from `docs/openapi.json`, `types.ts` names the generated types the
-screens use), `lib/` (pure rules, tested without a DOM; `settings.ts`, `draft.ts`), `components/` (the price box,
+screens use, `route.ts` builds a URL from a route of that document so a wrong path parameter or query name does not compile), `lib/` (pure rules, tested without a DOM; `settings.ts`, `draft.ts`), `components/` (the price box,
 confirmation sheets, the style form) and `pages/`. A page never builds HTML from text: React escapes it, and paths and
 provider errors are untrusted. Screens, data and layout: `docs/design/UX.md`.
 
@@ -521,7 +527,7 @@ Rules for where code attaches. Enforced where a test is named.
 - Library, corrections, retranslation, history and glossary pages reach the worker through `UnitService` and the pure
   router `library_api.py`. `TranslationAttempt` takes the `Library` so a job is registered and prompted with its rules.
   Retranslations are jobs with `trigger: retranslate` and `priority: 100`; `should_skip_job` lets them overwrite and
-  `_ready_job_path` runs them first.
+  their priority runs them before automatic jobs.
 - `subcore.matching` is the only place that decides whether a line mentions a name (glossary filter per request, character
   cards present, locked-term check, console matches); a test fails if another module writes a word-boundary pattern. A
   request is composed only by `engine.compose_request`.
@@ -567,7 +573,8 @@ What must stay true, whatever the change.
   aside, the cache stays as it was and the state says why; nothing becomes "not missing" because Bazarr failed. Items are
   identified by Bazarr's own id (`kind` + `bazarr_id`), never by a path; a job finds its files again through
   `CatalogPaths.refresh` when it is claimed. The label of an (item, language) is derived on reading, never stored.
-- Jobs come from exactly two places: an admin's request (`JobRequests`, origin `manual`) and the policy (`AutoRequest`,
+- A translation of a missing language is requested by exactly two deciders (section 4 lists the helpers that queue the
+  other kinds of job): an admin's request (`JobRequests`, origin `manual`) and the policy (`AutoRequest`,
   origin `policy`, automatic class, only after an accepted read; off by default; per series `on`/`off`; never an Ignored or
   Removed item, one with a job, one whose last finished job failed or was cancelled by the admin (only an admin's request
   retries it, D4), one outside `GST_ONLY_PATHS`, nor past `auto_request_daily_cap`; `Requested.capped` counts only what the
@@ -580,7 +587,13 @@ What must stay true, whatever the change.
   tab POSTs `.../memory/adopt` once); `catalog_apply` writes only rows that changed and a page of the Library reads its units
   and jobs once (`CatalogView.job_index`).
 - Long work is a job: no second background mechanism; a long wait that spends no model call (`sync_now`) wakes the existing
-  loop instead.
+  loop instead. Every task that spends model calls is a row of `jobs`. A new kind of job is added to the list of every
+  reader that says which kinds it means (`job_name`, `latest_for(kind=)`, `layer_report`, `catalog_view`, `_hard_job`,
+  `estimate_retry`), with a test.
+- Every button of the console that spends model calls goes through an Estimate/Confirm dialog showing the price ("Try 20
+  lines" is the one exception and shows its cost on the button); the live count of translations a Style or Glossary save
+  would flag stale comes from `dry_run`, not from a Check button. `estimate_only` and `dry_run` spend nothing.
+- Tests never call the network or a real model: the `fake` provider, `Store(":memory:")`, a fake `MediaLibrary`.
 
 **Secrets, authentication, logs**
 
