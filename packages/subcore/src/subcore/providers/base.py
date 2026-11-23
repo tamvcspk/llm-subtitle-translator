@@ -11,6 +11,7 @@ from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
     "Capabilities",
+    "GroundingSource",
     "LLMRequest",
     "LLMResponse",
     "Provider",
@@ -99,7 +100,11 @@ class LLMRequest:
     """One model call. ``meta`` is for callers/tests and is never sent to the model.
 
     ``json_output`` says the caller parses a JSON reply: a provider without schema support uses its JSON mode for
-    it (FR-9.2), while a plain-text task (a summary) leaves it off."""
+    it (FR-9.2), while a plain-text task (a summary) leaves it off.
+
+    ``web_search`` asks the provider to ground the answer in a web search (FR-7). It is only ever set by the research
+    step and never together with ``response_schema`` (a search tool and structured output do not mix on every model); a
+    provider whose ``caps.web_search`` is false ignores it."""
 
     system: str
     user: str
@@ -108,6 +113,18 @@ class LLMRequest:
     task: str = "translate"
     meta: dict[str, Any] = field(default_factory=dict)
     json_output: bool = False
+    web_search: bool = False
+
+
+@dataclass(frozen=True)
+class GroundingSource:
+    """One page a grounded answer rests on. ``url`` is what the provider gave (Gemini hands out a redirect link of its
+    own, so the caller resolves it, see ``subserver.adapters.redirects``); ``domain`` is the site's real name, the only
+    part that is certain to say where the page is; ``title`` is what the provider calls it."""
+
+    url: str
+    domain: str = ""
+    title: str = ""
 
 
 @dataclass
@@ -117,6 +134,12 @@ class LLMResponse:
     tokens_out: int = 0
     model: str = ""
     finish_reason: str = ""
+    # Filled only for a request with ``web_search`` (FR-7): the pages the answer rests on, without repeats, in the order
+    # the ``[n]`` marks of ``cited_text`` count them; the queries the model ran; and the answer with a ``[n]`` after each
+    # passage a source backs. The URLs come from the provider's grounding metadata, never from the model's own words.
+    grounding_sources: tuple[GroundingSource, ...] = ()
+    search_queries: tuple[str, ...] = ()
+    cited_text: str = ""
 
 
 @runtime_checkable

@@ -4076,6 +4076,58 @@
         }
       }
     },
+    "/api/suggestions/research": {
+      "post": {
+        "operationId": "endpoint_api_suggestions_research_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ResearchBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GenerateQueued"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ResearchEstimate"
+                    }
+                  ],
+                  "title": "Response Endpoint Api Suggestions Research Post"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "a refusal: the status says what went wrong, `error` says it in words",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/suggestions/from-edits": {
       "post": {
         "operationId": "endpoint_api_suggestions_from_edits_post",
@@ -10255,7 +10307,7 @@
                 "type": "null"
               }
             ],
-            "description": "``publish`` (a translation; also when the field is absent), ``variant``, ``extract``, ``suggest`` or ``judge``."
+            "description": "``publish`` (a translation; also when the field is absent), ``variant``, ``extract``, ``suggest``, ``judge`` or ``research``."
           },
           "version": {
             "anyOf": [
@@ -10267,6 +10319,29 @@
               }
             ],
             "description": "``judge`` jobs: the candidate version being judged."
+          },
+          "stored_series_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "``suggest`` and ``research`` jobs: the series (its id in the worker's own library) they are about."
+          },
+          "report": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "``suggest`` and ``research`` jobs: what the run did (``added``, ``auto_accepted``, ``terms``, ``errors``, ...)."
           },
           "source_code": {
             "anyOf": [
@@ -10531,6 +10606,192 @@
         "type": "object",
         "title": "RequestObject",
         "description": "Any JSON object. The route hands it to a use case that validates it (a glossary, a style, a correction, a setting)."
+      },
+      "ResearchBody": {
+        "properties": {
+          "series_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Id"
+          },
+          "lang": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lang"
+          },
+          "estimate_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimate Only"
+          },
+          "auto_accept": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Accept"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "ResearchBody",
+        "description": "``POST /api/suggestions/research``: ``auto_accept`` is the Estimate box's tick for this run only (absent: what\n``auto_accept_terms`` says)."
+      },
+      "ResearchBudget": {
+        "properties": {
+          "cap": {
+            "type": "integer",
+            "description": "``research_max_calls_per_series``; ``0`` is no cap."
+          },
+          "used": {
+            "type": "integer",
+            "description": "Calls of the research task this series has made over its whole life."
+          },
+          "after": {
+            "type": "integer",
+            "description": "``used`` plus the calls this run would make."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cap",
+          "used",
+          "after"
+        ]
+      },
+      "ResearchEstimate": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "estimate_only": {
+            "type": "boolean"
+          },
+          "terms": {
+            "type": "integer",
+            "description": "Terms two or more episodes share that the glossary and the inbox do not have: the ``N`` of the button."
+          },
+          "asked": {
+            "type": "integer",
+            "description": "How many of them one run asks about (the most widespread first)."
+          },
+          "calls": {
+            "type": "integer",
+            "description": "Model calls: the search and the one that reads its answer (an estimate: a search may run several queries)."
+          },
+          "search_model": {
+            "type": "string"
+          },
+          "read_model": {
+            "type": "string"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/ResearchBudget"
+          },
+          "auto_accept": {
+            "type": "boolean",
+            "description": "What ``auto_accept_terms`` says now: the default of the tick in the box."
+          },
+          "blocked": {
+            "type": "string",
+            "enum": [
+              "",
+              "no_web_search",
+              "budget",
+              "no_terms"
+            ],
+            "description": "Why a run cannot be made now; empty when it can."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "calls_left_today": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paused_until": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "minutes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finish_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "estimate_only",
+          "terms",
+          "asked",
+          "calls",
+          "search_model",
+          "read_model",
+          "budget",
+          "auto_accept",
+          "blocked",
+          "reason",
+          "calls_left_today",
+          "paused_until",
+          "minutes",
+          "finish_at"
+        ],
+        "description": "``POST /api/suggestions/research`` with ``estimate_only``: what a run would look up and spend. No model call."
       },
       "RetranslateEstimate": {
         "properties": {

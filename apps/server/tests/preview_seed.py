@@ -11,12 +11,14 @@ in use, a character card, a Spanish subtitle next to the Vietnamese one, and a m
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
 import time
 from pathlib import Path
 
+from subcore.memory import EXTRACT_PROMPT_VERSION, Character, Facts, FactTerm
 from subcore.providers import FakeProvider
 
 from subserver.services.glossaries import Glossaries
@@ -69,6 +71,33 @@ def translate(text: str) -> str:
     return f"[vi] {text}".replace("Kyber crystal", "tinh thể Kyber").replace("Mom", "Mẹ")
 
 
+# What the stored facts of "Arcane Demo" say (``--facts``, always on in the preview): the terms research looks up are the ones two
+# or more episodes share and the glossary does not have. "Old Observatory" is in all three episodes and "Hextech Gate" in two:
+# those are the two to research. "Lone Pass" is in one only, and "Kyber crystal" is already in the glossary: neither is asked.
+FACT_TERMS = {1: ("Old Observatory", "Lone Pass", "Kyber crystal"), 2: ("Old Observatory", "Hextech Gate", "Kyber crystal"),
+              3: ("Old Observatory", "Hextech Gate", "Kyber crystal")}
+
+
+def seed_facts(store: Store, show: Path) -> None:
+    """Facts for the three episodes of "Arcane Demo", as if story memory had read them (no model call). Makes the units too, so
+    this works when nothing is translated (live mode)."""
+    series_id = store.upsert_series("bazarr-7", title="Arcane Demo", bazarr_id="7")
+    for episode, terms in FACT_TERMS.items():
+        source = show / f"Arcane.Demo.S01E{episode:02d}.en.srt"
+        unit_id = store.upsert_unit(
+            series_id=series_id, season=1, episode=episode, title=f"Episode {episode}", media_type="series",
+            bazarr_id=str(100 + episode), video_path=str(show / f"Arcane.Demo.S01E{episode:02d}.mkv"),
+            source_path=str(source), source_code="en",
+        )
+        facts = Facts(
+            (Character("Zed", gender="m"), Character("Vi", gender="f")), (), tuple(FactTerm(t, "place") for t in terms),
+            f"Episode {episode}: Zed and Vi head north.",
+        )
+        store.save_facts(
+            unit_id, hashlib.sha256(source.read_bytes()).hexdigest(), EXTRACT_PROMPT_VERSION, model="preview-seed", facts=facts,
+        )
+
+
 def write_old_queue(state: Path) -> None:
     """What an older worker (before P10) and Bazarr's script leave in ``<state>/queue``, so the start-up has something
     to settle: a refusal of episode 3 (becomes Ignored) and a file the script dropped for the movie that nobody approved
@@ -98,7 +127,9 @@ def write_old_queue(state: Path) -> None:
         path.write_text(json.dumps(job), encoding="utf-8")
 
 
-def seed(state: Path, translated: tuple[int, ...] = (1, 2), *, edit_demo: bool = False, candidate: bool = False) -> str:
+def seed(
+    state: Path, translated: tuple[int, ...] = (1, 2), *, edit_demo: bool = False, candidate: bool = False, facts: bool = False,
+) -> str:
     media = state / "preview-media"
     show = media / "Arcane Demo" / "Season 1"
     show.mkdir(parents=True)
@@ -187,6 +218,8 @@ def seed(state: Path, translated: tuple[int, ...] = (1, 2), *, edit_demo: bool =
             video_path=str(folder / "Edit.Demo.S01E01.mkv"),
             subtitles=(CatalogSubtitle("en", str(source)), CatalogSubtitle("vi", str(target))),
         ))
+    if facts:
+        seed_facts(store, show)
     store.catalog_apply(entries, time.time())
 
     store.close()
@@ -211,7 +244,7 @@ def main() -> int:
         shutil.rmtree(state)
     state.mkdir(parents=True)
     (state / MARK).write_text("made by tests/preview_seed.py; --reset may delete this folder\n", encoding="utf-8")
-    seed(state, () if args.live else (1, 2), edit_demo=args.live)
+    seed(state, () if args.live else (1, 2), edit_demo=args.live, facts=True)
     if args.old_queue:
         write_old_queue(state)
     print(f"seeded {state}")

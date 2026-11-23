@@ -305,6 +305,9 @@ class ReviewAnswers(Contract):
         self.assertEqual(queued["queued"], 1)
         again = self.answer("POST", "/api/suggestions/generate", {"series_id": sid, "lang": "vi"})
         self.assertEqual(again["merged"], 1)
+        # Research (P16): nothing to look up in a series with no facts, so the estimate says why a run is not made.
+        research = self.answer("POST", "/api/suggestions/research", {"series_id": sid, "lang": "vi", "estimate_only": True})
+        self.assertEqual((research["terms"], research["calls"], research["blocked"]), (0, 0, "no_terms"))
 
         # The admin corrects "Mẹ" in three cues: the feedback loop proposes the term, with the cues as evidence.
         rows = self.answer("GET", f"/api/units/{unit}/cues?lang=vi")["rows"]

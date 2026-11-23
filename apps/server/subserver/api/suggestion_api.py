@@ -56,6 +56,11 @@ ROUTES: list[tuple[str, str, Handler]] = [
     ("POST", r"/api/suggestions/generate", lambda s, m, q, b: s.generate(
         _series_id(b, "generating"), str(b.get("lang") or ""), estimate_only=bool(b.get("estimate_only")),
     )),
+    # Look the terms up on the web (P16): spends model calls unless `estimate_only`; the page puts it behind Estimate.
+    ("POST", r"/api/suggestions/research", lambda s, m, q, b: s.research(
+        _series_id(b, "researching"), str(b.get("lang") or ""), estimate_only=bool(b.get("estimate_only")),
+        auto_accept=b.get("auto_accept") if isinstance(b.get("auto_accept"), bool) else None,
+    )),
     # What the admin keeps correcting, as suggestions (P15): no model call, so it answers with what it found.
     ("POST", r"/api/suggestions/from-edits", lambda s, m, q, b: s.from_edits(
         _series_id(b, "looking at the edits"), str(b.get("lang") or ""),
@@ -77,6 +82,7 @@ def handles(path: str) -> bool:
 BODIES = {
     ("POST", r"/api/suggestions/bulk"): schemas.BulkBody,
     ("POST", r"/api/suggestions/generate"): schemas.GenerateBody,
+    ("POST", r"/api/suggestions/research"): schemas.ResearchBody,
     ("POST", r"/api/suggestions/from-edits"): schemas.GenerateBody,
     ("POST", r"/api/suggestions/(\d+)/accept"): schemas.AcceptBody,
     ("POST", r"/api/suggestions/(\d+)/undo"): schemas.DryRunBody,
@@ -88,6 +94,7 @@ ANSWERS = {
     ("GET", r"/api/suggestions/summary"): ans.SuggestionSummary,
     ("POST", r"/api/suggestions/bulk"): ans.BulkAnswer,
     ("POST", r"/api/suggestions/generate"): Union[ans.GenerateQueued, ans.GenerateEstimate],
+    ("POST", r"/api/suggestions/research"): Union[ans.GenerateQueued, ans.ResearchEstimate],
     ("POST", r"/api/suggestions/from-edits"): ans.FromEditsAnswer,
     ("POST", r"/api/suggestions/(\d+)/accept"): ans.SuggestionDecision,
     ("POST", r"/api/suggestions/(\d+)/reject"): ans.SuggestionRejected,

@@ -20,7 +20,20 @@ export type Values = Record<string, unknown>;
 export const TRANSLATION_FIELDS: Field[] = [
   { key: "gst_model", label: "Default model", kind: "model", hint: "Does the work." },
   { key: "gst_fallback_model", label: "Strong model", kind: "model", empty: "(none)", hint: "Takes hard jobs, outages and spent quota. Clear it to run on one model." },
-  { key: "research_model", label: "Research model", kind: "model", empty: "(same as Default)", hint: "Nothing calls it yet." },
+  { key: "research_model", label: "Research model", kind: "model", empty: "(same as Default)", hint: "Does the web search of Research terms. Needs Gemini." },
+  {
+    key: "research_enabled",
+    label: "Research terms by itself",
+    kind: "switch",
+    hint: "Off by default. After a job reads new facts, look up on the web the names two episodes share. Results wait in Review (two independent sites apply a term by themselves when Auto-accept terms is on). The Research terms button always works.",
+  },
+  {
+    key: "research_max_calls_per_series",
+    label: "Research budget, calls per series",
+    kind: "int",
+    min: 0,
+    hint: "Calls of the research task one series may use over its whole life. A run makes two. 0 = no cap.",
+  },
   {
     key: "judge_enabled",
     label: "LLM judge",

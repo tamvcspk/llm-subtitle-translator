@@ -113,6 +113,12 @@ SUGGESTION_BOOL_CONFIG_KEYS = {
 # never a verdict that counts. Off by default because every use spends model calls; `judge_model` (task `judge`) is the
 # model that judges, and a stronger one than the one that translated is the point. key -> default
 JUDGE_BOOL_CONFIG_KEYS = {"judge_enabled": False}
+# Research grounding (P16, FR-7): off by default, because every run spends searched model calls. On, a translation job that
+# has just read the facts of an episode leaves a ``research`` job for its series when two episodes share a term the glossary
+# lacks; the admin can always run it by hand. ``research_max_calls_per_series`` is the calls of the ``research`` task one
+# series may ever use (0 = no cap); it is counted from ``llm_calls``, so it holds after the finished jobs are cleaned away.
+RESEARCH_BOOL_CONFIG_KEYS = {"research_enabled": False}
+RESEARCH_INT_CONFIG_KEYS = {"research_max_calls_per_series": (10, 0)}
 # Logging and measurement (P5, FR-19). `log_prompt_bodies` is what is kept of the prompts and answers of model
 # calls: `off`, `errors` (failed calls only), `sample` (failed calls and one call in ten) or `all`.
 LOG_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -177,6 +183,8 @@ DEFAULT_APP_CONFIG = {
     **{key: default for key, (default, _) in CATALOG_INT_CONFIG_KEYS.items()},
     **SUGGESTION_BOOL_CONFIG_KEYS,
     **JUDGE_BOOL_CONFIG_KEYS,
+    **RESEARCH_BOOL_CONFIG_KEYS,
+    **{key: default for key, (default, _) in RESEARCH_INT_CONFIG_KEYS.items()},
     "memory_enabled": False,
     "memory_model": "",
     "summarize_model": "",
@@ -292,7 +300,7 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             normalized[key] = default
     normalized["catalog_shrink_guard"] = min(100, normalized["catalog_shrink_guard"])
-    for key in (*SUGGESTION_BOOL_CONFIG_KEYS, *JUDGE_BOOL_CONFIG_KEYS):
+    for key in (*SUGGESTION_BOOL_CONFIG_KEYS, *JUDGE_BOOL_CONFIG_KEYS, *RESEARCH_BOOL_CONFIG_KEYS):
         value = normalized.get(key)
         normalized[key] = value is True or str(value).strip().lower() in ("1", "true", "on")
     for key in MEMORY_BOOL_CONFIG_KEYS:
@@ -320,7 +328,9 @@ def normalize_app_config(config: dict[str, Any]) -> dict[str, Any]:
             normalized[key] = max(0.0, float(normalized.get(key) or 0.0))
         except (TypeError, ValueError):
             normalized[key] = 0.0
-    for key, (default, minimum) in {**QUEUE_INT_CONFIG_KEYS, **STYLE_INT_CONFIG_KEYS, **RETENTION_INT_CONFIG_KEYS}.items():
+    for key, (default, minimum) in {
+        **QUEUE_INT_CONFIG_KEYS, **STYLE_INT_CONFIG_KEYS, **RETENTION_INT_CONFIG_KEYS, **RESEARCH_INT_CONFIG_KEYS,
+    }.items():
         try:
             normalized[key] = max(minimum, int(normalized.get(key, default)))
         except (TypeError, ValueError):

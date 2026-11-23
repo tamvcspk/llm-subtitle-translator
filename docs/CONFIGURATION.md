@@ -219,6 +219,8 @@ Saved settings with their defaults (the Settings page shows the same fields; key
   "llm_max_input_tokens": 128000,
   "llm_max_output_tokens": 8192,
   "research_model": "",
+  "research_enabled": false,
+  "research_max_calls_per_series": 10,
   "judge_enabled": false,
   "judge_model": "",
   "job_settle_seconds": 600,
@@ -299,7 +301,19 @@ The Settings page saves these options:
   `gst_model` is stored as empty. `/api/status` `model_layers` shows how often
   jobs escalate and how many the strong model finishes; if few escalate or it
   rescues few, drop the layer.
-- `research_model`: model of the research task (FR-7, P16); blank uses `gst_model`. Nothing calls it yet.
+- `research_model`: model of the web search of **Research terms** (FR-7, P16); blank uses `gst_model`. It must be a Gemini model
+  that can use the Google Search tool; the call that reads the search's answer runs on the Memory model (`extract` task).
+  An OpenAI-compatible provider has no search tool, so research is off with it (never an error).
+- `research_enabled` (default **off**): after a translation job has read new facts, the worker queues one `research` job for the
+  series if two or more episodes share a name or term the glossary and Review do not have yet and the budget allows, whatever
+  `auto_request` says. The job outranks the translations still waiting for the series, so a term applied by itself is there
+  for the episodes after it, and its failure, its quota or its budget never fails or delays a translation. Off, only the
+  **Research terms** button on the series' Glossary tab (priced in the Estimate box) does it.
+- `research_max_calls_per_series` (default **10**, `0` = no cap): the calls of the `research` task one series may use over its
+  whole life (a run is two: the search and the read). It is counted from the call records, not from the job list, so clearing
+  finished jobs does not give it back. A run that would pass it stops first (event `research.budget_reached`), and the button
+  says *Research budget reached for this series* until you raise it. Terms the web has no form for are asked about again after
+  seven days; a term already in Review (any status) never is.
 - `judge_enabled` (default **off**) and `judge_model`: the LLM judge on a candidate in Compare (P15, FR-18.8). Off, the Compare
   page shows nothing about it and `POST /api/units/{id}/versions/{v}/judge` answers `400`: every use spends model calls (a
   call per 30 differing cues, through the one queue, so `max_calls_per_day` and the breaker apply; the price is shown before
@@ -379,8 +393,9 @@ style*, live without a restart:
   it costs nothing and never fails the edit. Off, only `POST /api/suggestions/from-edits` (the **Look at my edits** button
   on Insights) does it. It is never applied by itself: a suggestion made from your edits has no research sources.
 - `auto_accept_terms` (default **on**): a `term` is applied the moment it is proposed, but only when two independent sources
-  (different hosts) agree on it, so until a generator that cites sources exists every term waits for you. A term found in the
-  facts has no such sources and always waits.
+  (different sites: the registered domain, so two pages of Wikipedia are one) agree on it. Only research cites sources, so a term
+  from the facts or from your edits always waits; the Research box has a tick that overrides this for one run. It is the one
+  switch for research too: there is no separate research auto-accept.
 - `auto_accept_address_rules` (default **off**): who calls whom how is your decision.
 - `auto_accept_characters` (default **off**).
 

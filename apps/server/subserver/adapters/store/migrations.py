@@ -431,4 +431,11 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX quality_signals_at ON quality_signals (at);
     """,
+    # Migration 16 (P16, FR-7.6): the series a call was made for, so the research budget (``research_max_calls_per_series``)
+    # is counted from the calls themselves and not from ``jobs``, whose finished rows are cleaned up. NULL for the calls
+    # made before this column and for those of a movie or of no series.
+    """
+    ALTER TABLE llm_calls ADD COLUMN series_id INTEGER;
+    CREATE INDEX llm_calls_series ON llm_calls (series_id, task);
+    """,
 )

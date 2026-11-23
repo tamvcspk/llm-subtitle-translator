@@ -37,18 +37,26 @@ class RecordsRepo(Repo):
         retries: int = 0,
         repairs: int = 0,
         cost_est: float = 0.0,
+        series_id: int | None = None,
     ) -> int:
         with self._lock:
             cursor = self._db.execute(
                 "INSERT INTO llm_calls (job_id, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at,"
                 " kind, prompt_version, bundle_hash, style_hash, glossary_hash, batch, http_status, finish_reason,"
-                " retries, repairs, cost_est)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " retries, repairs, cost_est, series_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (job_id, provider, model, task, tokens_in, tokens_out, latency_ms, outcome, at or time.time(),
                  kind, prompt_version, bundle_hash, style_hash, glossary_hash, batch, http_status, finish_reason,
-                 retries, repairs, cost_est),
+                 retries, repairs, cost_est, series_id),
             )
             return int(cursor.lastrowid)
+
+    def calls_for_series(self, series_id: int, task: str) -> int:
+        """Calls of one task recorded for one series, over its whole life: what ``research_max_calls_per_series`` counts
+        (FR-7.6). Read from the calls, not from ``jobs``, whose finished rows are cleaned up."""
+        return int(self.query(
+            "SELECT COUNT(*) AS n FROM llm_calls WHERE series_id = ? AND task = ?", (int(series_id), task)
+        )[0]["n"])
 
     def calls_since(self, at: float) -> int:
         """Model calls recorded since ``at`` (a Unix time): what `max_calls_per_day` counts (FR-17.6)."""
@@ -81,7 +89,7 @@ class RecordsRepo(Repo):
                 outcome=row["outcome"], at=row["at"], kind=row["kind"], prompt_version=row["prompt_version"],
                 bundle_hash=row["bundle_hash"], style_hash=row["style_hash"], glossary_hash=row["glossary_hash"],
                 batch=row["batch"], http_status=row["http_status"], finish_reason=row["finish_reason"],
-                retries=row["retries"], repairs=row["repairs"], cost_est=row["cost_est"],
+                retries=row["retries"], repairs=row["repairs"], cost_est=row["cost_est"], series_id=row["series_id"],
             )
             for row in rows
         ]

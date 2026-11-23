@@ -35,6 +35,8 @@ from ..domain.config import (
     PROVIDER_GEMINI,
     PROVIDER_OPENAI_COMPAT,
     QUEUE_INT_CONFIG_KEYS,
+    RESEARCH_BOOL_CONFIG_KEYS,
+    RESEARCH_INT_CONFIG_KEYS,
     RETENTION_INT_CONFIG_KEYS,
     SECRET_CONFIG_KEYS,
     SECRET_MASK,
@@ -223,7 +225,7 @@ class SettingsService:
             settings[key] = int(app[key])
         # The switches of suggestions and of the judge: without them here the running worker reads each one's default
         # and a switch turned off in the console would change nothing.
-        for key in (*SUGGESTION_BOOL_CONFIG_KEYS, *JUDGE_BOOL_CONFIG_KEYS):
+        for key in (*SUGGESTION_BOOL_CONFIG_KEYS, *JUDGE_BOOL_CONFIG_KEYS, *RESEARCH_BOOL_CONFIG_KEYS):
             settings[key] = bool(app.get(key))
         for key in MEMORY_BOOL_CONFIG_KEYS:
             settings[key] = bool(app.get(key))
@@ -237,7 +239,7 @@ class SettingsService:
             settings[key] = int(app[key])
         for key in LOG_FLOAT_CONFIG_KEYS:
             settings[key] = float(app[key])
-        for key in (*QUEUE_INT_CONFIG_KEYS, *STYLE_INT_CONFIG_KEYS, *RETENTION_INT_CONFIG_KEYS):
+        for key in (*QUEUE_INT_CONFIG_KEYS, *STYLE_INT_CONFIG_KEYS, *RETENTION_INT_CONFIG_KEYS, *RESEARCH_INT_CONFIG_KEYS):
             settings[key] = int(app[key])
         settings["quota_reset_tz"] = str(app["quota_reset_tz"])
         for key in ("llm_rpm", "llm_tpm", "llm_rpd"):

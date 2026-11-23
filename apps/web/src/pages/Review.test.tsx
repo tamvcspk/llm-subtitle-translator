@@ -88,6 +88,25 @@ describe("Review", () => {
     expect(within(screen.getByRole("region", { name: "Severance" })).getByText("1 suggestion waiting")).toBeInTheDocument();
   });
 
+  it("shows what a research proposal rests on as the sites it came from, each a link of its own that opens in a new tab", async () => {
+    const researched = suggestion(1, {
+      source: "research",
+      evidence: [],
+      sources: ["https://www.wikipedia.org/wiki/Fern", "https://fandom.com/wiki/Fern"],
+    });
+    serve(inbox({}, [researched]));
+    show("/review");
+    const term = await screen.findByRole("listitem", { name: "Term: Kyber crystal → tinh thể Kyber" });
+    expect(within(term).getByText("Research")).toBeInTheDocument();
+    const sources = within(term).getByRole("list", { name: "Sources" });
+    expect(within(sources).getByText("2 sources")).toBeInTheDocument();
+    const wiki = within(sources).getByRole("link", { name: "wikipedia.org" });
+    expect(wiki).toHaveAttribute("href", "https://www.wikipedia.org/wiki/Fern");
+    expect(wiki).toHaveAttribute("target", "_blank");
+    expect(wiki).toHaveAttribute("rel", "noreferrer");
+    expect(within(sources).getByRole("link", { name: "fandom.com" })).toBeInTheDocument();
+  });
+
   it("says how many translations accepting each one flags stale, from the worker's dry run, with no Check button", async () => {
     serve(inbox());
     show("/review");

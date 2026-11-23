@@ -1,4 +1,26 @@
 # Unreleased
+- **P16: Research grounding (FR-7).** The worker can look up on the web how the names and terms of a series are written in the
+  target language, and put what the web backs in Review. A **Research terms (N)** card sits at the top of a series' Glossary
+  tab: `N` is the number of terms two or more episodes share that the glossary and Review do not have yet; the button opens
+  the Estimate box (terms, the two calls, the search and read models, the series' budget before and after, calls left today,
+  and a tick *Auto-accept terms with 2+ independent sources* for that run) and **Confirm** queues one `research` job. A strip
+  under the button follows it: Stop while it runs, *Open Review →* when it found something, Retry after a failure. With the new
+  setting `research_enabled` (off by default) a translation that has read new facts leaves one such job behind, above the
+  translations still waiting for the series and whatever `auto_request` says, so one click on Translate series can run from
+  episode 1 to the end with the terms applied on the way. Its failure, its spent search quota and its budget never fail or
+  delay a translation: a search that runs out of quota makes only the research job wait and leaves the translation model's
+  breaker and quota alone. `research_max_calls_per_series` (default 10, `0` = no cap) counts the research calls of a series over
+  its whole life from the new `llm_calls.series_id` (migration 16), so clearing finished jobs does not give it back; a run
+  stops before the call that would pass it (event `research.budget_reached`). A provider with no search tool (OpenAI-compatible)
+  queues nothing and says *Web research requires Gemini*. A term the web backs with two different sites is applied by itself
+  when `auto_accept_terms` is on (the one switch; Undo is in Review's History), otherwise it waits. Review shows each proposal's
+  sources as the sites they are on (`wikipedia.org`, `fandom.com`), each a link that opens in a new tab. How the sources are
+  found, from one live Gemini call on 2026-11-23: the grounding link is a redirect of Google's whose title is the page's site,
+  so the worker follows it one hop (`RedirectResolver`, only Google's redirect host) and keeps the page's own address, or the
+  site's name when that fails; a link the model writes is never a source. New: `POST /api/suggestions/research`, job kind
+  `research`, `subcore.research`, `LLMRequest.web_search` and `LLMResponse.grounding_sources`/`search_queries`/`cited_text`,
+  `QueueJob.stored_series_id` and `report`. Not done: showing Google's *Search Suggestions* (its terms for displaying grounded
+  results have not been read yet) and checking on real corrections that research improves proper names.
 - **The Translate estimate counts the fact reads (P15g, FR-15.5.1).** With story memory on, a job reads the facts of every
   earlier episode that has none yet, and of itself, before it translates; the Estimate box now says so: an **Extract facts**
   row (`N calls · <memory model>`) under the translation calls, each episode counted once for the whole request (episodes 2

@@ -99,6 +99,8 @@ class LlmCall:
     retries: int = 0
     repairs: int = 0
     cost_est: float = 0.0
+    series_id: int | None = None
+    """The series the call was made for, when its job had one (the research budget counts by it, FR-7.6)."""
 
 
 @dataclass(frozen=True)
@@ -479,9 +481,17 @@ class Telemetry(Protocol):
 
     def llm_call(
         self, job_id: str, log: CallLog, *, prompt_version: str = "", glossary_hash: str = "",
-        bundle_hash: str = "", style_hash: str = "",
+        bundle_hash: str = "", style_hash: str = "", series_id: int | None = None,
     ) -> None:
-        """Record one provider call and, as the settings allow, its prompt and answer."""
+        """Record one provider call and, as the settings allow, its prompt and answer. ``series_id`` is the series the
+        job works for, when it is about one."""
+
+
+class LinkResolver(Protocol):
+    """Turns the link a grounded answer gives for a page into the page's own address (P16, FR-7)."""
+
+    def resolve(self, url: str) -> str | None:
+        """The address of the page, or ``None`` when it cannot be told (an error, a timeout, a link that is no page). Never raises."""
 
 
 class ProviderFactory(Protocol):

@@ -121,6 +121,13 @@ class GenerateBody(RequestObject):
     estimate_only: StrictBool | None = None
 
 
+class ResearchBody(GenerateBody):
+    """``POST /api/suggestions/research``: ``auto_accept`` is the Estimate box's tick for this run only (absent: what
+    ``auto_accept_terms`` says)."""
+
+    auto_accept: StrictBool | None = None
+
+
 class AcceptBody(RequestObject):
     payload: dict[str, Any] | None = None
     dry_run: StrictBool | None = None

@@ -225,11 +225,11 @@ Chính nút **Golden set** trên dòng chỉ mở sheet; nó không tải gì.
 
 Tra tên riêng và thuật ngữ trên web (Google Search grounding) rồi đổ kết quả vào Review. Không thêm màn hình hay mục nav.
 
-- **Điểm bấm:** nút **Research terms (N)** trên thanh nút của tab Glossary, `N` là số term xuất hiện ở ≥ 2 tập mà chưa có trong glossary (đếm cục bộ, nguyên tắc 4). Dải trạng thái dưới thanh nút theo mẫu Extract facts: đang chạy (Stop), chờ quota, xong (Open Review →), lỗi (Retry). Mọi trạng thái đều có việc kế tiếp (nguyên tắc 2).
+- **Điểm bấm:** (P16 đã làm: một thẻ **Research terms** ở đầu tab Glossary của series, trên trình soạn glossary; phim không có.) nút **Research terms (N)** trên thanh nút của tab Glossary, `N` là số term xuất hiện ở ≥ 2 tập mà chưa có trong glossary (đếm cục bộ, nguyên tắc 4). Dải trạng thái dưới thanh nút theo mẫu Extract facts: đang chạy (Stop), chờ quota, xong (Open Review →), lỗi (Retry). Mọi trạng thái đều có việc kế tiếp (nguyên tắc 2).
 - **Tắt có lý do:** `N = 0` ("No unmapped terms found"); provider `openai_compat` ("Web research requires Gemini", cố định); hết ngân sách ("Research budget reached for this series", gỡ bằng Settings → Translation). Hai lý do sau có liên kết Settings.
 - **Estimate (nguyên tắc 9):** số term, số lời gọi (1 tìm kiếm + 1 trích xuất; một lời gọi tìm kiếm có thể chạy nhiều truy vấn nên số lời gọi là ước), model của từng lời gọi, ngân sách đã dùng và sau lần chạy, `calls_left_today`, và ô *Auto-accept terms with 2+ independent sources* (mặc định theo `auto_accept_terms`, không có công tắc riêng của research; bỏ tích chỉ áp cho lần này).
 - **Ngân sách `research_max_calls_per_series`:** tính theo series, cộng dồn suốt đời series (chưa có cửa sổ thời gian); mặc định 10; muốn không trần phải bật *No cap*.
-- **Tự chạy (nguyên tắc 3, v0.21 theo SPEC #28):** khi `research_enabled` bật (mặc định tắt), research tự chạy **một lần** cho series ngay sau khi một job dịch trích được facts mới và có term ≥ 2 tập, không phụ thuộc `auto_request`; chạy trước các tập dịch còn chờ của series đó, nên một lần bấm Translate series chạy đủ A–Z. Ở Activity nó là một job riêng, nhãn kind `research`, origin `policy`, các nhãn trạng thái chuẩn của mục 5 (Requested · Running · Waiting · Failed · Done · Cancelled) với Stop/Retry; tính vào ngân sách. Research lỗi không làm tập nào ngừng dịch. Tắt `research_enabled` thì chỉ chạy khi admin bấm nút.
+- **Tự chạy (nguyên tắc 3, v0.21 theo SPEC #28):** khi `research_enabled` bật (mặc định tắt), research tự chạy **một lần** cho series ngay sau khi một job dịch trích được facts mới và có term ≥ 2 tập, không phụ thuộc `auto_request`; chạy trước các tập dịch còn chờ của series đó, nên một lần bấm Translate series chạy đủ A–Z. Ở Activity nó là một job riêng, nhãn kind `research`, origin `facts` (không phải `policy`, để không tính vào `auto_request_daily_cap`), các nhãn trạng thái chuẩn của mục 5 (Requested · Running · Waiting · Failed · Done · Cancelled) với Stop/Retry; tính vào ngân sách. Research lỗi không làm tập nào ngừng dịch. Tắt `research_enabled` thì chỉ chạy khi admin bấm nút.
 - **Kết quả:** vào Review với nhãn **Research** (khác Facts và Your edits), kèm danh sách nguồn lấy từ grounding metadata (tên miền, mở tab mới), không có `confidence` mà có số nguồn. Term đủ ≥ 2 nguồn độc lập và đang bật auto_accept thì tự áp dụng, có nhãn **Auto** ở History và nút **Undo** nói rõ số tập sẽ stale. Tự áp dụng chỉ đánh cờ stale, không dịch lại (nguyên tắc 3).
 
 ## 7. Ràng buộc kỹ thuật cho iframe, đăng nhập và hết phiên
@@ -375,9 +375,9 @@ Nguồn: `docs/CONFIGURATION.md`. Khi một tên giá trị trong tài liệu đ
 | | `llm_base_url` (Base URL) | URL tới `/v1` | rỗng | chỉ khi `openai_compat` |
 | Translation | `gst_model` (Default model) | chọn từ danh sách | `gemini-3.1-flash-lite` | |
 | | `gst_fallback_model` (Strong model) | chọn | `gemini-3.5-flash` | xoá để bỏ tầng thứ hai |
-| | `research_model` (Research model) | chọn (chỉ model có grounding) | rỗng = dùng `gst_model` | chưa ai gọi (P16); Gemini only |
+| | `research_model` (Research model) | chọn (chỉ model có grounding) | rỗng = dùng `gst_model` | model của lời gọi tìm kiếm (P16 đã làm); Gemini only; lời gọi đọc kết quả chạy bằng model của Memory |
 | | `research_enabled` (Research terms automatically) | bật/tắt | tắt | P16; bật thì research tự chạy một lần mỗi series sau khi có facts (6.7); chỉ Gemini |
-| | `research_max_calls_per_series` (Max research calls per series) | số nguyên ≥ 1, và công tắc *No cap* | 10 | P16; không có "0 = không giới hạn": muốn bỏ trần phải bật *No cap* |
+| | `research_max_calls_per_series` (Max research calls per series) | số nguyên ≥ 0 | 10 | P16 đã làm: `0` = không giới hạn, như mọi trần khác của Settings; công tắc *No cap* riêng của bản thiết kế chưa làm (một ô số, một cách nói) |
 | | `judge_enabled` (LLM judge) | bật/tắt | tắt | mỗi lần dùng tốn lời gọi; chỉ là lời khuyên (P15) |
 | | `judge_model` (Judge model) | chọn | rỗng = dùng `gst_model` | model mạnh hơn model dịch thì chấm tốt hơn |
 | | `gst_temperature` | số | `0.7` | |

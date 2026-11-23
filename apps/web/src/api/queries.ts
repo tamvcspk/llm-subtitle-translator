@@ -21,6 +21,7 @@ import type {
   PrerequisitesRequested,
   QueueAnswer,
   QueueJob,
+  ResearchEstimate,
   Style,
   StyleImpact,
   StyleOverview,
@@ -87,7 +88,7 @@ export function useQueue() {
     const finished = [...reading.current].some((id) => !now.has(id));
     reading.current = now;
     if (finished) {
-      for (const queryKey of [["memory"], ["unit-facts"], ["suggestions"], ["library"], ["unit"]]) {
+      for (const queryKey of [["memory"], ["unit-facts"], ["suggestions"], ["research-estimate"], ["library"], ["unit"]]) {
         void client.invalidateQueries({ queryKey });
       }
     }
@@ -95,7 +96,7 @@ export function useQueue() {
   return query;
 }
 
-/** The jobs that read and do not translate (`extract`, `suggest`, `judge`) that are still open: running, in line or waiting. */
+/** The jobs that read and do not translate (`extract`, `suggest`, `research`, `judge`) that are still open: running, in line or waiting. */
 function openReadingJobs(queue: QueueAnswer): QueueJob[] {
   return [...queue.processing, ...queue.pending, ...queue.deferred].filter((job) => readsOnly(job));
 }
@@ -1096,6 +1097,7 @@ function useRefreshSuggestions() {
         predicate: (query) => typeof decided !== "number" || query.queryKey[1] !== decided,
       }),
       client.invalidateQueries({ queryKey: ["suggestion-bulk-impact"] }),
+      client.invalidateQueries({ queryKey: ["research-estimate"] }),
       client.invalidateQueries({ queryKey: ["glossary"] }),
       client.invalidateQueries({ queryKey: ["style"] }),
       client.invalidateQueries({ queryKey: ["catalog"] }),
@@ -1140,6 +1142,41 @@ export function useBulkAccept() {
     mutationFn: (args: { seriesId: number; expect: number }) =>
       api<AnswerOf<"/api/suggestions/bulk", "post">>("/api/suggestions/bulk", { method: "POST", body: { series_id: args.seriesId, expect: args.expect } }),
     onSettled: (_answer, error) => void refresh(error ? undefined : "all"),
+  });
+}
+
+// -- Research terms (P16) ---------------------------------------------------------------------------------------------------
+
+/**
+ * What a run of Research terms would look up and spend (UX §6.7): the `N` of the button, why it is off, the price. It asks
+ * the worker (`estimate_only`), which counts from the stored facts and calls no model. Never reused: a price is only true now.
+ */
+export function useResearchEstimate(seriesId: number | null, lang: string) {
+  return useQuery({
+    queryKey: ["research-estimate", seriesId, lang] as const,
+    queryFn: ({ signal }) =>
+      api<ResearchEstimate>("/api/suggestions/research", { method: "POST", body: { series_id: seriesId, lang, estimate_only: true }, signal }),
+    enabled: seriesId !== null && lang !== "",
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/** **Confirm** in the Research box: queue the job. `autoAccept` is the tick of the box, for this run only. */
+export function useResearchTerms() {
+  const refresh = useRefreshJobs();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { seriesId: number; lang: string; autoAccept: boolean }) =>
+      api<AnswerOf<"/api/suggestions/research", "post">>("/api/suggestions/research", {
+        method: "POST",
+        body: { series_id: args.seriesId, lang: args.lang, auto_accept: args.autoAccept },
+      }),
+    onSettled: () => {
+      void refresh();
+      void client.invalidateQueries({ queryKey: ["research-estimate"] });
+    },
   });
 }
 

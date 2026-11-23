@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Suggestion } from "../api/types";
-import { describe as describeSuggestion, draftOf, draftProblem, evidenceLines, groupBySeries, impactLine, payloadOf, safeUrl } from "./suggestions";
+import { describe as describeSuggestion, draftOf, draftProblem, evidenceLines, groupBySeries, impactLine, payloadOf, safeUrl, sourceName } from "./suggestions";
 
 type Draftable = Pick<Suggestion, "kind" | "payload">;
 
@@ -35,6 +35,13 @@ describe("evidence", () => {
     expect(safeUrl("https://wiki.example/a")).toBe("https://wiki.example/a");
     expect(safeUrl("javascript:alert(1)")).toBeNull();
     expect(safeUrl("not a url")).toBeNull();
+  });
+
+  it("names a research source by its site, not by its address", () => {
+    expect(sourceName("https://www.wikipedia.org/wiki/Fern")).toBe("wikipedia.org");
+    expect(sourceName("https://vi.wikipedia.org/wiki/Frieren")).toBe("vi.wikipedia.org");
+    expect(sourceName("http://fandom.com/")).toBe("fandom.com");
+    expect(sourceName("not an address")).toBe("not an address");
   });
 });
 

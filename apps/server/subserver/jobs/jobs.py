@@ -42,13 +42,15 @@ LEGACY_STATES = ("pending", "processing", "deferred", "done", "failed", "cancell
 FROM_LEGACY = {"pending": (QUEUED,), "processing": (RUNNING,), "deferred": (WAITING,), "done": (DONE, SKIPPED),
                 "failed": (FAILED,), "cancelled": (CANCELLED,)}
 
-PUBLISH, VARIANT, EXTRACT, SUGGEST, JUDGE = "publish", "variant", "extract", "suggest", "judge"
+PUBLISH, VARIANT, EXTRACT, SUGGEST, JUDGE, RESEARCH = "publish", "variant", "extract", "suggest", "judge", "research"
 # The kinds that translate a subtitle (and so have a source, a target, a model layer and a bundle), against the kinds
 # that only read (F7): an ``extract`` job reads the facts of one episode, a ``suggest`` job looks for proposals in them,
-# a ``judge`` job reads a candidate next to the current translation and says which cues look better (P15).
+# a ``judge`` job reads a candidate next to the current translation and says which cues look better (P15), a ``research``
+# job looks the series' names and terms up on the web (P16).
 TRANSLATING_KINDS = (PUBLISH, VARIANT)
-READING_KINDS = (EXTRACT, SUGGEST, JUDGE)
+READING_KINDS = (EXTRACT, SUGGEST, JUDGE, RESEARCH)
 SUGGEST_CALLS = 3  # a ``suggest`` job asks about address rules, terms and characters: at most one call each
+RESEARCH_CALLS = 2  # a ``research`` job makes one search call and one call to read its answer
 JUDGE_MAX_CUES = 300  # a ``judge`` job looks at the first cues that differ, up to this many (ten calls)
 FILL, REPLACE = "fill", "replace"
 
@@ -79,6 +81,8 @@ def job_name(job: dict[str, Any]) -> str:
         return f"Look for proposals · {job.get('title') or 'series'}"
     if kind == JUDGE:
         return f"Judge variant · {job.get('label') or 'episode'}"
+    if kind == RESEARCH:
+        return f"Research terms · {job.get('title') or 'series'}"
     return Path(str(job.get("subtitle_path") or "")).name
 
 
@@ -90,6 +94,11 @@ def extract_key(unit_id: int) -> str:
 def suggest_key(series_id: int, target_lang: str) -> str:
     """The key of the job that looks for proposals for one series and language (F7)."""
     return f"suggest:{int(series_id)}:{target_lang}"
+
+
+def research_key(series_id: int, target_lang: str) -> str:
+    """The key of the job that researches the terms of one series for one language: one is open per series and language."""
+    return f"research:{int(series_id)}:{target_lang}"
 
 
 def judge_key(unit_id: int, target_lang: str, version: int) -> str:

@@ -19,8 +19,8 @@ from ..domain import queue_policy as policy
 from ..domain.config import QUOTA_RESET_TZ, enabled_target_languages
 from .jobs import (
     CANCELLED, DONE, FAILED, LEGACY_STATES, OPEN_STATES, PUBLISH, QUEUED, REPLACE, RUNNING, SKIPPED, VARIANT, WAITING,
-    EXTRACT, JUDGE, SUGGEST, TRANSLATING_KINDS, JobStore, FROM_LEGACY, extract_key, job_key, judge_key,
-    retranslation_key, suggest_key, variant_key,
+    EXTRACT, JUDGE, RESEARCH, SUGGEST, TRANSLATING_KINDS, JobStore, FROM_LEGACY, extract_key, job_key, judge_key,
+    research_key, retranslation_key, suggest_key, variant_key,
 )
 from ..domain.ports import Telemetry
 from ..domain.queue_policy import Health
@@ -390,6 +390,35 @@ class JobQueue:
             return added.job_id, True
         return str(added.existing), False
 
+    def enqueue_research(
+        self, series_id: int, lang: str, *, title: str, bazarr_id: str = "", origin: str = "manual",
+        prio: int = policy.INTERACTIVE, auto_accept: bool | None = None,
+    ) -> tuple[str, bool]:
+        """One ``research`` job for this series and language: it looks the names and terms of the series up on the web (two
+        model calls, FR-7.5). Returns ``(job id, whether it is new)``. At most one is open per series and language: a second
+        request is that job, lifted to the higher class. The admin's own request is ``origin = manual``; the one a translation
+        leaves behind is ``policy`` and outranks the translations still waiting for the series (``prio``), so a term applied
+        by itself is there for the episodes after it. ``auto_accept`` is the admin's choice for this run in the Estimate box
+        (``None`` = what ``auto_accept_terms`` says)."""
+        payload: dict[str, Any] = {
+            "stored_series_id": int(series_id), "series_id": bazarr_id, "title": title, "target_code": lang,
+            "created_at": int(time.time()),
+        }
+        if auto_accept is not None:
+            payload["auto_accept"] = bool(auto_accept)
+        key = research_key(series_id, lang)
+        added = self.jobs.add(payload, key=key, kind=RESEARCH, mode=RESEARCH, origin=origin, prio=prio,
+                              job_id=f"{key}-{time.time_ns()}")
+        if added.job_id:
+            self._emit(
+                "job.created", job_id=added.job_id, unit_id=None, target=lang, origin=origin, job_kind=RESEARCH,
+                reason=("the admin asked for the terms of " if origin == "manual"
+                        else "new facts were read: look up on the web what two episodes share in ")
+                + (title or "the series") + (" to be looked up on the web" if origin == "manual" else ""),
+            )
+            return added.job_id, True
+        return str(added.existing), False
+
     def enqueue_judge(self, payload: dict[str, Any]) -> tuple[str, bool]:
         """One ``judge`` job for a candidate (P15): it reads the candidate next to the current translation and says which
         cues look better, in as many calls as it takes to cover them (a few dozen cues each). The admin's own request,
@@ -753,10 +782,13 @@ class JobQueue:
         except JobStopped as exc:
             self.jobs.transition(job_id, CANCELLED, payload=job, error=str(exc), only_from=(RUNNING,))
             self._event("job.cancelled", job, str(exc))
-        except DailyQuotaExceededError as exc:
-            self._quota_spent(job, exc, now)
-        except ProviderUnavailableError as exc:
-            self._provider_unavailable(job, exc, now)
+        except (DailyQuotaExceededError, ProviderUnavailableError) as exc:
+            if job.get("kind") == RESEARCH:
+                self._research_waits(job, exc, now)
+            elif isinstance(exc, DailyQuotaExceededError):
+                self._quota_spent(job, exc, now)
+            else:
+                self._provider_unavailable(job, exc, now)
         except ProviderAuthError as exc:
             self._key_refused(job, exc, now)
         except ModelNotFoundError as exc:
@@ -843,6 +875,21 @@ class JobQueue:
         self._event("quota.paused", job, "the daily quota is spent on every configured model; the job waits for the reset",
                     level="WARNING", until=until, models=list(self.models))
         self._event("job.waiting", job, self._wait_text("quota", until), wait="quota", until=until)
+
+    def _research_waits(self, job: dict[str, Any], exc: Exception, now: float) -> None:
+        """A research job whose search ran out of quota or could not be reached waits by itself (FR-7.5): the grounded search
+        has limits of its own, so what it spends must never rest the model translations run on, and the breaker of that model
+        is left as it is. The job goes back in line when its wait is over (``rate``: a time, not a health)."""
+        job["last_error"] = redact(str(exc))
+        if isinstance(exc, DailyQuotaExceededError):
+            until = policy.daily_quota_reset_at(now, policy.zone_for(str(self._setting("quota_reset_tz", QUOTA_RESET_TZ))))
+            text = "the daily quota of the web search is spent; the research waits for the reset"
+        else:
+            until = now + policy.PROVIDER_RETRY_DELAYS[0]
+            text = "the provider could not be reached for the research; it tries again later"
+        self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="rate", not_before=until,
+                             error=job["last_error"], only_from=(RUNNING,))
+        self._event("job.waiting", job, text, level="WARNING", wait="rate", until=until)
 
     def _provider_unavailable(self, job: dict[str, Any], exc: Exception, now: float) -> None:
         model = str(job.get("gst_model") or "")

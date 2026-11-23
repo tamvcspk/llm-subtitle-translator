@@ -206,6 +206,15 @@ class RequestShape(ServerCase):
         self.provider(server).generate(LLMRequest(system="s", user="u", meta={"secret-note": "x", "source": {1: "t"}}))
         self.assertNotIn("secret-note", json.dumps(server.requests[0].body))
 
+    def test_there_is_no_web_search_and_a_request_for_one_sends_no_tool(self):
+        # FR-7.3: research needs the provider's own search tool; this adapter has none, so the worker never queues it.
+        server = self.serve(sse("[]"))
+        provider = self.provider(server)
+        self.assertFalse(provider.caps.web_search)
+        response = provider.generate(LLMRequest(system="s", user="u", web_search=True))
+        self.assertNotIn("tools", server.requests[0].body)
+        self.assertEqual((response.grounding_sources, response.search_queries, response.cited_text), ((), (), ""))
+
     def test_a_keyless_local_server_gets_no_authorization_header(self):
         server = self.serve(sse("[]"))
         OpenAICompatProvider(server.url, "", "llama3").generate(REQ)

@@ -9,7 +9,7 @@ from .base import Capabilities, LLMRequest, LLMResponse
 
 __all__ = ["FakeProvider", "echo_items"]
 
-Handler = Callable[[LLMRequest, int], "str | list[dict[str, Any]]"]
+Handler = Callable[[LLMRequest, int], "str | list[dict[str, Any]] | LLMResponse"]
 
 
 def echo_items(req: LLMRequest, prefix: str = "") -> list[dict[str, Any]]:
@@ -26,7 +26,8 @@ class FakeProvider:
     """Records every request in ``calls``; ``handler(req, call_no)`` produces the reply.
 
     ``call_no`` is 1-based. The handler returns either a raw string (sent as-is, so
-    tests can return broken JSON) or a list of items (JSON-encoded). It may raise a
+    tests can return broken JSON), a list of items (JSON-encoded) or a whole ``LLMResponse`` (how a test
+    gives a grounded answer its ``grounding_sources``). It may raise a
     provider exception to simulate failures. With no handler the fake echoes targets
     with ``prefix``.
     """
@@ -53,6 +54,8 @@ class FakeProvider:
             reply: str | list[dict[str, Any]] = echo_items(req, self.prefix)
         else:
             reply = self.handler(req, len(self.calls))
+        if isinstance(reply, LLMResponse):
+            return reply
         text = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
         return LLMResponse(
             text=text,

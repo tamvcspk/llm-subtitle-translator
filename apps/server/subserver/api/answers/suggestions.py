@@ -130,6 +130,40 @@ class GenerateEstimate(Answer):
     calls: int
 
 
+class ResearchBudget(Answer):
+    cap: int
+    """``research_max_calls_per_series``; ``0`` is no cap."""
+    used: int
+    """Calls of the research task this series has made over its whole life."""
+    after: int
+    """``used`` plus the calls this run would make."""
+
+
+class ResearchEstimate(Answer):
+    """``POST /api/suggestions/research`` with ``estimate_only``: what a run would look up and spend. No model call."""
+
+    ok: bool
+    estimate_only: bool
+    terms: int
+    """Terms two or more episodes share that the glossary and the inbox do not have: the ``N`` of the button."""
+    asked: int
+    """How many of them one run asks about (the most widespread first)."""
+    calls: int
+    """Model calls: the search and the one that reads its answer (an estimate: a search may run several queries)."""
+    search_model: str
+    read_model: str
+    budget: ResearchBudget
+    auto_accept: bool
+    """What ``auto_accept_terms`` says now: the default of the tick in the box."""
+    blocked: Literal["", "no_web_search", "budget", "no_terms"]
+    """Why a run cannot be made now; empty when it can."""
+    reason: str
+    calls_left_today: int | None
+    paused_until: float | None
+    minutes: float | None
+    finish_at: float | None
+
+
 class ProposeReport(Answer):
     added: int
     auto_accepted: int

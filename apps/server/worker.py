@@ -21,15 +21,17 @@ from subserver.adapters.http import HTTPClient, HTTPTransport, JsonFileCache, Me
 from subserver.domain.config import enabled_source_languages, provider_name
 from subserver.jobs.intake import import_queue_tree
 from subserver.services.job_requests import JobRequests
-from subserver.jobs.jobs import EXTRACT, JUDGE, PUBLISH, SUGGEST, VARIANT
+from subserver.jobs.jobs import EXTRACT, JUDGE, PUBLISH, RESEARCH, SUGGEST, VARIANT
 from subserver.services.judge import JudgeService
 from subserver.jobs.queue import JobQueue, skip_reason
-from subserver.jobs.read_jobs import ExtractJob, JudgeJob, SuggestJob
+from subserver.jobs.read_jobs import ExtractJob, JudgeJob, ResearchJob, SuggestJob
 from subserver.services.console import ConsoleActions
 from subserver.services.glossaries import Glossaries
 from subserver.services.style_service import StyleService
 from subserver.services.styles import Styles
 from subserver.services.proposals import FactsProposer
+from subserver.services.research import Researcher
+from subserver.adapters.redirects import RedirectResolver
 from subserver.services.suggestions import SuggestionService
 from subserver.services.library import Library, enrich_job_identity
 from subserver.services.memory import StoryMemory
@@ -333,6 +335,10 @@ def main() -> int:
         memory, suggestion_service, settings_source=live_settings, telemetry=telemetry,
     )
     suggestion_service.generator = proposer
+    # What the web says about the names and terms of a series (P16): a job of its own, queued by the same hook (FR-7.5).
+    researcher = Researcher(proposer, settings_source=live_settings, telemetry=telemetry, resolver=RedirectResolver())
+    proposer.researcher = researcher
+    suggestion_service.researcher = researcher
     attempt = TranslationAttempt(
         versions=versions, usage=store, provider_factory=provider_factory, library=library, memory=memory,
         telemetry=telemetry, proposals=proposer,
@@ -349,6 +355,9 @@ def main() -> int:
     ))
     worker.register_handler(SUGGEST, SuggestJob(
         proposer, provider_factory, settings_source=live_settings, usage=store, telemetry=telemetry,
+    ))
+    worker.register_handler(RESEARCH, ResearchJob(
+        researcher, provider_factory, settings_source=live_settings, usage=store, telemetry=telemetry,
     ))
     # Proposals are asked for through the queue: by the admin, and by a translation that read new facts.
     proposer.jobs = worker.queue

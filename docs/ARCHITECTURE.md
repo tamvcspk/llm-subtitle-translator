@@ -30,7 +30,7 @@ flowchart LR
     POL[AutoRequest policy] --> JR
     JR --> DB
     Q[QueueWorker loop: claims one job at a time] <--> DB
-    Q --> H[handler by kind: translate, extract, suggest, judge]
+    Q --> H[handler by kind: translate, extract, suggest, research, judge]
     H --> SC[subcore: render, translate, validate]
     SC --> PR[Provider, rate limited]
   end
@@ -69,9 +69,9 @@ The image installs only `llm-subtitle-server` (which depends on `subcore`) and k
 | Package | Holds | May import |
 |---|---|---|
 | `domain/` | pure decisions and the port types: `ports`, `config`, `queue_policy`, `rules`, `gather`, `suggestion_keys`, `subtitles`, `translation`, `redaction` | `subcore` and the standard library |
-| `services/` | the use cases: `units`, `console`, `library`, `versions`, `memory`, `suggestions`, `judge`, `metrics`, `cleanup`, `catalog*`, `job_requests`, `auto_request`, `glossaries`, `styles`, `style_service`, `proposals`, `feedback`, `estimates`, `bootstrap`, `auth` | `domain`, `jobs`, the `Store` and the `Telemetry` sink; never another adapter, `api`, a socket or an HTTP client |
+| `services/` | the use cases: `units`, `console`, `library`, `versions`, `memory`, `suggestions`, `judge`, `metrics`, `cleanup`, `catalog*`, `job_requests`, `auto_request`, `glossaries`, `styles`, `style_service`, `proposals`, `research`, `feedback`, `estimates`, `bootstrap`, `auth` | `domain`, `jobs`, the `Store` and the `Telemetry` sink; never another adapter, `api`, a socket or an HTTP client |
 | `jobs/` | the queue and what runs a job: `jobs` (`JobStore`), `queue` (`JobQueue`), `provider_guard`, `read_jobs`, `translation_attempt`, `intake` | the same as `services/` |
-| `adapters/` | what touches infrastructure: `bazarr`, `tmdb`, `http`, `gemini`, `llm`, `backups`, `connection_tests`, `settings`, `logs`, `bodies`, `telemetry` and the `store/` package | `domain` and other adapters; never a use case or `api` |
+| `adapters/` | what touches infrastructure: `bazarr`, `tmdb`, `http`, `gemini`, `llm`, `redirects`, `backups`, `connection_tests`, `settings`, `logs`, `bodies`, `telemetry` and the `store/` package | `domain` and other adapters; never a use case or `api` |
 | `api/` | the FastAPI app and the routers | everything below, but never the `Store`, `JobQueue` or `JobStore`: a route asks a service |
 | `runtime.py` | `RuntimeContext` and `BackgroundLoop`; with `worker.py`, the composition root | any layer |
 
@@ -135,8 +135,8 @@ application's own database is not behind a port).
   staleness;
 - `glossaries.py`, `styles.py`, `style_service.py`: the glossary, genre presets, series and episode styles and character
   cards in the database, and the use cases of the Style page, including the trial of a style (writes nothing);
-- `suggestions.py` (`SuggestionService`), `proposals.py` (`FactsProposer`), `feedback.py` (`FeedbackProposer`):
-  proposals and the Review inbox (section 6);
+- `suggestions.py` (`SuggestionService`), `proposals.py` (`FactsProposer`), `research.py` (`Researcher`),
+  `feedback.py` (`FeedbackProposer`): proposals and the Review inbox (section 6);
 - `metrics.py` (`Metrics`), `judge.py` (`JudgeService`): Insights and the optional judge (section 6);
 - `cleanup.py` (`Cleanup`): file clean-up (FR-13);
 - `auth.py` (`ConsoleAuth`): the single console account (a scrypt hash in the `auth` table, sessions, Basic Auth).
@@ -149,14 +149,16 @@ application's own database is not behind a port).
   persistence; it decides, `JobStore` stores;
 - `provider_guard.py`: what every job that calls the model shares: the time limit, the call budget (`JobProviders`), and
   `mapped_errors`, the one place a provider's typed failure becomes the queue's class;
-- `read_jobs.py`: the handlers of jobs that read and do not translate (`ExtractJob`, `SuggestJob`, `JudgeJob`);
+- `read_jobs.py`: the handlers of jobs that read and do not translate (`ExtractJob`, `SuggestJob`, `ResearchJob`, `JudgeJob`);
 - `translation_attempt.py` (`TranslationAttempt`): the only place that translates through `subcore` (section 5);
 - `intake.py`: the one-time settling of an older queue (folders and the P8 rows) at start-up.
 
 ### `adapters/`
 
 - `bazarr.py` (`BazarrMedia`, the `MediaLibrary` adapter: catalog read, refresh, wanted-item lookup, key parsing),
-  `tmdb.py` (`TmdbMetadata`), `http.py` (a small HTTP client and JSON file cache helpers);
+  `tmdb.py` (`TmdbMetadata`), `http.py` (a small HTTP client and JSON file cache helpers), `redirects.py`
+  (`RedirectResolver`: follows the redirect link of a grounded Gemini answer one hop to the page's own address; only
+  Google's redirect host is ever fetched);
 - `llm.py`: builds the provider of an attempt: one rate-limited provider per API key with failover. `LiveProviderFactory`
   takes the usable keys from `SettingsService` at every build, so a new key is used by the next call, and wraps each in
   `KeyedProvider`, which reports a refused key (`AuthError`: the key becomes `invalid`), a use and an unknown model
@@ -221,8 +223,8 @@ case in `tests/test_answer_contract.py`.
 **A job.** A translation of a missing language is requested by exactly two deciders: an admin's request (`JobRequests`,
 origin `manual`, interactive class) and the policy (`AutoRequest`, origin `policy`, automatic class). The other jobs are
 queued by `JobQueue` helpers under an admin's own action or a finished job: a retranslation (origin `retranslate`), a variant
-(`variant`), extract facts and judge (`manual`), a put-back of a failed job (`retry`), and the `suggest` job that
-`TranslationAttempt` queues after a job settles (`facts`). A read of Bazarr and a GET never make one. It is a row of `jobs` (states `queued`, `running`, `waiting`
+(`variant`), extract facts, research terms and judge (`manual`), a put-back of a failed job (`retry`), and the `suggest` and
+`research` jobs that `TranslationAttempt` queues after a job settles (`facts`). A read of Bazarr and a GET never make one. It is a row of `jobs` (states `queued`, `running`, `waiting`
 with a `wait_reason` of `quota`, `provider`, `context`, `settle` or `rate`, `done`, `skipped`, `failed`, `cancelled`).
 `QueueWorker` claims one at a time (priority by class, round-robin over series, aging) and `run_job` runs it by `kind`
 through the handlers `worker.py` registers (`register_handler`):
@@ -232,6 +234,7 @@ through the handlers `worker.py` registers (`register_handler`):
 | `publish`, `variant` (`TRANSLATING_KINDS`) | translate a subtitle; `variant` always ends as a `candidate` | `translate_job` -> `TranslationAttempt` | a sha1 of source path, output path and target code (a variant and a retranslation hash a prefix too) |
 | `extract` | the facts of one episode | `ExtractJob` | `extract:<unit_id>` |
 | `suggest` | proposals for one series and language, at most three calls | `SuggestJob` | `suggest:<series>:<lang>` |
+| `research` | the names and terms of one series looked up on the web, two calls (a search, then a read of its answer) | `ResearchJob` | `research:<series>:<lang>` |
 | `judge` | the LLM judge on one candidate, 30 cues a call | `JudgeJob` | `judge:<unit>:<lang>:<version>` |
 
 `READING_KINDS` read and have no subtitle, no bundle and no strong model. Every task that spends model calls is a row
@@ -369,8 +372,7 @@ One table (`suggestions`), one use case. `SuggestionService` (routes in `suggest
 Generators: `proposals.py` (`FactsProposer`: address rules and terms from facts, characters from memory; `subcore.suggest` is
 the pure part, one `extract`-task call per kind returning target-language forms, no timecode to the model; reached through a
 `suggest` job), `feedback.py` (`FeedbackProposer`, over `subcore.feedback`: a swap of words repeated in three or more
-corrected cues becomes a `term`, no model call, must never raise into a cue edit), and research grounding (P16, to come: its own `research` job queued after facts, designed in
-[docs/design/ARCHITECTURE.md](design/ARCHITECTURE.md) §3.5).
+corrected cues becomes a `term`, no model call, must never raise into a cue edit), and research grounding (`research.py`, below).
 Accepting goes through `Glossaries.save_doc` (and `write_character` when a character carries its voice, in one
 transaction) and counts the stale translations with `Library.impact_units`; it never retranslates. Undo restores exactly
 what an accept replaced and refuses when the entry changed since. A decided suggestion is kept (a few bytes) and never
@@ -383,6 +385,26 @@ of the candidates *before* each kind's limit. `FactsProposer.run` stores each ki
 error propagate typed. `TranslationAttempt` calls `after_facts` once the job is settled and only queues a `suggest` job
 (origin `facts`, the lowest class); it must never raise into the job. `bootstrap.py` says whether a series is held back
 (`is_locked` is pure), asked by both `AutoRequest` and `CatalogView`.
+
+**Research grounding (P16, FR-7).** `subcore.research` asks twice, both calls for the `research` task: a search call (the
+provider's search tool on, no schema, `research_model`) and a call that reads its prose into `[{i, target, source_refs}]`
+(structured output, the `extract` model). The pages a proposal rests on are the provider's grounding metadata
+(`LLMResponse.grounding_sources`, with `cited_text`: the answer with a `[n]` after each passage a page backs); a link the model
+writes is never a source, and an answer with no page behind it proposes nothing. Gemini's pages come as redirect links of
+Google's whose title is the site's domain, so `Researcher` follows each link once (`RedirectResolver`, behind the
+`LinkResolver` port) and keeps the page's address, or the site's name as an address when that fails; `source_host` then counts
+independent sites correctly. `Researcher` (`research.py`) is the one place that gathers the candidates (the terms two or more
+episodes share, minus the glossary, the inbox in any status and what the web had no form for in the last `SKIP_DAYS`; the skip
+identities are its own, `research_term`), keeps the budget, and hands `SuggestionService.propose(source="research")` the
+result; there is no other way into the glossary. It is a job of its own (`research`, key per series and language): the
+hook `FactsProposer.after_facts` calls `Researcher.after_facts`, which, when `research_enabled` is on, the provider is Gemini and
+the series has terms and budget left, queues one at origin `facts` and above every translation (`AUTO_PRIO`), whatever
+`auto_request` says; it never raises into the translation. `research_max_calls_per_series` counts the `research` calls of the
+series from `llm_calls.series_id` (migration 16, written by `ResearchJob` through `Telemetry.llm_call(series_id=)`), so the
+count survives the clean-up of finished jobs; a run stops before the call that would pass it, ends `done` with the event
+`research.budget_reached`. A provider with no search tool (`openai_compat`) queues nothing and a run made anyway is `skipped`.
+A search that runs out of quota or cannot be reached makes only the research job wait (`JobQueue._research_waits`, reason
+`rate`): the health of the translation model is not touched, so a limit of the search never rests the translations.
 
 ### Insights, the golden set and the judge (P15)
 
@@ -466,7 +488,7 @@ package's own tests keep it so). Modules:
   `subcore.providers.fake` (deterministic, for tests and dry runs) and `subcore.providers.limiter` (`RateLimiter`,
   `ResilientProvider`: RPM/TPM/RPD windows, retry with backoff, key failover);
 - `subcore.memory.facts`, `subcore.memory.fold`, `subcore.memory.compress`; `subcore.suggest`, `subcore.feedback`,
-  `subcore.golden`, `subcore.compare` and `subcore.judge`;
+  `subcore.research`, `subcore.golden`, `subcore.compare` and `subcore.judge`;
 - `subcore.cli`: the `subcore` command (`translate`, `bundle`, `render-prompt`, `validate`, `compare`); it knows no
   database, queue or HTTP. A bundle's `params.model` empty and `max_output_tokens` 0 mean "decided by the provider that runs
   it": they are neither serialised nor hashed; the worker always sets both.

@@ -81,6 +81,13 @@ export function safeUrl(value: string): string | null {
   }
 }
 
+/** The site a research source is on, as a person reads it: `wikipedia.org`, never `https://www.wikipedia.org/wiki/...`. */
+export function sourceName(value: string): string {
+  const href = safeUrl(value);
+  if (href === null) return value;
+  return new URL(href).hostname.replace(/^www\./i, "");
+}
+
 export interface SeriesGroup {
   seriesId: number;
   series: string;

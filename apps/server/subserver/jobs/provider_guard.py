@@ -26,6 +26,7 @@ from subcore.providers import (
     RateLimited,
     Unavailable,
 )
+from subcore.research import RESEARCH_PROMPT_VERSION
 from subcore.suggest import SUGGEST_PROMPT_VERSION
 from subcore.translate import TranslationError
 from subcore.translate.prompt import PROMPT_VERSION
@@ -60,6 +61,8 @@ def prompt_version_of(task: str, kind: str = "") -> str:
     runs on the ``extract`` model but has a prompt of its own, told apart by the call's ``kind``."""
     if kind == "suggest":
         return f"suggest-{SUGGEST_PROMPT_VERSION}"
+    if task == "research":  # both calls of a research, the search and the one that reads it
+        return f"research-{RESEARCH_PROMPT_VERSION}"
     if task == "judge":
         return f"judge-{JUDGE_PROMPT_VERSION}"
     if task == "translate":

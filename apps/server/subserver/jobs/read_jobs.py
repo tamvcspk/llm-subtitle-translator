@@ -1,4 +1,4 @@
-"""The jobs that read and do not translate: what a worker runs for an ``extract``, a ``suggest`` and a ``judge`` job.
+"""The jobs that read and do not translate: what a worker runs for an ``extract``, a ``suggest``, a ``research`` and a ``judge`` job.
 
 The queue has already picked the model, claimed the job under the day's quota and the breaker, and will map whatever
 a handler raises: a handler only does its work and lets typed provider errors through ``mapped_errors`` so the queue
@@ -13,6 +13,7 @@ from ..domain.config import DEFAULT_MODEL, model_for_task
 from ..services.judge import JudgeService
 from ..services.memory import StoryMemory, unit_label
 from ..services.proposals import FactsProposer
+from ..services.research import Researcher
 from ..domain.ports import ProviderFactory, Telemetry
 from .provider_guard import JobProviders, mapped_errors, prompt_version_of
 from ..adapters.telemetry import Telemetry as TelemetrySink
@@ -107,6 +108,55 @@ class SuggestJob:
                 self.proposer.run(series_id, lang, providers.for_task, report)
         finally:
             job["report"] = report  # what was stored before a stop or a failure is told as well as what was stored after a finish
+        return "proposed" if report.get("added") else "nothing-new"
+
+
+class ResearchJob:
+    """Looks the terms of one series up on the web (``research`` job, P16): a search call and a call that reads its answer,
+    both for the ``research`` task, each recorded with the series so the budget counts them (FR-7.6). The budget, a provider
+    without a search tool and a nothing-found answer end the job without a fault; a quota or an outage waits like any job."""
+
+    def __init__(
+        self,
+        researcher: Researcher,
+        provider_factory: ProviderFactory | None,
+        *,
+        settings_source: Callable[[], dict[str, Any]],
+        usage: Any = None,
+        telemetry: Telemetry | None = None,
+    ) -> None:
+        self.researcher = researcher
+        self.provider_factory = provider_factory
+        self.settings_source = settings_source
+        self.usage = usage
+        self.telemetry: Telemetry = telemetry or TelemetrySink(usage=usage, synchronous=True)
+
+    def __call__(self, job: dict[str, Any], update_status: StatusCallback) -> str:
+        settings = self.settings_source()
+        if job.get("gst_model"):
+            settings = {**settings, "gst_model": str(job["gst_model"])}
+        series_id, lang = int(job.get("stored_series_id") or 0), str(job.get("target_code") or "")
+        update_status("Looking terms up on the web")
+        job_id = str(job.get("job_id") or "")
+        model = str(settings.get("gst_model") or DEFAULT_MODEL)
+
+        def record(log) -> None:
+            self.telemetry.llm_call(
+                job_id, log, prompt_version=prompt_version_of(log.task, getattr(log, "kind", "") or ""), series_id=series_id,
+            )
+
+        providers = JobProviders(self.provider_factory, settings, model, usage=self.usage, on_call=record)
+        report: dict[str, Any] = {}
+        accept = job.get("auto_accept")
+        try:
+            with mapped_errors(settings, model_for_task(settings, "research", model)):
+                self.researcher.run(series_id, lang, providers.for_task, report, auto_accept=accept if isinstance(accept, bool) else None)
+        finally:
+            job["report"] = report  # what was stored before a stop or a failure is told as well as what was stored after a finish
+        if report.get("skipped"):
+            return "skipped-no-web-search"
+        if report.get("budget_reached"):
+            return "budget-reached"
         return "proposed" if report.get("added") else "nothing-new"
 
 

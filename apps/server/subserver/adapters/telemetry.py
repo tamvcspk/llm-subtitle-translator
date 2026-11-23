@@ -199,9 +199,10 @@ class Telemetry:
 
     def llm_call(
         self, job_id: str, log: Any, *, prompt_version: str = "", glossary_hash: str = "", bundle_hash: str = "",
-        style_hash: str = "",
+        style_hash: str = "", series_id: int | None = None,
     ) -> None:
-        """Record one provider call (``log`` is a ``subcore`` ``CallLog``) and, per ``log_prompt_bodies``, its body."""
+        """Record one provider call (``log`` is a ``subcore`` ``CallLog``) and, per ``log_prompt_bodies``, its body.
+        ``series_id`` is the series the job is for (the research budget counts calls by it)."""
         if self.usage is None:
             return
         try:
@@ -217,7 +218,7 @@ class Telemetry:
                 http_status=getattr(log, "http_status", None), finish_reason=getattr(log, "finish_reason", "") or "",
                 retries=getattr(log, "retry", 0) or 0,
                 repairs=(getattr(log, "targets", 0) or 0) if getattr(log, "kind", "") == "repair" else 0,
-                cost_est=cost,
+                cost_est=cost, series_id=series_id,
             )
             keep = self._keep_body(log.outcome)
             body = self._body_source(job_id, log, fields) if keep else None

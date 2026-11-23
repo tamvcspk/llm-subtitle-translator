@@ -166,9 +166,13 @@ class QueueJob(OpenAnswer):
     """``S01E04``; empty for a movie."""
     unit_id: int | None = None
     kind: str | None = None
-    """``publish`` (a translation; also when the field is absent), ``variant``, ``extract``, ``suggest`` or ``judge``."""
+    """``publish`` (a translation; also when the field is absent), ``variant``, ``extract``, ``suggest``, ``judge`` or ``research``."""
     version: int | None = None
     """``judge`` jobs: the candidate version being judged."""
+    stored_series_id: int | None = None
+    """``suggest`` and ``research`` jobs: the series (its id in the worker's own library) they are about."""
+    report: dict[str, Any] | None = None
+    """``suggest`` and ``research`` jobs: what the run did (``added``, ``auto_accepted``, ``terms``, ``errors``, ...)."""
     source_code: str | None = None
     target_code: str | None = None
     subtitle_path: str | None = None

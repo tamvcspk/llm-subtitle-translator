@@ -157,6 +157,8 @@ export type CharacterPayload = Schemas["CharacterPayload"];
 export type SuggestionPayload = Suggestion["payload"];
 /** What shows why: a cue and its timecode, or a line a person can check. */
 export type Evidence = Suggestion["evidence"][number];
+/** `POST /api/suggestions/research` with `estimate_only`: what a run would look up and spend (P16). No model call. */
+export type ResearchEstimate = Schemas["ResearchEstimate"];
 export type SuggestionSummary = Schemas["SuggestionSummary"];
 export type SuggestionList = Schemas["SuggestionList"];
 /** An accept or an undo, or a dry run of one (`saved: false`): what it flags stale. Nothing is retranslated. */

@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { useSuggestionImpact } from "../../api/queries";
 import type { Suggestion } from "../../api/types";
 import { ago } from "../../lib/format";
-import { describe, evidenceLines, impactLine, KIND_LABEL, safeUrl, SOURCE_LABEL } from "../../lib/suggestions";
+import { describe, evidenceLines, impactLine, KIND_LABEL, safeUrl, SOURCE_LABEL, sourceName } from "../../lib/suggestions";
 
 function Evidence({ suggestion }: { suggestion: Suggestion }) {
   const lines = evidenceLines(suggestion.evidence);
@@ -44,16 +44,25 @@ function Evidence({ suggestion }: { suggestion: Suggestion }) {
           </Stack>
         </details>
       )}
-      {links.map(({ url, href }) =>
-        href ? (
-          <Anchor key={url} href={href} target="_blank" rel="noreferrer" size="sm" style={{ overflowWrap: "anywhere" }}>
-            {url}
-          </Anchor>
-        ) : (
-          <Text key={url} size="sm" style={{ overflowWrap: "anywhere" }}>
-            {url}
+      {links.length > 0 && (
+        <Stack gap={0} component="ul" aria-label="Sources" style={{ margin: 0, padding: 0, listStyle: "none" }}>
+          <Text size="xs" c="dimmed" fw={600}>
+            {links.length === 1 ? "1 source" : `${links.length.toLocaleString()} sources`}
           </Text>
-        ),
+          {links.map(({ url, href }) => (
+            <li key={url} style={{ minHeight: 44, display: "flex", alignItems: "center" }}>
+              {href ? (
+                <Anchor href={href} target="_blank" rel="noreferrer" size="sm" style={{ overflowWrap: "anywhere" }}>
+                  {sourceName(url)}
+                </Anchor>
+              ) : (
+                <Text size="sm" style={{ overflowWrap: "anywhere" }}>
+                  {url}
+                </Text>
+              )}
+            </li>
+          ))}
+        </Stack>
       )}
     </Stack>
   );

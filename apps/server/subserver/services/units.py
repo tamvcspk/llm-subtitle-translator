@@ -25,7 +25,9 @@ from subcore.translate.prompt import PROMPT_VERSION as SUBCORE_PROMPT_VERSION
 from .catalog import pick_source
 from .estimates import Estimator
 from .glossaries import Glossaries
-from ..jobs.jobs import EXTRACT, FAILED, JUDGE, READING_KINDS, SUGGEST_CALLS, VARIANT, job_name, variant_key
+from ..jobs.jobs import (
+    EXTRACT, FAILED, JUDGE, READING_KINDS, RESEARCH, RESEARCH_CALLS, SUGGEST_CALLS, VARIANT, job_name, variant_key,
+)
 from .library import Library, Owner
 from ..domain.ports import CURRENT, KIND_EPISODE, KIND_SERIES, PRUNED, Correction, Output, Telemetry, Unit
 from ..adapters.store import Store
@@ -582,7 +584,10 @@ class UnitService:
             if not reason and job is not None and job.get("kind") in READING_KINDS:
                 # a job that reads has no subtitle to count cues in: its calls are fixed, or a judge job says how many it needs
                 kind = job.get("kind")
-                calls = 1 if kind == EXTRACT else max(1, int(job.get("calls") or 0)) if kind == JUDGE else SUGGEST_CALLS
+                calls = (
+                    1 if kind == EXTRACT else max(1, int(job.get("calls") or 0)) if kind == JUDGE
+                    else RESEARCH_CALLS if kind == RESEARCH else SUGGEST_CALLS
+                )
             elif not reason and job is not None:
                 try:
                     source = srt.parse_file(str(job.get("subtitle_path") or ""))

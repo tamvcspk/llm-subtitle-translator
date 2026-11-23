@@ -1189,6 +1189,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/suggestions/research": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["endpoint_api_suggestions_research_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/suggestions/from-edits": {
         parameters: {
             query?: never;
@@ -2877,10 +2893,16 @@ export interface components {
             /** @description ``S01E04``; empty for a movie. */
             label: string;
             unit_id?: number | null;
-            /** @description ``publish`` (a translation; also when the field is absent), ``variant``, ``extract``, ``suggest`` or ``judge``. */
+            /** @description ``publish`` (a translation; also when the field is absent), ``variant``, ``extract``, ``suggest``, ``judge`` or ``research``. */
             kind?: string | null;
             /** @description ``judge`` jobs: the candidate version being judged. */
             version?: number | null;
+            /** @description ``suggest`` and ``research`` jobs: the series (its id in the worker's own library) they are about. */
+            stored_series_id?: number | null;
+            /** @description ``suggest`` and ``research`` jobs: what the run did (``added``, ``auto_accepted``, ``terms``, ``errors``, ...). */
+            report?: {
+                [key: string]: unknown;
+            } | null;
             source_code?: string | null;
             target_code?: string | null;
             subtitle_path?: string | null;
@@ -2924,6 +2946,57 @@ export interface components {
          */
         RequestObject: {
             [key: string]: unknown;
+        };
+        /**
+         * ResearchBody
+         * @description ``POST /api/suggestions/research``: ``auto_accept`` is the Estimate box's tick for this run only (absent: what
+         *     ``auto_accept_terms`` says).
+         */
+        ResearchBody: {
+            /** Series Id */
+            series_id?: number | string | null;
+            /** Lang */
+            lang?: string | null;
+            /** Estimate Only */
+            estimate_only?: boolean | null;
+            /** Auto Accept */
+            auto_accept?: boolean | null;
+        } & {
+            [key: string]: unknown;
+        };
+        ResearchBudget: {
+            /** @description ``research_max_calls_per_series``; ``0`` is no cap. */
+            cap: number;
+            /** @description Calls of the research task this series has made over its whole life. */
+            used: number;
+            /** @description ``used`` plus the calls this run would make. */
+            after: number;
+        };
+        /** @description ``POST /api/suggestions/research`` with ``estimate_only``: what a run would look up and spend. No model call. */
+        ResearchEstimate: {
+            ok: boolean;
+            estimate_only: boolean;
+            /** @description Terms two or more episodes share that the glossary and the inbox do not have: the ``N`` of the button. */
+            terms: number;
+            /** @description How many of them one run asks about (the most widespread first). */
+            asked: number;
+            /** @description Model calls: the search and the one that reads its answer (an estimate: a search may run several queries). */
+            calls: number;
+            search_model: string;
+            read_model: string;
+            budget: components["schemas"]["ResearchBudget"];
+            /** @description What ``auto_accept_terms`` says now: the default of the tick in the box. */
+            auto_accept: boolean;
+            /**
+             * @description Why a run cannot be made now; empty when it can.
+             * @enum {string}
+             */
+            blocked: "" | "no_web_search" | "budget" | "no_terms";
+            reason: string;
+            calls_left_today: number | null;
+            paused_until: number | null;
+            minutes: number | null;
+            finish_at: number | null;
         };
         /** @description With ``estimate_only``: the same checks ran, nothing was queued. */
         RetranslateEstimate: {
@@ -6227,6 +6300,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GenerateQueued"] | components["schemas"]["GenerateEstimate"];
+                };
+            };
+            /** @description a refusal: the status says what went wrong, `error` says it in words */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorAnswer"];
+                };
+            };
+        };
+    };
+    endpoint_api_suggestions_research_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ResearchBody"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerateQueued"] | components["schemas"]["ResearchEstimate"];
                 };
             };
             /** @description a refusal: the status says what went wrong, `error` says it in words */

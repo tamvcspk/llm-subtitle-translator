@@ -34,16 +34,17 @@ const baseName = (path: string | null | undefined) => (path ?? "").split(/[\\/]/
 
 /** Jobs that read and do not translate: they have no subtitle to write and no bundle to export. */
 export const readsOnly = (job: Pick<QueueJob, "kind">): boolean =>
-  job.kind === "extract" || job.kind === "suggest" || job.kind === "judge";
+  job.kind === "extract" || job.kind === "suggest" || job.kind === "judge" || job.kind === "research";
 
 /**
  * `Arcane · S01E04 · vi`; a job with no unit (an older queue file) is its subtitle's file name. A job that reads is named
  * for what it reads: `Extract facts · Arcane · S01E04`, `Look for proposals · Arcane · vi`,
- * `Judge variant · Arcane · S01E04 · vi`.
+ * `Research terms · Arcane · vi`, `Judge variant · Arcane · S01E04 · vi`.
  */
 export function jobName(job: QueueJob): string {
   if (job.kind === "extract") return ["Extract facts", job.title, job.label].filter(Boolean).join(" · ");
   if (job.kind === "suggest") return ["Look for proposals", job.title, job.target_code].filter(Boolean).join(" · ");
+  if (job.kind === "research") return ["Research terms", job.title, job.target_code].filter(Boolean).join(" · ");
   if (job.kind === "judge") return ["Judge variant", job.title, job.label, job.target_code].filter(Boolean).join(" · ");
   const parts = [job.title, job.label].filter(Boolean);
   const name = parts.length > 0 ? parts.join(" · ") : baseName(job.subtitle_path) || job.job_id;
@@ -89,6 +90,10 @@ const READ_RESULT: Record<string, string> = {
   "nothing-answered": "the judge gave no answer",
   "skipped-nothing-to-judge": "nothing left to judge",
   "skipped-not-a-candidate": "the version is no longer a candidate",
+  proposed: "proposals are in Review",
+  "nothing-new": "nothing new to propose",
+  "budget-reached": "the research budget of the series is spent",
+  "skipped-no-web-search": "this provider has no web search",
 };
 
 /** `manual · fill`, `policy · variant`: who asked and how. */

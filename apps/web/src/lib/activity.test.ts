@@ -18,6 +18,11 @@ describe("Activity", () => {
     const extract = job({ kind: "extract", target_code: undefined, mode: "extract" });
     expect(jobName(extract)).toBe("Extract facts · Arcane · S01E04");
     expect(jobName(job({ kind: "suggest", label: "", target_code: "vi" }))).toBe("Look for proposals · Arcane · vi");
+    const research = job({ kind: "research", label: "", mode: "research" });
+    expect(jobName(research)).toBe("Research terms · Arcane · vi");
+    expect(readsOnly(research)).toBe(true); // no subtitle to export, no episode to request
+    expect(jobStatus({ ...research, result: "proposed" }, "done")).toBe("manual · research · proposals are in Review");
+    expect(jobStatus({ ...research, result: "budget-reached" }, "done")).toBe("manual · research · the research budget of the series is spent");
     expect(readsOnly(extract)).toBe(true);
     expect(readsOnly(job({ kind: "variant" }))).toBe(false);
     expect(readsOnly(job())).toBe(false);

@@ -52,6 +52,18 @@ ProviderFor = Callable[[str], Provider]
 
 
 @dataclass
+class Inputs:
+    """The inputs of a generator: the series' facts in story order (``stored`` pairs each unit with its facts), the same as
+    ``Episode``s, a reader of the source cues of an episode by its label, and the glossary."""
+
+    owner: Any
+    stored: list[Any]
+    episodes: list[Episode]
+    cues_of: Callable[[str], list[srt.Cue]]
+    glossary: Glossary
+
+
+@dataclass
 class Scan:
     """What a run would ask the model about: the candidates left after the glossary and the inbox are taken out."""
 
@@ -86,11 +98,13 @@ class FactsProposer:
         self.telemetry: Telemetry = telemetry or NULL
         # The queue a run is asked through (``request``); wired by the composition root once the queue exists.
         self.jobs: JobQueue | None = None
+        # The research step (P16, ``services.research.Researcher``): the same hook leaves its job beside the suggest job.
+        self.researcher: Any = None
 
     # -- what there is to propose -----------------------------------------------------------------------------
-    def scan(self, series_id: int, lang: str) -> Scan:
-        """The candidates a run would ask about. Reads the facts, the source cues, the glossary and the inbox; makes no
-        model call and writes nothing."""
+    def inputs(self, series_id: int, lang: str) -> "Inputs":
+        """What every generator reads: the stored facts of the series in story order, the source cues of each episode (for
+        evidence) and the series' glossary. Makes no model call and writes nothing."""
         owner = self.suggestions.library.series_owner(series_id)
         stored = self.memory.story_facts(series_id)
         episodes = [Episode(unit_label(u), int(u.season or 0), int(u.episode or 0), facts) for u, facts in stored]
@@ -106,8 +120,15 @@ class FactsProposer:
                     cache[label] = []
             return cache[label]
 
+        glossary: Glossary = self.suggestions.library.glossaries.load(owner.kind, owner.key, lang)
+        return Inputs(owner, stored, episodes, cues_of, glossary)
+
+    def scan(self, series_id: int, lang: str) -> Scan:
+        """The candidates a run would ask about. Reads the facts, the source cues, the glossary and the inbox; makes no
+        model call and writes nothing."""
+        found = self.inputs(series_id, lang)
+        owner, stored, episodes, cues_of, glossary = found.owner, found.stored, found.episodes, found.cues_of, found.glossary
         library = self.suggestions.library
-        glossary: Glossary = library.glossaries.load(owner.kind, owner.key, lang)
         cards = library.styles.cards(owner.kind, owner.key) if library.styles else []
         held = self._held(series_id, lang)  # taken out BEFORE each kind's limit, or they would crowd out the rest
         address = address_items(episodes, cues_of, glossary=glossary, exclude=held["address_rule"])[:ADDRESS_PER_RUN]
@@ -230,11 +251,10 @@ class FactsProposer:
             return
         try:
             enabled = settings.get("suggest_from_facts", True)
-            if not (enabled is True or str(enabled).strip().lower() in ("1", "true", "on")):
-                return
-            series_ids = {u.series_id for u in (self.memory.units.get_unit(i) for i in unit_ids) if u and u.series_id}
-            for series_id in sorted(series_ids):
-                self.request(series_id, lang, manual=False)
+            if enabled is True or str(enabled).strip().lower() in ("1", "true", "on"):
+                series_ids = {u.series_id for u in (self.memory.units.get_unit(i) for i in unit_ids) if u and u.series_id}
+                for series_id in sorted(series_ids):
+                    self.request(series_id, lang, manual=False)
         except Exception as exc:  # noqa: BLE001 - by contract nothing here may reach the job
             message = redact(f"{type(exc).__name__}: {exc}", settings)
             logging.warning("Could not queue a look for suggestions in the new facts (%s)", message)
@@ -242,3 +262,5 @@ class FactsProposer:
                 "suggestions.generator_failed", reason="the generator could not be queued; the translation job is not affected",
                 lang=lang, error=message[:300],
             )
+        if self.researcher is not None:  # its own switch, its own job; it never raises either (FR-7.5)
+            self.researcher.after_facts(unit_ids, lang, settings)

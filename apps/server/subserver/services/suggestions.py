@@ -190,6 +190,28 @@ class SuggestionService:
         self.generator: Any = None
         # What the admin's own corrections suggest (P15, ``FeedbackProposer``); also wired by the composition root.
         self.feedback: Any = None
+        # The web research the admin can ask for by hand (P16, ``Researcher``); wired by the composition root too.
+        self.researcher: Any = None
+
+    def research(
+        self, series_id: int, lang: str, *, estimate_only: bool = False, auto_accept: bool | None = None,
+    ) -> dict[str, Any]:
+        """Look the terms of a series up on the web (``POST /api/suggestions/research``). ``estimate_only`` says what a run
+        would ask and cost, without a call. Otherwise the run is a ``research`` job: the queue makes it under the day's quota
+        and the breaker, and the answer is the job (an open one for the same series and language is not made twice).
+        ``auto_accept`` is the Estimate box's tick for this run only."""
+        if self.researcher is None:
+            raise ValueError("no research step is wired into this worker")
+        if not _LANG.match(lang or ""):
+            raise ValueError(f"invalid language code {lang!r}")
+        self.library.series_owner(series_id)  # LookupError for a series that is not there
+        if estimate_only:
+            return self.researcher.estimate(series_id, lang)
+        blocked = self.researcher.blocked(series_id, lang)
+        if blocked:
+            raise ValueError(self.researcher.explain(blocked))
+        job_id, created = self.researcher.request(series_id, lang, auto_accept=auto_accept)
+        return {"ok": True, "job_ids": [job_id], "queued": 1 if created else 0, "merged": 0 if created else 1}
 
     def from_edits(self, series_id: int, lang: str) -> dict[str, Any]:
         """Look for what the admin keeps correcting in this series (``POST /api/suggestions/from-edits``). It spends no
@@ -215,9 +237,13 @@ class SuggestionService:
         return {"ok": True, "job_ids": [job_id], "queued": 1 if created else 0, "merged": 0 if created else 1}
 
     # -- proposing ----------------------------------------------------------------------------------------
-    def propose(self, series_id: int, lang: str, proposals: list[Proposal], *, source: str) -> ProposeReport:
+    def propose(
+        self, series_id: int, lang: str, proposals: list[Proposal], *, source: str, auto_accept: bool | None = None,
+    ) -> ProposeReport:
         """Store what a generator found. Content already waiting, already decided, or already in the glossary is
-        skipped; what is new waits as ``pending`` unless ``auto_accept`` for its kind applies it at once."""
+        skipped; what is new waits as ``pending`` unless ``auto_accept`` for its kind applies it at once. ``auto_accept``
+        (``None`` = what Settings say) is the admin's choice for this run only; it can switch the setting off or on, but a
+        term still needs two independent sources either way (FR-4.4)."""
         if source not in SOURCES:
             raise ValueError(f"source must be one of {', '.join(SOURCES)}")
         if not _LANG.match(lang or ""):
@@ -252,7 +278,7 @@ class SuggestionService:
                 counts["pending_already"] += 1
                 continue
             counts["added"] += 1
-            if self._auto(stored):
+            if self._auto(stored, auto_accept):
                 try:
                     self.accept(stored.id, auto=True)
                     counts["auto_accepted"] += 1
@@ -265,9 +291,9 @@ class SuggestionService:
         )
         return report
 
-    def _auto(self, suggestion: Suggestion) -> bool:
+    def _auto(self, suggestion: Suggestion, override: bool | None = None) -> bool:
         key = AUTO_SETTING[suggestion.kind]
-        enabled = self._settings().get(key, SUGGESTION_BOOL_CONFIG_KEYS[key])
+        enabled = override if override is not None else self._settings().get(key, SUGGESTION_BOOL_CONFIG_KEYS[key])
         if not (enabled is True or str(enabled).strip().lower() in ("1", "true", "on")):
             return False
         if suggestion.kind == "term":  # FR-4.4: only when independent sources agree

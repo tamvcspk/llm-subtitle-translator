@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from .base import (
     AuthError,
     BadOutput,
     Blocked,
     Capabilities,
+    GroundingSource,
     LLMRequest,
     LLMResponse,
     ModelNotFound,
@@ -23,7 +25,10 @@ from .base import (
     Unavailable,
 )
 
-__all__ = ["GeminiProvider", "map_api_error", "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S", "BLOCKED_FINISH_REASONS"]
+__all__ = [
+    "GeminiProvider", "map_api_error", "parse_grounding", "source_domain", "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S",
+    "BLOCKED_FINISH_REASONS",
+]
 
 # Finish reasons that mean "the content was refused", as opposed to a cut-off or an empty answer (FR-17.2).
 BLOCKED_FINISH_REASONS = frozenset({"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", "RECITATION"})
@@ -93,6 +98,96 @@ def _map_api_error(code: int | None, status: str | None, message: str | None, de
     return ProviderError(message)
 
 
+# -- grounding (FR-7) ---------------------------------------------------------------------------------------------
+# What a live call showed (2026-11-23, gemini-3.1-flash-lite with the Google Search tool): ``grounding_chunks[].web.uri`` is a
+# redirect link of Google's (``vertexaisearch.cloud.google.com/grounding-api-redirect/...``) that answers 302 to the page, and
+# ``web.title`` is the site's registered domain (``wikipedia.org``), not the page's title. The same page comes back as
+# several chunks. ``grounding_supports`` ties a passage of the answer (``segment.text``) to chunk indices.
+_HOSTLIKE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$", re.IGNORECASE)
+_REDIRECT_HOSTS = frozenset({"vertexaisearch.cloud.google.com"})
+
+
+def source_domain(uri: str, title: str) -> str:
+    """The site a grounding chunk is from: its title when that is a domain name (what Gemini gives), else the host of its
+    link, unless that is Google's redirect host (which says nothing about the page). Empty when neither says."""
+    named = (title or "").strip().lower()
+    if _HOSTLIKE.match(named):
+        return named.removeprefix("www.")
+    try:
+        host = (urlparse(uri or "").hostname or "").lower()
+    except ValueError:
+        host = ""
+    return "" if not host or host in _REDIRECT_HOSTS else host.removeprefix("www.")
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        data = dump(mode="json", exclude_none=True)
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _cite(text: str, supports: list[Any], source_of: dict[int, int]) -> str:
+    """``text`` with ``[n]`` after every passage some source backs (``n`` counts the deduplicated sources from 0). A passage
+    is found by its own words; when they are not there the provider's byte offset is used."""
+    marks: dict[int, list[int]] = {}
+    cursor = 0
+    raw = text.encode("utf-8")
+    for support in supports:
+        if not isinstance(support, dict):
+            continue
+        segment = support.get("segment") if isinstance(support.get("segment"), dict) else {}
+        found = sorted({source_of[i] for i in support.get("grounding_chunk_indices") or [] if i in source_of})
+        if not found:
+            continue
+        passage = str(segment.get("text") or "")
+        at = text.find(passage, cursor) if passage else -1
+        if at < 0 and passage:
+            at = text.find(passage)
+        if at >= 0:
+            end = at + len(passage)
+            cursor = max(cursor, at)
+        elif isinstance(segment.get("end_index"), int):
+            end = len(raw[: segment["end_index"]].decode("utf-8", errors="ignore"))
+        else:
+            continue
+        slot = marks.setdefault(min(end, len(text)), [])
+        slot.extend(n for n in found if n not in slot)
+    out: list[str] = []
+    last = 0
+    for end in sorted(marks):
+        out.append(text[last:end])
+        out.append(" [" + ", ".join(str(n) for n in sorted(marks[end])) + "]")
+        last = end
+    out.append(text[last:])
+    return "".join(out)
+
+
+def parse_grounding(metadata: Any, text: str) -> tuple[tuple[GroundingSource, ...], tuple[str, ...], str]:
+    """``(sources, search queries, cited text)`` of a response's ``grounding_metadata`` (an SDK object or its dict).
+    The sources are the distinct pages in the order they first appear; the same page backs several passages."""
+    meta = _as_dict(metadata)
+    sources: list[GroundingSource] = []
+    by_uri: dict[str, int] = {}
+    source_of: dict[int, int] = {}
+    for number, chunk in enumerate(meta.get("grounding_chunks") or []):
+        web = chunk.get("web") if isinstance(chunk, dict) else None
+        uri = str(web.get("uri") or "").strip() if isinstance(web, dict) else ""
+        if not uri:
+            continue
+        if uri not in by_uri:
+            title = str(web.get("title") or "").strip()
+            by_uri[uri] = len(sources)
+            sources.append(GroundingSource(uri, source_domain(uri, title), title))
+        source_of[number] = by_uri[uri]
+    queries = tuple(q.strip() for q in meta.get("web_search_queries") or [] if isinstance(q, str) and q.strip())
+    cited = _cite(text, meta.get("grounding_supports") or [], source_of) if sources else ""
+    return tuple(sources), queries, cited
+
+
 def _caps_for(model: str) -> Capabilities:
     # Gemini 2.x/3 models share these limits; refine per model as needed.
     return Capabilities(max_input_tokens=1_048_576, max_output_tokens=65_536, structured_output=True, web_search=True)
@@ -145,6 +240,8 @@ class GeminiProvider:
             kwargs["temperature"] = req.temperature
         if self._thinking_budget is not None:
             kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=self._thinking_budget)
+        if req.web_search and self.caps.web_search:
+            kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
         return types.GenerateContentConfig(**kwargs)
 
     def _convert(self, exc: Exception) -> ProviderError:
@@ -169,6 +266,7 @@ class GeminiProvider:
         tokens_in = tokens_out = 0
         finish = None
         block_reason = ""
+        grounding: Any = None
         try:
             stream = client.models.generate_content_stream(
                 model=self.model, contents=req.user, config=self._config(req)
@@ -178,12 +276,15 @@ class GeminiProvider:
                     parts.append(chunk.text)
                 usage = getattr(chunk, "usage_metadata", None)
                 if usage is not None:
-                    tokens_in = usage.prompt_token_count or tokens_in
+                    # What a search brought back into the prompt is billed as input too.
+                    tokens_in = (usage.prompt_token_count or 0) + (getattr(usage, "tool_use_prompt_token_count", 0) or 0) or tokens_in
                     # Thinking tokens are billed as output.
                     tokens_out = (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0) or tokens_out
                 candidates = getattr(chunk, "candidates", None) or []
                 if candidates and getattr(candidates[0], "finish_reason", None) is not None:
                     finish = candidates[0].finish_reason
+                if candidates and getattr(candidates[0], "grounding_metadata", None) is not None:
+                    grounding = candidates[0].grounding_metadata  # the last one is the whole picture
                 feedback = getattr(chunk, "prompt_feedback", None)
                 reason = getattr(feedback, "block_reason", None) if feedback is not None else None
                 if reason is not None:
@@ -201,8 +302,10 @@ class GeminiProvider:
             raise BadOutput(f"empty response (finish_reason={finish_name or 'unknown'})")
         # A MAX_TOKENS cut-off is returned as-is: the cues that made it are kept and the
         # rest are repaired/split by the translator instead of re-buying the whole call.
+        sources, queries, cited = parse_grounding(grounding, text) if req.web_search and grounding is not None else ((), (), "")
         return LLMResponse(
-            text=text, tokens_in=tokens_in, tokens_out=tokens_out, model=self.model, finish_reason=finish_name
+            text=text, tokens_in=tokens_in, tokens_out=tokens_out, model=self.model, finish_reason=finish_name,
+            grounding_sources=sources, search_queries=queries, cited_text=cited,
         )
 
     def count_tokens(self, req: LLMRequest) -> int:

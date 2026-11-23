@@ -35,6 +35,16 @@ One job looks for proposals (address rules, terms, characters) in the stored fac
 three calls, each kind stored as soon as it returns. The admin asks for it; a translation that read new facts leaves one behind
 (origin `facts`, the lowest class), and at most one is open per series and language.
 
+**Research job** (job kind `research`) and **research grounding**:
+One job looks up on the web how the names and terms of one series are written in the target language (FR-7), in two calls: a
+search with the provider's own search tool, then a call that reads its answer. A term it is about is one that two or more
+episodes share and the glossary and Review do not have yet. What the web backs becomes a `term` suggestion of source
+`research`; its **sources** are the pages the provider reported (**grounding sources**: their address and the site's name), never
+a link the model wrote, and two pages of one site count as one independent source. With `research_enabled` a translation that read
+new facts leaves one behind (origin `facts`, above the translations still waiting for the series); the admin can always ask by hand
+(**Research terms**, priced first). It has a **research budget** (`research_max_calls_per_series`), counted per series from the call
+records, and a provider with no search tool (OpenAI-compatible) skips it without a fault.
+
 **Judge job** (job kind `judge`):
 One job asks a model which of two translations of a cue is better, for the cues where a candidate (a variant) differs from the
 current translation: 30 cues a call, up to 300 cues a job, each batch stored when it returns. The admin asks for it on the
