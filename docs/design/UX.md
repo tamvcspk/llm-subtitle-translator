@@ -1,7 +1,7 @@
 # UX — luồng dùng và nguyên tắc giao diện
 
-> Trạng thái: **Draft v0.18** · 2026-11-23 · Nền cho dựng giao diện. Nguồn: lời mô tả của admin ngày 2026-11-16 (mục 1–2), các bất biến trong `AGENTS.md`, và các quyết định ở SPEC #26. Quyết định: SPEC #25, #26, FR-10.4, FR-10.5; ADR-17. Wireframe: [wireframe-v2.md](wireframe-v2.md) (v2.1); prompt vẽ: [wireframe-prompt.md](wireframe-prompt.md). **Khi wireframe và tài liệu này khác nhau, tài liệu này thắng.**
-> v0.14: sau review wireframe v1: giao diện React, bỏ Stale khỏi Home, bỏ nút Check, Estimate/Confirm, banner toàn cục, Inherit và Style cấp tập, Settings 7 nhóm. v0.15: các mặc định đã vẽ thành quy tắc (SPEC #26 điểm 12). v0.16: iPad cầm dọc nên khổ chính là dọc (SPEC #26 điểm 13); Import YAML chốt; wireframe v2.1 đã sửa các sai lệch của v2 nên bỏ Phụ lục C. v0.17: đã kiểm code cho sáu điểm còn mở (kết quả ở PLAN P12b); mục 8 chỉ còn ý tưởng chưa quyết; Memory và Specials after không có dòng impact ở v1 (SPEC #26 điểm 14). v0.18: ghi lại nút **Download golden set** của trang Insights (đã có trong code): mục 6.6 và Phụ lục A.6b; không đổi hành vi.
+> Trạng thái: **Draft v0.20** · 2026-11-23 · Nền cho dựng giao diện. Nguồn: lời mô tả của admin ngày 2026-11-16 (mục 1–2), các bất biến trong `AGENTS.md`, và các quyết định ở SPEC #26. Quyết định: SPEC #25, #26, FR-10.4, FR-10.5; ADR-17. Wireframe: [wireframe-v2.md](wireframe-v2.md) (v2.1); prompt vẽ: [wireframe-prompt.md](wireframe-prompt.md). **Khi wireframe và tài liệu này khác nhau, tài liệu này thắng.**
+> v0.14: sau review wireframe v1: giao diện React, bỏ Stale khỏi Home, bỏ nút Check, Estimate/Confirm, banner toàn cục, Inherit và Style cấp tập, Settings 7 nhóm. v0.15: các mặc định đã vẽ thành quy tắc (SPEC #26 điểm 12). v0.16: iPad cầm dọc nên khổ chính là dọc (SPEC #26 điểm 13); Import YAML chốt; wireframe v2.1 đã sửa các sai lệch của v2 nên bỏ Phụ lục C. v0.17: đã kiểm code cho sáu điểm còn mở (kết quả ở PLAN P12b); mục 8 chỉ còn ý tưởng chưa quyết; Memory và Specials after không có dòng impact ở v1 (SPEC #26 điểm 14). v0.18: ghi lại nút **Download golden set** của trang Insights (đã có trong code): mục 6.6 và Phụ lục A.6b; không đổi hành vi. v0.19: nút **Golden set** trên mỗi dòng ngôn ngữ mở một bottom sheet có **Download** và **Copy** (giống Export YAML), để dòng ngôn ngữ không bị chật; thêm wireframe Insights (mục 5b của wireframe-v2.md). v0.20: Insights có một cửa sổ thời gian, mũi tên so kỳ trước và số cue đã sửa theo ngôn ngữ; mục 6.7 Research terms (P16): nút trên Glossary, hộp Estimate riêng, thẻ Review có nguồn, Auto kèm Undo, ngân sách theo series; thêm wireframe Review (mục 5c).
 > Giao diện viết bằng **tiếng Anh** (khớp arr stack); tài liệu này bằng tiếng Việt, các nhãn UI giữ nguyên tiếng Anh.
 
 ## 1. Người dùng và bối cảnh
@@ -213,7 +213,24 @@ Hộp Estimate là dialog hoặc bottom sheet có **Cancel** và **Confirm** (kh
 
 Tải bằng `blob:` có thể bị iOS chặn trong iframe (mục 7). Mọi thao tác xuất (**Export YAML** của glossary, **Export job spec**, tải backup) dùng **liên kết do server phục vụ** (có `Content-Disposition`), không tạo `blob:`. Bản xuất dạng chữ (YAML, job spec) có thêm nút **Copy** (nếu iframe không cho ghi clipboard thì hiện ô văn bản chọn-tất-cả để chép tay); backup `.zip` chỉ có liên kết tải, không có Copy.
 
-**Bộ golden** của một series (nút **Download golden set** trong "Your corrections" ở cuối trang Insights, mỗi ngôn ngữ của series một nút) theo cùng quy tắc: là một liên kết `<a>` tới `GET /api/series/{id}/golden?lang=<lang>&download=1`, server trả file đính kèm `<series-key>.<lang>.golden.json`; không tạo `blob:`; cao ít nhất 44 px như mọi nút. Chỉ đọc, không tốn lời gọi model nên không có Estimate/Confirm. Hiện chỉ có liên kết tải, chưa có nút Copy (câu hỏi mở ở bàn giao, không phải hành vi mới).
+**Bộ golden** của một series (trong "Your corrections" ở cuối trang Insights, mỗi ngôn ngữ của series một nút **Golden set**) mở một **bottom sheet** giống Export YAML, để dòng ngôn ngữ không chật:
+
+- **Download** là một liên kết `<a>` tới `GET /api/series/{id}/golden?lang=<lang>&download=1`, server trả file đính kèm `<series-key>.<lang>.golden.json`; không tạo `blob:`.
+- **Copy** lấy văn bản JSON của bộ golden bằng `GET /api/series/{id}/golden?lang=<lang>` (cùng nội dung, không có `download=1`) rồi ghi vào clipboard. Trong lúc lấy hiện *Copying…*; xong thì `role="status"` báo *Copied {cues} cues*. Nếu iframe không cho ghi clipboard, hoặc việc lấy lỗi, thì hiện ô văn bản chọn-tất-cả để chép tay (lỗi lấy hiện `Alert` đỏ).
+- Mọi nút trong sheet cao ít nhất 44 px. Chỉ đọc, không tốn lời gọi model nên không có Estimate/Confirm.
+
+Chính nút **Golden set** trên dòng chỉ mở sheet; nó không tải gì.
+
+### 6.7 Research terms (P16)
+
+Tra tên riêng và thuật ngữ trên web (Google Search grounding) rồi đổ kết quả vào Review. Không thêm màn hình hay mục nav.
+
+- **Điểm bấm:** nút **Research terms (N)** trên thanh nút của tab Glossary, `N` là số term xuất hiện ở ≥ 2 tập mà chưa có trong glossary (đếm cục bộ, nguyên tắc 4). Dải trạng thái dưới thanh nút theo mẫu Extract facts: đang chạy (Stop), chờ quota, xong (Open Review →), lỗi (Retry). Mọi trạng thái đều có việc kế tiếp (nguyên tắc 2).
+- **Tắt có lý do:** `N = 0` ("No unmapped terms found"); provider `openai_compat` ("Web research requires Gemini", cố định); hết ngân sách ("Research budget reached for this series", gỡ bằng Settings → Translation). Hai lý do sau có liên kết Settings.
+- **Estimate (nguyên tắc 9):** số term, số lời gọi (1 tìm kiếm + 1 trích xuất; một lời gọi tìm kiếm có thể chạy nhiều truy vấn nên số lời gọi là ước), model của từng lời gọi, ngân sách đã dùng và sau lần chạy, `calls_left_today`, và ô *Auto-accept terms with 2+ independent sources* (mặc định theo cài đặt; bỏ tích chỉ áp cho lần này).
+- **Ngân sách `research_max_calls_per_series`:** tính theo series, cộng dồn suốt đời series (chưa có cửa sổ thời gian); mặc định 10; muốn không trần phải bật *No cap*.
+- **Tự chạy (nguyên tắc 3):** research chỉ tự chạy cho series có `auto_request` bật, cùng luồng bootstrap P13, hiện ở Activity là `policy · research` và tính vào ngân sách. Series khác chỉ chạy khi admin bấm nút.
+- **Kết quả:** vào Review với nhãn **Research** (khác Facts và Your edits), kèm danh sách nguồn lấy từ grounding metadata (tên miền, mở tab mới), không có `confidence` mà có số nguồn. Term đủ ≥ 2 nguồn độc lập và đang bật auto_accept thì tự áp dụng, có nhãn **Auto** ở History và nút **Undo** nói rõ số tập sẽ stale. Tự áp dụng chỉ đánh cờ stale, không dịch lại (nguyên tắc 3).
 
 ## 7. Ràng buộc kỹ thuật cho iframe, đăng nhập và hết phiên
 
@@ -297,17 +314,17 @@ Nhóm theo series; mỗi mục: `source`, nội dung đề xuất, bằng chứn
 
 ### A.6b Insights: "Your corrections" (P15)
 
-Phần cuối trang Insights, chỉ đọc. Mỗi series có ít nhất một ngôn ngữ thì có một thẻ; series chưa có ngôn ngữ nào thì không hiện. Mỗi ngôn ngữ một dòng gồm huy hiệu ngôn ngữ và hai nút cao ít nhất 44 px, xếp xuống dòng khi hẹp. Khổ dọc: thẻ xếp chồng.
+Phần cuối trang Insights, chỉ đọc. Mỗi series có ít nhất một ngôn ngữ thì có một thẻ; series chưa có ngôn ngữ nào thì không hiện. Mỗi ngôn ngữ một dòng gồm huy hiệu ngôn ngữ, nút **Look at my edits** và nút **Golden set** (cao ít nhất 44 px; xếp xuống dòng khi hẹp). Khổ dọc: thẻ xếp chồng. Khổ ngang: xem wireframe-v2.md mục 5b.
 
 | Hiển thị | Nguồn |
 |---|---|
 | Danh sách series; tên series là liên kết tới tab Glossary của series (chỉ khi series có trong catalog; nếu không thì chữ thường) | `GET /api/library/series`, `GET /api/catalog` |
 | Các ngôn ngữ của series (một dòng mỗi ngôn ngữ) | `GET /api/library/series/{id}/units` → `languages` |
 | Nút **Look at my edits** (tên truy cập: "Look at my <lang> edits of <series>"): tìm mẫu sửa lặp lại trong cue đã sửa và đề xuất vào Review (`pending`). Không tốn lời gọi model, không qua Estimate. Khi chạy nút hiện trạng thái loading; xong thì một dòng kết quả `<lang>: <câu tóm tắt>` (`role="status"`) dưới thẻ; lỗi hiện `Alert` đỏ | `POST /api/suggestions/from-edits` (`series_id`, `lang`) |
-| Nút **Download golden set** (tên truy cập: "Download the <lang> golden set of <series>"): liên kết tải bộ golden, xem 6.6. Không có trạng thái loading (trình duyệt tải) | `GET /api/series/{id}/golden?lang=&download=1` → file `<series-key>.<lang>.golden.json` (`golden_version`, `series`, `lang`, `cues[]`: `season`, `episode`, `cue`, `source`, `text`) |
+| Nút **Golden set** (tên truy cập: "Open the <lang> golden set of <series>"): mở bottom sheet có **Download** (liên kết tải) và **Copy** (xem 6.6). Download không có trạng thái loading; Copy có *Copying…* | Download: `GET /api/series/{id}/golden?lang=&download=1` → file `<series-key>.<lang>.golden.json`. Copy: `GET /api/series/{id}/golden?lang=`. Cả hai có `golden_version`, `series`, `lang`, `cues[]`: `season`, `episode`, `cue`, `source`, `text` |
 | Đang tải danh sách series: vòng quay "Loading the series"; không có series: "The worker keeps no series yet." | `GET /api/library/series` |
 
-Phần còn lại của trang Insights (số đo, theo model, từng ngày) chưa có bảng ở đây.
+Dòng ngôn ngữ hiện thêm `{n} edits` (số cue đã sửa; cần API trả số này); series sắp theo số sửa giảm dần; bằng 0 thì cả hai nút tắt. Đầu trang có liên kết *Your corrections ↓* và một bộ chọn cửa sổ thời gian (7d · 30d · 90d) cho mọi khối số đo. Phần còn lại của trang Insights (số đo, theo model, từng ngày) chưa có bảng trường API ở đây; bố cục ở wireframe-v2.md mục 5b.
 
 ### A.7 Còn thiếu (Mới, làm ở P12b hoặc để sau)
 
@@ -345,7 +362,8 @@ Nguồn: `docs/CONFIGURATION.md`. Khi một tên giá trị trong tài liệu đ
 | | `llm_base_url` (Base URL) | URL tới `/v1` | rỗng | chỉ khi `openai_compat` |
 | Translation | `gst_model` (Default model) | chọn từ danh sách | `gemini-3.1-flash-lite` | |
 | | `gst_fallback_model` (Strong model) | chọn | `gemini-3.5-flash` | xoá để bỏ tầng thứ hai |
-| | `research_model` (Research model) | chọn | rỗng = dùng `gst_model` | chưa ai gọi (P16) |
+| | `research_model` (Research model) | chọn (chỉ model có grounding) | rỗng = dùng `gst_model` | chưa ai gọi (P16); Gemini only |
+| | `research_max_calls_per_series` (Max research calls per series) | số nguyên ≥ 1, và công tắc *No cap* | 10 | P16; không có "0 = không giới hạn": muốn bỏ trần phải bật *No cap* |
 | | `judge_enabled` (LLM judge) | bật/tắt | tắt | mỗi lần dùng tốn lời gọi; chỉ là lời khuyên (P15) |
 | | `judge_model` (Judge model) | chọn | rỗng = dùng `gst_model` | model mạnh hơn model dịch thì chấm tốt hơn |
 | | `gst_temperature` | số | `0.7` | |

@@ -1,6 +1,6 @@
 # Wireframe v2.1 — khổ dọc là chính
 
-> Trạng thái: **v2.1** · 2026-11-16 · Vẽ theo [UX.md](UX.md) v0.16 và [wireframe-prompt.md](wireframe-prompt.md). **Khi khác UX.md thì UX.md thắng.** Điểm còn mở: UX §8.
+> Trạng thái: **v2.2** · 2026-11-23 · Vẽ theo [UX.md](UX.md) v0.20 và [wireframe-prompt.md](wireframe-prompt.md). v2.2 thêm mục 5b (Insights, nút Golden set mở bottom sheet có Download và Copy), 5c (Review) và biến thể Research (0d, 2c, Activity, Settings). **Khi khác UX.md thì UX.md thắng.** Điểm còn mở: UX §8.
 > Bản v2.1 vẽ lại v2: khổ **DỌC (~820 px, iPad cầm dọc)** là khổ chính; khổ ngang chỉ ghi phần khác (mục 8). Đã sửa 9 sai lệch của v2, bỏ phần "đề xuất thêm" và "tự rà soát" (kết luận nằm ở UX.md và SPEC #26).
 
 ## Cách đọc
@@ -83,7 +83,7 @@ Không có "Forgot password".
 
 ### 0d) Hộp Estimate (bottom sheet dùng chung)
 
-Dùng cho: Translate (tập, mùa, series, tất cả), Translate again, Retranslate, Retry, Retry all failed, Extract facts, Compare on a whole episode, Request that episode.
+Dùng cho: Translate (tập, mùa, series, tất cả), Translate again, Retranslate, Retry, Retry all failed, Extract facts, Compare on a whole episode, Request that episode, Research terms (biến thể bên dưới).
 
 ```text
 +------------------------------------------------------------------------------+
@@ -99,6 +99,31 @@ Dùng cho: Translate (tập, mùa, series, tất cả), Translate again, Retrans
 | [ Cancel ]                                                      [ Confirm ]  |
 +------------------------------------------------------------------------------+
 ```
+
+**Biến thể Research terms** (P16; UX 6.7). Thêm ba dòng riêng của tác vụ `research` và một ô chọn:
+
+```text
++------------------------------------------------------------------------------+
+| Research terms for Arcane (vi)                              (Bottom Sheet)   |
++------------------------------------------------------------------------------+
+| Scope                   {terms_count: 14} unmapped terms (in ≥ 2 episodes)   |
+| Model calls (est.)      {estimate.calls: 2}  (1 web search + 1 extract)      |
+|                         (one search call may run several queries)            |
+| Models                  {research_model} (search) · {extract_model} (extract)|
+| Series research budget  {used: 2} / {research_max_calls_per_series: 10}      |
+|                         (after this run: 4 / 10)                             |
+| Calls left today        {estimate.calls_left_today: 42}   (hidden when no cap)|
+|                                                                              |
+| [x] Auto-accept terms with 2+ independent sources                            |
+|     (shows the saved setting; unchecking applies to this run only)           |
+| Auto-accepted terms flag the episodes that use them as stale. Nothing is     |
+| retranslated. Every other result goes to Review.                             |
+| [ Cancel ]                                                      [ Confirm ]  |
++------------------------------------------------------------------------------+
+```
+
+- `{extract_model}` là model của lời gọi 2. `ARCHITECTURE.md` (§3.5, `model_for_task`) cho tác vụ `extract` là `memory_model`; kiểm lại khi dựng xem lời gọi 2 chạy tác vụ nào.
+- Số lời gọi và ngân sách còn lại đọc từ Estimate; ngân sách hết thì không mở được hộp này (nút bị tắt, xem 2c).
 
 ### 0e) Rời trang khi còn thay đổi chưa lưu (mọi form)
 
@@ -359,7 +384,10 @@ Xác nhận **Save** (chỉ khi N > 0):
 +------------------------------------------------------------------------------+
 | Version v{version: 4}                                                        |
 | Saving flags {stale_after: 5} episodes stale.                    [ Save ]    |
-| [ History ] [ Copy from another series ] [ Import YAML ] [ Export YAML ]     |
+| [ Research terms (14) ] [ History ] [ Copy from another series ]             |
+| [ Import YAML ] [ Export YAML ]                                              |
++------------------------------------------------------------------------------+
+| (một dải trạng thái, chỉ hiện một trong các trạng thái ở dưới)               |
 +------------------------------------------------------------------------------+
 | TERMS                                                       [ + Add term ]   |
 | +--------------------------------------------------------------------------+ |
@@ -381,6 +409,34 @@ Xác nhận **Save** (chỉ khi N > 0):
 | +--------------------------------------------------------------------------+ |
 +------------------------------------------------------------------------------+
 ```
+
+**Research terms (N)** (P16, UX 6.7): `N` là số term xuất hiện ở ≥ 2 tập mà chưa có trong glossary, đếm cục bộ (không tốn model). Bấm mở hộp Estimate biến thể Research (0d). Dải trạng thái dưới thanh nút, mẫu giống **Extract facts** ở tab Context; mỗi trạng thái có đúng một việc kế tiếp:
+
+```text
++------------------------------------------------------------------------------+
+| Đang chạy:    Researching terms… (searching web · 1/2)             [ Stop ]  |
+|               (Stop giữ phần đã có: kết quả đã ghi vẫn vào Review)           |
++------------------------------------------------------------------------------+
+| Chờ quota:    Waiting · quota · retry at {retry_at: 00:00}                   |
++------------------------------------------------------------------------------+
+| Xong:         [i] Research finished: 2 auto-accepted (flag 3 episodes        |
+|               stale), 4 pending.                         [ Open Review → ]   |
++------------------------------------------------------------------------------+
+| Lỗi:          [!] Research failed: {error}                      [ Retry ]    |
+|               (Retry qua Estimate)                                           |
++------------------------------------------------------------------------------+
+| N = 0:        [ Research terms (0) ] tắt · No unmapped terms found.          |
++------------------------------------------------------------------------------+
+| Provider:     [ Research terms ] tắt · Web research requires Gemini         |
+|               (unavailable on OpenAI-compatible).          [ Settings → ]    |
++------------------------------------------------------------------------------+
+| Hết ngân sách: [ Research terms ] tắt · Research budget reached for this     |
+|               series (10/10 calls used).                   [ Settings → ]    |
++------------------------------------------------------------------------------+
+```
+
+- Hai trạng thái "tắt vì provider" và "tắt vì ngân sách" khác nhau: cái đầu cố định, cái sau gỡ được bằng cách nâng ngân sách ở Settings → Translation.
+- Chỉ series có `auto_request` bật mới được research tự chạy (cùng luồng bootstrap P13); mọi series khác chỉ chạy khi admin bấm nút này (UX nguyên tắc 3).
 
 Không có sub-tab Characters ở đây. Hộp thoại:
 
@@ -733,11 +789,206 @@ Chỉ các section chữ của story memory. Không có version glossary hay sty
 | manual · variant · Failed · {error: Output token limit exceeded}             |
 | restarts {attempts: 3}               [ Retry ]    [ Export job spec ]        |
 +------------------------------------------------------------------------------+
+| Arcane · vi                                                                  |
+| manual · research · searching web (1/2)                          [ Stop ]    |
++------------------------------------------------------------------------------+
+| Severance · vi                                                               |
+| policy · research · Waiting · quota · retry at {retry_at: 00:00}             |
++------------------------------------------------------------------------------+
 ```
+
+Job `research` thuộc series (không có tập); dùng đúng năm nhãn trạng thái chuẩn. `policy · research` chỉ có ở series bật `auto_request`.
 
 - **Retry all failed** → Estimate: `Jobs {counts.failed: 3}`, `Model calls: unknown`.
 - **Export job spec** → liên kết server + Copy (bản xuất dạng chữ, UX 6.6).
 - Tên tab là Requested · Running · Waiting · Failed · Done (không dùng tên trạng thái nội bộ).
+
+---
+
+## 5b. Insights (`#/insights`)
+
+Chỉ đọc, **không tốn lời gọi model** (không có Estimate/Confirm), không dùng CDN biểu đồ: chỉ thẻ số liệu và thanh ngang CSS/SVG thuần. Mọi nút cao ≥ 44 px; bảng thu về thẻ xếp dọc. Số liệu trong `{...}` là minh hoạ theo nhóm ở UX §4; bảng trường API của phần số đo chưa có ở UX (Phụ lục A.6b).
+
+```text
++------------------------------------------------------------------------------+
+| [ Library ]  [ Activity ]  [ Insights ]  [ Settings ]  [ Review (2) ]        |
+| Running 1 · Waiting 2 · Synced 2m ago                                        |
++------------------------------------------------------------------------------+
+| INSIGHTS                                           (read-only · no LLM calls)|
+| Window  [ 7d ]  [ 30d ]  [ 90d ]                     [ Your corrections ↓ ]  |
++------------------------------------------------------------------------------+
+| QUALITY                         (▼ better · ▲ worse · vs the previous window)|
+| +--------------------------------------------------------------------------+ |
+| | Cue edit rate          {edit_rate: 4.2%}  ▼ 0.6  (cues you had to edit)  | |
+| | Repair rate            {repair_rate: 1.8%}  ▲ 0.2  (auto-repaired batches)| |
+| | Retranslate rate       {retranslate_rate: 6.5%}  ▼ 1.1                   | |
+| | Over max CPS           {over_cps: 3.1%}  ▼ 0.4                           | |
+| | Over max line length   {over_line: 2.4%}  — (no previous data)           | |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+| BY MODEL AND PROMPT VERSION                                                  |
+| +--------------------------------------------------------------------------+ |
+| | {model: gemini-3.1-flash-lite} · prompt {prompt_v: v4}                   | |
+| | Episodes {episodes: 38} · Edit {edit_rate: 4.8%} · Repair {repair: 2.1%} | |
+| | Over CPS {over_cps: 3.4%} · Long lines {over_line: 2.6%}                 | |
+| +--------------------------------------------------------------------------+ |
+| | {model: gemini-3.5-flash} · prompt {prompt_v: v4}                        | |
+| | Episodes {episodes: 12} · Edit {edit_rate: 2.1%} · Repair {repair: 0.4%} | |
+| | Over CPS {over_cps: 1.9%} · Long lines {over_line: 1.5%}                 | |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+| STYLE A/B SCORES                                                             |
+| +--------------------------------------------------------------------------+ |
+| | {style_label: gritty (Casual · Keep · Adapt)}                            | |
+| | Compared {comparisons: 6} · Chosen {wins: 5} ({win_rate: 83%})           | |
+| | Too few comparisons to conclude (needs 10)                               | |
+| +--------------------------------------------------------------------------+ |
+| | {style_label: default (Neutral · Soften · Balanced)}                     | |
+| | Compared {comparisons: 6} · Chosen {wins: 1} ({win_rate: 17%})           | |
+| | Too few comparisons to conclude (needs 10)                               | |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+| QUEUE, QUOTA AND COST                                                        |
+| +--------------------------------------------------------------------------+ |
+| | Queue wait (median)    {queue_wait: 1m 20s}                              | |
+| | Quota pauses           {quota_pauses: 2}                                 | |
+| | Avg cost / episode     {cost_per_ep: $0.014}  (from Maintenance rates)   | |
+| | Avg tokens / episode   {tokens_in: 42k} in · {tokens_out: 14k} out       | |
+| | Calls by task          Translate 412                                     | |
+| |                        Extract 38                                        | |
+| |                        Judge 6                                           | |
+| |                        Research 8 (search queries {queries: 19})         | |
+| | Research cost          {research_cost: $0.04}                            | |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+| RELIABILITY                                                                  |
+| +--------------------------------------------------------------------------+ |
+| | Job success rate       {success_rate: 94.6%}                             | |
+| | Retries / episode      {avg_retries: 0.18}                               | |
+| | Breaker opens          {breaker_opens: 1}                                | |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+| DAILY            (bar = episodes that day; full bar = {max: 14}; no CDN)     |
+| +--------------------------------------------------------------------------+ |
+| | 2026-11-23   ████████████░░░░  12 eps · 0 failed · edit 3.8% · $0.16     | |
+| | 2026-11-22   ████████░░░░░░░░   8 eps · 1 failed · edit 4.5% · $0.11     | |
+| | 2026-11-21   ██████████████░░  14 eps · 0 failed · edit 4.1% · $0.19     | |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+| YOUR CORRECTIONS                                                             |
+| Find repeated edit patterns to propose to Review, or download a golden set.  |
++------------------------------------------------------------------------------+
+| +--------------------------------------------------------------------------+ |
+| | [ Arcane → ]                              (link tới #/series/:id/glossary)| |
+| |                                                                          | |
+| | [ vi · 14 edits ]  [ Look at my edits ]  [ Golden set ]                  | |
+| | [ en · 0 edits ]   [ Look at my edits ]  [ Golden set ]   (cả hai tắt)   | |
+| |                                                                          | |
+| | (role="status") vi: Found 3 repeated edit patterns and added to Review.  | |
+| +--------------------------------------------------------------------------+ |
+| +--------------------------------------------------------------------------+ |
+| | [ Severance → ]                                                          | |
+| |                                                                          | |
+| | [ vi · 6 edits ]   [ Looking… ]                    [ Golden set ]        | |
+| +--------------------------------------------------------------------------+ |
+| +--------------------------------------------------------------------------+ |
+| | Old Mini-Series (no longer in catalog)    (chữ thường, không gắn link)   | |
+| |                                                                          | |
+| | [ vi · 2 edits ]   [ Look at my edits ]  [ Golden set ]                  | |
+| |                                                                          | |
+| | [!] RED ALERT: Could not scan edits ({error: internal error})            | |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+```
+
+**Trạng thái tải và rỗng**
+
+```text
++------------------------------------------------------------------------------+
+| Đang tải:   (o) Loading the series                                           |
++------------------------------------------------------------------------------+
+| Rỗng:       The worker keeps no series yet.                                  |
++------------------------------------------------------------------------------+
+```
+
+**Golden set** (bottom sheet, giống Export YAML; mở từ nút Golden set của một dòng ngôn ngữ)
+
+```text
++------------------------------------------------------------------------------+
+| Golden set vi · Arcane                                      (Bottom Sheet)   |
+| [ Download arcane.vi.golden.json ]     (liên kết server, không blob:)        |
+| [ Copy ]                                                                     |
+|   (GET .../golden?lang=vi rồi ghi clipboard)                                 |
+| Đang lấy:   Copying…                          (role="status")                |
+| Xong:       Copied {cues: 342} cues.          (role="status")                |
+| Nếu clipboard bị chặn: ô chữ chọn-tất-cả, chỉ xem trước vài cue đầu:         |
+| +--------------------------------------------------------------------------+ |
+| | { "golden_version": 1, "series": "arcane", "lang": "vi", "cues": [ ...  | |
+| +--------------------------------------------------------------------------+ |
+|   (chọn-tất-cả vẫn chép đủ {cues: 342} cues; chỉ phần hiện ra bị cắt)       |
+| Lỗi lấy:    [!] Could not copy: {error}   (Alert đỏ)                         |
+|                                                                 [ Close ]    |
++------------------------------------------------------------------------------+
+```
+
+Quy tắc của trang:
+
+- **Một cửa sổ thời gian** (7d · 30d · 90d, mặc định 30d) cho mọi khối; không khối nào tự chọn cửa sổ riêng. Mũi tên so với cửa sổ liền trước cùng độ dài; không có dữ liệu trước thì hiện "—". Máy mới chưa có số liệu: mọi số hiện "—", không hiện 0%.
+- **Style A/B**: dưới 10 lần so sánh thì thêm dòng *Too few comparisons to conclude*, không tô nổi tỉ lệ thắng.
+- **Your corrections**: sắp theo số cue đã sửa giảm dần; `{n} edits` của mỗi ngôn ngữ là số cue đã sửa (**[NEW]** cần API trả số này). Bằng 0 thì cả hai nút tắt. Liên kết *Your corrections ↓* ở đầu trang cuộn tới khối này.
+- Sheet Golden set: nút **Copy** không vẽ thêm khi ngôn ngữ chưa có cue sửa (nút Golden set đã tắt).
+- Calls by task và Research cost: tách tác vụ nhờ `llm_calls` ghi tác vụ `research` (ARCHITECTURE §3.5); chưa có research thì dòng Research hiện "—".
+
+**Khổ ngang (≥ 1024 px)**: cùng nguyên tắc mục 8.
+
+| Khu vực | Khổ dọc | Khổ ngang |
+| --- | --- | --- |
+| Quality / Queue & Quota / Reliability | thẻ xếp dọc 1 cột | lưới 2–3 thẻ cạnh nhau |
+| By model and prompt version | thẻ xếp dọc | bảng: Model · Prompt · Episodes · Edit % · Repair % · Over CPS · Long lines |
+| Style A/B scores | thẻ xếp dọc | bảng: Style · Compared · Chosen · Win rate |
+| Daily | danh sách dòng xếp dọc | bảng kèm thanh ngang: Date · Bar · Episodes · Failed · Edit % · Cost |
+| Your corrections | thẻ xếp dọc 1 cột | lưới 2 cột thẻ (hoặc 1 cột rộng, hai nút nằm trên cùng một hàng) |
+
+---
+
+## 5c. Review (`#/review`)
+
+Hộp thư đề xuất (P13) cho glossary, thẻ nhân vật và quy tắc xưng hô. Nguồn của thẻ: **Facts** (từ facts của tập), **Your edits** (từ cue bạn sửa), **Research** (P16, từ tìm kiếm có grounding). Mục nav *Review (N)* chỉ hiện khi có đề xuất. Accept · Edit · Reject và Accept all giữ như UX Phụ lục A.6; hình dưới chỉ vẽ phần khác khi có Research.
+
+```text
++------------------------------------------------------------------------------+
+| [ Pending (4) ]   [ History (12) ]                                           |
++------------------------------------------------------------------------------+
+| ARCANE (4 pending)                                [ Accept all in Arcane ]   |
++------------------------------------------------------------------------------+
+| +--------------------------------------------------------------------------+ |
+| | [Term]  [Research]                                  1 of 2 sources       | |
+| | Source  Hextech                                                          | |
+| | Target  Công nghệ Hextech                                                | |
+| |                                                                          | |
+| | Sources                                                                  | |
+| |   ↗ leagueoflegends.fandom.com                                           | |
+| | Pending because only 1 source was found (2 are needed to auto-accept).   | |
+| |                                                                          | |
+| | Accepting flags 3 episodes stale.                                        | |
+| | [ Accept ]                  [ Edit ]                        [ Reject ]   | |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+```
+
+- Thẻ Research **không có `confidence`**: số nguồn thay vai trò đó (thẻ Facts giữ `confidence` nếu API có). Mỗi nguồn là một liên kết mở tab mới, vùng chạm ≥ 44 px, hiện tên miền (và tiêu đề nếu grounding trả); URL lấy từ grounding metadata, không bao giờ từ chữ model viết. Link grounding có thể là link chuyển hướng: hiện tên miền, không hiện URL thô.
+- Số nguồn độc lập là điều admin tự đánh giá được qua tên miền; không thêm điểm tin cậy.
+
+**History**: term tự chấp nhận (`auto_accept`, ≥ 2 nguồn) có huy hiệu **Auto**, nguồn, và **Undo**. Undo gỡ term khỏi glossary và đánh stale lại, nên nút nói rõ số tập.
+
+```text
++------------------------------------------------------------------------------+
+| [Term]  [Research]  [Auto · 2 sources]   "Piltover" → "Piltover"             |
+|   ↗ vi.wikipedia.org  ·  ↗ leagueoflegends.fandom.com                        |
+|   Auto-accepted 10m ago · flagged 3 episodes stale                           |
+|                                                  [ Undo (flags 3 stale) ]    |
++------------------------------------------------------------------------------+
+```
 
 ---
 
@@ -774,6 +1025,10 @@ Bảy thẻ gập, mỗi thẻ có **Save** riêng và chỉ báo `● Unsaved c
 | Default model ({gst_model})          [ gemini-3.1-flash-lite   v ]           |
 | Strong model ({gst_fallback_model})  [ gemini-3.5-flash  v ]  [ Clear ]      |
 | Research model ({research_model})    [ (same as Default)       v ]           |
+|   Uses Google Search grounding (Gemini only; skipped on OpenAI-compatible).  |
+|   Only models with grounding are listed.                                     |
+| Max research calls per series ({research_max_calls_per_series})  [ 10 ]      |
+|   [ ] No cap   (spends search quota without limit; off by default)           |
 | Temperature ({gst_temperature})      [ 0.7 ]                                 |
 | Thinking budget ({gst_thinking_budget}) [ 2048 ]                             |
 | [ ] No thinking ({gst_no_thinking})   [ ] Paid quota tier ({gst_paid_quota}) |
