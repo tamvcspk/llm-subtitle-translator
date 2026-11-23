@@ -37,7 +37,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P15e** | Kiểu API của `apps/web` sinh từ OpenAPI (ADR-18 phần 3) | Đổi một field ở schema Python mà không sinh lại thì CI đỏ; `npm run typecheck` pass trên bản sinh | `[x]` |
 | **P15f** | Một tài liệu kiến trúc "như đã dựng"; skill và agent theo vai (backend, frontend, designer, architect, QA) (quyết định #27) | Script kiểm docs sạch; `AGENTS.md` không còn chép lại Seams/Invariants; mỗi skill mới đã dùng thử một lần trên một thay đổi nhỏ | `[ ]` Xong về nội dung (tài liệu, `AGENTS.md`, 4 skill, 2 agent, kiểu truy vấn, doccheck, mỗi skill và agent đã dùng thử một lần); CI GitHub xanh cho `6b774e5` (run 45047031278), chờ CI cho commit sửa theo báo cáo `qa` rồi tick |
 | **P15g** | Estimate của Translate đếm cả lời gọi extract inline (FR-15.5.1, quyết định #28 điểm 6); thay đổi nhỏ, tách khỏi P16 | Tiêu chí 24k: dịch tập N của series có memory bật mà tập 1…N chưa có facts → Estimate hiện số lời gọi extract tách riêng, mỗi tập đếm một lần cho cả yêu cầu; memory tắt hoặc facts đủ → 0 | `[x]` |
-| **P16** | Research grounding (FR-7), làm cuối cùng nhưng vẫn bắt buộc của v1 (FR-7.4); làm **sau P15f**, trên cấu trúc mới | Tiêu chí 23 a–g: một lần mỗi series, URL từ grounding metadata, kết quả vào `suggestions`, `term` ≥ 2 nguồn tự áp dụng khi bật, provider không có `web_search` thì bỏ qua, có ngân sách lời gọi; job riêng tự xếp sau facts khi `research_enabled`, chạy trước các tập dịch còn chờ, lỗi không chặn dịch; ngân sách đúng sau khi dọn `jobs` | `[~]` |
+| **P16** | Research grounding (FR-7), làm cuối cùng nhưng vẫn bắt buộc của v1 (FR-7.4); làm **sau P15f**, trên cấu trúc mới | Tiêu chí 23 a–g: một lần mỗi series, URL từ grounding metadata, kết quả vào `suggestions`, `term` ≥ 2 nguồn tự áp dụng khi bật, provider không có `web_search` thì bỏ qua, có ngân sách lời gọi; job riêng tự xếp sau facts khi `research_enabled`, chạy trước các tập dịch còn chờ, lỗi không chặn dịch; ngân sách đúng sau khi dọn `jobs` | `[x]` (CI xanh trên `5ff369c`; còn mở: điều khoản hiển thị grounding của Google, đo cải thiện trên cue sửa thật) |
 
 **Thứ tự làm là thứ tự số.** Mỗi phase chỉ cần các phase đứng trước nó:
 
@@ -473,7 +473,7 @@ FR-15.5.1; quyết định #28 điểm 6; tiêu chí 24k. Ngay trước P16. Hi�
 - [x] Hộp Estimate của Translate hiện dòng extract riêng (UX 6.4); thời gian dự kiến tính cả lời gọi extract.
 - [x] Test: server (series memory bật, tập 3 với tập 1–3 chưa có facts → 3; yêu cầu tập 2 và 3 → vẫn 3; memory tắt → 0; facts đủ → 0) và Vitest cho dòng của hộp. `tests/test_estimate_extract.py` (15 test, tiêu chí 24k) và `components/EstimateSheet.test.ts`. Thử trên trình duyệt (fake): 7 kịch bản đạt. CI xanh trên `da2c611`.
 
-## P16 — Research grounding `[~]`
+## P16 — Research grounding `[x]`
 
 FR-7, FR-7.4–7.6; ARCHITECTURE §3.5; tiêu chí 23 a–g; quyết định #28. **Làm cuối cùng của lộ trình v1, sau P15f (trên cấu trúc mới của ADR-18) và P15g, nhưng vẫn bắt buộc.**
 
@@ -488,7 +488,7 @@ FR-7, FR-7.4–7.6; ARCHITECTURE §3.5; tiêu chí 23 a–g; quyết định #28
 - [~] Giao diện: nút Research terms và dải trạng thái (UX 6.7), kind `research` ở Activity, thẻ Review hiện tên miền nguồn (vùng chạm ≥ 44 px); xem lại điều khoản hiển thị grounding của Google trước khi chốt thẻ. **Làm:** `ResearchTerms` (thẻ đầu tab Glossary của series: nút `Research terms (N)`, lý do tắt, hộp Estimate có ô tick auto-accept, dải Stop / Open Review → / Retry), `research` ở Activity (`readsOnly`, tên, kết quả), thẻ Review hiện số nguồn và tên miền (mỗi dòng cao ≥ 44 px, mở tab mới), hai cài đặt ở Settings → Translation. **Còn mở:** điều khoản hiển thị grounding của Google (lời gọi tìm kiếm trả `search_entry_point` với HTML "Search Suggestions"; chưa hiển thị nó, chưa lưu `web_search_queries`): cần bạn đọc điều khoản của Gemini API về Grounding with Google Search trước khi cho người khác dùng.
 - [ ] Dùng số liệu P5/P15 (tên riêng bị sửa lặp lại) để kiểm tra research có cải thiện thật không và ghi kết quả.
 - [x] Test tiêu chí 23 a–g bằng fake provider có `web_search`; docs; `CHANGELOG.md`. **Làm:** `subcore/tests/test_research.py` (parser theo dạng thật, `research_terms`), `apps/server/tests/test_research.py` (a một lần mỗi series, b nguồn từ grounding, c vào `suggestions`, d ≥ 2 tên miền tự áp dụng, e không có `web_search`, f job riêng và ưu tiên và lỗi không chặn dịch, g ngân sách qua `llm_calls.series_id` sau khi dọn `jobs`), `test_redirects.py`, vitest `lib/research.test.ts` và `pages/series/Research.test.tsx`.
-- [ ] Workflow **CI** trên GitHub xanh cho commit P16 (chưa chạy).
+- [x] Workflow **CI** trên GitHub xanh cho commit P16: `5ff369c` (chạy tay trên nhánh `p16-research`). Thử trên trình duyệt (live, một lời gọi Gemini thật, 2026-11-23): 6 trong 7 kịch bản đạt; kết quả `nothing-new` vì tên trong seed là tên bịa nên web không trả gì; thẻ Review có nguồn (S5) chưa thấy live, được phủ bằng test và lần thử ngày 2026-11-23. **Còn mở, không chặn phase:** điều khoản hiển thị grounding của Google và đo cải thiện trên cue sửa thật (hai mục trên).
 
 ---
 
