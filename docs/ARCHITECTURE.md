@@ -367,7 +367,8 @@ One table (`suggestions`), one use case. `SuggestionService` (routes in `suggest
 Generators: `proposals.py` (`FactsProposer`: address rules and terms from facts, characters from memory; `subcore.suggest` is
 the pure part, one `extract`-task call per kind returning target-language forms, no timecode to the model; reached through a
 `suggest` job), `feedback.py` (`FeedbackProposer`, over `subcore.feedback`: a swap of words repeated in three or more
-corrected cues becomes a `term`, no model call, must never raise into a cue edit), and research grounding (P16, to come).
+corrected cues becomes a `term`, no model call, must never raise into a cue edit), and research grounding (P16, to come: its own `research` job queued after facts, designed in
+[docs/design/ARCHITECTURE.md](design/ARCHITECTURE.md) §3.5).
 Accepting goes through `Glossaries.save_doc` (and `write_character` when a character carries its voice, in one
 transaction) and counts the stale translations with `Library.impact_units`; it never retranslates. Undo restores exactly
 what an accept replaced and refuses when the entry changed since. A decided suggestion is kept (a few bytes) and never

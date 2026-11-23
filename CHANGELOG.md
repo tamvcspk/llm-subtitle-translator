@@ -1,4 +1,10 @@
 # Unreleased
+- **Research flow settled before P16 (design docs only, no code).** SPEC v0.20 decision #28: research runs as its own
+  `research` job, queued after a job extracts new facts when `research_enabled` is on (independent of `auto_request`), ahead
+  of the episodes still waiting to translate, and never stops a translation; `auto_accept_terms` (still on by default) is the
+  only auto-accept switch; the per-series budget counts `llm_calls` by a new `series_id` column; a live Gemini call checks
+  the shape of the grounding sources before the parser is written. New phase P15g: the Translate estimate counts the extract
+  calls a job makes inline. FR-7.5, FR-7.6, FR-15.5.1, criteria 23f–g and 24k; ARCHITECTURE v0.20 §3.5, UX.md v0.21.
 - **Insights follows the wireframe (5b).** The page is laid out as Quality, By model and prompt version (one row per pair, with
   the share of cues read too fast and lines too long), Style A/B scores (under ten comparisons it says "Too few comparisons to
   conclude"), Queue, quota and cost, Reliability, Daily and Your corrections; from 1024 px the lists are tables. Quality says

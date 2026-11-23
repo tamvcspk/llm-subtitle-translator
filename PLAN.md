@@ -36,7 +36,8 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P15d** | HTTP chuyển sang FastAPI (ADR-18 phần 2): middleware xác thực ASGI, router có schema pydantic, vòng nền trong `lifespan`; bỏ `http.server` | Tiêu chí 9 và 24c vẫn pass (danh sách route lấy từ app FastAPI); mọi route của `docs/API.md` trả cùng mã và payload như trước; một process, cổng 6789 | `[x]` Xong: ba bước, CI GitHub xanh (3bc74bc, run 45037708716); `smoke.mjs` qua 11 màn trên preview sạch; duyệt tay 7 kịch bản trên trình duyệt (session 1 tự chạy) PASS |
 | **P15e** | Kiểu API của `apps/web` sinh từ OpenAPI (ADR-18 phần 3) | Đổi một field ở schema Python mà không sinh lại thì CI đỏ; `npm run typecheck` pass trên bản sinh | `[x]` |
 | **P15f** | Một tài liệu kiến trúc "như đã dựng"; skill và agent theo vai (backend, frontend, designer, architect, QA) (quyết định #27) | Script kiểm docs sạch; `AGENTS.md` không còn chép lại Seams/Invariants; mỗi skill mới đã dùng thử một lần trên một thay đổi nhỏ | `[ ]` Xong về nội dung (tài liệu, `AGENTS.md`, 4 skill, 2 agent, kiểu truy vấn, doccheck, mỗi skill và agent đã dùng thử một lần); CI GitHub xanh cho `6b774e5` (run 45047031278), chờ CI cho commit sửa theo báo cáo `qa` rồi tick |
-| **P16** | Research grounding (FR-7), làm cuối cùng nhưng vẫn bắt buộc của v1 (FR-7.4); làm **sau P15f**, trên cấu trúc mới | Tiêu chí 23: một lần mỗi series, URL từ grounding metadata, kết quả vào `suggestions`, `term` ≥ 2 nguồn tự áp dụng khi bật, provider không có `web_search` thì bỏ qua, có ngân sách lời gọi | `[ ]` |
+| **P15g** | Estimate của Translate đếm cả lời gọi extract inline (FR-15.5.1, quyết định #28 điểm 6); thay đổi nhỏ, tách khỏi P16 | Tiêu chí 24k: dịch tập N của series có memory bật mà tập 1…N chưa có facts → Estimate hiện số lời gọi extract tách riêng, mỗi tập đếm một lần cho cả yêu cầu; memory tắt hoặc facts đủ → 0 | `[ ]` |
+| **P16** | Research grounding (FR-7), làm cuối cùng nhưng vẫn bắt buộc của v1 (FR-7.4); làm **sau P15f**, trên cấu trúc mới | Tiêu chí 23 a–g: một lần mỗi series, URL từ grounding metadata, kết quả vào `suggestions`, `term` ≥ 2 nguồn tự áp dụng khi bật, provider không có `web_search` thì bỏ qua, có ngân sách lời gọi; job riêng tự xếp sau facts khi `research_enabled`, chạy trước các tập dịch còn chờ, lỗi không chặn dịch; ngân sách đúng sau khi dọn `jobs` | `[ ]` |
 
 **Thứ tự làm là thứ tự số.** Mỗi phase chỉ cần các phase đứng trước nó:
 
@@ -46,7 +47,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 - **P10** (Bazarr kéo, Library/Missing) cần `jobs` và `versions` của P8 để dẫn xuất nhãn, và là lúc gỡ script Bazarr và `hold`. **P11** (bundle) đứng trước **P12** (style, xem thử, variant) vì mọi thứ đó chạy trên bundle.
 - **P12b** (giao diện mới) cần API của P12 (style, variant, glossary trong DB, Compare) và làm **trước P13** để trang Review dựng thẳng bằng React, không viết hai lần. Phần backend của P13 và P14 không phụ thuộc P12b nên có thể làm trước nếu cần.
 - **P13** (`suggestions` + Review inbox) cần glossary và thẻ nhân vật trong DB (P12) để "chấp nhận" ghi vào đó. **P14** (đề xuất từ facts) là nguồn đầu tiên của inbox. **P15** (Insights, vòng phản hồi) cắm cue sửa lặp lại vào cùng inbox và cần số liệu tích luỹ từ P5 và A/B của P12. **P16** (research) làm cuối vì không phase nào phụ thuộc nó và nó tốn quota có tìm kiếm, nhưng vẫn bắt buộc của v1 (FR-7.4).
-- **P15b → P15f** (tái cấu trúc sau P15, quyết định #27, ADR-18) chen giữa P15 và P16: cần một code base dễ theo dõi trước khi thêm tính năng cuối, nên P16 viết một lần theo cấu trúc mới thay vì chuyển lại. Chỉ bắt đầu khi P15 có CI xanh. **P15b** (sửa docs cũ) nhỏ và làm ngay; **P15c** (dời file thành package, không đổi hành vi) trước **P15d** (FastAPI) để mỗi bước chỉ đổi một thứ; **P15e** (kiểu sinh từ OpenAPI) cần schema của P15d; **P15f** (gộp docs, skill theo vai) làm khi cấu trúc đã đứng yên để không phải viết lại.
+- **P15b → P15f** (tái cấu trúc sau P15, quyết định #27, ADR-18) chen giữa P15 và P16: cần một code base dễ theo dõi trước khi thêm tính năng cuối, nên P16 viết một lần theo cấu trúc mới thay vì chuyển lại. Chỉ bắt đầu khi P15 có CI xanh. **P15b** (sửa docs cũ) nhỏ và làm ngay; **P15c** (dời file thành package, không đổi hành vi) trước **P15d** (FastAPI) để mỗi bước chỉ đổi một thứ; **P15e** (kiểu sinh từ OpenAPI) cần schema của P15d; **P15f** (gộp docs, skill theo vai) làm khi cấu trúc đã đứng yên để không phải viết lại. **P15g** (Estimate đếm extract, quyết định #28) nhỏ, độc lập với research, làm ngay trước P16 để hộp Estimate đúng trước khi research thêm một loại lời gọi nữa.
 
 Triển khai lên homeserver là bước riêng khi bạn yêu cầu (AGENTS.md).
 
@@ -463,16 +464,30 @@ Quyết định #27. Sau P15e, khi cấu trúc đã đứng yên.
 - [x] Dùng thử mỗi skill một lần trên một thay đổi nhỏ. `frontend-dev`: việc dưới đây (`route.ts`, bốn lệnh web xanh). `architect`: cắt `docs/design/ARCHITECTURE.md`, chạy doccheck. `backend-dev`: một test mới ở `test_openapi.py` (series và movie đọc cùng query ở mọi phần chung, giữ giả định của `ownerUrl`). `designer` (skill qua agent): mô tả nút "Download golden set" có sẵn vào UX.md v0.18 (6.6 và A.6b), không thêm hành vi. `qa` (agent): rà P15f, tìm ra 3 chỗ `docs/ARCHITECTURE.md` sai với code (backoff của breaker, `_ready_job_path` không còn, "đúng hai nơi tạo job"), hai quy tắc thiếu ở mục 11 và một chú thích lỗi thời trong `route.ts`; đã sửa cả. Còn mở từ báo cáo của designer: có thêm nút Copy cho golden set không, và vẽ wireframe Insights hay không (chờ bạn quyết).
 - [x] (còn lại của P15e) Chuỗi truy vấn trong `apps/web/src/api/queries.ts` ghép tay → `src/api/route.ts`: `routeUrl(route, { path, query })`, `apiGet(route, args, signal)` (cả hai chiều có kiểu: tham số vào, câu trả lời ra) và `ownerUrl(owner, part, query)` (series và movie dùng chung phần chung của hai tiền tố). Tên route, tham số đường dẫn và tên query lấy từ `paths` của tài liệu OpenAPI nên sai là không biên dịch được (`route.test.ts` giữ bằng `@ts-expect-error`). 22 chỗ gọi của `queries.ts` và liên kết golden của Insights đã chuyển; chỗ còn ghép tay là liên kết `href` tải về (GlossarySheets, Backups) và đường dẫn `#hash` của chính giao diện (không phải API). Ghi vào skill `frontend-dev`.
 
+## P15g — Estimate đếm lời gọi extract `[ ]`
+
+FR-15.5.1; quyết định #28 điểm 6; tiêu chí 24k. Ngay trước P16. Hiện `Estimator.calls_for` chỉ đếm phần dịch của planner, trong khi job dịch chạy extract inline cho tập < N và chính tập N (`StoryMemory.plan` → `ensure_facts`).
+
+- [ ] Hàm đọc (không gọi model) đếm các tập cần extract cho một yêu cầu: tập trước mỗi tập được dịch theo story order, và chính tập đó, có phụ đề nguồn mà chưa có facts cho `sha256` và `EXTRACT_PROMPT_VERSION`; hợp lại trên cả yêu cầu để mỗi tập đếm một lần; 0 khi memory tắt cho series. Dùng cùng quy tắc với `ensure_facts`, không chép lại.
+- [ ] `Estimate` thêm `extract_calls` (và model của nó); answer của `POST /api/jobs` `estimate_only` mang trường này; `docs/openapi.json` và `schema.gen.ts` sinh lại.
+- [ ] Hộp Estimate của Translate hiện dòng extract riêng (UX 6.4); thời gian dự kiến tính cả lời gọi extract.
+- [ ] Test: server (series memory bật, tập 3 với tập 1–3 chưa có facts → 3; yêu cầu tập 2 và 3 → vẫn 3; memory tắt → 0; facts đủ → 0) và Vitest cho dòng của hộp. CI xanh.
+
 ## P16 — Research grounding `[ ]`
 
-FR-7, FR-7.4; ARCHITECTURE §3.5; tiêu chí 23. **Làm cuối cùng của lộ trình v1, sau P15f (trên cấu trúc mới của ADR-18), nhưng vẫn bắt buộc.**
+FR-7, FR-7.4–7.6; ARCHITECTURE §3.5; tiêu chí 23 a–g; quyết định #28. **Làm cuối cùng của lộ trình v1, sau P15f (trên cấu trúc mới của ADR-18) và P15g, nhưng vẫn bắt buộc.**
 
-- [ ] `subcore.glossary.research`: lời gọi 1 có tìm kiếm (không schema), lời gọi 2 structured output; URL nguồn lấy từ grounding metadata, không tin URL model tự viết.
-- [ ] Chạy một lần mỗi series và khi có term mới; ngân sách `research_max_calls_per_series`; tác vụ `research` ghi riêng trong `llm_calls`.
-- [ ] Kết quả vào `suggestions` (`source = research`); `terms` có ≥ 2 nguồn độc lập tự áp dụng khi bật `auto_accept` cho `terms` (FR-4.4).
+- [ ] **Thử live trước** (quyết định #28 điểm 4): một lời gọi Gemini có Google Search bằng khoá ở `local-state/secrets/gemini.key`, ghi lại dạng `grounding_metadata` (`grounding_chunks[].web.uri`, `web.title`, `web_search_queries`) vào mục này; parser và test fake dựng theo dạng thật đã thấy.
+- [ ] Provider: `LLMRequest.web_search`, `LLMResponse.grounding_sources` (`url`, `domain`, `title`) và `search_queries`; Gemini gắn tool Google Search và đọc grounding metadata; `openai_compat` giữ `caps.web_search = False`; `FakeProvider` trả nguồn từ handler. Test hợp đồng cho cả ba.
+- [ ] `subcore/research.py` (không phải `subcore.glossary.research`: `glossary` là một file): lời gọi 1 có tìm kiếm (không schema, `research_model`), lời gọi 2 structured output (model của `extract`) trả chỉ số nguồn; URL nguồn lấy từ grounding metadata, không tin URL model tự viết. Cả hai ghi `task = research`.
+- [ ] Job kind `research` (khoá theo series), service gọi `SuggestionService.propose(source="research")`; hook sau facts xếp job khi `research_enabled` bật, không phụ thuộc `auto_request`, mức ưu tiên trên job dịch đang chờ của cùng series; hook không bao giờ ném vào job dịch. Nút Research terms tạo cùng job qua Estimate.
+- [ ] Migration `llm_calls.series_id`; `UsageLog` ghi từ job; ngân sách `research_max_calls_per_series` (mặc định 10, *No cap*) đếm từ đó; chạm trần → event, job `done`.
+- [ ] Settings: `research_enabled` (mặc định tắt), `research_max_calls_per_series`; `auto_accept_terms` giữ mặc định bật và là công tắc auto-accept duy nhất; ghi vào `docs/CONFIGURATION.md`; bỏ hint "Nothing calls it yet." của `research_model` ở `settings.ts`.
+- [ ] Kết quả vào `suggestions` (`source = research`); `terms` có ≥ 2 nguồn độc lập tự áp dụng khi bật `auto_accept_terms` (FR-4.4).
 - [ ] Provider không có `web_search` thì bỏ qua, không lỗi (FR-7.3).
+- [ ] Giao diện: nút Research terms và dải trạng thái (UX 6.7), kind `research` ở Activity, thẻ Review hiện tên miền nguồn (vùng chạm ≥ 44 px); xem lại điều khoản hiển thị grounding của Google trước khi chốt thẻ.
 - [ ] Dùng số liệu P5/P15 (tên riêng bị sửa lặp lại) để kiểm tra research có cải thiện thật không và ghi kết quả.
-- [ ] Test tiêu chí 23 a–e bằng fake provider có `web_search`; docs; `CHANGELOG.md`. Workflow **CI** trên GitHub xanh cho commit P16.
+- [ ] Test tiêu chí 23 a–g bằng fake provider có `web_search`; docs; `CHANGELOG.md`. Workflow **CI** trên GitHub xanh cho commit P16.
 
 ---
 

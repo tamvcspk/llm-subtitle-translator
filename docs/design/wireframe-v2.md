@@ -797,7 +797,7 @@ Chỉ các section chữ của story memory. Không có version glossary hay sty
 +------------------------------------------------------------------------------+
 ```
 
-Job `research` thuộc series (không có tập); dùng đúng năm nhãn trạng thái chuẩn. `policy · research` chỉ có ở series bật `auto_request`.
+Job `research` thuộc series (không có tập); dùng đúng năm nhãn trạng thái chuẩn. `policy · research` chỉ có khi bật `research_enabled` (UX.md 6.7 v0.21, SPEC #28), không phụ thuộc `auto_request`.
 
 - **Retry all failed** → Estimate: `Jobs {counts.failed: 3}`, `Model calls: unknown`.
 - **Export job spec** → liên kết server + Copy (bản xuất dạng chữ, UX 6.6).
