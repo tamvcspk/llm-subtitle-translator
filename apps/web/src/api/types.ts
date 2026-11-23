@@ -175,6 +175,8 @@ export type InsightsQuality = Schemas["InsightsQuality"];
 export type InsightsBreakdown = Schemas["InsightsBreakdown"];
 export type InsightsAb = Schemas["InsightsAb"];
 export type InsightsDay = Schemas["InsightsDay"];
+/** The cues of one series in one language whose correction stands: the size of its golden set. */
+export type CorrectionCount = Schemas["CorrectionCount"];
 export type Insights = Schemas["Insights"];
 
 // -- the rest of the console: the account, models, languages, connections, clean-up, backups, logs ------------------------

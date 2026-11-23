@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Iterable
 
-from ...domain.ports import CallDay, JobPrompt, MetricRow
+from ...domain.ports import CallDay, JobOutcomes, JobPrompt, MetricRow
 from .base import Repo
 
 
@@ -63,6 +63,19 @@ class InsightsRepo(Repo):
             " AND started_at >= created_at", (since, *names),
         )
         return [float(r["waited"]) for r in rows]
+
+    def job_outcomes(self, since: float, kinds: Iterable[str]) -> JobOutcomes:
+        """How the jobs of these kinds that finished since ``since`` ended: done, or failed (a cancelled job is neither)."""
+        names = list(kinds)
+        if not names:
+            return JobOutcomes(done=0, failed=0)
+        marks = ",".join("?" * len(names))
+        rows = self.query(
+            f"SELECT state, COUNT(*) AS n FROM jobs WHERE finished_at >= ? AND state IN ('done', 'failed') AND kind IN ({marks})"
+            " GROUP BY state", (since, *names),
+        )
+        by_state = {r["state"]: int(r["n"]) for r in rows}
+        return JobOutcomes(done=by_state.get("done", 0), failed=by_state.get("failed", 0))
 
     def metric_rows(self, since_day: str) -> list[MetricRow]:
         rows = self.query(

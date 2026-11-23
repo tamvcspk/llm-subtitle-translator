@@ -199,10 +199,72 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(by_day["2026-11-18"]["failed"], 2)
         self.assertEqual(by_day["2026-11-19"]["calls"], 0)
 
+    def test_a_model_and_a_prompt_version_together_with_the_review_rates(self):
+        pairs = {(row["model"], row["prompt_version"]): row for row in self.metrics.report(30)["by_model_prompt"]}
+        self.assertEqual(sorted(pairs), [("m-1", "p1"), ("m-2", "p2")])
+        row = pairs[("m-1", "p1")]
+        self.assertEqual((row["episodes"], row["cues"], row["cue_edits"]), (2, 200, 3))
+        self.assertEqual(row["cue_edit_rate"], round(3 / 200, 4))
+        self.assertEqual((row["cps_rate"], row["too_long_rate"]), (round(6 / 200, 4), round(2 / 200, 4)))
+        self.assertIsNone(row["retranslations"])  # a retranslation names a model, not a pair
+        self.assertEqual(pairs[("m-2", "p2")]["cps_rate"], 0.0)
+        by_model = {row["model"]: row for row in self.metrics.report(30)["by_model"]}
+        self.assertEqual(by_model["m-1"]["cps_rate"], round(6 / 200, 4))
+
+    def test_each_day_counts_its_episodes(self):
+        by_day = {d["day"]: d for d in self.metrics.report(5)["daily"]}
+        self.assertEqual((by_day["2026-11-20"]["episodes"], by_day["2026-11-18"]["episodes"], by_day["2026-11-19"]["episodes"]), (1, 2, 0))
+
+    def test_calls_by_task_and_what_research_cost(self):
+        ops = self.metrics.report(30)["operations"]
+        self.assertEqual(ops["calls_by_task"], {"extract": 2, "translate": 9})
+        self.assertEqual(ops["research_cost"], 0.0)
+        for _ in range(2):
+            self.db.record_llm_call("r1", provider="gemini", model="m-1", task="research", tokens_in=5, tokens_out=5, latency_ms=10,
+                                    outcome="ok", at=TODAY, kind="research", prompt_version="p1", cost_est=0.25)
+        ops = self.metrics.report(30)["operations"]
+        self.assertEqual((ops["calls_by_task"]["research"], ops["research_cost"]), (2, 0.5))
+
+    def test_days_the_quota_stopped_the_queue_breaker_opens_and_retries(self):
+        for at in (TODAY, TODAY + 60, EARLIER):  # two jobs waited the same day: one pause, not two
+            self.db.add_event("quota.paused", job_id="j1", data={}, at=at)
+        self.db.add_event("breaker.opened", job_id="j1", data={"model": "m-1"}, at=TODAY)
+        for wait in ("rate", "provider", "quota", "time"):  # only a wait for the provider is a retry
+            self.db.add_event("job.waiting", job_id="j1", data={"wait": wait}, at=TODAY)
+        ops = self.metrics.report(30)["operations"]
+        self.assertEqual((ops["quota_pauses"], ops["breaker_opens"]), (2, 1))
+        self.assertEqual(ops["jobs"]["retries_per_episode"], round(2 / 3, 2))  # three episodes in the window
+
+    def test_how_the_jobs_ended(self):
+        for n, (kind, state) in enumerate([("publish", "done")] * 3 + [("publish", "failed"), ("variant", "done"), ("publish", "cancelled"), ("extract", "failed")]):
+            self.db.query(
+                "INSERT INTO jobs (job_id, key, kind, state, created_at, updated_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (f"o{n}", f"k{n}", kind, state, TODAY - 5, TODAY, TODAY),
+            )
+        jobs = self.metrics.report(30)["operations"]["jobs"]
+        self.assertEqual((jobs["done"], jobs["failed"], jobs["success_rate"]), (4, 1, 0.8))  # extraction and cancelled are not counted
+
+    def test_the_window_before_gives_the_rates_to_compare_with(self):
+        report = self.metrics.report(2)
+        # Two days ago is the second day of the window before: j2 and j3, 150 cues, nobody corrected a cue of them.
+        self.assertEqual(report["previous"], {
+            "cue_edit_rate": 0.0, "repair_rate": 0.0, "retranslate_rate": 0.0,
+            "cps_rate": round(1 / 150, 4), "too_long_rate": 0.0,
+        })
+        self.assertEqual(report["quality"]["cues_translated"], 100)  # the figures of the window itself are not mixed with it
+        self.assertEqual(report["operations"]["calls"]["total"], 7)
+
+    def test_no_window_before_with_nothing_in_it_is_no_data(self):
+        self.assertEqual(set(self.metrics.report(30)["previous"].values()), {None})
+        self.assertEqual(set(self.metrics.report(365)["previous"].values()), {None})  # a year cannot look back a year more
+
     def test_no_data_is_none_not_zero(self):
         empty = store()
         self.addCleanup(empty.close)
         report = metrics(empty).report(30)
+        self.assertEqual(report["corrections"], [])
+        self.assertIsNone(report["operations"]["jobs"]["success_rate"])
+        self.assertIsNone(report["operations"]["jobs"]["retries_per_episode"])
         self.assertIsNone(report["quality"]["cue_edits"]["rate"])
         self.assertIsNone(report["operations"]["calls"]["rate_429"])
         self.assertIsNone(report["operations"]["wait_seconds"]["median"])
@@ -457,6 +519,15 @@ class GoldenSetTests(unittest.TestCase):
         env.service.remove_correction(env.unit(1), correction.id)
         _, text = env.feedback.golden(env.series_id, "vi")
         self.assertEqual([(c.episode, c.cue) for c in golden.loads(text)], [(1, 1), (2, 1)])
+
+    def test_the_report_counts_the_corrected_cues_of_each_language_as_the_golden_set_does(self):
+        env = self.build()
+        report = Metrics(env.store, clock=lambda: NOW).report(7)
+        self.assertEqual(report["corrections"], [{"series_id": env.series_id, "lang": "vi", "edits": 3}])
+        (correction,) = [c for c in env.store.corrections(env.unit(1), "vi") if c.payload["cue"] == 2]
+        env.service.remove_correction(env.unit(1), correction.id)
+        self.assertEqual(Metrics(env.store, clock=lambda: NOW).report(7)["corrections"][0]["edits"], 2)
+        self.assertEqual(env.store.cue_edit_counts()[0].edits, len(golden.loads(env.feedback.golden(env.series_id, "vi")[1])))
 
     def test_each_entry_still_matches_its_source_file(self):
         env = self.build()

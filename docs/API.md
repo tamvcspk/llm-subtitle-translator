@@ -845,7 +845,7 @@ Insights reads the worker's own records (calls, events, quality signals), never 
 ### GET /api/metrics?days=30
 
 `days` is 1 to 365 (default 30; the page offers 7, 30 and 90); `400` for anything else. Days are UTC days and the window ends now.
-The answer is `{"window": {"days", "since", "until"}, "operations", "quality", "by_model", "by_prompt_version", "ab", "daily"}`.
+The answer is `{"window": {"days", "since", "until"}, "operations", "quality", "previous", "by_model", "by_prompt_version", "by_model_prompt", "ab", "daily", "corrections"}`.
 A rate is a number from 0 to 1, or `null` when there was nothing to divide by (**no data is not 0**).
 
 - `operations.queue` `{"counts", "depth"}` (live; `depth` is requested + running + waiting) · `providers` (the health of each model, as `/api/status`) ·
@@ -853,16 +853,24 @@ A rate is a number from 0 to 1, or `null` when there was nothing to divide by (*
   `usage` `{"calls_today", "calls_last_minute", "limits": {"rpm", "tpm", "rpd", "max_calls_per_day"}}` (`0` = no limit; today is the provider's day, UTC) ·
   `calls` `{"total", "by_outcome", "failed", "rate_429", "rate_503"}` (`rate_429` counts `rate_limited` and `quota_exhausted`, `rate_503` counts `unavailable`) ·
   `escalation` `{"jobs", "escalated", "rescued", "rate", "rescue_rate", "window_days"}` (from the job rows, so it reaches back only as far as `retention_*_days`) ·
-  `per_episode` `{"episodes", "tokens_in", "tokens_out", "cost"}` (the translation task only; `cost` needs the prices in Settings) · `tokens` · `latency_ms` `{"calls", "mean", "median", "p90"}`.
+  `per_episode` `{"episodes", "tokens_in", "tokens_out", "cost"}` (the translation task only; `cost` needs the prices in Settings) · `tokens` · `latency_ms` `{"calls", "mean", "median", "p90"}` ·
+  `calls_by_task` (`translate`, `extract`, `judge`, and `research` once P16 exists) · `research_cost` (`0` with none) ·
+  `quota_pauses` (days of the window on which the daily quota was spent on every model and the queue waited for the reset) · `breaker_opens` ·
+  `jobs` `{"done", "failed", "success_rate", "retries_per_episode"}` (jobs that make translations and finished in the window; a retry is a wait because the provider said no, per episode translated).
+  `quota_pauses`, `breaker_opens` and `retries_per_episode` are counted from the day a worker that knows them first ran: an earlier day reads 0.
 - `quality.cues_translated`, `episodes` · `repair` `{"calls", "translate_calls", "rate", "cues", "cue_rate"}` (repair and split calls over translate calls) ·
   `cue_edits` `{"cues", "rate"}` (**the share of cues the admin corrected**: distinct cues corrected in the window over cues translated in it) ·
   `retranslations` `{"count", "rate", "reverts"}` · `review` `{"by_kind", "cps", "cps_rate", "too_long", "too_long_rate"}` (what the review of each finished translation found:
   over 20 characters a second, over 42 a line) · `validate` (what the validator saw in a model's reply, by issue).
-- `by_model` and `by_prompt_version`: one row each, `{"model"|"prompt_version", "calls", "episodes", "cues", "tokens_in", "tokens_out", "cost", "repair_rate", "cue_edits", "cue_edit_rate", "retranslations"}`.
-  A corrected cue belongs to the model and prompt version of the job that wrote it. `retranslations` is `null` by prompt version (a retranslation names the model it replaces).
+- `previous`: `{"cue_edit_rate", "repair_rate", "retranslate_rate", "cps_rate", "too_long_rate"}`, the five rates of `quality` over the window just before this one, as long as it
+  (so the page can say better or worse). Each is `null` when that window had nothing to divide by, or when it would reach back past 365 days.
+- `by_model`, `by_prompt_version` and `by_model_prompt` (one row for each model and prompt version together, both fields set): `{"model"|"prompt_version"|both, "calls", "episodes", "cues", "tokens_in", "tokens_out", "cost", "repair_rate", "cue_edits", "cue_edit_rate", "cps_rate", "too_long_rate", "retranslations"}`.
+  A corrected cue belongs to the model and prompt version of the job that wrote it. `retranslations` is `null` by prompt version and by pair (a retranslation names the model it replaces).
   There is no split by style for translations (a call records only the hash of its style); styles are compared through `ab`.
 - `ab`: the cue-by-cue verdicts on variants by style label and prompt version, `{"style", "prompt_version", "variant", "current", "tie", "judged", "score"}`; `score` = (variant wins + ties / 2) / judged.
-- `daily`: one row for each day of the window (zeros included): `{"day", "calls", "failed", "tokens", "cost", "cues_translated", "cue_edits"}`.
+- `daily`: one row for each day of the window (zeros included): `{"day", "episodes", "calls", "failed", "tokens", "cost", "cues_translated", "cue_edits"}`.
+- `corrections`: `[{"series_id", "lang", "edits"}]`, for each series and language the cues whose correction still stands, over all time (not the window): the size of its golden set.
+  `series_id` is the worker's (`/api/library/series`). A language with no correction is not listed.
 
 The figures are rolled up from the raw tables into `metrics_daily` (one row per UTC day, name and labels) each time they are asked for, so they survive the clean-up of the events they came from
 (`events_retention_days`); a day the clean-up has begun to prune is never recomputed from what is left.

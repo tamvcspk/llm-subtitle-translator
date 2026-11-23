@@ -1909,6 +1909,13 @@ export interface components {
             impact?: components["schemas"]["Impact"] | null;
             from?: string | null;
         };
+        /** @description Cues of one series in one language whose correction still stands: the size of its golden set, over all time. */
+        CorrectionCount: {
+            /** @description The worker's id of the series (``GET /api/library/series``), not the catalog's. */
+            series_id: number;
+            lang: string;
+            edits: number;
+        };
         CorrectionRow: {
             id: number;
             unit_id: number;
@@ -2290,10 +2297,15 @@ export interface components {
             window: components["schemas"]["Window"];
             operations: components["schemas"]["InsightsOperations"];
             quality: components["schemas"]["InsightsQuality"];
+            previous: components["schemas"]["PreviousRates"];
             by_model: components["schemas"]["InsightsBreakdown"][];
             by_prompt_version: components["schemas"]["InsightsBreakdown"][];
+            /** @description One row for each model and prompt version that wrote cues together (both fields set). */
+            by_model_prompt: components["schemas"]["InsightsBreakdown"][];
             ab: components["schemas"]["InsightsAb"][];
             daily: components["schemas"]["InsightsDay"][];
+            /** @description A series and language with no correction is not listed: it has none. */
+            corrections: components["schemas"]["CorrectionCount"][];
         };
         InsightsAb: {
             style: string;
@@ -2317,11 +2329,16 @@ export interface components {
             repair_rate: number | null;
             cue_edits: number;
             cue_edit_rate: number | null;
-            /** @description Only by model: a retranslation names the model it replaces, not a prompt version. */
+            /** @description Share of cues the review found over the reading speed. */
+            cps_rate: number | null;
+            /** @description Share of cues the review found too long. */
+            too_long_rate: number | null;
+            /** @description Only by model: a retranslation names the model it replaces, not a prompt version (or a pair). */
             retranslations: number | null;
         };
         InsightsDay: {
             day: string;
+            episodes: number;
             calls: number;
             failed: number;
             tokens: number;
@@ -2340,6 +2357,16 @@ export interface components {
             per_episode: components["schemas"]["PerEpisode"];
             tokens: components["schemas"]["Tokens"];
             latency_ms: components["schemas"]["Latency"];
+            /** @description Model calls by task: ``translate``, ``extract``, ``judge``, and ``research`` once P16 exists. */
+            calls_by_task: {
+                [key: string]: number;
+            };
+            /** @description What the ``research`` task cost; ``0`` when there has been none (needs the prices in Settings). */
+            research_cost: number;
+            /** @description Days of the window on which the daily quota was spent on every model and the queue had to wait for the reset. */
+            quota_pauses: number;
+            breaker_opens: number;
+            jobs: components["schemas"]["JobFigures"];
         };
         InsightsQuality: {
             cues_translated: number;
@@ -2365,6 +2392,15 @@ export interface components {
             job_id: string;
         } & {
             [key: string]: unknown;
+        };
+        /** @description How the jobs that make translations ended in the window. */
+        JobFigures: {
+            done: number;
+            failed: number;
+            /** @description Done over done and failed; a cancelled job is neither. */
+            success_rate: number | null;
+            /** @description Times a job waited because the provider said no (429, 503), per episode translated. */
+            retries_per_episode: number | null;
         };
         /** @description The job a row can act on (Cancel, Stop, Retry) and what it shows about it. */
         JobInfo: {
@@ -2761,6 +2797,17 @@ export interface components {
             /** @description What the current translation says; ``null`` when there is none. */
             current: string | null;
             preview: string;
+        };
+        /**
+         * @description The five rates of Quality over the window just before this one, as long as it: put next to the figures to say better
+         *     or worse. Each is ``null`` when that window has nothing to divide by (or reaches back past a year).
+         */
+        PreviousRates: {
+            cue_edit_rate: number | null;
+            repair_rate: number | null;
+            retranslate_rate: number | null;
+            cps_rate: number | null;
+            too_long_rate: number | null;
         };
         ProposeReport: {
             added: number;

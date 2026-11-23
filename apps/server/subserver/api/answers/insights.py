@@ -81,6 +81,17 @@ class Latency(Answer):
     p90: float | None
 
 
+class JobFigures(Answer):
+    """How the jobs that make translations ended in the window."""
+
+    done: int
+    failed: int
+    success_rate: float | None
+    """Done over done and failed; a cancelled job is neither."""
+    retries_per_episode: float | None
+    """Times a job waited because the provider said no (429, 503), per episode translated."""
+
+
 class InsightsOperations(Answer):
     queue: QueueDepth
     providers: list[ProviderHealth]
@@ -92,6 +103,14 @@ class InsightsOperations(Answer):
     per_episode: PerEpisode
     tokens: Tokens
     latency_ms: Latency
+    calls_by_task: dict[str, int]
+    """Model calls by task: ``translate``, ``extract``, ``judge``, and ``research`` once P16 exists."""
+    research_cost: float
+    """What the ``research`` task cost; ``0`` when there has been none (needs the prices in Settings)."""
+    quota_pauses: int
+    """Days of the window on which the daily quota was spent on every model and the queue had to wait for the reset."""
+    breaker_opens: int
+    jobs: JobFigures
 
 
 class Repair(Answer):
@@ -148,8 +167,12 @@ class InsightsBreakdown(Answer):
     repair_rate: float | None
     cue_edits: int
     cue_edit_rate: float | None
+    cps_rate: float | None
+    """Share of cues the review found over the reading speed."""
+    too_long_rate: float | None
+    """Share of cues the review found too long."""
     retranslations: int | None
-    """Only by model: a retranslation names the model it replaces, not a prompt version."""
+    """Only by model: a retranslation names the model it replaces, not a prompt version (or a pair)."""
 
 
 class InsightsAb(Answer):
@@ -164,6 +187,7 @@ class InsightsAb(Answer):
 
 class InsightsDay(Answer):
     day: str
+    episodes: int
     calls: int
     failed: int
     tokens: int
@@ -172,16 +196,41 @@ class InsightsDay(Answer):
     cue_edits: int
 
 
+class PreviousRates(Answer):
+    """The five rates of Quality over the window just before this one, as long as it: put next to the figures to say better
+    or worse. Each is ``null`` when that window has nothing to divide by (or reaches back past a year)."""
+
+    cue_edit_rate: float | None
+    repair_rate: float | None
+    retranslate_rate: float | None
+    cps_rate: float | None
+    too_long_rate: float | None
+
+
+class CorrectionCount(Answer):
+    """Cues of one series in one language whose correction still stands: the size of its golden set, over all time."""
+
+    series_id: int
+    """The worker's id of the series (``GET /api/library/series``), not the catalog's."""
+    lang: str
+    edits: int
+
+
 class Insights(Answer):
     """``GET /api/metrics``."""
 
     window: Window
     operations: InsightsOperations
     quality: InsightsQuality
+    previous: PreviousRates
     by_model: list[InsightsBreakdown]
     by_prompt_version: list[InsightsBreakdown]
+    by_model_prompt: list[InsightsBreakdown]
+    """One row for each model and prompt version that wrote cues together (both fields set)."""
     ab: list[InsightsAb]
     daily: list[InsightsDay]
+    corrections: list[CorrectionCount]
+    """A series and language with no correction is not listed: it has none."""
 
 
 class GoldenCue(Answer):

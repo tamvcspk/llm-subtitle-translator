@@ -11,9 +11,15 @@ Figures and where they come from
 ================================
 Operations: queue depth and provider state (the live queue), wait before a job starts (``jobs``), calls used today
 against the limits (``llm_calls``), the share of calls answered 429 and 503 (``outcome``), escalation and rescue
-(``JobQueue.layer_report``), tokens and cost per episode, latency.
+(``JobQueue.layer_report``), tokens and cost per episode, latency, calls by task and what research cost, the days the daily
+quota stopped the queue, breaker opens, how jobs ended (``jobs``) and retries per episode (a ``job.waiting`` for the provider).
 Quality: calls that were repairs, **the share of cues an admin corrected**, retranslations, cues over the reading speed
-or too long (the review of each translation), the A/B score of a style, all by model and prompt version.
+or too long (the review of each translation), the A/B score of a style, all by model and prompt version; the same five
+rates for the window just before (``previous``) so the page can say better or worse.
+Corrections: how many cues of each series and language the admin corrected (the size of its golden set).
+
+A figure added later (quota pauses, breaker opens, retries) is only rolled up from the day the worker that knows it ran: an
+earlier day reads 0 for it.
 """
 
 from __future__ import annotations
@@ -32,7 +38,9 @@ MARK_DAY = "0000-00-00"  # the rows of this day are roll-up markers, not figures
 PAGE = 1_000  # what ``Store.events`` returns at most
 
 LLM_NAMES = ("calls", "tokens_in", "tokens_out", "cost", "latency_ms", "repair_cues")
-EVENT_NAMES = ("episodes", "cues_translated", "review")
+EVENT_NAMES = ("episodes", "cues_translated", "review", "quota_pauses", "breaker_opens", "retries")
+WAITS_FOR_THE_PROVIDER = ("rate", "provider")  # a ``job.waiting`` for one of these is a retry; a wait for the quota or a time is not
+JOB_KINDS = ("publish", "variant")  # the jobs whose wait and ending Insights counts: the ones that make a translation
 SIGNAL_NAMES = ("cue_edits", "retranslations", "reverts", "validate", "ab")
 REPAIR_KINDS = ("repair", "split")
 FAILED = ("rate_limited", "quota_exhausted", "unavailable", "bad_output", "auth_error", "model_not_found", "error")
@@ -152,6 +160,15 @@ class Metrics:
             review = event.data.get("review")
             for kind, n in (review.items() if isinstance(review, dict) else ()):
                 add(day, "review", _count(n), kind=str(kind), model=model, prompt_version=prompt)
+        # The daily quota is spent once a day however many jobs wait for it, so a pause is a day on which one did.
+        paused_days = {_day(e.at) for e in self._paged(self.store.events, start, kind="quota.paused")}
+        for day in paused_days:
+            add(day, "quota_pauses", 1)
+        for event in self._paged(self.store.events, start, kind="breaker.opened"):
+            add(_day(event.at), "breaker_opens", 1, model=str(event.data.get("model") or ""))
+        for event in self._paged(self.store.events, start, kind="job.waiting"):
+            if event.data.get("wait") in WAITS_FOR_THE_PROVIDER:
+                add(_day(event.at), "retries", 1)
         return [MetricRow(day, name, labels, value) for (day, name, labels), value in total.items()]
 
     def _signal_rows(self, start: float) -> list[MetricRow]:
@@ -189,19 +206,38 @@ class Metrics:
     # -- the report ------------------------------------------------------------------------------------------
     def report(self, days: int = 30) -> dict[str, Any]:
         days = max(1, min(int(days), MAX_DAYS))
-        self.rollup(days)
+        before = min(days, MAX_DAYS - days)  # the window before this one, as long as it, as far back as a roll-up goes
+        self.rollup(days + before)
         now = self._clock()
         window_start = _floor(now) - (days - 1) * DAY
-        rows = self.store.metric_rows(_day(window_start))
-        figures = _Figures(rows)
+        first = _day(window_start)
+        rows = self.store.metric_rows(_day(window_start - before * DAY))
+        this = _Figures([r for r in rows if r.day >= first])
+        previous = _Figures([r for r in rows if r.day < first]) if before > 0 else None
         return {
             "window": {"days": days, "since": window_start, "until": now},
-            "operations": self._operations(figures, window_start, now),
-            "quality": self._quality(figures),
-            "by_model": figures.breakdown("model"),
-            "by_prompt_version": figures.breakdown("prompt_version"),
-            "ab": figures.ab(),
-            "daily": figures.daily(_day(window_start), days),
+            "operations": self._operations(this, window_start, now),
+            "quality": self._quality(this),
+            "previous": self._rates(self._quality(previous)) if previous is not None else self._rates(None),
+            "by_model": this.breakdown("model"),
+            "by_prompt_version": this.breakdown("prompt_version"),
+            "by_model_prompt": this.breakdown("model", "prompt_version"),
+            "ab": this.ab(),
+            "daily": this.daily(first, days),
+            "corrections": [
+                {"series_id": c.series_id, "lang": c.lang, "edits": c.edits} for c in self.store.cue_edit_counts()
+            ],
+        }
+
+    @staticmethod
+    def _rates(quality: dict[str, Any] | None) -> dict[str, float | None]:
+        """The five rates of Quality, to put next to the window before: ``None`` for each when there is no such window."""
+        if quality is None:
+            return dict.fromkeys(("cue_edit_rate", "repair_rate", "retranslate_rate", "cps_rate", "too_long_rate"))
+        return {
+            "cue_edit_rate": quality["cue_edits"]["rate"], "repair_rate": quality["repair"]["rate"],
+            "retranslate_rate": quality["retranslations"]["rate"], "cps_rate": quality["review"]["cps_rate"],
+            "too_long_rate": quality["review"]["too_long_rate"],
         }
 
     def _operations(self, f: "_Figures", since: float, now: float) -> dict[str, Any]:
@@ -216,7 +252,8 @@ class Metrics:
         today_start = next_utc_midnight(now) - DAY
         snapshot = self.console.snapshot(limit=1) if self.console is not None else {}
         layers = self.console.layer_report() if self.console is not None else {}
-        waits = self.store.job_waits(since, ("publish", "variant"))
+        waits = self.store.job_waits(since, JOB_KINDS)
+        ended = self.store.job_outcomes(since, JOB_KINDS)
         latencies = [float(v) for v in self.store.latencies(since)]
         escalated = (layers.get("escalated") or {})
         finished = sum(v.get("done", 0) + v.get("failed", 0) for v in (layers.get("by_model") or {}).values())
@@ -248,6 +285,14 @@ class Metrics:
                 "cost": _round(_safe(f.total("cost", **translate), episodes), 4),
             },
             "tokens": {"in": int(f.total("tokens_in")), "out": int(f.total("tokens_out")), "cost": round(f.total("cost"), 4)},
+            "calls_by_task": {k: int(v) for k, v in sorted(f.group("calls", "task").items())},
+            "research_cost": round(f.total("cost", task="research"), 4),
+            "quota_pauses": int(f.total("quota_pauses")),
+            "breaker_opens": int(f.total("breaker_opens")),
+            "jobs": {
+                "done": ended.done, "failed": ended.failed, "success_rate": _rate(ended.done, ended.done + ended.failed),
+                "retries_per_episode": _round(_safe(f.total("retries"), episodes), 2),
+            },
             "latency_ms": {
                 "calls": len(latencies), "mean": _round(sum(latencies) / len(latencies)) if latencies else None,
                 "median": _round(_percentile(latencies, 0.5)), "p90": _round(_percentile(latencies, 0.9)),
@@ -315,26 +360,30 @@ class _Figures:
             out[key] = out.get(key, 0.0) + row.value
         return out
 
-    def breakdown(self, label: str) -> list[dict[str, Any]]:
-        """One line per model (or prompt version): what it did and how much of it the admin had to correct."""
-        keys = sorted(
-            {dict(r.labels).get(label, "") for r in self.rows if label in dict(r.labels)}
-        )
+    def breakdown(self, *labels: str) -> list[dict[str, Any]]:
+        """One line per model, per prompt version, or per model and prompt version together: what it did and how much of it
+        the admin had to correct."""
+        keys = sorted({
+            tuple(dict(r.labels).get(label, "") for label in labels)
+            for r in self.rows if all(label in dict(r.labels) for label in labels)
+        })
         out = []
         for key in keys:
-            only = {label: key}
+            only = dict(zip(labels, key))
             cues, episodes = self.total("cues_translated", **only), self.total("episodes", **only)
             translate_calls = self.total("calls", kind="translate", task="translate", **only)
             repair_calls = sum(self.total("calls", kind=k, task="translate", **only) for k in REPAIR_KINDS)
             edits = self.total("cue_edits", **only)
+            review = self.group("review", "kind", **only)
             # A retranslation names the model that wrote the version it replaces, not a prompt version.
-            retranslations = self.total("retranslations", model=key) if label == "model" else None
+            retranslations = self.total("retranslations", model=key[0]) if labels == ("model",) else None
             out.append({
-                label: key, "calls": int(self.total("calls", **only)), "episodes": int(episodes), "cues": int(cues),
+                **only, "calls": int(self.total("calls", **only)), "episodes": int(episodes), "cues": int(cues),
                 "tokens_in": int(self.total("tokens_in", **only)), "tokens_out": int(self.total("tokens_out", **only)),
                 "cost": round(self.total("cost", **only), 4),
                 "repair_rate": _rate(repair_calls, translate_calls),
                 "cue_edits": int(edits), "cue_edit_rate": _rate(edits, cues),
+                "cps_rate": _rate(review.get("cps", 0), cues), "too_long_rate": _rate(review.get("line_length", 0), cues),
                 "retranslations": None if retranslations is None else int(retranslations),
             })
         return out
@@ -369,7 +418,8 @@ class _Figures:
             day = _day(start + n * DAY)
             cell = by_day.get(day, {})
             out.append({
-                "day": day, "calls": int(cell.get("calls", 0)), "failed": int(cell.get("failed", 0)),
+                "day": day, "episodes": int(cell.get("episodes", 0)), "calls": int(cell.get("calls", 0)),
+                "failed": int(cell.get("failed", 0)),
                 "tokens": int(cell.get("tokens_in", 0) + cell.get("tokens_out", 0)), "cost": round(cell.get("cost", 0.0), 4),
                 "cues_translated": int(cell.get("cues_translated", 0)), "cue_edits": int(cell.get("cue_edits", 0)),
             })

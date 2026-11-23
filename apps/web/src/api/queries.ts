@@ -1162,6 +1162,11 @@ export function useLibrarySeries() {
   });
 }
 
+/** The golden set of one series and language as data, for the Copy button of its sheet (the file itself is a link, not this). */
+export function fetchGolden(seriesId: number, lang: string, signal?: AbortSignal) {
+  return apiGet("/api/series/{series_id}/golden", { path: { series_id: seriesId }, query: { lang } }, signal);
+}
+
 /** Look at the corrections of one series for a word the admin keeps changing. Free: no model is asked. */
 export function useFromEdits() {
   const client = useQueryClient();

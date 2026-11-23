@@ -807,7 +807,7 @@ Job `research` thuộc series (không có tập); dùng đúng năm nhãn trạn
 
 ## 5b. Insights (`#/insights`)
 
-Chỉ đọc, **không tốn lời gọi model** (không có Estimate/Confirm), không dùng CDN biểu đồ: chỉ thẻ số liệu và thanh ngang CSS/SVG thuần. Mọi nút cao ≥ 44 px; bảng thu về thẻ xếp dọc. Số liệu trong `{...}` là minh hoạ theo nhóm ở UX §4; bảng trường API của phần số đo chưa có ở UX (Phụ lục A.6b).
+Chỉ đọc, **không tốn lời gọi model** (không có Estimate/Confirm), không dùng CDN biểu đồ: chỉ thẻ số liệu và thanh ngang CSS/SVG thuần. Mọi nút cao ≥ 44 px; bảng thu về thẻ xếp dọc. Số liệu trong `{...}` là minh hoạ theo nhóm ở UX §4; bảng trường API của các khối số đo ở UX Phụ lục A.6b. Đã làm khác hình: dòng Research hiện số lời gọi và chi phí, chưa có `search queries` (API chưa ghi); thanh Daily đo số tập.
 
 ```text
 +------------------------------------------------------------------------------+
@@ -935,7 +935,7 @@ Quy tắc của trang:
 
 - **Một cửa sổ thời gian** (7d · 30d · 90d, mặc định 30d) cho mọi khối; không khối nào tự chọn cửa sổ riêng. Mũi tên so với cửa sổ liền trước cùng độ dài; không có dữ liệu trước thì hiện "—". Máy mới chưa có số liệu: mọi số hiện "—", không hiện 0%.
 - **Style A/B**: dưới 10 lần so sánh thì thêm dòng *Too few comparisons to conclude*, không tô nổi tỉ lệ thắng.
-- **Your corrections**: sắp theo số cue đã sửa giảm dần; `{n} edits` của mỗi ngôn ngữ là số cue đã sửa (**[NEW]** cần API trả số này). Bằng 0 thì cả hai nút tắt. Liên kết *Your corrections ↓* ở đầu trang cuộn tới khối này.
+- **Your corrections**: sắp theo số cue đã sửa giảm dần; `{n} edits` của mỗi ngôn ngữ là số cue đã sửa (`corrections` của `GET /api/metrics`, tính cả thời gian). Bằng 0 thì cả hai nút tắt. Liên kết *Your corrections ↓* ở đầu trang cuộn tới khối này.
 - Sheet Golden set: nút **Copy** không vẽ thêm khi ngôn ngữ chưa có cue sửa (nút Golden set đã tắt).
 - Calls by task và Research cost: tách tác vụ nhờ `llm_calls` ghi tác vụ `research` (ARCHITECTURE §3.5); chưa có research thì dòng Research hiện "—".
 

@@ -6470,6 +6470,28 @@
         ],
         "description": "``POST /api/units/{id}/corrections``. ``ids`` are the corrections made (none for a wider scope); a ``cue_edit``\nadds ``version`` and ``warnings``; ``forward`` and ``series`` add ``impact`` and where it starts."
       },
+      "CorrectionCount": {
+        "properties": {
+          "series_id": {
+            "type": "integer",
+            "description": "The worker's id of the series (``GET /api/library/series``), not the catalog's."
+          },
+          "lang": {
+            "type": "string"
+          },
+          "edits": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "series_id",
+          "lang",
+          "edits"
+        ],
+        "description": "Cues of one series in one language whose correction still stands: the size of its golden set, over all time."
+      },
       "CorrectionRow": {
         "properties": {
           "id": {
@@ -7978,6 +8000,9 @@
           "quality": {
             "$ref": "#/components/schemas/InsightsQuality"
           },
+          "previous": {
+            "$ref": "#/components/schemas/PreviousRates"
+          },
           "by_model": {
             "items": {
               "$ref": "#/components/schemas/InsightsBreakdown"
@@ -7990,6 +8015,13 @@
             },
             "type": "array"
           },
+          "by_model_prompt": {
+            "items": {
+              "$ref": "#/components/schemas/InsightsBreakdown"
+            },
+            "type": "array",
+            "description": "One row for each model and prompt version that wrote cues together (both fields set)."
+          },
           "ab": {
             "items": {
               "$ref": "#/components/schemas/InsightsAb"
@@ -8001,6 +8033,13 @@
               "$ref": "#/components/schemas/InsightsDay"
             },
             "type": "array"
+          },
+          "corrections": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionCount"
+            },
+            "type": "array",
+            "description": "A series and language with no correction is not listed: it has none."
           }
         },
         "additionalProperties": false,
@@ -8009,10 +8048,13 @@
           "window",
           "operations",
           "quality",
+          "previous",
           "by_model",
           "by_prompt_version",
+          "by_model_prompt",
           "ab",
-          "daily"
+          "daily",
+          "corrections"
         ],
         "description": "``GET /api/metrics``."
       },
@@ -8108,6 +8150,28 @@
               }
             ]
           },
+          "cps_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Share of cues the review found over the reading speed."
+          },
+          "too_long_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Share of cues the review found too long."
+          },
           "retranslations": {
             "anyOf": [
               {
@@ -8117,7 +8181,7 @@
                 "type": "null"
               }
             ],
-            "description": "Only by model: a retranslation names the model it replaces, not a prompt version."
+            "description": "Only by model: a retranslation names the model it replaces, not a prompt version (or a pair)."
           }
         },
         "additionalProperties": false,
@@ -8132,6 +8196,8 @@
           "repair_rate",
           "cue_edits",
           "cue_edit_rate",
+          "cps_rate",
+          "too_long_rate",
           "retranslations"
         ],
         "description": "One model, or one prompt version: what it did and how much of it the admin corrected."
@@ -8140,6 +8206,9 @@
         "properties": {
           "day": {
             "type": "string"
+          },
+          "episodes": {
+            "type": "integer"
           },
           "calls": {
             "type": "integer"
@@ -8164,6 +8233,7 @@
         "type": "object",
         "required": [
           "day",
+          "episodes",
           "calls",
           "failed",
           "tokens",
@@ -8213,6 +8283,27 @@
           },
           "latency_ms": {
             "$ref": "#/components/schemas/Latency"
+          },
+          "calls_by_task": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "description": "Model calls by task: ``translate``, ``extract``, ``judge``, and ``research`` once P16 exists."
+          },
+          "research_cost": {
+            "type": "number",
+            "description": "What the ``research`` task cost; ``0`` when there has been none (needs the prices in Settings)."
+          },
+          "quota_pauses": {
+            "type": "integer",
+            "description": "Days of the window on which the daily quota was spent on every model and the queue had to wait for the reset."
+          },
+          "breaker_opens": {
+            "type": "integer"
+          },
+          "jobs": {
+            "$ref": "#/components/schemas/JobFigures"
           }
         },
         "additionalProperties": false,
@@ -8227,7 +8318,12 @@
           "escalation",
           "per_episode",
           "tokens",
-          "latency_ms"
+          "latency_ms",
+          "calls_by_task",
+          "research_cost",
+          "quota_pauses",
+          "breaker_opens",
+          "jobs"
         ]
       },
       "InsightsQuality": {
@@ -8282,6 +8378,47 @@
         "type": "object",
         "title": "JobBody",
         "description": "The queue buttons that act on one job."
+      },
+      "JobFigures": {
+        "properties": {
+          "done": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Done over done and failed; a cancelled job is neither."
+          },
+          "retries_per_episode": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Times a job waited because the provider said no (429, 503), per episode translated."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "done",
+          "failed",
+          "success_rate",
+          "retries_per_episode"
+        ],
+        "description": "How the jobs that make translations ended in the window."
       },
       "JobInfo": {
         "properties": {
@@ -9782,6 +9919,70 @@
           "current",
           "preview"
         ]
+      },
+      "PreviousRates": {
+        "properties": {
+          "cue_edit_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repair_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retranslate_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cps_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "too_long_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cue_edit_rate",
+          "repair_rate",
+          "retranslate_rate",
+          "cps_rate",
+          "too_long_rate"
+        ],
+        "description": "The five rates of Quality over the window just before this one, as long as it: put next to the figures to say better\nor worse. Each is ``null`` when that window has nothing to divide by (or reaches back past a year)."
       },
       "ProposeReport": {
         "properties": {

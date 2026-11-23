@@ -324,7 +324,20 @@ Phần cuối trang Insights, chỉ đọc. Mỗi series có ít nhất một ng
 | Nút **Golden set** (tên truy cập: "Open the <lang> golden set of <series>"): mở bottom sheet có **Download** (liên kết tải) và **Copy** (xem 6.6). Download không có trạng thái loading; Copy có *Copying…* | Download: `GET /api/series/{id}/golden?lang=&download=1` → file `<series-key>.<lang>.golden.json`. Copy: `GET /api/series/{id}/golden?lang=`. Cả hai có `golden_version`, `series`, `lang`, `cues[]`: `season`, `episode`, `cue`, `source`, `text` |
 | Đang tải danh sách series: vòng quay "Loading the series"; không có series: "The worker keeps no series yet." | `GET /api/library/series` |
 
-Dòng ngôn ngữ hiện thêm `{n} edits` (số cue đã sửa; cần API trả số này); series sắp theo số sửa giảm dần; bằng 0 thì cả hai nút tắt. Đầu trang có liên kết *Your corrections ↓* và một bộ chọn cửa sổ thời gian (7d · 30d · 90d) cho mọi khối số đo. Phần còn lại của trang Insights (số đo, theo model, từng ngày) chưa có bảng trường API ở đây; bố cục ở wireframe-v2.md mục 5b.
+Dòng ngôn ngữ hiện thêm `{n} edits` (số cue đã sửa, theo `corrections` của `GET /api/metrics`, tính cả thời gian, không theo cửa sổ); series sắp theo số sửa giảm dần; bằng 0 thì cả hai nút tắt. Đầu trang có liên kết *Your corrections ↓* và một bộ chọn cửa sổ thời gian (7d · 30d · 90d) cho mọi khối số đo.
+
+Các khối số đo đọc từ `GET /api/metrics` (xem `docs/API.md`), bố cục ở wireframe-v2.md mục 5b:
+
+| Khối | Trường |
+|---|---|
+| Quality: mũi tên ▼ tốt hơn / ▲ xấu hơn so với cửa sổ liền trước cùng độ dài; "— no previous data" khi cửa sổ trước không có số | `quality`, `previous` (năm tỉ lệ: `cue_edit_rate`, `repair_rate`, `retranslate_rate`, `cps_rate`, `too_long_rate`) |
+| By model and prompt version: một dòng cho mỗi cặp | `by_model_prompt` (kèm `cps_rate`, `too_long_rate`) |
+| Style A/B scores: dưới 10 lần so sánh thì thêm dòng *Too few comparisons to conclude* | `ab` |
+| Queue, quota and cost | `operations`: `queue`, `usage`, `wait_seconds`, `latency_ms`, `per_episode`, `quota_pauses` (số ngày quota ngày cạn trên mọi model), `calls_by_task`, `research_cost` |
+| Reliability | `operations`: `calls`, `escalation`, `jobs` (`success_rate`, `retries_per_episode`), `breaker_opens` |
+| Daily: thanh = số tập mỗi ngày | `daily` (`episodes`, `failed`, `cue_edits` / `cues_translated`, `cost`) |
+
+Chưa có: số truy vấn tìm kiếm của research (`search queries`), vì `llm_calls` chưa ghi; dòng Research cost hiện "—" và "No research yet." khi chưa có lời gọi `research`.
 
 ### A.7 Còn thiếu (Mới, làm ở P12b hoặc để sau)
 

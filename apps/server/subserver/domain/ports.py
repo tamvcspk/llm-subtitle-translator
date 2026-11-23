@@ -442,6 +442,24 @@ class CuePair:
     after: str
 
 
+@dataclass(frozen=True)
+class CueEditCount:
+    """How many cues of one series the admin corrected in one language, whose correction still stands: the size of that
+    series' golden set (Insights shows it next to the language)."""
+
+    series_id: int
+    lang: str
+    edits: int
+
+
+@dataclass(frozen=True)
+class JobOutcomes:
+    """How the jobs that finished in a window ended."""
+
+    done: int
+    failed: int
+
+
 @runtime_checkable
 class Telemetry(Protocol):
     """What the core uses to leave a trace of its decisions. Best effort: it never raises and never blocks

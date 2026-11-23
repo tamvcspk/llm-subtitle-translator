@@ -1,4 +1,12 @@
 # Unreleased
+- **Insights follows the wireframe (5b).** The page is laid out as Quality, By model and prompt version (one row per pair, with
+  the share of cues read too fast and lines too long), Style A/B scores (under ten comparisons it says "Too few comparisons to
+  conclude"), Queue, quota and cost, Reliability, Daily and Your corrections; from 1024 px the lists are tables. Quality says
+  ▼ better or ▲ worse than the window before (`previous` in `GET /api/metrics`). New figures: quota pauses (days the daily
+  quota stopped the queue), breaker opens, job success rate, retries per episode, calls by task, research cost, episodes per
+  day, and the cues corrected per series and language (`corrections`). **Golden set** is a button that opens a bottom sheet
+  with Download and Copy; a language with no corrected cue has both buttons off. The three new counts begin on the day this
+  worker first ran; an earlier day reads 0.
 - **P15f: one architecture document, and skills and agents by role. Nothing a user sees changes.** `docs/ARCHITECTURE.md` is
   rewritten as the system is built (layers, module reference, how a request and a job travel, the subsystems, and the
   **Seams** and **Invariants** that used to be copied into `AGENTS.md`); `docs/design/ARCHITECTURE.md` keeps the ADRs and the

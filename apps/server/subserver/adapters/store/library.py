@@ -7,7 +7,7 @@ import sqlite3
 import time
 from typing import Any
 
-from ...domain.ports import Correction, CueEdit, CuePair, Output, Series, SeriesSeed, Unit, SUGGESTION_PENDING
+from ...domain.ports import Correction, CueEdit, CueEditCount, CuePair, Output, Series, SeriesSeed, Unit, SUGGESTION_PENDING
 from .base import Repo
 
 
@@ -218,6 +218,21 @@ class LibraryRepo(Repo):
                 source=source, before=str(payload.get("before_text") or ""), after=text,
             ))
         return out
+
+    def cue_edit_counts(self) -> list[CueEditCount]:
+        """For each series and language, how many cues have a correction that still stands: exactly the cues of its golden set
+        (``series_cue_edit_pairs`` keeps a correction only when it has a source line and a text)."""
+        rows = self.query(
+            "SELECT u.series_id, c.target_lang, c.payload_json FROM corrections c JOIN units u ON u.id = c.unit_id"
+            " WHERE u.series_id IS NOT NULL AND c.kind = 'cue_edit' AND c.active = 1"
+        )
+        counts: dict[tuple[int, str], int] = {}
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            if str(payload.get("source_text") or "").strip() and str(payload.get("text") or "").strip():
+                key = (int(row["series_id"]), str(row["target_lang"]))
+                counts[key] = counts.get(key, 0) + 1
+        return [CueEditCount(series_id=s, lang=lang, edits=n) for (s, lang), n in sorted(counts.items())]
 
     # -- series and unit lookups, per-series switches (P4) ------------------------------------------------------------
     def find_unit(self, series_id: int, season: int, episode: int) -> Unit | None:
