@@ -33,7 +33,8 @@ export function RouteTabs({ base, tabs, keep = [] }: { base: string; tabs: reado
     <Tabs value={active} onChange={go} keepMounted={false}>
       <Tabs.List style={{ overflowX: "auto", flexWrap: "nowrap" }}>
         {tabs.map((tab) => (
-          <Tabs.Tab key={tab.value} value={tab.value} style={{ minHeight: 44, flexShrink: 0 }}>
+          // Tighter on a phone so the five tabs of a series fit at 390 px; a page with more tabs (an episode) still scrolls.
+          <Tabs.Tab key={tab.value} value={tab.value} px={{ base: 6, xs: "md" }} style={{ minHeight: 44, flexShrink: 0 }}>
             {tab.label}
           </Tabs.Tab>
         ))}
