@@ -31,7 +31,7 @@ function catalog(rows: ReturnType<typeof series>[], movies: ReturnType<typeof mo
 
 const estimate = {
   estimate_only: true,
-  estimate: { jobs: 5, cues: 2740, calls: 16, calls_left_today: 42, paused_until: null, minutes: 4, finish_at: null },
+  estimate: { jobs: 5, cues: 2740, calls: 16, calls_left_today: 42, paused_until: null, minutes: 4, finish_at: null, extract_calls: 0, extract_model: "" },
   planned_total: 5,
   skipped_total: 1,
   skipped_by_reason: { "already requested": 1 },

@@ -22,6 +22,11 @@ export function estimateLines(estimate: Estimate): Array<[string, string]> {
     ["Cues", estimate.cues.toLocaleString()],
     ["Model calls (est.)", estimate.calls === null ? "unknown" : estimate.calls.toLocaleString()],
   ];
+  // Reading the story so far is not translation: its own row, with the model it runs on (FR-15.5.1).
+  if (estimate.extract_calls > 0) {
+    const model = estimate.extract_model ? ` · ${estimate.extract_model}` : "";
+    lines.push(["Extract facts", `${estimate.extract_calls.toLocaleString()} ${estimate.extract_calls === 1 ? "call" : "calls"}${model}`]);
+  }
   if (estimate.calls_left_today !== null) lines.push(["Calls left today", estimate.calls_left_today.toLocaleString()]);
   if (estimate.paused_until !== null) lines.push(["Paused until", clock(estimate.paused_until)]);
   if (estimate.minutes !== null) {

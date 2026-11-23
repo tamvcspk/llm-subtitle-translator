@@ -26,7 +26,8 @@ from .console import CONSOLE_PROVIDER
 from .estimates import Estimate, Estimator
 from ..jobs.jobs import CANCELLED, FAILED, FILL, REPLACE, job_key
 from .library import Library
-from ..domain.ports import KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, Telemetry
+from .memory import StoryMemory
+from ..domain.ports import KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, Telemetry, Unit
 from ..jobs.queue import JobQueue, outside_allowed_paths
 from ..adapters.store import Store
 from ..domain.subtitles import existing_target_subtitle, target_output_path
@@ -138,8 +139,10 @@ class JobRequests:
         telemetry: Telemetry | None = None,
         clock: Callable[[], float] = time.time,
         estimator: Estimator | None = None,
+        memory: StoryMemory | None = None,
     ) -> None:
         self.store = store
+        self.memory = memory  # when set, a request's estimate also counts the fact reads its jobs would run (P15g)
         self.library = library
         self.queue = queue
         self.versions = versions
@@ -226,7 +229,7 @@ class JobRequests:
                     entry, title, unit.id if unit else None, picked, target, mode, ignored, automatic, measure,
                 )
                 (skipped if job.skip else planned).append(job)
-        return RequestPlan(tuple(planned), tuple(skipped), self.estimate(planned), mode)
+        return RequestPlan(tuple(planned), tuple(skipped), self.estimate(planned, extract=measure), mode)
 
     def _evaluate(
         self, entry: CatalogEntry, title: str, unit_id: int | None,
@@ -297,8 +300,51 @@ class JobRequests:
         """Model calls to translate these cues: the planner's parts (a repair or a split adds a few more)."""
         return self.estimator.calls_for(cues)
 
-    def estimate(self, planned: list[PlannedJob]) -> Estimate:
-        return self.estimator.of(len(planned), sum(job.cues for job in planned), sum(job.calls for job in planned))
+    def estimate(self, planned: list[PlannedJob], *, extract: bool = True) -> Estimate:
+        return self.estimator.of(
+            len(planned), sum(job.cues for job in planned), sum(job.calls for job in planned),
+            self._extract_calls(planned) if extract else 0,
+        )
+
+    def _extract_calls(self, planned: list[PlannedJob]) -> int:
+        """Story-fact reads the planned jobs would run first (FR-15.5.1): per series with memory on, each episode before
+        a planned one in story order and the planned one itself that has a source and no facts yet, once for the whole
+        request. The rule is ``StoryMemory.needs_extract``, the one ``ensure_facts`` follows; nothing is called."""
+        if self.memory is None:
+            return 0
+        by_series: dict[int, list[CatalogEntry]] = {}
+        for item_id in dict.fromkeys(job.item_id for job in planned):
+            entry = self.store.catalog_entry(item_id)
+            if entry is not None and entry.kind == KIND_EPISODE and entry.parent_id is not None:
+                by_series.setdefault(entry.parent_id, []).append(entry)
+        settings = self._settings()
+        sources = enabled_source_languages(self._config())
+        total = 0
+        for parent_id, wanted in by_series.items():
+            series = self.store.series_by_key(wanted[0].series_key)
+            if not self.memory.series_enabled(series, settings):
+                continue
+            known = {(u.season, u.episode): u for u in self.store.list_units(series.id)} if series else {}
+            units: list[Unit] = []
+            chosen: dict[int, Unit] = {}
+            for episode in self.store.catalog_entries(KIND_EPISODE, parent_id=parent_id):
+                picked = pick_source(episode, sources)
+                path = picked[0].path if picked else ""
+                unit = known.pop((episode.season, episode.episode), None)
+                if unit is None:  # the worker has not met it: it has no facts, as for a job that would register it now
+                    unit = Unit(
+                        id=-episode.id, series_id=series.id if series else None, season=episode.season,
+                        episode=episode.episode, title=episode.title, media_type="series", source_path=path,
+                    )
+                elif path:
+                    unit = dataclasses.replace(unit, source_path=path)
+                units.append(unit)
+                chosen[episode.id] = unit
+            units.extend(known.values())
+            total += len(self.memory.extract_needed(
+                [chosen[e.id] for e in wanted if e.id in chosen], units, series, settings,
+            ))
+        return total
 
     # -- making the jobs -------------------------------------------------------------------------------------------
     def create(

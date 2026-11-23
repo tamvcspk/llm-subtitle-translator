@@ -41,7 +41,7 @@ const judgeSummary = (overrides: Partial<JudgeSummary> = {}): JudgeSummary => ({
   ...overrides,
 });
 
-const estimate = { jobs: 1, cues: 2, calls: 1, calls_left_today: null, paused_until: null, minutes: null, finish_at: null };
+const estimate = { jobs: 1, cues: 2, calls: 1, calls_left_today: null, paused_until: null, minutes: null, finish_at: null, extract_calls: 0, extract_model: "" };
 
 const versions = {
   lang: "vi",

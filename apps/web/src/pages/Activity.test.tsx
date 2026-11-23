@@ -58,7 +58,7 @@ const status = {
 const estimate = (jobs: number) => ({
   body: {
     estimate_only: true,
-    estimate: { jobs, cues: jobs * 340, calls: jobs * 9, calls_left_today: null, paused_until: null, minutes: null, finish_at: null },
+    estimate: { jobs, cues: jobs * 340, calls: jobs * 9, calls_left_today: null, paused_until: null, minutes: null, finish_at: null, extract_calls: 0, extract_model: "" },
     planned_total: jobs,
     skipped_total: 0,
     skipped_by_reason: {},

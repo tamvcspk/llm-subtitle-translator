@@ -147,7 +147,9 @@ class EstimateNumbers(unittest.TestCase):
         env.service.estimator = Estimator(env.store, env.jobs, lambda: {"max_calls_per_day": 10})
         result = env.service.retranslate(env.unit(1), {"lang": "vi", "estimate_only": True})["estimate"]
         self.assertEqual((result["calls_left_today"], result["paused_until"]), (10, None))
-        self.assertEqual(set(result), {"jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at"})
+        self.assertEqual(set(result), {
+            "jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at", "extract_calls", "extract_model",
+        })
 
 
 class AdoptKeepingTheStyle(unittest.TestCase):

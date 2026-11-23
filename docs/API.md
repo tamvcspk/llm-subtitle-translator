@@ -446,13 +446,17 @@ episodes), `{"series": id}` (optionally with `"season": 1`), or `{"all": true}`.
 overwrites) or `"replace"` (retranslate: the current subtitle becomes a version first), `"estimate_only": true`.
 
 With `estimate_only` nothing is made. The answer (and the real answer too) is
-`{"estimate_only", "mode", "estimate": {"jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at"},
-"planned_total", "planned": [...first 200 rows], "skipped_total", "skipped_by_reason": {"already requested": 2, ...},
+`{"estimate_only", "mode", "estimate": {"jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at",
+"extract_calls", "extract_model"}, "planned_total", "planned": [...first 200 rows], "skipped_total", "skipped_by_reason": {"already requested": 2, ...},
 "skipped": [...first 200 rows]}`; a real request adds `"created": [job ids]`, `"count"` and `"merged"` (a replace
 request that turned an open `fill` job into the replacement). A row is `{"item_id", "title", "lang", "cues", "calls",
-"skip", "reason"}`. `calls` is the planner's count of model calls to translate; story-memory extraction, repairs and
-splits add some. `calls_left_today` is what `max_calls_per_day` still allows (null: no cap); `minutes` and `finish_at`
-use the average of recent calls (null until a call was timed) and a spent quota (`paused_until`).
+"skip", "reason"}`. `calls` is the planner's count of model calls to translate; repairs and splits add some.
+`extract_calls` (P15g) is the story-fact reads the jobs run first when memory is on for the series: each episode before a
+planned one in story order, and the planned one, that has a source subtitle and no facts for its current `sha256` and
+extraction prompt version, each counted once for the whole request, on `extract_model` (the `memory_model`; `""` when there
+are none); 0 when memory is off or the facts are there. `calls_left_today` is what `max_calls_per_day` still allows (null:
+no cap); `minutes` and `finish_at` use the average of recent calls over `calls + extract_calls` (null until a call was
+timed) and a spent quota (`paused_until`).
 
 A request for something that already has an open job makes no second job (it lifts the first to the interactive
 class). The reasons an item is left out: `ignored by the admin`, `the source and the target language are the same`,

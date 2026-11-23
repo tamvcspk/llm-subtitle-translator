@@ -190,7 +190,7 @@ Hộp Estimate là dialog hoặc bottom sheet có **Cancel** và **Confirm** (kh
 
 | Nút | Ước lượng lấy từ | Có sẵn? |
 |---|---|---|
-| Translate (tập, mùa, series, tất cả), Translate again | `POST /api/jobs` với `estimate_only`; (v0.21, P15g) khi memory bật, số lời gọi **extract** cho các tập chưa có facts hiện thành dòng riêng ("Extract facts: N calls (Memory model)") dưới dòng lời gọi dịch, mỗi tập đếm một lần. Khi `research_enabled` bật thì thêm một dòng chữ, không có số: "Research may run once for this series afterwards (budget X of Y used)" | Có (dòng extract: P15g) |
+| Translate (tập, mùa, series, tất cả), Translate again | `POST /api/jobs` với `estimate_only`; (v0.21, P15g) khi memory bật, số lời gọi **extract** cho các tập chưa có facts hiện thành dòng riêng ("Extract facts: N calls · <tên model của memory_model>", dưới dòng lời gọi dịch; làm ở P15g) mỗi tập đếm một lần cho cả yêu cầu, và thời gian dự kiến tính cả lời gọi này. Khi `research_enabled` bật thì thêm một dòng chữ, không có số: "Research may run once for this series afterwards (budget X of Y used)" | Có (dòng extract: P15g) |
 | Retranslate cả tập | `POST /api/jobs` với `mode: replace`, `estimate_only` | Có |
 | Retranslate theo dải cue hoặc thời gian | `POST /api/units/{id}/retranslate` với `estimate_only` (số cue của dải và số lời gọi); số cue khoá giữ lại vẫn tính ở giao diện | Có |
 | Retry một job, **Retry All Failed** | `POST /api/queue/retry` với `estimate_only` và `job_id`, `job_ids` hoặc `all` | Có |

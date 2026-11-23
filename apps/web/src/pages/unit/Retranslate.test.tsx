@@ -6,7 +6,7 @@ import { buildRange, overwriteLine } from "../../lib/retranslate";
 import { sent, serve, show } from "../../test/render";
 import { base, correction, cue, cues, episode } from "../../test/unit-fixtures";
 
-const estimate = { jobs: 1, cues: 31, calls: 2, calls_left_today: null, paused_until: null, minutes: null, finish_at: null };
+const estimate = { jobs: 1, cues: 31, calls: 2, calls_left_today: null, paused_until: null, minutes: null, finish_at: null, extract_calls: 0, extract_model: "" };
 
 const items: Correction[] = [
   correction(3, "term", { source: "Enforcer", target: "Cảnh vệ" }),

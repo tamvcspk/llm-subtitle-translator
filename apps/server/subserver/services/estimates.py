@@ -15,7 +15,7 @@ from subcore import srt
 from subcore.translate.planner import plan_parts
 
 from ..domain import queue_policy as policy
-from ..domain.config import PROVIDER_OPENAI_COMPAT, provider_name
+from ..domain.config import PROVIDER_OPENAI_COMPAT, model_for_task, provider_name
 from ..jobs.queue import JobQueue
 from ..adapters.store import Store
 
@@ -25,7 +25,8 @@ GEMINI_MAX_OUTPUT_TOKENS = 65_536
 @dataclass(frozen=True)
 class Estimate:
     """What the planned jobs would cost. ``calls`` is the model calls to translate (a repair or a split adds a few
-    more); ``calls_left_today`` is what ``max_calls_per_day`` still allows (None: no cap); ``paused_until`` is when a
+    more); ``extract_calls`` is the story-fact reads they would run first, on ``extract_model`` (shown apart: they are
+    not translation); ``calls_left_today`` is what ``max_calls_per_day`` still allows (None: no cap); ``paused_until`` is when a
     spent quota ends (None: not paused); ``minutes``/``finish_at`` are None until a call has been timed."""
 
     jobs: int = 0
@@ -35,6 +36,8 @@ class Estimate:
     paused_until: float | None = None
     minutes: float | None = None
     finish_at: float | None = None
+    extract_calls: int = 0
+    extract_model: str = ""
 
 
 class Estimator:
@@ -58,15 +61,18 @@ class Estimator:
         wanted = ordinals if ordinals is not None else list(range(1, len(cues) + 1))
         return max(1, len(plan_parts(cues, wanted, self.max_output_tokens())))
 
-    def of(self, jobs: int, cues: int, calls: int) -> Estimate:
+    def of(self, jobs: int, cues: int, calls: int, extract_calls: int = 0) -> Estimate:
+        """``extract_calls`` are the story-fact reads the jobs would run first (P15g); they take time like any call."""
         now = self._clock()
-        cap = int(self._settings().get("max_calls_per_day") or 0)
+        settings = self._settings()
+        cap = int(settings.get("max_calls_per_day") or 0)
         left = None
         if cap > 0:
             used = self.store.calls_since(policy.next_utc_midnight(now) - 86_400)
             left = max(0, cap - used)
         average = self.store.average_call_seconds()
-        minutes = calls * average / 60.0 if average is not None and calls else None
+        total = calls + extract_calls
+        minutes = total * average / 60.0 if average is not None and total else None
         paused = self.queue.quota_pause_until()
         finish = None
         if minutes is not None:
@@ -74,4 +80,5 @@ class Estimator:
         return Estimate(
             jobs=jobs, cues=cues, calls=calls, calls_left_today=left, paused_until=paused,
             minutes=round(minutes, 1) if minutes is not None else None, finish_at=finish,
+            extract_calls=extract_calls, extract_model=model_for_task(settings, "extract") if extract_calls else "",
         )

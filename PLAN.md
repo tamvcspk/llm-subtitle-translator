@@ -468,10 +468,10 @@ Quyết định #27. Sau P15e, khi cấu trúc đã đứng yên.
 
 FR-15.5.1; quyết định #28 điểm 6; tiêu chí 24k. Ngay trước P16. Hiện `Estimator.calls_for` chỉ đếm phần dịch của planner, trong khi job dịch chạy extract inline cho tập < N và chính tập N (`StoryMemory.plan` → `ensure_facts`).
 
-- [ ] Hàm đọc (không gọi model) đếm các tập cần extract cho một yêu cầu: tập trước mỗi tập được dịch theo story order, và chính tập đó, có phụ đề nguồn mà chưa có facts cho `sha256` và `EXTRACT_PROMPT_VERSION`; hợp lại trên cả yêu cầu để mỗi tập đếm một lần; 0 khi memory tắt cho series. Dùng cùng quy tắc với `ensure_facts`, không chép lại.
-- [ ] `Estimate` thêm `extract_calls` (và model của nó); answer của `POST /api/jobs` `estimate_only` mang trường này; `docs/openapi.json` và `schema.gen.ts` sinh lại.
-- [ ] Hộp Estimate của Translate hiện dòng extract riêng (UX 6.4); thời gian dự kiến tính cả lời gọi extract.
-- [ ] Test: server (series memory bật, tập 3 với tập 1–3 chưa có facts → 3; yêu cầu tập 2 và 3 → vẫn 3; memory tắt → 0; facts đủ → 0) và Vitest cho dòng của hộp. CI xanh.
+- [x] Hàm đọc (không gọi model) đếm các tập cần extract cho một yêu cầu: tập trước mỗi tập được dịch theo story order, và chính tập đó, có phụ đề nguồn mà chưa có facts cho `sha256` và `EXTRACT_PROMPT_VERSION`; hợp lại trên cả yêu cầu để mỗi tập đếm một lần; 0 khi memory tắt cho series. Dùng cùng quy tắc với `ensure_facts`, không chép lại. **Làm:** `StoryMemory.needs_extract` / `extract_needed` / `series_enabled` (chỉ đọc); `JobRequests._extract_calls` ghép tập của catalog với unit đã có (tập chưa có unit không có facts) rồi hỏi memory, mỗi series một lần; chính sách tự động (`measure=False`) không đếm.
+- [x] `Estimate` thêm `extract_calls` (và model của nó); answer của `POST /api/jobs` `estimate_only` mang trường này; `docs/openapi.json` và `schema.gen.ts` sinh lại.
+- [x] Hộp Estimate của Translate hiện dòng extract riêng (UX 6.4); thời gian dự kiến tính cả lời gọi extract.
+- [x] Test: server (series memory bật, tập 3 với tập 1–3 chưa có facts → 3; yêu cầu tập 2 và 3 → vẫn 3; memory tắt → 0; facts đủ → 0) và Vitest cho dòng của hộp. `tests/test_estimate_extract.py` (15 test, tiêu chí 24k) và `components/EstimateSheet.test.ts`. CI xanh: chờ GitHub (phase chỉ đánh `[x]` ở bảng đầu sau đó).
 
 ## P16 — Research grounding `[ ]`
 

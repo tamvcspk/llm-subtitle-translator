@@ -6936,6 +6936,14 @@
                 "type": "null"
               }
             ]
+          },
+          "extract_calls": {
+            "type": "integer",
+            "description": "Story-fact reads the jobs would run first (memory on, an episode before the one translated with no facts yet), each episode once for the whole request; 0 when memory is off or the facts are there. Counted apart from ``calls``."
+          },
+          "extract_model": {
+            "type": "string",
+            "description": "The model those reads use (``memory_model``), empty when ``extract_calls`` is 0."
           }
         },
         "additionalProperties": false,
@@ -6947,7 +6955,9 @@
           "calls_left_today",
           "paused_until",
           "minutes",
-          "finish_at"
+          "finish_at",
+          "extract_calls",
+          "extract_model"
         ],
         "description": "What planned jobs would cost (``services.estimates``): shown in the Estimate/Confirm dialog before anything is queued."
       },

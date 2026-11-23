@@ -145,7 +145,7 @@ describe("Series Style tab", () => {
       style({
         "/api/units/501/variant": (body: Record<string, unknown> | null) =>
           body?.estimate_only
-            ? { body: { ok: true, estimate_only: true, label: "gritty", estimate: { jobs: 1, cues: 340, calls: 9, calls_left_today: null, paused_until: null, minutes: null, finish_at: null } } }
+            ? { body: { ok: true, estimate_only: true, label: "gritty", estimate: { jobs: 1, cues: 340, calls: 9, calls_left_today: null, paused_until: null, minutes: null, finish_at: null, extract_calls: 0, extract_model: "" } } }
             : { body: { ok: true, job_id: "v1", label: "gritty" } },
       }),
     );

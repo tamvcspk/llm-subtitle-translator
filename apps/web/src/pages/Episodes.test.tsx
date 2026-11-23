@@ -22,7 +22,7 @@ const base = {
 
 const estimate = {
   estimate_only: true,
-  estimate: { jobs: 2, cues: 900, calls: 5, calls_left_today: null, paused_until: null, minutes: null, finish_at: null },
+  estimate: { jobs: 2, cues: 900, calls: 5, calls_left_today: null, paused_until: null, minutes: null, finish_at: null, extract_calls: 0, extract_model: "" },
   planned_total: 2,
   skipped_total: 0,
   skipped_by_reason: {},

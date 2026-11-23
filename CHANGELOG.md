@@ -1,4 +1,10 @@
 # Unreleased
+- **The Translate estimate counts the fact reads (P15g, FR-15.5.1).** With story memory on, a job reads the facts of every
+  earlier episode that has none yet, and of itself, before it translates; the Estimate box now says so: an **Extract facts**
+  row (`N calls · <memory model>`) under the translation calls, each episode counted once for the whole request (episodes 2
+  and 3 of a series ask for 3, not 5), and the time estimate includes them. Memory off for the series, or facts already
+  stored for the current source and prompt version, count 0. `estimate` of `POST /api/jobs` carries `extract_calls` and
+  `extract_model`.
 - **Research flow settled before P16 (design docs only, no code).** SPEC v0.20 decision #28: research runs as its own
   `research` job, queued after a job extracts new facts when `research_enabled` is on (independent of `auto_request`), ahead
   of the episodes still waiting to translate, and never stops a translation; `auto_accept_terms` (still on by default) is the

@@ -382,7 +382,7 @@ def main() -> int:
     # The library as Bazarr lists it, what the admin asks for from it, and the policy that asks by itself (P10, ADR-10).
     job_requests = JobRequests(
         store, library, worker.queue, versions, config_source=settings_service.app_config,
-        settings_source=live_settings, telemetry=telemetry,
+        settings_source=live_settings, telemetry=telemetry, memory=memory,
     )
     catalog_sync = CatalogSync(store, media, live_settings, telemetry)
     auto_request = AutoRequest(store, job_requests, live_settings, settings_service.app_config, telemetry)

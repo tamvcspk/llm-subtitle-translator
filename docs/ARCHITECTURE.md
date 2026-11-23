@@ -128,7 +128,9 @@ application's own database is not behind a port).
   language) is derived on reading, never stored), `catalog_actions.py` (the Library page's use cases),
   `job_requests.py` (`JobRequests`: planning, estimate and creation of requests, `POST /api/jobs`), `auto_request.py`
   (`AutoRequest`, the policy), `bootstrap.py` (the first episodes `auto_request` may ask for while a series has nothing
-  approved) and `estimates.py` (`Estimator`: what an action that spends model calls would cost, said before it runs);
+  approved) and `estimates.py` (`Estimator`: what an action that spends model calls would cost, said before it runs;
+  a Translate request's estimate also counts the fact reads its jobs would run first, `extract_calls`, through
+  `StoryMemory.extract_needed`, which follows the same rule as `ensure_facts` and calls nothing);
 - `memory.py` (`StoryMemory`): story order, prerequisite fact extraction, gap waiting, the context bundle and its
   staleness;
 - `glossaries.py`, `styles.py`, `style_service.py`: the glossary, genre presets, series and episode styles and character

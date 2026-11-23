@@ -23,6 +23,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any, Callable
 
 from subcore import srt
@@ -128,7 +129,10 @@ class StoryMemory:
         """Memory applies to episodes only; a series can follow the global switch or override it."""
         if unit.series_id is None:
             return False
-        series = self.units.get_series(unit.series_id)
+        return self.series_enabled(self.units.get_series(unit.series_id), settings)
+
+    def series_enabled(self, series: Series | None, settings: dict[str, Any] | None = None) -> bool:
+        """Memory for a series (or for one that is not stored yet: None): its own setting, else the global switch."""
         policy = series.memory if series else ""
         if policy == "on":
             return True
@@ -213,6 +217,36 @@ class StoryMemory:
         )
         logging.info("Extracted story facts for %s %s (%s tokens in)", title or "unit", unit_label(unit), result.tokens_in)
         return result.facts, "extracted"
+
+    def needs_extract(self, unit: Unit) -> bool:
+        """Would ``ensure_facts`` call the model for ``unit``? Same reading as there: a source subtitle that can be
+        read and no facts stored for its sha256 and the current ``EXTRACT_PROMPT_VERSION``. Never calls anything."""
+        if not self.has_source(unit):
+            return False
+        try:
+            sha = sha256_file(Path(unit.source_path))
+        except OSError:
+            return False
+        return self.facts.get_facts(unit.id, sha, EXTRACT_PROMPT_VERSION) is None
+
+    def extract_needed(
+        self, wanted: Iterable[Unit], units: list[Unit], series: Series | None, settings: dict[str, Any] | None = None,
+    ) -> list[Unit]:
+        """The units whose facts translating ``wanted`` would extract now (P15g, FR-15.5.1): what ``plan`` makes sure of
+        for each of them, the units before it in story order and itself. ``units`` is every unit of the series known
+        to the caller (an episode the worker has not met yet may be among them: it has no facts). Each unit is
+        named once however many of ``wanted`` need it; none when memory is off for the series."""
+        if not self.series_enabled(series, settings):
+            return []
+        found: dict[int, Unit] = {}
+        checked: dict[int, bool] = {}
+        for unit in wanted:
+            for needed in (*self.prior_units(unit, units, series), unit):
+                if needed.id not in checked:
+                    checked[needed.id] = self.needs_extract(needed)
+                if checked[needed.id]:
+                    found[needed.id] = needed
+        return list(found.values())
 
     # -- the series catalogue (FR-8.3) --------------------------------------------------
     def refresh_catalog(self, unit: Unit, series: Series, source_code: str) -> None:
