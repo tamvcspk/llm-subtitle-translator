@@ -39,6 +39,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P15g** | Estimate của Translate đếm cả lời gọi extract inline (FR-15.5.1, quyết định #28 điểm 6); thay đổi nhỏ, tách khỏi P16 | Tiêu chí 24k: dịch tập N của series có memory bật mà tập 1…N chưa có facts → Estimate hiện số lời gọi extract tách riêng, mỗi tập đếm một lần cho cả yêu cầu; memory tắt hoặc facts đủ → 0 | `[x]` |
 | **P16** | Research grounding (FR-7), làm cuối cùng nhưng vẫn bắt buộc của v1 (FR-7.4); làm **sau P15f**, trên cấu trúc mới | Tiêu chí 23 a–g: một lần mỗi series, URL từ grounding metadata, kết quả vào `suggestions`, `term` ≥ 2 nguồn tự áp dụng khi bật, provider không có `web_search` thì bỏ qua, có ngân sách lời gọi; job riêng tự xếp sau facts khi `research_enabled`, chạy trước các tập dịch còn chờ, lỗi không chặn dịch; ngân sách đúng sau khi dọn `jobs` | `[x]` (CI xanh trên `5ff369c`; còn mở: điều khoản hiển thị grounding của Google, đo cải thiện trên cue sửa thật) |
 | **P17** | Tách file lớn, không đổi hành vi (ADR-18 phần 4): `apps/web/src/api/queries.ts` (1226 dòng, 100 export) thành thư mục theo nhóm; `services/units.py` (1160) và `jobs/queue.py` (993), `pages/Insights.tsx` (583), `domain/ports.py` (646) thành các module nhỏ theo nhóm việc | Toàn bộ test (server, subcore, web) pass, số test không giảm; `docs/openapi.json` và `schema.gen.ts` không đổi; 48 import `api/queries` của web chạy nguyên; `test_core_boundary.py` và `doccheck.py` sạch; không file nào trong năm file trên còn quá ~500 dòng | `[x]` (CI xanh trên `b1ecf33`) |
+| **P18** | Sửa theo feedback UX đợt 1–2 (2026-11-24) và báo cáo ổ đĩa không ngủ được: đọc đĩa, Review, Translate/Retranslate nhiều tập, xưng hô theo cặp, Glossary, điều hướng | Xem mục P18: không còn đọc toàn văn file chỉ để hiển thị; accept song song không mất thao tác; Translate selected tách dịch mới/dịch lại có Confirm; mỗi cặp nhân vật một đề xuất, giai đoạn chỉ khi có điểm đổi vững | `[ ]` Kế hoạch đã duyệt 2026-11-24 (cả thiết kế P18f), chưa code |
 
 **Thứ tự làm là thứ tự số.** Mỗi phase chỉ cần các phase đứng trước nó:
 
@@ -502,6 +503,86 @@ Sau P16, theo yêu cầu 2026-11-24. Chỉ dời code và đổi chỗ đặt, *
 - [x] **P17d.** **Làm:** `pages/Insights.tsx` còn 109 dòng, các khối ở `pages/insights/` (`parts` dùng chung, `Pairs`, `StyleTrials`, `Days`, `SeriesCorrections`, `Quality`, `Operations`; `Insights.test.tsx` không đổi); `domain/ports.py` còn 202 dòng (các Protocol và kiểu của Bazarr/TMDB) và re-export kiểu bản ghi từ `records.py` (245) và `library_records.py` (222), mọi tên cũ còn đủ (đối chiếu 60 tên). *Kế hoạch ban đầu:* **`pages/Insights.tsx` (583 dòng)** thành các khối trong `pages/insights/` (như `pages/unit/`); **`domain/ports.py` (646 dòng, toàn Protocol)** theo vùng `Store` với `ports.py` re-export. Ít rủi ro; làm cuối, bỏ qua nếu không còn đáng.
 - [x] Docs: `docs/ARCHITECTURE.md` (`services/`, `jobs/`, `domain/`, console), `CHANGELOG.md`; `python scripts/doccheck.py` sạch. Không đổi ranh giới nên không thêm ADR; skill `backend-dev`/`frontend-dev` không nhắc đường dẫn cũ.
 - [x] Workflow **CI** trên GitHub xanh cho commit `b1ecf33` (chạy tay trên `p17-split-files`, run `45366257480`: worker, subcore, web đều xanh). Kiểm tra cục bộ trước đó: web typecheck, lint, 373 test, build; server 1239 test, subcore 408 test, compileall, `subcore --help`, `openapi --check`, doccheck.
+
+## P18 — Sửa theo feedback UX đợt 1–2 và tải đĩa `[ ]`
+
+Nguồn: `local-state/feedback/UX-FEEDBACK-01.md`, `UX-FEEDBACK-02.md` (git-ignored; người dùng thử Malcolm in the Middle trên homeserver) và báo cáo ổ đĩa ngày 2026-11-24: disk1 đọc khoảng 2 MB/s, khoảng 34 nghìn ops mỗi 5 phút, không spindown được. Nguồn đọc là container `llm-translator`, với job S05E07 "waiting for source" và khoảng 78 lần `POST /api/suggestions/*/accept` trả 400 trong 2 phút. Nguyên nhân dưới đây suy ra từ code ở `72a6fc8`, chưa kiểm trên dữ liệu thật.
+
+**Thứ tự:** P18a → P18b → P18c → P18f → P18d → P18e. P18g làm song song, chỉ đọc. P18a đứng đầu vì nó làm hỏng phần cứng chạy thật, và cũng là gốc của sự chậm ở P18b. Thiết kế P18f đã chốt (2026-11-24); việc đầu tiên của P18f là ghi nó vào SPEC FR-6.1 và `docs/design/ARCHITECTURE.md` rồi mới code. P18d và P18e qua `designer` (UX.md) trước. Mỗi mục kèm unit test (fake provider), CI xanh, `CHANGELOG.md`.
+
+### P18a — Không đọc toàn văn file chỉ để hiển thị
+- [ ] **Stale không cần băm file.** `Library.target_info` không có `page` thì gọi `is_system_file(trusting_stat=False)`, tức sha256 toàn file, chỉ để lấy `modified_outside`. Phép tính stale không cần cờ này. Thêm cờ để `impact_units` bỏ hẳn `modified_outside`. `unit_summary` (`GET /api/library/series/{id}/units`, Episodes hỏi mỗi 30 s) dùng `trusting_stat` (so `mtime_ns`, `size` với lần băm đã nhớ). Các đường quyết định có ghi đè được không thì giữ băm thật.
+- [ ] **Review không tự chạy dry run trên từng thẻ.** Hiện mỗi thẻ pending gọi `accept` `dry_run` khi hiện ra (`SuggestionCard.tsx`). Mỗi lần như vậy là một `impact_units` trên cả series, đọc mọi bản dịch 2 lần. Lần làm mới sau mỗi accept, reject, bulk và khi quay lại tab nhân số đó với số thẻ (~66 thẻ × ~100 bản dịch × 2). Sửa: impact chỉ tính khi mở thẻ hoặc bấm Accept/Edit. Nếu muốn hiện số trên cả trang thì dùng một endpoint tính chung một lượt. Không invalidate `suggestion-impact` của mọi thẻ sau một quyết định. Tắt `refetchOnWindowFocus` cho query nặng.
+- [ ] **Facts không băm lại nguồn mỗi lần thử.** `StoryMemory.ensure_facts`/`needs_extract` băm sha256 mọi SRT nguồn của các tập trước mỗi lần `plan()`. Với S05E07 là khoảng 94 file, mỗi 5 phút (`GAP_RECHECK_SECONDS`) khi đang chờ gap. Nhớ sha theo `(path, mtime_ns, size)` để lần sau chỉ cần `stat`. Khi đang chờ gap thì chỉ `stat` các tập thiếu; chỉ chạy lại cả `plan()` khi một tập thiếu đã có nguồn hoặc hết `gap_wait`.
+- [ ] **Polling nhẹ hơn.** `useSeriesUnits` chỉ hỏi dày khi series có job đang chạy, còn lại vài phút một lần. Xem lại `useSeriesPage` (10 s: vài `stat` mỗi tập).
+- [ ] **Policy sau sync:** `existing_target_subtitle` liệt kê lại cùng thư mục season cho từng tập. Cache kết quả `iterdir` theo thư mục trong một lượt `plan`.
+- [ ] Test: đếm lần mở file bằng một `Path`/hàm băm giả: trang units hai lần liên tiếp không băm lại; dry run không băm; `plan` khi đang chờ gap không băm. Sau khi triển khai (chỉ khi được yêu cầu), đo lại disk1 trên homeserver.
+
+### P18b — Review: accept song song, accept all một lượt
+- [ ] **Thao tác không bị "stopped".** `Review.tsx` giữ một `working` id. Bấm mục 2 thì spinner của mục 1 mất, và TanStack chỉ chạy callback của lần `mutate` cuối, nên mục 1 không có thông báo (server vẫn accept). Đổi thành `Set` id; mỗi thẻ dùng callback riêng (`mutateAsync`); thông báo cho từng mục.
+- [ ] **Accept all một lượt.** `SuggestionService.bulk` lặp `accept()` nên tính impact và ghi glossary N lần. Đổi thành: gấp mọi đề xuất của một ngôn ngữ vào glossary một lần, ghi một lần, tính impact một lần, mỗi đề xuất vẫn có bản ghi undo riêng (`_commit` nhận nhiều bản ghi). Dry run của hộp bulk dùng cùng đường đó.
+- [ ] Trong lúc chờ, hiện việc đang làm ("Đang tính số bản dịch bị ảnh hưởng…") để người dùng biết vì sao chậm. (Lần đọc đầu nói chỗ chậm là parse SRT; sai: `unit_rules` không parse cue, chỗ tốn là băm bản dịch ở P18a.)
+
+### P18c — Translate / Retranslate nhiều tập
+- [ ] Hiện `Translate selected` luôn gửi `mode: fill`. Tập đã có bản dịch bị bỏ qua với lý do `has-target`, dù backend đã nhận `mode: replace`. Thêm `mode: auto` vào `JobRequests.plan`: tập chưa có bản dịch thì `fill`, đã có thì `replace`; mỗi job trong plan ghi `translate`/`retranslate`. Đưa vào `docs/openapi.json` và sinh lại kiểu.
+- [ ] Hộp Estimate hiện hai nhóm kèm lý do: "Dịch mới: N tập (chưa có phụ đề <ngôn ngữ>)", "Dịch lại: M tập (đã có bản dịch; bản cũ giữ thành version)", và các tập vẫn bỏ qua với lý do cụ thể.
+- [ ] M > 0 thì Confirm "Ghi đè M bản dịch" trước khi tạo job. Bấm Translate là phải có job, hoặc nói rõ vì sao từng tập không có. Bất biến giữ nguyên: dịch lại là yêu cầu rõ của admin và luôn lưu version cũ trước.
+
+### P18d — Glossary: chia nhóm, Save luôn thấy
+- [ ] `OwnerGlossary` hiện Terms rồi Forms of address thành một cột dài, Save/Discard ở cuối. Đổi thành SegmentedControl `Terms (n) | Forms of address (n)` kèm ô lọc. Forms of address gom theo cặp, mỗi cặp liệt kê giai đoạn theo `from`. Thanh Save/Discard và dòng impact dính đáy màn hình (`sticky`, safe-area), hiện khi có thay đổi. UX.md (wireframe 2c) trước.
+- [ ] Trang Characters (`addressFor`) gom theo cặp và hiện cửa sổ `from–until` của từng dòng; hiện nay hai giai đoạn cùng chữ nhìn như dòng lặp.
+
+### P18e — Điều hướng không mất chỗ
+- [ ] Nav Library mở lại đường dẫn cuối trong khu Library (`/library`, `/series/…`, `/unit/…`, lưu sessionStorage); bấm Library lần nữa khi đang ở đó thì về danh sách. Tìm kiếm và bộ lọc của Home lên URL (`?q=&filter=`); khôi phục vị trí cuộn.
+- [ ] Tab Suggestions trong trang series (Review lọc theo series) để duyệt mà không rời chỗ đang làm. UX.md trước.
+
+### P18f — Xưng hô: mỗi cặp một đề xuất, giai đoạn chỉ khi có điểm đổi vững
+
+**Đã chốt (2026-11-24):**
+- Thiết kế bên dưới được duyệt.
+- Ngưỡng điểm đổi là ≥ 2 tập mỗi bên (hằng số trong `subcore.suggest`, có test).
+- Trường vai trò họ hàng trong extract **chưa làm**. Chỉ xét lại nếu chạy thật trên Malcolm vẫn sai chuyện ai là anh, ai là em; khi đó chốt riêng vì phải đọc lại facts.
+
+**Thiết kế giữ nguyên:** quan hệ có thể đổi theo thời gian, nên rule có cửa sổ `from/until` (FR-4.2, ví dụ của FR-5). Chỗ sai nằm ở **cách phát hiện điểm đổi**, không phải ở việc cho phép giai đoạn.
+
+**Vì sao đang rối loạn** (đọc code, 10 tập Malcolm không có thay đổi quan hệ thật):
+1. `address_items` mở giai đoạn mới mỗi khi nhãn `(relation, hierarchy)` của một tập khác tập trước. Mỗi tập được extract riêng, nên nhãn dao động theo cảnh: anh em cãi nhau thành `rival`, đùa nhau thành `friend`, `hierarchy` của anh em lúc `a_above` lúc `equal`. Nhiễu theo cảnh bị đọc thành đổi quan hệ. `_settled` chỉ lọc giai đoạn dựa trên một lần đọc kém tin cậy.
+2. Mỗi giai đoạn là một item riêng của `address_drafts`. Model không thấy các giai đoạn khác của cùng cặp, nên ra ba lần `con–mẹ`, hoặc `tớ–cậu` rồi `tôi–mày` cho cùng anh em.
+3. Danh tính đề xuất gồm `from` (`suggestion_keys.identity`), nên mỗi giai đoạn là một thẻ Review và, khi accept, một rule riêng.
+4. Nhãn `family` không nói ai là anh, ai là em, ai là mẹ, nên model đoán theo `detail` và `standing` của từng giai đoạn.
+
+**Đề xuất:**
+- [ ] **Hai lớp cho mỗi cặp.**
+  - *Nền:* vai trò cố định (họ hàng và ai lớn hơn, vợ chồng, thầy trò, đồng nghiệp). Lấy theo đa số trên **mọi** tập của cặp, không theo nhãn mới nhất. Quan hệ huyết thống không bao giờ tự mở giai đoạn.
+  - *Lớp đổi được:* độ thân và thế đứng (người lạ → bạn → người yêu → vợ chồng; thân → thù). Chỉ lớp này được sinh giai đoạn.
+- [ ] **Điểm đổi phải vững (hysteresis).** Chỉ tạo giai đoạn mới khi:
+  - trạng thái cũ thấy ở ≥ 2 tập trước điểm đổi và trạng thái mới thấy ở ≥ 2 tập sau đó, không quay lại;
+  - hoặc có một sự kiện rõ trong một tập (cưới, chia tay, lộ thân phận) với độ tin cậy cao.
+
+  Cảm xúc của một cảnh (cãi nhau, giận) không phải điểm đổi: giọng điệu đó đã có trong story memory của chính tập (FR-5.2), không cần thành rule. Thiếu bằng chứng thì mặc định là **không đổi**: 10 tập không có điểm đổi vững thì ra đúng một rule cho cả cặp.
+- [ ] **Hỏi model một lần cho cả cặp.** Item gửi lên gồm dòng thời gian của cặp (nhãn theo từng tập, vài câu trích), nền đã suy ra, và các điểm đổi ứng viên. Model trả xưng hô của nền và của từng giai đoạn, giữ nhất quán. Model chỉ được xác nhận hay bỏ điểm đổi đã có bằng chứng, không tự thêm. Sau đó code gộp các giai đoạn liền nhau có cùng `a_to_b/b_to_a`. Prompt `suggest` tăng phiên bản. Prompt extract giữ nguyên để không phải đọc lại facts. Nếu sau đó vẫn thiếu thông tin ai là anh, ai là em, xét thêm trường vai trò họ hàng vào extract (tốn lời gọi đọc lại, chốt riêng).
+- [ ] **Một đề xuất cho mỗi cặp.** Danh tính của `address_rule` là cặp (không có `from`); payload chứa danh sách giai đoạn. Accept ghi mọi giai đoạn của cặp, thay các rule cũ của cặp đó (undo trả lại đúng như trước). Cặp đã có rule mà tập mới cho thấy một điểm đổi vững thì sinh đề xuất **đổi** cho cặp đó ("Malcolm–Reese: đổi từ S03E05?"), kèm bằng chứng trước và sau điểm đổi, thay vì bỏ qua như hiện nay.
+- [ ] **Dữ liệu đã có trên dev:**
+  - Thẻ pending cũ của cùng cặp gộp thành một thẻ khi chạy lại bộ sinh.
+  - Rule đã accept trùng nhau (cùng cặp, cùng chữ, cửa sổ liền nhau) có nút dọn trên Forms of address. Lưu qua đường save glossary, có version.
+  - `with_address_rule`, `merge` và `_identity` coi `(A, B)` và `(B, A)` là cùng cặp (hiện phân biệt thứ tự).
+- [ ] Test (`subcore/tests/test_suggest.py`):
+  - anh em có nhãn dao động friend/rival/family qua 10 tập → một giai đoạn;
+  - người yêu ở tập 1–3, kẻ thù ở tập 6–8 (ví dụ của FR-5) → hai giai đoạn, `from` ở cue đổi;
+  - một tập lệch giữa chừng → không đổi;
+  - model trả hai giai đoạn cùng chữ → gộp.
+
+  Phía server: mỗi cặp một thẻ; accept thay đúng rule của cặp; undo trả lại; đề xuất đổi cho cặp đã có rule.
+- [ ] Chạy lại bộ sinh trên Malcolm ở dev (khi được yêu cầu triển khai) và đọc kết quả: mỗi cặp một thẻ, anh em không có giai đoạn giả. Ghi nhận xét vào đây; quyết định có cần trường vai trò họ hàng không.
+- [ ] Docs (làm trước khi code): SPEC FR-6.1 (đề xuất theo cặp, điều kiện điểm đổi), `docs/design/ARCHITECTURE.md` (quyết định), `docs/API.md` (payload `address_rule` có danh sách giai đoạn), UX.md (thẻ Review của một cặp).
+- [ ] Hal–Lois `anh–em / em–anh` là đúng cho vợ chồng (đã ghi ở P14), không cần sửa.
+
+### P18g — Cần dữ liệu thật (chỉ đọc, `docker exec`, khi được cho phép)
+- [ ] "Mới vào series đã có nhiều cảnh báo về glossary": là banner hay nhãn nào? Cần ảnh chụp.
+- [ ] "Fact extraction 10 tập không ra fact nào": extract trả rỗng, hay facts có mà bộ sinh không còn ứng viên (`_held`, skip 7 ngày)? Đọc `facts` và report của job.
+- [ ] Dewey không có quan hệ nào: tên bị lọc nhóm (`is_group`), độ tin cậy < 0.5, hay extract không thấy.
+- [ ] Job S05E07 vẫn "waiting for source" quá `gap_wait` (30 phút): đọc `memory_gap_wait_seconds` và `gap_since` trong payload.
+- [ ] Đếm trong log container số lần gọi `GET /api/library/series/*/units` và `POST /api/suggestions/*/accept` theo từng phút để xác nhận nguồn đọc của P18a.
 
 ---
 
