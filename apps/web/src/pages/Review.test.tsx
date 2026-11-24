@@ -20,6 +20,7 @@ const suggestion = (id: number, extra: Partial<Suggestion> = {}): Suggestion => 
   created_at: 1_900_000_000,
   undoable: false,
   edited: false,
+  search_display_id: null,
   ...extra,
 });
 
@@ -105,6 +106,26 @@ describe("Review", () => {
     expect(wiki).toHaveAttribute("target", "_blank");
     expect(wiki).toHaveAttribute("rel", "noreferrer");
     expect(within(sources).getByRole("link", { name: "fandom.com" })).toBeInTheDocument();
+  });
+
+  it("shows Google's Search Suggestions of a research proposal as they came, in a sandboxed frame, and nothing for the other sources", async () => {
+    const html = '<div class="container"><a class="chip" href="https://www.google.com/search?q=fern">fern vietnamese</a></div>';
+    const researched = suggestion(1, { source: "research", evidence: [], search_display_id: 41 });
+    serve(
+      inbox(
+        {
+          "/api/suggestions/search/41": { body: { id: 41, series_id: 7, lang: "vi", html, queries: ["fern vietnamese"], created_at: 1_900_000_000 } },
+        },
+        [researched, rule],
+      ),
+    );
+    show("/review");
+    const term = await screen.findByRole("listitem", { name: "Term: Kyber crystal → tinh thể Kyber" });
+    const frame = await within(term).findByTitle("Google Search Suggestions");
+    expect(frame).toHaveAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox"); // no scripts, no access to the console
+    expect(frame.getAttribute("srcdoc")).toContain(html); // Google's HTML, unchanged
+    expect(frame.getAttribute("srcdoc")).toContain('<base target="_blank">');
+    expect(within(screen.getByRole("listitem", { name: "Form of address: Vi ↔ Jinx" })).queryByTitle("Google Search Suggestions")).toBeNull();
   });
 
   it("says how many translations accepting each one flags stale, from the worker's dry run, with no Check button", async () => {

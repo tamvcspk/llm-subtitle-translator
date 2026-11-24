@@ -279,6 +279,7 @@ class Researcher:
         unit_ids = {unit_label(u): u.id for u, _ in found.stored}
         pages: dict[str, str] = {}  # the links of this run, each followed once
         proposals: list[Proposal] = []
+        display_id = 0  # made on the first proposal: a search whose result is not used has nothing to show
         for draft in outcome.drafts:
             links = list(dict.fromkeys(url for url in (self._link(s, pages) for s in draft.sources) if url))
             try:
@@ -290,7 +291,9 @@ class Researcher:
                     {**e, "unit_id": unit_ids[str(e.get("episode"))]} if str(e.get("episode")) in unit_ids else e
                     for e in draft.evidence
                 )
-                proposals.append(Proposal("term", draft.payload, evidence=evidence, sources=tuple(links)))
+                if not display_id and outcome.search_suggestions:
+                    display_id = self._store.search_display_add(series_id, lang, outcome.search_suggestions, outcome.queries, now=self._clock())
+                proposals.append(Proposal("term", draft.payload, evidence=evidence, sources=tuple(links), display_id=display_id))
         if proposals:
             stored = self.proposer.suggestions.propose(series_id, lang, proposals, source="research", auto_accept=auto_accept)
             report["added"], report["auto_accepted"] = stored.added, stored.auto_accepted

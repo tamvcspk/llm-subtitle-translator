@@ -52,6 +52,21 @@ class Suggestion(Answer):
     """An accepted suggestion that changed the glossary can be undone."""
     edited: bool
     """Accepted after the admin changed it."""
+    search_display_id: int | None
+    """The Search Suggestions of the web search a research suggestion came from (``GET /api/suggestions/search/{id}``);
+    null for the other sources."""
+
+
+class SearchSuggestions(Answer):
+    """``GET /api/suggestions/search/{id}``: what Google's grounding returned to be shown next to the result of a search."""
+
+    id: int
+    series_id: int
+    lang: str
+    html: str
+    """Google's own HTML, unchanged: shown as it is, in a sandboxed frame, never edited (its terms)."""
+    queries: list[str]
+    created_at: float
 
 
 class SuggestionCounts(Answer):

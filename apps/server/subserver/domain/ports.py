@@ -387,6 +387,20 @@ class Suggestion:
     decided_at: float = 0.0
     created_at: float = 0.0
     identity: str = ""  # what the glossary keys the entry by (``suggestion_keys``); a decision holds for it, however worded
+    display_id: int = 0  # the ``SearchDisplay`` of the search it came from (research), 0 for the rest
+
+
+@dataclass(frozen=True)
+class SearchDisplay:
+    """The "Search Suggestions" a grounded search returned: HTML of the provider's own, kept unchanged and shown next to
+    what the search gave (Google's terms of Grounding with Google Search), and the queries it ran."""
+
+    id: int
+    series_id: int
+    target_lang: str
+    html: str
+    queries: list[str]
+    created_at: float
 
 
 @dataclass(frozen=True)

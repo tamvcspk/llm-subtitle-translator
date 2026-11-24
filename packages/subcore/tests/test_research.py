@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 
 from subcore.providers import BadOutput, Capabilities, FakeProvider, GroundingSource, LLMRequest, LLMResponse
-from subcore.providers.gemini import GeminiProvider, parse_grounding, source_domain
+from subcore.providers.gemini import GeminiProvider, parse_grounding, parse_search_suggestions, source_domain
 from subcore.research import MAX_TERMS, ResearchError, research_terms
 from subcore.suggest import TermItem
 
@@ -18,6 +18,9 @@ ANSWER = (
     "**Land of Souls:** Thiên đường Aureole\n"
     "**Fern:** Fern (giữ nguyên tên riêng)"
 )
+
+# The "Search Suggestions" chip of the live call: Google's own HTML, not to be touched.
+CHIP = '<style>.c{display:flex}</style><div class="c"><a href="https://www.google.com/search?q=frieren">frieren vietnamese</a></div>'
 
 # What `candidates[0].grounding_metadata.model_dump(mode="json", exclude_none=True)` gave, with the long tokens cut short.
 GROUNDING = {
@@ -34,7 +37,7 @@ GROUNDING = {
         {"grounding_chunk_indices": [3, 4], "segment": {"start_index": 80, "text": "**Land of Souls:** Thiên đường Aureole"}},
     ],
     "web_search_queries": ["Land of Souls Frieren Vietnamese translation", "Frieren Vietnamese official title"],
-    "search_entry_point": {"rendered_content": "<style></style>"},
+    "search_entry_point": {"rendered_content": CHIP},
 }
 
 
@@ -79,6 +82,13 @@ class GroundingParseTests(unittest.TestCase):
         self.assertEqual(parse_grounding(None, "text"), ((), (), ""))
         self.assertEqual(parse_grounding({"grounding_chunks": [{"retrieved_context": {}}]}, "text"), ((), (), ""))
 
+    def test_the_search_suggestions_html_is_kept_exactly_as_the_provider_sent_it(self):
+        self.assertEqual(parse_search_suggestions(GROUNDING), CHIP)
+        self.assertEqual(parse_search_suggestions({"search_entry_point": {"rendered_content": "  \n"}}), "")
+        self.assertEqual(parse_search_suggestions({"search_entry_point": {"rendered_content": "x" * (64 * 1024 + 1)}}), "")
+        self.assertEqual(parse_search_suggestions({"grounding_chunks": []}), "")
+        self.assertEqual(parse_search_suggestions(None), "")
+
     def test_the_domain_comes_from_the_title_then_from_a_real_link_never_from_googles_redirect(self):
         self.assertEqual(source_domain(REDIRECT + "x", "Wikipedia.org"), "wikipedia.org")
         self.assertEqual(source_domain(REDIRECT + "x", "www.fandom.com"), "fandom.com")
@@ -101,12 +111,14 @@ class GeminiSearchTests(unittest.TestCase):
         self.assertEqual(len(response.search_queries), 2)
         self.assertIn("[0, 1]", response.cited_text)
         self.assertEqual(response.tokens_in, 1000)  # what the search brought into the prompt is billed as input
+        self.assertEqual(response.search_suggestions, CHIP)
 
     def test_without_web_search_there_is_no_tool_and_no_sources_even_if_metadata_came(self):
         client = Client([chunk("text", GROUNDING)])
         response = GeminiProvider("k", client=client).generate(LLMRequest(system="s", user="u"))
         self.assertIsNone(client.requests[0]["config"].tools)
         self.assertEqual((response.grounding_sources, response.search_queries, response.cited_text), ((), (), ""))
+        self.assertEqual(response.search_suggestions, "")
 
     def test_a_model_without_web_search_in_its_caps_is_asked_without_the_tool(self):
         client = Client([chunk("text")])
@@ -150,6 +162,11 @@ class ResearchTermsTests(unittest.TestCase):
         self.assertEqual([s.url for s in second.sources], [f"{REDIRECT}reddit.com-2"])
         self.assertEqual(first.evidence[0]["text"], "line with Himmel the Hero")  # the cues that show the term come along
         self.assertEqual((outcome.pages, outcome.queries, outcome.unanswered), (3, ("q",), ()))
+
+    def test_the_search_suggestions_of_the_search_call_come_back_with_the_outcome_unchanged(self):
+        env = Env(LLMResponse("the answer", grounding_sources=sources("wikipedia.org"), cited_text="the answer [0]", search_suggestions=CHIP),
+                  {"terms": [{"i": 0, "target": "Dũng sĩ Himmel", "source_refs": [0]}]})
+        self.assertEqual(research_terms(env.search, env.read, items("Himmel"), lang="vi").search_suggestions, CHIP)
 
     def test_the_first_call_searches_without_a_schema_the_second_reads_with_one_and_no_search_both_for_the_research_task(self):
         env = Env(grounded(), {"terms": []})

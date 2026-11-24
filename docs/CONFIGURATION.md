@@ -309,6 +309,9 @@ The Settings page saves these options:
   `auto_request` says. The job outranks the translations still waiting for the series, so a term applied by itself is there
   for the episodes after it, and its failure, its quota or its budget never fails or delays a translation. Off, only the
   **Research terms** button on the series' Glossary tab (priced in the Estimate box) does it.
+  The search is Google's Grounding with Google Search, under its terms: use it only in this application, for yourself; Review
+  shows Google's *Search Suggestions* with the proposals it made and they are kept two years at most; Google keeps the prompts
+  (series title and terms) and the answers for 30 days. Do not give other people access to research results.
 - `research_max_calls_per_series` (default **10**, `0` = no cap): the calls of the `research` task one series may use over its
   whole life (a run is two: the search and the read). It is counted from the call records, not from the job list, so clearing
   finished jobs does not give it back. A run that would pass it stops first (event `research.budget_reached`), and the button

@@ -4,6 +4,7 @@ import { useSuggestionImpact } from "../../api/queries";
 import type { Suggestion } from "../../api/types";
 import { ago } from "../../lib/format";
 import { describe, evidenceLines, impactLine, KIND_LABEL, safeUrl, SOURCE_LABEL, sourceName } from "../../lib/suggestions";
+import { SearchSuggestions } from "./SearchSuggestions";
 
 function Evidence({ suggestion }: { suggestion: Suggestion }) {
   const lines = evidenceLines(suggestion.evidence);
@@ -106,6 +107,7 @@ export function PendingCard({
           </Text>
         ))}
         <Evidence suggestion={suggestion} />
+        <SearchSuggestions id={suggestion.search_display_id} />
         <Text size="sm" c={impact.isError ? "red" : "dimmed"} role="status">
           {line ?? "Counting…"}
         </Text>
@@ -149,6 +151,7 @@ export function DecidedCard({ suggestion, busy, onUndo }: { suggestion: Suggesti
             {detail}
           </Text>
         ))}
+        <SearchSuggestions id={suggestion.search_display_id} />
         <Text size="sm" c="dimmed">
           {suggestion.series} · {suggestion.lang} · {ago(suggestion.decided_at)}
           {!accepted && " · not proposed again"}

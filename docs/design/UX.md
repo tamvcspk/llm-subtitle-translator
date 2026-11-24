@@ -376,7 +376,7 @@ Nguồn: `docs/CONFIGURATION.md`. Khi một tên giá trị trong tài liệu đ
 | Translation | `gst_model` (Default model) | chọn từ danh sách | `gemini-3.1-flash-lite` | |
 | | `gst_fallback_model` (Strong model) | chọn | `gemini-3.5-flash` | xoá để bỏ tầng thứ hai |
 | | `research_model` (Research model) | chọn (chỉ model có grounding) | rỗng = dùng `gst_model` | model của lời gọi tìm kiếm (P16 đã làm); Gemini only; lời gọi đọc kết quả chạy bằng model của Memory |
-| | `research_enabled` (Research terms automatically) | bật/tắt | tắt | P16; bật thì research tự chạy một lần mỗi series sau khi có facts (6.7); chỉ Gemini |
+| | `research_enabled` (Research terms automatically) | bật/tắt | tắt | P16; bật thì research tự chạy một lần mỗi series sau khi có facts (6.7); chỉ Gemini. Điều khoản Grounding with Google Search: kết quả hiện cùng *Search Suggestions* của Google (thẻ Review), chỉ cho admin dùng trong chính ứng dụng này; Google giữ prompt và output 30 ngày |
 | | `research_max_calls_per_series` (Max research calls per series) | số nguyên ≥ 0 | 10 | P16 đã làm: `0` = không giới hạn, như mọi trần khác của Settings; công tắc *No cap* riêng của bản thiết kế chưa làm (một ô số, một cách nói) |
 | | `judge_enabled` (LLM judge) | bật/tắt | tắt | mỗi lần dùng tốn lời gọi; chỉ là lời khuyên (P15) |
 | | `judge_model` (Judge model) | chọn | rỗng = dùng `gst_model` | model mạnh hơn model dịch thì chấm tốt hơn |

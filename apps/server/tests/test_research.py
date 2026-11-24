@@ -5,6 +5,7 @@ first two, so two terms are worth looking up; "Lone Term" shows once and is not.
 import json
 import re
 import tempfile
+import time
 import unittest
 
 from subcore.providers import Capabilities, GroundingSource, LLMResponse, QuotaExhausted, ResilientProvider
@@ -24,6 +25,7 @@ from subserver.services.suggestions import independent_sources
 from .test_proposals import Env as ProposalEnv
 
 REDIRECT = "https://redirect.test/r/"
+CHIP = '<style>.c{display:flex}</style><div class="c"><a href="https://www.google.com/search?q=fern">fern vietnamese</a></div>'
 
 
 class Resolver:
@@ -67,6 +69,7 @@ class Env(ProposalEnv):
         self.fake.caps = Capabilities(web_search=True)
         self.sites, self.refs = sites, list(refs)
         self.search_error = None
+        self.chip = CHIP  # the "Search Suggestions" HTML the fake search returns
         self.requests = []  # the research calls the model was asked
         self.models_used = []
         self.telemetry = Recorder()
@@ -92,7 +95,7 @@ class Env(ProposalEnv):
             sources = tuple(GroundingSource(f"{REDIRECT}{site}-{n}", site, site) for n, site in enumerate(self.sites))
             return LLMResponse(
                 "the web says so", tokens_in=50, tokens_out=20, grounding_sources=sources,
-                search_queries=("how is it written",), cited_text="the web says so [0]",
+                search_queries=("how is it written",), cited_text="the web says so [0]", search_suggestions=self.chip,
             )
         listed = req.user.split("ITEMS:\n")[1].split("\n\nSOURCES")[0].splitlines()
         terms = []
@@ -235,6 +238,48 @@ class Criterion23cResultsInSuggestionsTests(unittest.TestCase):
         for item in env.proposals():
             env.suggestions.reject(item["id"])
         self.assertEqual(env.researcher.candidates(env.series_id, "vi"), [])
+
+
+class SearchSuggestionsTests(unittest.TestCase):
+    """Google's terms for Grounding with Google Search: its "Search Suggestions" are shown with what the search gave, as sent,
+    and kept no longer than two years."""
+
+    def get(self, env, display_id):
+        return suggestion_api.handle(env.suggestions, "GET", f"/api/suggestions/search/{display_id}", {}, None)
+
+    def test_every_proposal_of_a_run_points_at_the_one_chip_of_its_search_and_the_route_returns_it_unchanged(self):
+        env = ready(self)
+        env.research()
+        ids = {i["search_display_id"] for i in env.proposals()}
+        self.assertEqual(len(ids), 1)
+        (display_id,) = ids
+        status, answer = self.get(env, display_id)
+        self.assertEqual((status, answer["html"], answer["queries"], answer["lang"]), (200, CHIP, ["how is it written"], "vi"))
+        self.assertEqual(self.get(env, display_id + 100)[0], 404)
+
+    def test_a_search_that_returned_no_chip_leaves_the_proposals_without_one(self):
+        env = ready(self)
+        env.chip = ""
+        env.research()
+        self.assertEqual({i["search_display_id"] for i in env.proposals()}, {None})
+
+    def test_a_suggestion_of_another_source_has_none(self):
+        env = ready(self)
+        env.research()
+        self.assertEqual({i["search_display_id"] for i in env.suggestions.listing()["items"] if i["source"] != "research"}, set())
+
+    def test_what_is_older_than_two_years_goes_when_the_next_is_written_and_the_suggestion_loses_the_link(self):
+        env = ready(self)
+        env.research()
+        (first,) = {i["search_display_id"] for i in env.proposals()}
+        year = 365 * 86400
+        later = env.store.search_display_add(env.series_id, "vi", "<b>new</b>", [], now=time.time() + 3 * year)
+        self.assertIsNone(env.store.search_display(first))
+        self.assertEqual(env.store.search_display(later).html, "<b>new</b>")
+        self.assertEqual({i["search_display_id"] for i in env.proposals()}, {None})
+        kept = env.store.search_display_add(env.series_id, "vi", "<b>again</b>", [], now=time.time() + 3 * year + 86400)
+        self.assertIsNotNone(env.store.search_display(later))  # a day old: kept
+        self.assertIsNotNone(env.store.search_display(kept))
 
 
 class Criterion23dAutoAcceptTests(unittest.TestCase):

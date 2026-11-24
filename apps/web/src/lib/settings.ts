@@ -25,7 +25,7 @@ export const TRANSLATION_FIELDS: Field[] = [
     key: "research_enabled",
     label: "Research terms by itself",
     kind: "switch",
-    hint: "Off by default. After a job reads new facts, look up on the web the names two episodes share. Results wait in Review (two independent sites apply a term by themselves when Auto-accept terms is on). The Research terms button always works.",
+    hint: "Off by default. After a job reads new facts, look up on the web the names two episodes share. Results wait in Review (two independent sites apply a term by themselves when Auto-accept terms is on). The Research terms button always works. Google's Search terms apply: for your own use only; Google keeps the prompts 30 days.",
   },
   {
     key: "research_max_calls_per_series",

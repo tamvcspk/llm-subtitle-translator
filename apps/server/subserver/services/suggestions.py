@@ -60,6 +60,7 @@ class Proposal:
     payload: dict[str, Any]
     evidence: tuple[Any, ...] = ()
     sources: tuple[str, ...] = ()
+    display_id: int = 0  # the Search Suggestions of the search it came from (``Store.search_display_add``), research only
 
 
 @dataclass(frozen=True)
@@ -272,7 +273,7 @@ class SuggestionService:
                     continue
                 stored = self.store.suggestion_add(
                     series_id, lang, proposal.kind, source, digest, payload, list(proposal.evidence), list(proposal.sources),
-                    identity=key,
+                    identity=key, display_id=proposal.display_id,
                 )
             if stored is None:  # raced with another proposal of the same content
                 counts["pending_already"] += 1
@@ -340,7 +341,15 @@ class SuggestionService:
             "status": s.status, "auto_accepted": s.auto_accepted, "decided_at": s.decided_at, "created_at": s.created_at,
             "undoable": s.status == SUGGESTION_ACCEPTED and bool(s.applied) and not s.applied.get("noop"),
             "edited": "edited_from" in s.applied,
+            "search_display_id": s.display_id or None,
         }
+
+    def search_display(self, display_id: int) -> dict[str, Any]:
+        """The Search Suggestions of a research search (``GET /api/suggestions/search/{id}``): HTML of Google's, unchanged."""
+        found = self.store.search_display(int(display_id))
+        if found is None:
+            raise LookupError(f"no search suggestions {display_id}")
+        return {"id": found.id, "series_id": found.series_id, "lang": found.target_lang, "html": found.html, "queries": found.queries, "created_at": found.created_at}
 
     def _get(self, suggestion_id: int) -> Suggestion:
         found = self.store.suggestion(int(suggestion_id))

@@ -393,7 +393,11 @@ provider's search tool on, no schema, `research_model`) and a call that reads it
 writes is never a source, and an answer with no page behind it proposes nothing. Gemini's pages come as redirect links of
 Google's whose title is the site's domain, so `Researcher` follows each link once (`RedirectResolver`, behind the
 `LinkResolver` port) and keeps the page's address, or the site's name as an address when that fails; `source_host` then counts
-independent sites correctly. `Researcher` (`research.py`) is the one place that gathers the candidates (the terms two or more
+independent sites correctly. Google's terms for Grounding with Google Search ask that its "Search Suggestions" are shown with
+what the search gave, unchanged: `LLMResponse.search_suggestions` keeps `search_entry_point.rendered_content` as sent, the
+`search_displays` table (migration 17) keeps one row per search call (HTML and queries; rows older than two years are dropped
+when a new one is written), the research suggestions of that call point at it (`suggestions.display_id`), and
+`GET /api/suggestions/search/{id}` returns it for the Review card to put in a sandboxed frame. `Researcher` (`research.py`) is the one place that gathers the candidates (the terms two or more
 episodes share, minus the glossary, the inbox in any status and what the web had no form for in the last `SKIP_DAYS`; the skip
 identities are its own, `research_term`), keeps the budget, and hands `SuggestionService.propose(source="research")` the
 result; there is no other way into the glossary. It is a job of its own (`research`, key per series and language): the

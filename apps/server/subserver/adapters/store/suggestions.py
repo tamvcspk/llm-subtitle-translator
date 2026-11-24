@@ -7,7 +7,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-from ...domain.ports import Suggestion, SuggestionCount, SUGGESTION_ACCEPTED, SUGGESTION_PENDING, SUGGESTION_REJECTED
+from ...domain.ports import SearchDisplay, Suggestion, SuggestionCount, SUGGESTION_ACCEPTED, SUGGESTION_PENDING, SUGGESTION_REJECTED
 from .base import Repo
 
 
@@ -18,7 +18,11 @@ def _suggestion_from_row(row: sqlite3.Row) -> Suggestion:
         evidence=json.loads(row["evidence_json"] or "[]"), sources=json.loads(row["sources_json"] or "[]"),
         auto_accepted=bool(row["auto_accepted"]), status=row["status"], applied=json.loads(row["applied_json"] or "{}"),
         decided_at=row["decided_at"], created_at=row["created_at"], identity=row["identity"],
+        display_id=int(row["display_id"] or 0),
     )
+
+
+DISPLAY_KEEP_SECONDS = 2 * 365 * 86400  # the longest Google lets Search Suggestions and grounded results be stored
 
 
 class SuggestionRepo(Repo):
@@ -27,7 +31,7 @@ class SuggestionRepo(Repo):
     # -- suggestions (P13, FR-4.4, FR-11.1) ---------------------------------------------------------------
     def suggestion_add(
         self, series_id: int, target_lang: str, kind: str, source: str, fingerprint: str, payload: dict[str, Any],
-        evidence: list[Any], sources: list[str], *, identity: str = "",
+        evidence: list[Any], sources: list[str], *, identity: str = "", display_id: int = 0,
     ) -> Suggestion | None:
         """Store a pending suggestion; ``None`` when the series already has one with that fingerprint, or about the same
         thing (``identity``), in that language (pending, accepted or rejected: a rejected one is exactly what must not
@@ -40,17 +44,45 @@ class SuggestionRepo(Repo):
                 return None
             cursor = db.execute(
                 "INSERT INTO suggestions (series_id, target_lang, kind, source, fingerprint, payload_json, evidence_json,"
-                " sources_json, created_at, identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " sources_json, created_at, identity, display_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT (series_id, target_lang, fingerprint) DO NOTHING",
                 (
                     series_id, target_lang, kind, source, fingerprint, json.dumps(payload, ensure_ascii=False, sort_keys=True),
                     json.dumps(evidence, ensure_ascii=False), json.dumps(sources, ensure_ascii=False), time.time(), identity,
+                    display_id or None,
                 ),
             )
             if cursor.rowcount == 0:
                 return None
             row = db.execute("SELECT * FROM suggestions WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return _suggestion_from_row(row)
+
+    def search_display_add(
+        self, series_id: int, target_lang: str, html: str, queries: Iterable[str], *, now: float | None = None,
+    ) -> int:
+        """Keep the Search Suggestions of one search call and return its id. Rows older than two years are dropped first
+        (``DISPLAY_KEEP_SECONDS``), and the suggestions that pointed at them lose the link."""
+        at = time.time() if now is None else now
+        with self.transaction() as db:
+            old = [r["id"] for r in db.execute("SELECT id FROM search_displays WHERE created_at < ?", (at - DISPLAY_KEEP_SECONDS,))]
+            for display_id in old:
+                db.execute("UPDATE suggestions SET display_id = NULL WHERE display_id = ?", (display_id,))
+                db.execute("DELETE FROM search_displays WHERE id = ?", (display_id,))
+            cursor = db.execute(
+                "INSERT INTO search_displays (series_id, target_lang, html, queries_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (series_id, target_lang, html, json.dumps(list(queries), ensure_ascii=False), at),
+            )
+            return int(cursor.lastrowid)
+
+    def search_display(self, display_id: int) -> SearchDisplay | None:
+        rows = self.query("SELECT * FROM search_displays WHERE id = ?", (display_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        return SearchDisplay(
+            id=row["id"], series_id=row["series_id"], target_lang=row["target_lang"], html=row["html"],
+            queries=json.loads(row["queries_json"] or "[]"), created_at=row["created_at"],
+        )
 
     def suggestion(self, suggestion_id: int) -> Suggestion | None:
         rows = self.query("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,))

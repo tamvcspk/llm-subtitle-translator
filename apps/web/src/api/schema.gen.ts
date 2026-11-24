@@ -1157,6 +1157,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/suggestions/search/{p1}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["endpoint_api_suggestions_search__p1__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/suggestions/bulk": {
         parameters: {
             query?: never;
@@ -3077,6 +3093,16 @@ export interface components {
             too_long: number;
             too_long_rate: number | null;
         };
+        /** @description ``GET /api/suggestions/search/{id}``: what Google's grounding returned to be shown next to the result of a search. */
+        SearchSuggestions: {
+            id: number;
+            series_id: number;
+            lang: string;
+            /** @description Google's own HTML, unchanged: shown as it is, in a sandboxed frame, never edited (its terms). */
+            html: string;
+            queries: string[];
+            created_at: number;
+        };
         /**
          * SelectionBody
          * @description What to request or ignore in the Library: exactly one of ``items``, ``series`` or ``all`` (the use case says so).
@@ -3290,6 +3316,11 @@ export interface components {
             undoable: boolean;
             /** @description Accepted after the admin changed it. */
             edited: boolean;
+            /**
+             * @description The Search Suggestions of the web search a research suggestion came from (``GET /api/suggestions/search/{id}``);
+             *     null for the other sources.
+             */
+            search_display_id: number | null;
         };
         SuggestionCounts: {
             pending: number;
@@ -6234,6 +6265,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SuggestionSummary"];
+                };
+            };
+            /** @description a refusal: the status says what went wrong, `error` says it in words */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorAnswer"];
+                };
+            };
+        };
+    };
+    endpoint_api_suggestions_search__p1__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                p1: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchSuggestions"];
                 };
             };
             /** @description a refusal: the status says what went wrong, `error` says it in words */

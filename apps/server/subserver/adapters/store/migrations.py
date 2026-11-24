@@ -438,4 +438,19 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE llm_calls ADD COLUMN series_id INTEGER;
     CREATE INDEX llm_calls_series ON llm_calls (series_id, task);
     """,
+    # Migration 17 (P16, Google's terms for Grounding with Google Search): the "Search Suggestions" HTML a search call
+    # returned, kept as Google sent it and shown next to what the search gave. One row per search call, shared by the
+    # suggestions made from it (``suggestions.display_id``, NULL for every other source). Rows older than two years are
+    # dropped when a new one is written (the longest storage the terms allow).
+    """
+    CREATE TABLE search_displays (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,  -- an id is never reused: the page caches a chip by it
+        series_id INTEGER NOT NULL REFERENCES series(id),
+        target_lang TEXT NOT NULL,
+        html TEXT NOT NULL,
+        queries_json TEXT NOT NULL DEFAULT '[]',
+        created_at REAL NOT NULL
+    );
+    ALTER TABLE suggestions ADD COLUMN display_id INTEGER;
+    """,
 )

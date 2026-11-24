@@ -19,8 +19,15 @@
   so the worker follows it one hop (`RedirectResolver`, only Google's redirect host) and keeps the page's own address, or the
   site's name when that fails; a link the model writes is never a source. New: `POST /api/suggestions/research`, job kind
   `research`, `subcore.research`, `LLMRequest.web_search` and `LLMResponse.grounding_sources`/`search_queries`/`cited_text`,
-  `QueueJob.stored_series_id` and `report`. Not done: showing Google's *Search Suggestions* (its terms for displaying grounded
-  results have not been read yet) and checking on real corrections that research improves proper names.
+  `QueueJob.stored_series_id` and `report`. Not done: checking on real corrections that research improves proper names.
+- **Google's Search Suggestions are shown with research results (P16).** Google's terms for Grounding with Google Search want
+  its "Search Suggestions" shown with what the search gave, unchanged. The worker now keeps the HTML of each search call as it
+  came (`LLMResponse.search_suggestions`; table `search_displays`, migration 17, with the queries; rows older than two years,
+  the longest the terms allow, are dropped when a new one is written), and a research suggestion in Review, pending or
+  decided, shows it in a sandboxed frame (no script, links open in a new tab). New: `GET /api/suggestions/search/{id}`,
+  `search_display_id` on a suggestion. Settings → Translation notes the terms (own application, shown to the admin only;
+  Google keeps prompts and output 30 days). Open, and written down for the operator: whether following Google's redirect
+  link to the page's address (`RedirectResolver`) is within the terms, and whether measuring research on real corrections is.
 - **The Translate estimate counts the fact reads (P15g, FR-15.5.1).** With story memory on, a job reads the facts of every
   earlier episode that has none yet, and of itself, before it translates; the Estimate box now says so: an **Extract facts**
   row (`N calls · <memory model>`) under the translation calls, each episode counted once for the whole request (episodes 2

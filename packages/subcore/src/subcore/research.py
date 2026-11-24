@@ -62,6 +62,7 @@ class ResearchOutcome:
     pages: int  # distinct pages the search used
     queries: tuple[str, ...]  # what the provider searched for
     calls: int  # model calls made
+    search_suggestions: str = ""  # the provider's "Search Suggestions" HTML of the search call, unchanged (Google's terms)
 
 
 _SEARCH_SYSTEM = """\
@@ -201,4 +202,4 @@ def research_terms(
         drafts.append(ResearchDraft(payload, item.evidence, tuple(pages)))
     drafted = {_fold(d.payload["source"]) for d in drafts}
     unanswered = tuple(item for item in items if _fold(item.source) not in drafted)  # also the ones kept as they are
-    return ResearchOutcome(tuple(drafts), unanswered, len(sources), queries, 2)
+    return ResearchOutcome(tuple(drafts), unanswered, len(sources), queries, 2, found.search_suggestions)

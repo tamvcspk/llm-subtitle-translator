@@ -140,6 +140,9 @@ class LLMResponse:
     grounding_sources: tuple[GroundingSource, ...] = ()
     search_queries: tuple[str, ...] = ()
     cited_text: str = ""
+    # The provider's own "Search Suggestions" HTML (Gemini: ``search_entry_point.rendered_content``). Google's terms for
+    # Grounding with Google Search want it shown, unchanged, next to what the search gave; the caller keeps it as is.
+    search_suggestions: str = ""
 
 
 @runtime_checkable

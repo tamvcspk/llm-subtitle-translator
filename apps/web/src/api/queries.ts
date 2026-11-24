@@ -1050,6 +1050,17 @@ export function useSuggestions(status: SuggestionStatus | "decided", enabled = t
 }
 
 /** What accepting this suggestion (as edited, when `payload` is given) would flag stale: a dry run, nothing is written (FR-11.1.3). */
+/** Google's Search Suggestions of a research search: unchanged HTML, fetched only for the card that shows it. */
+export function useSearchSuggestions(id: number | null | undefined) {
+  return useQuery({
+    queryKey: ["suggestions", "search", id] as const,
+    queryFn: ({ signal }) => api<AnswerOf<"/api/suggestions/search/{p1}", "get">>(`/api/suggestions/search/${id}`, { signal }),
+    enabled: typeof id === "number",
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
 export function useSuggestionImpact(id: number, payload: SuggestionPayload | null, enabled: boolean) {
   return useQuery({
     queryKey: ["suggestion-impact", id, payload] as const,

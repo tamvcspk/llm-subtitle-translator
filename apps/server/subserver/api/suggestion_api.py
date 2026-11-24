@@ -48,6 +48,8 @@ def _list(s: SuggestionService, m: re.Match[str], q: Query, b: dict[str, Any]) -
 ROUTES: list[tuple[str, str, Handler]] = [
     ("GET", r"/api/suggestions", _list),
     ("GET", r"/api/suggestions/summary", lambda s, m, q, b: s.summary()),
+    # Google's "Search Suggestions" of a research search, unchanged, for the card to show next to what the search gave.
+    ("GET", r"/api/suggestions/search/(\d+)", lambda s, m, q, b: s.search_display(int(m[1]))),
     # One series at a time, on purpose: the answer to "accept all" is never "accept every series".
     ("POST", r"/api/suggestions/bulk", lambda s, m, q, b: s.bulk(
         _series_id(b), lang=str(b.get("lang") or "") or None, expect=b.get("expect"), dry_run=bool(b.get("dry_run")),
@@ -92,6 +94,7 @@ BODIES = {
 ANSWERS = {
     ("GET", r"/api/suggestions"): ans.SuggestionList,
     ("GET", r"/api/suggestions/summary"): ans.SuggestionSummary,
+    ("GET", r"/api/suggestions/search/(\d+)"): ans.SearchSuggestions,
     ("POST", r"/api/suggestions/bulk"): ans.BulkAnswer,
     ("POST", r"/api/suggestions/generate"): Union[ans.GenerateQueued, ans.GenerateEstimate],
     ("POST", r"/api/suggestions/research"): Union[ans.GenerateQueued, ans.ResearchEstimate],

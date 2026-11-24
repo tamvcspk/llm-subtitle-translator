@@ -3980,6 +3980,43 @@
         }
       }
     },
+    "/api/suggestions/search/{p1}": {
+      "get": {
+        "operationId": "endpoint_api_suggestions_search__p1__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchSuggestions"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "a refusal: the status says what went wrong, `error` says it in words",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "p1",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
     "/api/suggestions/bulk": {
       "post": {
         "operationId": "endpoint_api_suggestions_bulk_post",
@@ -11124,6 +11161,43 @@
           "too_long_rate"
         ]
       },
+      "SearchSuggestions": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "series_id": {
+            "type": "integer"
+          },
+          "lang": {
+            "type": "string"
+          },
+          "html": {
+            "type": "string",
+            "description": "Google's own HTML, unchanged: shown as it is, in a sandboxed frame, never edited (its terms)."
+          },
+          "queries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "series_id",
+          "lang",
+          "html",
+          "queries",
+          "created_at"
+        ],
+        "description": "``GET /api/suggestions/search/{id}``: what Google's grounding returned to be shown next to the result of a search."
+      },
       "SelectionBody": {
         "properties": {
           "items": {
@@ -11938,6 +12012,17 @@
           "edited": {
             "type": "boolean",
             "description": "Accepted after the admin changed it."
+          },
+          "search_display_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Search Suggestions of the web search a research suggestion came from (``GET /api/suggestions/search/{id}``);\nnull for the other sources."
           }
         },
         "additionalProperties": false,
@@ -11957,7 +12042,8 @@
           "decided_at",
           "created_at",
           "undoable",
-          "edited"
+          "edited",
+          "search_display_id"
         ]
       },
       "SuggestionCounts": {

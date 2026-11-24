@@ -16,7 +16,7 @@ from subserver.api.answers.console import QueueCounts, QueueJob
 from subserver.api.answers.insights import Insights
 from subserver.api.answers.library import AdoptAnswer, CorrectionAdded, UnitContextAnswer
 from subserver.api.answers.style import PresetImpact, StylePreview
-from subserver.api.answers.suggestions import Suggestion
+from subserver.api.answers.suggestions import SearchSuggestions, Suggestion
 from tests.contract_kit import APP, COVERED, ContractCase as Contract, check_answer
 
 # Routes that answer something other than JSON, or that this seeded worker cannot reach with a 200. Each says why.
@@ -29,6 +29,7 @@ NOT_DRIVEN = {
     ("POST", "/api/auth/password"): "needs an account: with authentication off it is a 409 (test_console_login covers it)",
     ("GET", "/api/jobs/{job_id:path}/spec"): "needs a job that has translated: the answer is the bundle, any JSON object",
     ("POST", "/api/queue/request-prerequisites"): "needs a job that waits for earlier episodes (test_queue_requests covers the logic)",
+    ("GET", "/api/suggestions/search/{p1:int}"): "needs a research search with Search Suggestions: checked on its model below, and in test_research",
     ("POST", "/api/series/{p1:int}/style/preview"): "calls the model: checked on the use case with a fake provider below",
     ("POST", "/api/movies/{p1:int}/style/preview"): "calls the model: checked on the use case with a fake provider below",
 }
@@ -393,6 +394,7 @@ class AnswersOfWhatTheSeededWorkerCannotMake(unittest.TestCase):
         base = {
             "id": 1, "series_id": 1, "series": "S", "lang": "vi", "source": "facts", "sources": [], "status": "pending",
             "auto_accepted": False, "decided_at": 0, "created_at": 1.5, "undoable": False, "edited": False,
+            "search_display_id": None,
         }
         cue = {"episode": "S01E02", "cue": 12, "timecode": "00:01:02", "text": "Hey", "unit_id": 3, "note": "they switch to casual"}
         for kind, payload in (
@@ -403,7 +405,9 @@ class AnswersOfWhatTheSeededWorkerCannotMake(unittest.TestCase):
             with self.subTest(kind=kind):
                 check_answer(Suggestion, {**base, "kind": kind, "payload": payload, "evidence": [cue, "a line to check"]})
         check_answer(Suggestion, {**base, "kind": "term", "source": "research", "sources": ["https://example.org/a"],
-                                  "payload": {"source": "a", "target": "b"}, "evidence": [{"url": "https://example.org/a"}]})
+                                  "payload": {"source": "a", "target": "b"}, "evidence": [{"url": "https://example.org/a"}],
+                                  "search_display_id": 4})
+        check_answer(SearchSuggestions, {"id": 4, "series_id": 1, "lang": "vi", "html": "<div></div>", "queries": ["q"], "created_at": 1.5})
 
     def test_the_other_shapes_a_model_may_answer_with(self):
         check_answer(CorrectionAdded, {"ok": True, "scope": "forward", "ids": [], "impact": {"stale_now": 0, "stale_after": 1, "would_stale": 1}, "from": "S01E02"})

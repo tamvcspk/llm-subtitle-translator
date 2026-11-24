@@ -26,7 +26,7 @@ from .base import (
 )
 
 __all__ = [
-    "GeminiProvider", "map_api_error", "parse_grounding", "source_domain", "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S",
+    "GeminiProvider", "map_api_error", "parse_grounding", "parse_search_suggestions", "source_domain", "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S",
     "BLOCKED_FINISH_REASONS",
 ]
 
@@ -188,6 +188,17 @@ def parse_grounding(metadata: Any, text: str) -> tuple[tuple[GroundingSource, ..
     return tuple(sources), queries, cited
 
 
+MAX_SEARCH_SUGGESTIONS_HTML = 64 * 1024  # the chip is a few KB; anything bigger is not what Google sends
+
+
+def parse_search_suggestions(metadata: Any) -> str:
+    """The HTML of the "Search Suggestions" of a grounded response (``search_entry_point.rendered_content``), exactly as
+    the provider sent it, or ``""``. It is never edited: Google's terms forbid changing it."""
+    entry = _as_dict(metadata).get("search_entry_point")
+    html = entry.get("rendered_content") if isinstance(entry, dict) else None
+    return html if isinstance(html, str) and html.strip() and len(html) <= MAX_SEARCH_SUGGESTIONS_HTML else ""
+
+
 def _caps_for(model: str) -> Capabilities:
     # Gemini 2.x/3 models share these limits; refine per model as needed.
     return Capabilities(max_input_tokens=1_048_576, max_output_tokens=65_536, structured_output=True, web_search=True)
@@ -303,9 +314,10 @@ class GeminiProvider:
         # A MAX_TOKENS cut-off is returned as-is: the cues that made it are kept and the
         # rest are repaired/split by the translator instead of re-buying the whole call.
         sources, queries, cited = parse_grounding(grounding, text) if req.web_search and grounding is not None else ((), (), "")
+        suggestions = parse_search_suggestions(grounding) if req.web_search and grounding is not None else ""
         return LLMResponse(
             text=text, tokens_in=tokens_in, tokens_out=tokens_out, model=self.model, finish_reason=finish_name,
-            grounding_sources=sources, search_queries=queries, cited_text=cited,
+            grounding_sources=sources, search_queries=queries, cited_text=cited, search_suggestions=suggestions,
         )
 
     def count_tokens(self, req: LLMRequest) -> int:
