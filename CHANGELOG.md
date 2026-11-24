@@ -1,5 +1,8 @@
 # Unreleased
 
+## 1.0.0-rc.2 (2026-11-25)
+Second release candidate: Phase 18 (P18a–P18f) UX round 1–2 fixes, disk I/O reduction, pair-level address proposals with hysteresis, and P18 code review fixes (R18-1..R18-10).
+
 - **P18 (P18a–P18f): UX round 1–2 fixes, pair-level address proposals and disk I/O reduction.**
   - *Disk I/O & polling (P18a):* `Library.impact_units` skips `modified_outside` file hashing; read-only status views (`unit_summary`) use stat-trusted checks (`trusting_stat=True`), while overwrite paths in `TranslationVersions` still hash for real. `StoryMemory` caches source subtitle SHA-256 by `(mtime_ns, size)` and uses a stat-only fast path during `gap_wait` instead of re-hashing earlier episodes every 5 minutes. `JobRequests.plan` caches `iterdir` per folder per pass. Review cards no longer fire per-card `dry_run` requests on mount (impact is fetched only when expanding *"Affected translations"* or opening Edit), deciding a card never invalidates other cards' impact queries, `refetchOnWindowFocus` is off for heavy queries, and `useSeriesUnits` / `useSeriesPage` poll slowly when no job is running on the series.
   - *Review parallel accept & single-pass bulk (P18b):* `Review` tracks busy ids in a `Set` and uses `mutateAsync` with independent per-item notices/errors so rapid clicks never cancel or drop each other. `SuggestionService.bulk` folds all valid proposals of a language into the glossary once, writes once, and counts stale impact once while keeping per-item undo records. Bulk and Edit sheets show explicit progress messages while counting affected translations.
