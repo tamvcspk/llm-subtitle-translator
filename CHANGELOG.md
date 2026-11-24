@@ -1,4 +1,15 @@
 # Unreleased
+- **P17: the large files are split, with no change in behaviour.** `apps/web/src/api/queries.ts` (1226 lines) is now one file per
+  area under `api/queries/` (`core`, `catalog`, `jobs`, `units`, `corrections`, `style`, `glossary`, `settings`, `memory`,
+  `suggestions`, `research`, `insights`, `keys`, and the internal `refresh`) and `queries.ts` re-exports them, so no page
+  import changed; a test keeps the list of names. The comment of `useSuggestionImpact` that sat above `useSearchSuggestions`
+  is back on its own hook. `services/units.py` (1160 lines) keeps `UnitService` with the lookups every action shares and
+  inherits five mixins (`unit_corrections`, `unit_requests`, `unit_versions`, `unit_context`, `unit_glossary`);
+  `parse_time_ms` and `format_ms` moved to `domain/rules.py`. `jobs/queue.py` (993 lines) keeps the lifecycle of `JobQueue` and
+  inherits `EnqueueMixin` (`enqueue.py`), `ReportMixin` (`queue_report.py`) and `EndingsMixin` (`endings.py`); the pure
+  checks are in `skip_rules.py` and still reachable from `jobs.queue`. `domain/ports.py` re-exports its record types from
+  `records.py` and `library_records.py`. `pages/Insights.tsx` is a page of 109 lines over the blocks in `pages/insights/`.
+  All tests, `openapi.json` and the generated types are unchanged.
 - **P16: Research grounding (FR-7).** The worker can look up on the web how the names and terms of a series are written in the
   target language, and put what the web backs in Review. A **Research terms (N)** card sits at the top of a series' Glossary
   tab: `N` is the number of terms two or more episodes share that the glossary and Review do not have yet; the button opens

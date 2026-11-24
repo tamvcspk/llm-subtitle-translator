@@ -98,7 +98,10 @@ application's own database is not behind a port).
 ### `domain/`
 
 - `ports.py`: the ports (`MediaLibrary`, `Metadata`, `ProviderFactory`, the `Telemetry` sink) and the named types the
-  `Store` returns. `tests/test_core_boundary.py` keeps a `dict` or `sqlite3.Row` from leaking out of it;
+  `Store` returns, which it re-exports from `records.py` (account, keys, settings, log and metric rows, translation
+  versions, story facts) and `library_records.py` (series, units, outputs, corrections, glossaries, suggestions, styles,
+  cue pairs), so every caller imports them from `domain.ports`. `tests/test_core_boundary.py` keeps a `dict` or
+  `sqlite3.Row` from leaking out of the ports;
 - `config.py`: the settings schema (defaults, validation, `SYSTEM_SETTING_KEYS` the console cannot write, the key
   fields), language normalisation, Bazarr language lists, and `model_for_task`, the one place that maps a task to a
   model (`translate` = `gst_model`; `extract` = `memory_model`; `summarize`, `research`, `judge`; each falls back to
@@ -118,7 +121,12 @@ application's own database is not behind a port).
 ### `services/`
 
 - `units.py` (`UnitService`): the Library, corrections, retranslation, versions, diff, revert, compare, judge and
-  glossary pages' use cases; `library.py` knows units and statuses (and `Library.impact_units`, the one place that counts
+  glossary pages' use cases. `UnitService` holds the lookups every action shares (`unit`, `output`, the source and
+  target cues, the Bazarr rescan) and the cue page; the rest is five mixins it inherits, one file each:
+  `unit_corrections.py` (cue edits, term, address and note corrections), `unit_requests.py` (retranslate, variant, retry
+  and the estimate of a retry, the earlier episodes a waiting job needs), `unit_versions.py` (compare, choose, adopt,
+  diff, revert, remove), `unit_context.py` (story memory of an episode and a series, the facts) and `unit_glossary.py`
+  (the glossary of a series or a movie). `parse_time_ms` and `format_ms` are in `domain/rules.py`. `library.py` knows units and statuses (and `Library.impact_units`, the one place that counts
   how many translations a change to the rules would make stale); `versions.py` (`TranslationVersions`) publishes with
   version history, backs up before overwriting and reverts;
 - `console.py` (`ConsoleActions`): the queue use cases of the HTTP layer (retry, cancel, delete, stop, the snapshot, a
@@ -146,7 +154,11 @@ application's own database is not behind a port).
 - `jobs.py` (`JobStore`): the `jobs` table; every state change of a job is a method here (claim, wait, finish, stop,
   retry, delete of a finished row);
 - `queue.py` (`JobQueue`): the lifecycle: recovery, settling, claiming, deferred retries, quota pauses and status
-  persistence; it decides, `JobStore` stores;
+  persistence; it decides, `JobStore` stores. `JobQueue` holds that lifecycle and inherits three mixins, one file each:
+  `enqueue.py` (the `enqueue_*` methods, one per job kind), `queue_report.py` (the snapshot, the layer and health reports,
+  the daily quota pause) and `endings.py` (what each way a run ends means: done, quota spent, provider down, key
+  refused, unknown model, call budget, an earlier episode not ready, a hard job). `skip_rules.py` has the pure checks of
+  what may be translated at all (`GST_ONLY_PATHS`, source gone, target present); `queue.py` re-exports them;
 - `provider_guard.py`: what every job that calls the model shares: the time limit, the call budget (`JobProviders`), and
   `mapped_errors`, the one place a provider's typed failure becomes the queue's class;
 - `read_jobs.py`: the handlers of jobs that read and do not translate (`ExtractJob`, `SuggestJob`, `ResearchJob`, `JudgeJob`);
@@ -505,7 +517,7 @@ controls), portrait first (about 820 px; landscape >= 1024 px only widens tables
 Dockerfile builds it in a pinned Node stage and copies only `dist/` into the final image as `/app/static`; the final image
 never holds Node, `node_modules` or the sources. The sign-in page `apps/web/public/login.html` is the one file outside the
 bundle (self-contained, `GET /login`, the only static file served without a session). The code is organised as `api/`
-(typed calls and queries; `schema.gen.ts` generated from `docs/openapi.json`, `types.ts` names the generated types the
+(typed calls and queries, the hooks in `queries/<area>.ts` and re-exported by `queries.ts` so pages import from `api/queries`; `queries/refresh.ts` holds what each kind of change makes out of date and is not re-exported; `schema.gen.ts` generated from `docs/openapi.json`, `types.ts` names the generated types the
 screens use, `route.ts` builds a URL from a route of that document so a wrong path parameter or query name does not compile), `lib/` (pure rules, tested without a DOM; `settings.ts`, `draft.ts`), `components/` (the price box,
 confirmation sheets, the style form) and `pages/`. A page never builds HTML from text: React escapes it, and paths and
 provider errors are untrusted. Screens, data and layout: `docs/design/UX.md`.
