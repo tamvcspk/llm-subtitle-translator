@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -190,3 +191,22 @@ def correction_position(season: int | None, episode: int | None, cue: srt.Cue | 
     if cue is None:
         return g.Position(season, episode, 0, False)
     return g.Position(season, episode, cue.start_ms, True)
+
+
+_TIME = re.compile(r"^\s*(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?\s*$")
+
+
+def parse_time_ms(text: str) -> int:
+    """``00:23:10``, ``23:10`` or ``1:02:03.5`` as read off a player, in milliseconds."""
+    match = _TIME.match(str(text))
+    if not match:
+        raise ValueError(f"expected a time like 00:23:10, got {text!r}")
+    hours, minutes, seconds, frac = match.groups()
+    return ((int(hours or 0) * 60 + int(minutes)) * 60 + int(seconds)) * 1000 + int((frac or "0").ljust(3, "0"))
+
+
+def format_ms(ms: int) -> str:
+    seconds, milli = divmod(max(0, int(ms)), 1000)
+    hours, rest = divmod(seconds, 3600)
+    minutes, seconds = divmod(rest, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
