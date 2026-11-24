@@ -54,10 +54,13 @@ class StoreBase(Repo):
             self._db.execute("BEGIN IMMEDIATE")
             try:
                 yield self._db
+                self._db.execute("COMMIT")
             except BaseException:
-                self._db.execute("ROLLBACK")
+                # A COMMIT that failed leaves the transaction open: close it, or the shared connection refuses every
+                # later BEGIN ("cannot start a transaction within a transaction") until the process restarts.
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
                 raise
-            self._db.execute("COMMIT")
 
     def query(self, sql: str, args: Iterable[Any] = ()) -> list[sqlite3.Row]:
         with self._lock:

@@ -147,11 +147,13 @@ def _cite(text: str, supports: list[Any], source_of: dict[int, int]) -> str:
         at = text.find(passage, cursor) if passage else -1
         if at < 0 and passage:
             at = text.find(passage)
+        offset = segment.get("end_index")
         if at >= 0:
             end = at + len(passage)
-            cursor = max(cursor, at)
-        elif isinstance(segment.get("end_index"), int):
-            end = len(raw[: segment["end_index"]].decode("utf-8", errors="ignore"))
+            # Past the passage, not at its start: the same words said again further on are another passage with its own sources.
+            cursor = max(cursor, end)
+        elif isinstance(offset, int) and not isinstance(offset, bool) and 0 <= offset <= len(raw):
+            end = len(raw[:offset].decode("utf-8", errors="ignore"))
         else:
             continue
         slot = marks.setdefault(min(end, len(text)), [])
@@ -303,7 +305,14 @@ class GeminiProvider:
         except ProviderError:
             raise
         except Exception as exc:  # noqa: BLE001 - converted or re-raised below
-            raise self._convert(exc) from exc
+            converted = self._convert(exc)
+            if req.web_search and isinstance(converted, AuthError) and converted.http_status == 403:
+                # A key that translates fine may not be allowed the search tool: that fails the search, it does not say the
+                # key is bad (an AuthError would mark it invalid and stop every translation).
+                failure = ProviderError(f"Google Search is not allowed for this key or model: {converted}")
+                failure.http_status = 403
+                raise failure from exc
+            raise converted from exc
 
         text = "".join(parts)
         finish_name = getattr(finish, "name", str(finish)) if finish is not None else ""

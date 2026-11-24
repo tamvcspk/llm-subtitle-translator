@@ -226,7 +226,10 @@ class TranslationAttempt:
             raise
 
         self._record_issues(result.issues, job_id, unit_id, model)
-        findings = self._review(bundle, result, settings)
+        # The review reads the whole file, but Insights divides what it found by the cues this run translated: a range
+        # retranslated over a kept text, or a cue the admin edited, is not this run's.
+        ours = {n for n in (only if only is not None else range(1, len(cues) + 1)) if n not in keep}
+        findings = [f for f in self._review(bundle, result, settings) if f.cue == 0 or f.cue in ours]
         self.telemetry.event(
             "translation.finished", job_id=job_id, unit_id=unit_id, target=target_code, model=model,
             reason=f"{len(result.calls)} model call(s), {sum(1 for c in result.calls if c.kind != 'translate')} repair or split",

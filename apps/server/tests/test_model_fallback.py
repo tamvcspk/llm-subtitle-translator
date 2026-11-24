@@ -58,7 +58,8 @@ class ModelFallbackQueueTests(SchedulerCase):
 
         self.drain(execute, step=31)
 
-        self.assertEqual({call.args[0]["gst_model"] for call in execute.call_args_list}, {PRIMARY, FALLBACK})
+        # A job that needs the strong model is never sent back to the default one (R17-1): it waits for the strong one.
+        self.assertEqual({call.args[0]["gst_model"] for call in execute.call_args_list}, {FALLBACK})
         job = self.job(job_id)
         self.assertEqual((job["state"], job["wait_reason"]), ("waiting", "provider"))  # not failed: the breaker rests
         self.assertEqual(self.queue.jobs.counts()["failed"], 0)

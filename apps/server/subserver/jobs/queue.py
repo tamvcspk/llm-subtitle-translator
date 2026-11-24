@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from ..domain import queue_policy as policy
 from .jobs import (
-    CANCELLED, FAILED, PUBLISH, QUEUED, RUNNING, WAITING, RESEARCH, TRANSLATING_KINDS, JobStore, FROM_LEGACY,
+    CANCELLED, FAILED, JUDGE, PUBLISH, QUEUED, RUNNING, WAITING, RESEARCH, TRANSLATING_KINDS, JobStore, FROM_LEGACY,
 )
 from ..domain.ports import Telemetry
 from ..domain.queue_policy import Health
@@ -387,8 +387,8 @@ class JobQueue(EnqueueMixin, ReportMixin, EndingsMixin):
             self.jobs.transition(job_id, CANCELLED, payload=job, error=str(exc), only_from=(RUNNING,))
             self._event("job.cancelled", job, str(exc))
         except (DailyQuotaExceededError, ProviderUnavailableError) as exc:
-            if job.get("kind") == RESEARCH:
-                self._research_waits(job, exc, now)
+            if job.get("kind") in (RESEARCH, JUDGE):  # a model of their own: their limits never rest the translation model
+                self._own_model_waits(job, exc, now)
             elif isinstance(exc, DailyQuotaExceededError):
                 self._quota_spent(job, exc, now)
             else:

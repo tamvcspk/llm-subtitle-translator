@@ -298,6 +298,8 @@ class Researcher:
             stored = self.proposer.suggestions.propose(series_id, lang, proposals, source="research", auto_accept=auto_accept)
             report["added"], report["auto_accepted"] = stored.added, stored.auto_accepted
             report["outcome"] = stored.to_json()
+            if display_id and not stored.added:  # every proposal was already in the inbox: nothing points at this display
+                self._store.search_display_drop(display_id)
         proposed = {_fold(p.payload["source"]) for p in proposals}
         # What the web had no form for is remembered, or it would head the list of every run.
         self._store.suggestion_skip(

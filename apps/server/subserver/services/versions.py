@@ -348,7 +348,7 @@ class TranslationVersions:
             trigger=REVERT, origin="revert", source_path=target.source_path, source_sha256=target.source_sha256,
             target_lang=target.target_lang, context_hash=target.context_hash, parent_version=version,
             model=target.model, unit_id=target.unit_id, glossary_hash=target.glossary_hash,
-            context_complete=target.context_complete, missing_units=target.missing_units,
+            memory_hash=target.memory_hash, context_complete=target.context_complete, missing_units=target.missing_units,
         )
         self.telemetry.event(
             "version.reverted", unit_id=target.unit_id, target=Path(output_path).name, version=new_version,

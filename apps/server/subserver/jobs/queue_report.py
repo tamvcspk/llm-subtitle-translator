@@ -70,10 +70,13 @@ class ReportMixin:
         for state, job in self.jobs.all_payloads(TRANSLATING_KINDS):
             if state == CANCELLED:
                 continue
-            if job.get("escalated_from"):
+            # A finished translation is a job that ended ``translated`` or ``failed``: a candidate of a variant, or a job that
+            # found its target already there, is neither a rescue nor a loss, and is not in ``by_model`` either.
+            counted = state in (DONE, FAILED) and (state == FAILED or job.get("result") == "translated")
+            if job.get("escalated_from") and (counted or state not in (DONE, FAILED)):
                 escalated["total"] += 1
                 escalated[state if state in (DONE, FAILED) else "waiting"] += 1
-            if state in (DONE, FAILED) and job.get("gst_model") and (state == FAILED or job.get("result") == "translated"):
+            if counted and job.get("gst_model"):
                 counts = by_model.setdefault(str(job["gst_model"]), {"done": 0, "failed": 0})
                 counts[state] += 1
         # The counts come from the job rows, and cleanup deletes finished ones past `retention_*_days` (FR-13.6):

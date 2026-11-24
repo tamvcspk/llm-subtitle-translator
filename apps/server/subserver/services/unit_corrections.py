@@ -131,6 +131,8 @@ class CorrectionsMixin:
 
     def _cue_edits(self, unit: Unit, out: Output, payload: dict[str, Any]) -> dict[str, Any]:
         edits = payload.get("edits") if isinstance(payload.get("edits"), list) else [payload]
+        if not edits:  # nothing to change must not make a version, an event and a rescan
+            raise ValueError("cue edit: give at least one cue to edit")
         source, target = self._source(unit), self._target(out)
         if len(target) != len(source):
             raise ValueError("the target has a different number of cues than the source; retranslate the episode first")
@@ -161,10 +163,14 @@ class CorrectionsMixin:
             target_lang=lang, context_hash=current.context_hash if current else "",
             model=current.model if current else "", unit_id=unit.id,
             glossary_hash=current.glossary_hash if current else "",
+            # What the text was made with does not change because a cue was edited: the Context tab still shows it, a later
+            # change of the story memory still makes the episode stale, and an incomplete one stays incomplete.
+            memory_hash=current.memory_hash if current else "",
+            context_complete=current.context_complete if current else True,
+            missing_units=current.missing_units if current else (),
         )
         ids = []
-        # Edits made by hand carry no job; the one that wrote the text is the newest version a job made.
-        written_by = next((v.job_id for v in reversed(self.version_repo.versions(output_path)) if v.job_id), "")
+        written_by = self._written_by(output_path, current)
         for ordinal, text in sorted(parsed.items()):
             replaced = [
                 old for old in self.catalog.corrections(unit.id, lang)
@@ -197,6 +203,22 @@ class CorrectionsMixin:
         self._after_edit(unit, lang)
         self._bazarr_refresh(unit)
         return {"ok": True, "scope": "episode", "ids": ids, "version": published.version, "warnings": warnings}
+
+    def _written_by(self, output_path: str, current: Any) -> str:
+        """The job that wrote the text of ``current``: edits made by hand carry no job, so follow the versions it came
+        from (its parent, then that one's) to the first a job made. Not the newest version with a job: that can be a
+        variant nobody has adopted."""
+        if current is None:
+            return ""
+        by_number = {v.version: v for v in self.version_repo.versions(output_path)}
+        seen: set[int] = set()
+        version = current
+        while version is not None and version.version not in seen:
+            if version.job_id:
+                return version.job_id
+            seen.add(version.version)
+            version = by_number.get(version.parent_version) if version.parent_version is not None else None
+        return ""
 
     def _after_edit(self, unit: Unit, lang: str) -> None:
         """Let the feedback loop look at the series' edits (FR-19.6). It costs no model call and never fails the edit."""

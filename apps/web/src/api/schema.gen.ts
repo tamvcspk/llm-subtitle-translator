@@ -2063,6 +2063,17 @@ export interface components {
             /** @description The model those reads use (``memory_model``), empty when ``extract_calls`` is 0. */
             extract_model: string;
         };
+        /**
+         * EstimateBody
+         * @description A request that spends model calls (retranslate, a variant): ``estimate_only`` is the price, so a client that sends
+         *     ``"true"`` or ``1`` gets a 400, not a job that was queued for real.
+         */
+        EstimateBody: {
+            /** Estimate Only */
+            estimate_only?: boolean | null;
+        } & {
+            [key: string]: unknown;
+        };
         EventRow: {
             id: number;
             at: number;
@@ -2477,6 +2488,15 @@ export interface components {
             created?: string[];
             count?: number;
             merged?: number;
+        };
+        /** JudgeBody */
+        JudgeBody: {
+            /** Estimate Only */
+            estimate_only?: boolean | null;
+            /** Again */
+            again?: boolean | null;
+        } & {
+            [key: string]: unknown;
         };
         JudgeEstimate: {
             ok: boolean;
@@ -4618,7 +4638,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["RequestObject"] | null;
+                "application/json": components["schemas"]["EstimateBody"] | null;
             };
         };
         responses: {
@@ -4653,7 +4673,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["RequestObject"] | null;
+                "application/json": components["schemas"]["EstimateBody"] | null;
             };
         };
         responses: {
@@ -4759,7 +4779,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["RequestObject"] | null;
+                "application/json": components["schemas"]["JudgeBody"] | null;
             };
         };
         responses: {
@@ -5269,8 +5289,8 @@ export interface operations {
     };
     endpoint_api_series__p1__glossary_restore_post: {
         parameters: {
-            query: {
-                lang: string;
+            query?: {
+                lang?: string;
             };
             header?: never;
             path: {
@@ -5306,8 +5326,8 @@ export interface operations {
     };
     endpoint_api_series__p1__glossary_copy_post: {
         parameters: {
-            query: {
-                lang: string;
+            query?: {
+                lang?: string;
             };
             header?: never;
             path: {
@@ -5446,8 +5466,8 @@ export interface operations {
     };
     endpoint_api_movies__p1__glossary_restore_post: {
         parameters: {
-            query: {
-                lang: string;
+            query?: {
+                lang?: string;
             };
             header?: never;
             path: {

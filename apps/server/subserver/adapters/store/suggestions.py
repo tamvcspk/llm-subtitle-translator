@@ -74,11 +74,21 @@ class SuggestionRepo(Repo):
             )
             return int(cursor.lastrowid)
 
-    def search_display(self, display_id: int) -> SearchDisplay | None:
+    def search_display_drop(self, display_id: int) -> None:
+        """Forget one display (the search brought nothing that kept it), and the link of any suggestion to it."""
+        with self.transaction() as db:
+            db.execute("UPDATE suggestions SET display_id = NULL WHERE display_id = ?", (display_id,))
+            db.execute("DELETE FROM search_displays WHERE id = ?", (display_id,))
+
+    def search_display(self, display_id: int, *, now: float | None = None) -> SearchDisplay | None:
+        """The display, unless it is older than the two years it may be kept: it is not served after that, whether or not a
+        later search has come to prune it."""
         rows = self.query("SELECT * FROM search_displays WHERE id = ?", (display_id,))
         if not rows:
             return None
         row = rows[0]
+        if row["created_at"] < (time.time() if now is None else now) - DISPLAY_KEEP_SECONDS:
+            return None
         return SearchDisplay(
             id=row["id"], series_id=row["series_id"], target_lang=row["target_lang"], html=row["html"],
             queries=json.loads(row["queries_json"] or "[]"), created_at=row["created_at"],

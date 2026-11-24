@@ -30,7 +30,7 @@ COMPOSITION_ROOT = frozenset({"runtime"})  # modules directly under ``subserver`
 # The adapters the core is allowed to import: the application's own storage and its telemetry sink (ADR-12).
 CORE_MAY_USE = ("subserver.adapters.store", "subserver.adapters.telemetry")
 # What ``api`` must not touch directly: a router asks a service (ADR-18).
-API_NEVER_IMPORTS = ("subserver.adapters.store", "subserver.jobs.queue", "subserver.jobs.jobs")
+API_NEVER_IMPORTS = ("subserver.adapters.store", "subserver.jobs")
 
 FORBIDDEN_EXTERNAL = (
     "socket",
@@ -130,7 +130,7 @@ def package_violations() -> set[tuple[str, str]]:
     found: set[tuple[str, str]] = set()
     for path in package_files():
         name = module_name(path)
-        if name.split(".")[0] in LAYERS and path.name != "__init__.py":
+        if name.split(".")[0] in LAYERS:  # an ``__init__.py`` that re-exports counts too: it is code a layer imports
             found |= violations_in(name, path.read_text(encoding="utf-8"))
     return found
 

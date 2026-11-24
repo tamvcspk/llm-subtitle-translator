@@ -280,9 +280,11 @@ class SessionStore:
     def _sign(self, secret: bytes, body: str) -> str:
         return _b64u(hmac.new(secret, body.encode("ascii"), hashlib.sha256).digest())
 
-    def _issue(self, user: str, token_id: str, now: float) -> str:
+    def _issue(self, user: str, token_id: str, now: float, secret: bytes | None = None) -> str:
+        """``secret`` is the one a caller has just verified a token with: a refresh signs with it, so a password change
+        between the check and the signing cannot give a session of the old secret a cookie of the new one."""
         body = f"{_b64u(user.encode('utf-8'))}.{token_id}.{int(now)}"
-        secret = self._secret()
+        secret = self._secret() if secret is None else secret
         if not secret:
             raise RuntimeError("there is no session secret (no console account yet)")
         return f"{body}.{self._sign(secret, body)}"
@@ -290,14 +292,15 @@ class SessionStore:
     def create(self, user: str) -> str:
         return self._issue(user, secrets.token_urlsafe(12), self._clock())
 
-    def _parse(self, token: str | None) -> tuple[str, str, float] | None:
-        """(user, token id, issued at) of a token with a valid signature, else None."""
+    def _parse(self, token: str | None, secret: bytes | None = None) -> tuple[str, str, float] | None:
+        """(user, token id, issued at) of a token with a valid signature, else None. ``secret`` is the one to verify
+        with (read once by the caller); without it the current one is read."""
         if not token or len(token) > 1024:
             return None
         parts = token.split(".")
         if len(parts) != 4:
             return None
-        secret = self._secret()
+        secret = self._secret() if secret is None else secret
         if not secret:
             return None
         body = ".".join(parts[:3])
@@ -310,7 +313,8 @@ class SessionStore:
 
     def resolve(self, token: str | None) -> tuple[str, str | None] | None:
         """``(user, fresh token or None)`` for a live session, else None."""
-        parsed = self._parse(token)
+        secret = self._secret()  # once: the token is checked and, if it is old, re-signed with this very secret
+        parsed = self._parse(token, secret)
         if parsed is None:
             return None
         user, token_id, issued = parsed
@@ -320,7 +324,7 @@ class SessionStore:
         with self._lock:
             if token_id in self._revoked:
                 return None
-        fresh = self._issue(user, token_id, now) if now - issued >= SESSION_REFRESH_SECONDS else None
+        fresh = self._issue(user, token_id, now, secret) if now - issued >= SESSION_REFRESH_SECONDS else None
         return user, fresh
 
     def lookup(self, token: str | None) -> str | None:

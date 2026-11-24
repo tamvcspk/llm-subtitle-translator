@@ -299,7 +299,9 @@ A translation job, in `TranslationAttempt` (`translation_attempt.py`, the only p
    a job. `AuthError` marks the key
    `invalid` and passes over it (the next call uses another key if there is one); an unknown model (`ModelNotFound`) is a
    Settings warning; an exceeded watchdog fails the job. Output that stays invalid after repair and splitting
-   (`HardJobError`) is a hard job and moves once to the strong model, recording `escalated_from`.
+   (`HardJobError`) is a hard job and moves once to the strong model, recording `escalated_from`; if the strong model is
+   resting the job still goes up to it (tier `strong`) and waits there, and a job of that tier never goes back to the default
+   model, whose answer would be the same hard failure.
    `layer_report` (`/api/status` `model_layers`) counts how many escalate and how many the strong model finishes.
 6. A daily quota error pauses that model for 24 hours; another configured model with quota continues the job; when every
    model is spent, the job and the waiting jobs wait for the first pause to end.
@@ -419,8 +421,14 @@ the series has terms and budget left, queues one at origin `facts` and above eve
 series from `llm_calls.series_id` (migration 16, written by `ResearchJob` through `Telemetry.llm_call(series_id=)`), so the
 count survives the clean-up of finished jobs; a run stops before the call that would pass it, ends `done` with the event
 `research.budget_reached`. A provider with no search tool (`openai_compat`) queues nothing and a run made anyway is `skipped`.
-A search that runs out of quota or cannot be reached makes only the research job wait (`JobQueue._research_waits`, reason
-`rate`): the health of the translation model is not touched, so a limit of the search never rests the translations.
+A search that runs out of quota or cannot be reached makes only the research job wait (`JobQueue._own_model_waits`, reason
+`rate`): the health of the translation model is not touched, so a limit of the search never rests the translations. The
+judge job does the same, and a task model the provider does not know (`memory_model`, `research_model`, `judge_model`
+that is not one of the two translation models) makes its job wait a time, not "the provider": the sweep reads the health of
+the translation models only, so a wait for the provider would be lifted on the next tick, call after call. The model named
+in `ModelNotFoundError` is the one the call was made on (`BudgetedProvider` tags it), not the job's own. A search a key is not
+allowed (`403` with the search tool) is a failed search (`ProviderError`), not a refused key. The budget of
+`research_max_calls_per_series` counts the calls the provider answered, not the tries it turned away (busy, down, out of quota).
 
 ### Insights, the golden set and the judge (P15)
 

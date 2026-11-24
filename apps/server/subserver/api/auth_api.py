@@ -48,7 +48,8 @@ def register(router: APIRouter) -> None:
     async def logout(request: Request, body: RequestObject | None = Body(default=None)) -> Response:
         sessions = _sessions(request)
         if sessions is not None:
-            sessions.revoke(console_auth.session_token(request.headers.get("Cookie")))
+            # Off the event loop: the secret may be read from the database, which can make the call wait for its lock.
+            await blocking(sessions.revoke, console_auth.session_token(request.headers.get("Cookie")))
         request.state.refreshed_token = None
         return json_response({"ok": True}, headers={"Set-Cookie": session_cookie(request, "", max_age=0)})
 

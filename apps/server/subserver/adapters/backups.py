@@ -126,11 +126,22 @@ def create_backup(
     return backup_info(backup_path)
 
 
-def _read_json_member(archive: zipfile.ZipFile, name: str) -> dict[str, Any]:
+MAX_MEMBER_BYTES = 10 * 1024 * 1024  # what a member of a backup may unpack to; the real ones are a few KB
+
+
+def _read_member(archive: zipfile.ZipFile, name: str) -> bytes:
+    """One member's bytes; a member that says it unpacks to more than ``MAX_MEMBER_BYTES`` is refused before it is read."""
     try:
-        raw = archive.read(name)
+        info = archive.getinfo(name)
     except KeyError as exc:
         raise ValueError(f"backup is missing {name}") from exc
+    if info.file_size > MAX_MEMBER_BYTES:
+        raise ValueError(f"backup member {name} is too large")
+    return archive.read(info)
+
+
+def _read_json_member(archive: zipfile.ZipFile, name: str) -> dict[str, Any]:
+    raw = _read_member(archive, name)
     try:
         return json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -165,7 +176,7 @@ def restore_backup_archive(
             config = _read_json_member(archive, CONFIG_MEMBER)
             targets = _read_json_member(archive, TARGETS_MEMBER)
             if KEYS_MEMBER in archive.namelist():
-                keys = json.loads(archive.read(KEYS_MEMBER).decode("utf-8"))
+                keys = json.loads(_read_member(archive, KEYS_MEMBER).decode("utf-8"))
                 if not isinstance(keys, list):
                     raise ValueError(f"backup member {KEYS_MEMBER} is not a list of keys")
     except zipfile.BadZipFile as exc:

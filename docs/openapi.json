@@ -1390,7 +1390,7 @@
               "schema": {
                 "anyOf": [
                   {
-                    "$ref": "#/components/schemas/RequestObject"
+                    "$ref": "#/components/schemas/EstimateBody"
                   },
                   {
                     "type": "null"
@@ -1452,7 +1452,7 @@
               "schema": {
                 "anyOf": [
                   {
-                    "$ref": "#/components/schemas/RequestObject"
+                    "$ref": "#/components/schemas/EstimateBody"
                   },
                   {
                     "type": "null"
@@ -1629,7 +1629,7 @@
               "schema": {
                 "anyOf": [
                   {
-                    "$ref": "#/components/schemas/RequestObject"
+                    "$ref": "#/components/schemas/JudgeBody"
                   },
                   {
                     "type": "null"
@@ -2481,7 +2481,7 @@
           {
             "name": "lang",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2543,7 +2543,7 @@
           {
             "name": "lang",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2755,7 +2755,7 @@
           {
             "name": "lang",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -7050,6 +7050,25 @@
         ],
         "description": "What planned jobs would cost (``services.estimates``): shown in the Estimate/Confirm dialog before anything is queued."
       },
+      "EstimateBody": {
+        "properties": {
+          "estimate_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimate Only"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "EstimateBody",
+        "description": "A request that spends model calls (retranslate, a variant): ``estimate_only`` is the price, so a client that sends\n``\"true\"`` or ``1`` gets a 400, not a job that was queued for real."
+      },
       "EventRow": {
         "properties": {
           "id": {
@@ -8679,6 +8698,35 @@
           "skipped"
         ],
         "description": "``POST /api/jobs``: the plan and what it costs; a real request adds ``created``, ``count`` and ``merged``."
+      },
+      "JudgeBody": {
+        "properties": {
+          "estimate_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimate Only"
+          },
+          "again": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Again"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "JudgeBody"
       },
       "JudgeEstimate": {
         "properties": {

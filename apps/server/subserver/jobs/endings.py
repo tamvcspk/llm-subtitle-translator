@@ -13,7 +13,7 @@ from typing import Any
 
 from ..domain import queue_policy as policy
 from ..domain.config import QUOTA_RESET_TZ
-from .jobs import DONE, FAILED, PUBLISH, QUEUED, RUNNING, SKIPPED, WAITING, TRANSLATING_KINDS
+from .jobs import DONE, FAILED, PUBLISH, QUEUED, RESEARCH, RUNNING, SKIPPED, WAITING, TRANSLATING_KINDS
 from ..domain.queue_policy import Health
 from ..domain.translation import (
     CallBudgetError, ContextGapError, DailyQuotaExceededError, HardJobError, ModelNotFoundError, redact,
@@ -53,9 +53,11 @@ class EndingsMixin:
                     seconds=round(time.monotonic() - started, 1), model=model)
 
     def _other_model(self, job: dict[str, Any], now: float) -> str | None:
-        """The other layer, when the job may and can go there now."""
+        """The other layer, when the job may and can go there now. A job that went up to the strong model because the
+        light one could not produce valid output has nowhere to go back to: it would fail the same way, so it waits for
+        the strong model instead."""
         model = job.get("gst_model")
-        if len(self.models) < 2 or not model:
+        if len(self.models) < 2 or not model or job.get("tier") == "strong":
             return None
         other = self.models[1] if model == self.models[0] else self.models[0]
         return other if self._usable(other, self.jobs.health_map(), now) else None
@@ -92,17 +94,19 @@ class EndingsMixin:
                     level="WARNING", until=until, models=list(self.models))
         self._event("job.waiting", job, self._wait_text("quota", until), wait="quota", until=until)
 
-    def _research_waits(self, job: dict[str, Any], exc: Exception, now: float) -> None:
-        """A research job whose search ran out of quota or could not be reached waits by itself (FR-7.5): the grounded search
-        has limits of its own, so what it spends must never rest the model translations run on, and the breaker of that model
-        is left as it is. The job goes back in line when its wait is over (``rate``: a time, not a health)."""
+    def _own_model_waits(self, job: dict[str, Any], exc: Exception, now: float) -> None:
+        """A ``research`` or ``judge`` job whose model ran out of quota or could not be reached waits by itself (FR-7.5):
+        the grounded search has limits of its own and the judge has a model of its own, so what they spend must never rest
+        the model translations run on, and the breaker of that model is left as it is. The job goes back in line when its
+        wait is over (``rate``: a time, not a health)."""
         job["last_error"] = redact(str(exc))
+        what, who = ("the web search", "research") if job.get("kind") == RESEARCH else ("the judge", "judge")
         if isinstance(exc, DailyQuotaExceededError):
             until = policy.daily_quota_reset_at(now, policy.zone_for(str(self._setting("quota_reset_tz", QUOTA_RESET_TZ))))
-            text = "the daily quota of the web search is spent; the research waits for the reset"
+            text = f"the daily quota of {what} is spent; the {who} waits for the reset"
         else:
             until = now + policy.PROVIDER_RETRY_DELAYS[0]
-            text = "the provider could not be reached for the research; it tries again later"
+            text = f"the provider could not be reached for the {who}; it tries again later"
         self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="rate", not_before=until,
                              error=job["last_error"], only_from=(RUNNING,))
         self._event("job.waiting", job, text, level="WARNING", wait="rate", until=until)
@@ -150,10 +154,19 @@ class EndingsMixin:
         if model:
             current = self.jobs.health_map().get((self.provider, model), Health())
             self.jobs.set_health(self.provider, model, policy.after_invalid(current, "model"))
-        self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="provider", not_before=0.0,
-                             error=job["last_error"], only_from=(RUNNING,))
         self._event("provider.model_unknown", job, f"the provider does not know the model {model!r}; check the model in Settings",
                     level="ERROR", model=model)
+        if model and model not in self.models:
+            # A model of a task's own (memory, research, judge): the sweep reads the health of the translation models only,
+            # so a wait for "the provider" would be lifted on the next tick, call after call. It waits for a time instead.
+            until = now + policy.PROVIDER_RETRY_DELAYS[1]
+            self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="rate", not_before=until,
+                                 error=job["last_error"], only_from=(RUNNING,))
+            self._event("job.waiting", job, f"the model {model!r} is unknown to the provider; the job tries again later",
+                        level="WARNING", wait="rate", until=until)
+            return
+        self.jobs.transition(job["job_id"], WAITING, payload=job, wait_reason="provider", not_before=0.0,
+                             error=job["last_error"], only_from=(RUNNING,))
         self._event("job.waiting", job, self._wait_text("provider", 0.0), level="WARNING", wait="provider")
 
     def _over_budget(self, job: dict[str, Any], exc: CallBudgetError, now: float) -> None:
@@ -182,13 +195,18 @@ class EndingsMixin:
                     until=exc.retry_at, missing=list(exc.missing))
 
     def _hard_job(self, job: dict[str, Any], exc: HardJobError, now: float) -> None:
-        # Only a translation has a stronger model to go to; an extract or suggest job that fails this way just fails.
-        other = self._other_model(job, now) if job.get("kind", PUBLISH) in TRANSLATING_KINDS else None
         model = job.get("gst_model")
         blocked = int(getattr(exc, "blocked", 0) or 0)
         if model:  # the provider answered (badly): it works, so a trial call has passed
             self.jobs.set_health(self.provider, model, policy.after_success(Health()))
-        if other and len(self.models) > 1 and other == self.models[1]:
+        # Only a translation has a stronger model to go to; an extract or suggest job that fails this way just fails. The
+        # strong model may be resting now: the job still goes up to it and waits there (the sweep parks it), because
+        # failing for want of a model that is only resting is not what a provider outage may do to a job (NFR-1).
+        other = (
+            self.models[1] if len(self.models) > 1 and model and model != self.models[1] and job.get("tier") != "strong"
+            and job.get("kind", PUBLISH) in TRANSLATING_KINDS else None
+        )
+        if other:
             # A hard job: the default model could not produce valid output. Try the strong model once.
             job["escalated_from"] = model
             job["escalation_reason"] = str(exc)[-300:]

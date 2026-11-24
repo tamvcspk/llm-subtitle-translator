@@ -129,6 +129,20 @@ class GeminiProviderTests(unittest.TestCase):
         with self.assertRaises(Unavailable):
             GeminiProvider("k", client=client).generate(REQ)
 
+    def test_a_403_on_the_search_tool_is_a_failed_search_not_a_refused_key(self):
+        """A key that translates may not be allowed Google Search: an AuthError would mark it invalid and stop every job."""
+        client = FakeClient(raises=api_error(403, "PERMISSION_DENIED", "the search tool is not allowed"))
+        search = LLMRequest(system="s", user="u", web_search=True)
+        with self.assertRaises(ProviderError) as raised:
+            GeminiProvider("k", client=client).generate(search)
+        self.assertNotIsInstance(raised.exception, AuthError)
+        self.assertEqual(raised.exception.http_status, 403)
+        self.assertIn("Google Search", str(raised.exception))
+        with self.assertRaises(AuthError):  # the same answer to a plain call still says the key is not permitted
+            GeminiProvider("k", client=client).generate(REQ)
+        with self.assertRaises(AuthError):  # and a 401 is the key, whatever the call
+            GeminiProvider("k", client=FakeClient(raises=api_error(401, "UNAUTHENTICATED"))).generate(search)
+
     def test_count_tokens(self):
         self.assertEqual(GeminiProvider("k", client=FakeClient()).count_tokens(REQ), 321)
 

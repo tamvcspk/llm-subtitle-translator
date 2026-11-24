@@ -64,9 +64,12 @@ class EnqueueMixin:
             if sibling:
                 skipped(f"a {target_code} subtitle is already present: {Path(sibling).name}", target_code, key)
                 continue
-            if self.jobs.open_for(key) is not None:
-                self.jobs.add({}, key=key, prio=prio)  # a higher class lifts the job already in line
-                skipped("the same job is already waiting or running", target_code, key)
+            open_job = self.jobs.open_for(key)
+            if open_job is not None:
+                # A higher class lifts the job already in line. Lifting it by id never makes a job: ``add`` would, with
+                # an empty payload, if that job ended between the look and the call.
+                self.jobs.lift(open_job["job_id"], prio)
+                skipped("the same job is already waiting or running", target_code, open_job["job_id"])
                 continue
             # The same request under another name: the files were renamed after the first job was made (FR-14.3).
             same = self.jobs.open_for_unit(int(base_job["unit_id"]), target_code) if base_job.get("unit_id") else None
@@ -230,6 +233,9 @@ class EnqueueMixin:
         key = research_key(series_id, lang)
         added = self.jobs.add(payload, key=key, kind=RESEARCH, mode=RESEARCH, origin=origin, prio=prio,
                               job_id=f"{key}-{time.time_ns()}")
+        if added.existing and auto_accept is not None:
+            # The admin's choice in the Estimate box is for this run: it goes to the job already in line, if that has not started.
+            self.jobs.set_payload_field(str(added.existing), "auto_accept", bool(auto_accept))
         if added.job_id:
             self._emit(
                 "job.created", job_id=added.job_id, unit_id=None, target=lang, origin=origin, job_kind=RESEARCH,

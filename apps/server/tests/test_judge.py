@@ -5,6 +5,7 @@ as the admin's A/B pick and never edit a cue. Every provider is a fake; nothing 
 
 import json
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -302,6 +303,30 @@ class RunTests(unittest.TestCase):
         env.service.ask_judge(env.unit(1), version, {"lang": "vi", "again": True})
         env.run_queued()
         self.assertEqual(len(env.asked()), 12)
+
+    def test_asking_again_over_a_cap_goes_round_the_episode_and_not_over_the_first_cues_each_time(self):
+        """R15-8: with more differing cues than one run may ask, the cues the judge looked at longest ago come first."""
+        env = JudgeEnv(self)
+        version = env.candidate()
+        unit = env.unit(1)
+
+        def verdict_times():
+            return {n: signal.at for n, signal in env.judge._newest(unit, "vi", version).items()}
+
+        with mock.patch.object(judge_module, "JUDGE_MAX_CUES", 5):
+            for _ in range(3):  # five, five and two cues: all twelve have a verdict, the first five the oldest
+                env.service.ask_judge(unit, version, {"lang": "vi"})
+                env.run_queued()
+                time.sleep(0.02)
+            reached = []
+            for _ in range(2):
+                before = verdict_times()
+                env.service.ask_judge(unit, version, {"lang": "vi", "again": True})
+                env.run_queued()
+                time.sleep(0.02)
+                after = verdict_times()
+                reached.append(sorted(n for n in after if after[n] != before[n]))
+        self.assertEqual(reached, [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
 
     def test_a_new_rubric_does_not_show_the_verdicts_of_the_old_one(self):
         env = JudgeEnv(self)

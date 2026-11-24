@@ -183,6 +183,10 @@ BODIES = {
     ("POST", r"/api/movies/(\d+)/glossary/restore"): schemas.GlossaryRestoreBody,
     ("POST", r"/api/series/(\d+)/glossary/copy"): schemas.GlossaryCopyBody,
     ("POST", r"/api/units/(\d+)/versions/(\d+)/adopt"): schemas.AdoptBody,
+    # The three that spend model calls: ``estimate_only`` is a real boolean or a 400 (a queued job is not an estimate).
+    ("POST", r"/api/units/(\d+)/retranslate"): schemas.EstimateBody,
+    ("POST", r"/api/units/(\d+)/variant"): schemas.EstimateBody,
+    ("POST", r"/api/units/(\d+)/versions/(\d+)/judge"): schemas.JudgeBody,
 }
 
 
@@ -245,12 +249,13 @@ QUERIES = {
     ("GET", r"/api/series/(\d+)/glossary"): _GLOSSARY_LANG,
     ("PUT", r"/api/series/(\d+)/glossary"): _GLOSSARY_LANG,
     ("GET", r"/api/series/(\d+)/glossary/history"): _GLOSSARY_LANG,
-    ("POST", r"/api/series/(\d+)/glossary/restore"): _GLOSSARY_LANG,
-    ("POST", r"/api/series/(\d+)/glossary/copy"): _GLOSSARY_LANG,
+    # Restore and copy read the language from their body (the console sends it there), the query is the other way to say it.
+    ("POST", r"/api/series/(\d+)/glossary/restore"): _LANG,
+    ("POST", r"/api/series/(\d+)/glossary/copy"): _LANG,
     ("GET", r"/api/movies/(\d+)/glossary"): _GLOSSARY_LANG,
     ("PUT", r"/api/movies/(\d+)/glossary"): _GLOSSARY_LANG,
     ("GET", r"/api/movies/(\d+)/glossary/history"): _GLOSSARY_LANG,
-    ("POST", r"/api/movies/(\d+)/glossary/restore"): _GLOSSARY_LANG,
+    ("POST", r"/api/movies/(\d+)/glossary/restore"): _LANG,
 }
 
 

@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Insights } from "../api/types";
@@ -319,6 +319,23 @@ describe("Insights", () => {
       await userEvent.click(await screen.findByRole("button", { name: "Copy" }));
       expect(await screen.findByText("Copied 1 cues.")).toBeInTheDocument();
       expect(writeText).toHaveBeenCalledWith(JSON.stringify(golden, null, 2));
+    });
+
+    it("does not tell a sheet that was closed meanwhile that its copy was made", async () => {
+      let finish: () => void = () => {};
+      const writeText = vi.fn().mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      serve(routes());
+      show("/insights");
+      const open = await screen.findByRole("button", { name: "Open the vi golden set of Arcane" });
+      await userEvent.click(open);
+      await userEvent.click(await screen.findByRole("button", { name: "Copy" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      await userEvent.click(await screen.findByRole("button", { name: "Close" }));
+      finish();
+      await userEvent.click(await screen.findByRole("button", { name: "Open the vi golden set of Arcane" }));
+      await screen.findByRole("link", { name: "Download bazarr-7.vi.golden.json" });
+      expect(screen.queryByText("Copied 1 cues.")).not.toBeInTheDocument();
     });
 
     it("shows a box to copy by hand when the clipboard is refused", async () => {

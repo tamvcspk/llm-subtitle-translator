@@ -326,6 +326,21 @@ class JobStore:
             )
         return True
 
+    def set_payload_field(self, job_id: str, name: str, value: Any) -> bool:
+        """Put one field in the payload of a job that has not started (a second request that merged into it says
+        something the first did not). False when the job is gone or already running."""
+        with self.store.transaction() as db:
+            row = db.execute("SELECT payload_json, state FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+            if row is None or row["state"] not in (QUEUED, WAITING):
+                return False
+            payload = _loads(row["payload_json"])
+            payload[name] = value
+            db.execute(
+                "UPDATE jobs SET payload_json = ?, updated_at = ? WHERE job_id = ?",
+                (json.dumps(payload, ensure_ascii=False), self.clock(), job_id),
+            )
+        return True
+
     # -- the scheduler's one atomic step --------------------------------------------------------------------------
     def health_map(self) -> dict[tuple[str, str], Health]:
         return {

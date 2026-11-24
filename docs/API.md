@@ -551,7 +551,8 @@ The result overwrites the target and is recorded as a version; the old file is
 kept in `backups/subtitles/`.
 
 With `"estimate_only": true` (P12b) nothing is queued and no correction is made: the same checks run (a bad range, an
-unknown correction, a retranslation already queued or a job running are the same `400`) and the reply is `{"ok",
+unknown correction, a retranslation already queued or a job running are the same `400`; they are checked before the first
+`new_corrections` entry is written, so a refused request leaves nothing behind) and the reply is `{"ok",
 "estimate_only": true, "range", "correction_ids", "estimate": {"jobs", "cues", "calls", "calls_left_today", "paused_until",
 "minutes", "finish_at"}}`. `cues` is the size of the range (or of the episode) and `calls` the planner's parts for those cues.
 The whole-episode retranslation is also estimated by `POST /api/jobs` with `mode: "replace"`.

@@ -118,7 +118,10 @@ class Metrics:
         known_from = self._known_from(source)
         if through <= 0 or known_from <= 0 or window_start < known_from:
             return window_start  # never rolled, or a longer window than before: from its first day
-        return max(window_start, _floor(through) - DAY)
+        # Everything from ``known_from`` to ``through`` is rolled, so go on from where it stopped, whatever this window
+        # is: starting later (a short window after a long rest) would leave the days between as a hole that no window
+        # ever fills, since the markers say they were rolled.
+        return _floor(through) - DAY
 
     def _llm_rows(self, start: float) -> list[MetricRow]:
         rows: list[MetricRow] = []
@@ -177,7 +180,7 @@ class Metrics:
             signals += self._paged(self.store.signals, start, kind=kind)
         prompts = self._prompts(str(s.meta.get("job_id") or "") for s in signals if s.kind == "cue_edit")
         total: dict[tuple[str, str, tuple[tuple[str, str], ...]], float] = {}
-        edited: set[tuple[str, Any, Any, str, str]] = set()
+        edited: set[tuple[str, Any, Any, str, str, str]] = set()
 
         def add(day: str, name: str, **labels: str) -> None:
             key = (day, name, tuple(sorted(labels.items())))
@@ -187,8 +190,9 @@ class Metrics:
             day, meta = _day(s.at), s.meta
             if s.kind == "cue_edit":
                 model, prompt = str(meta.get("model") or ""), prompts.get(str(meta.get("job_id") or ""), "")
-                if (day, s.unit_id, s.cue, model, prompt) not in edited:  # a cue edited twice in a day is one cue
-                    edited.add((day, s.unit_id, s.cue, model, prompt))
+                seen = (day, s.unit_id, s.cue, str(meta.get("lang") or ""), model, prompt)
+                if seen not in edited:  # a cue edited twice in a day is one cue (in one language: a unit has one per target)
+                    edited.add(seen)
                     add(day, "cue_edits", model=model, prompt_version=prompt)
             elif s.kind == "retranslate":
                 add(day, "retranslations", model=str(meta.get("model") or ""),
@@ -256,6 +260,7 @@ class Metrics:
         ended = self.store.job_outcomes(since, JOB_KINDS)
         latencies = [float(v) for v in self.store.latencies(since)]
         escalated = (layers.get("escalated") or {})
+        ended_up = escalated.get("done", 0) + escalated.get("failed", 0)
         finished = sum(v.get("done", 0) + v.get("failed", 0) for v in (layers.get("by_model") or {}).values())
         counts = snapshot.get("counts") or {}
         return {
@@ -274,8 +279,9 @@ class Metrics:
                 "failed": int(failed), "rate_429": _rate(limited, calls), "rate_503": _rate(by_outcome.get("unavailable", 0), calls),
             },
             "escalation": {
+                # The rates are over jobs that ended, as ``finished`` is: one still waiting is not a rescue that failed.
                 "jobs": finished, "escalated": int(escalated.get("total", 0)), "rescued": int(escalated.get("done", 0)),
-                "rate": _rate(escalated.get("total", 0), finished), "rescue_rate": _rate(escalated.get("done", 0), escalated.get("total", 0)),
+                "rate": _rate(ended_up, finished), "rescue_rate": _rate(escalated.get("done", 0), ended_up),
                 "window_days": (layers.get("window") or {}).get("done_days"),
             },
             "per_episode": {

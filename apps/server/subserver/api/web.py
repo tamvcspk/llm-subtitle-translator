@@ -39,8 +39,13 @@ def static_response(static_dir: str, request_path: str, no_store: bool = False) 
     """A file of the console's build. A path that is not a file is the app's entry page (the console routes in the browser)."""
     root = Path(static_dir)
     rel = "index.html" if request_path in {"", "/"} else request_path.lstrip("/")
-    path = (root / rel).resolve()
-    if not str(path).startswith(str(root.resolve())) or not path.exists() or not path.is_file():
+    try:
+        path = (root / rel).resolve()
+        # Inside the build folder by path parts: a prefix test would also let a sibling folder through (``static-x``).
+        inside = path.is_relative_to(root.resolve()) and path.is_file()
+    except (OSError, ValueError):  # a name the file system refuses (a NUL byte, a path too long)
+        inside = False
+    if not inside:
         path = root / "index.html"
     # Module scripts require a JavaScript MIME type; the Windows registry can map .js to text/plain, so the console's
     # own asset types are fixed here.

@@ -1,4 +1,35 @@
 # Unreleased
+
+## 1.0.0-rc.1 (2026-11-24)
+First release candidate: every phase of PLAN.md (P0 to P17) is done. It is for real use and feedback; 1.0.0 follows.
+
+- **Review of P15 to P17 (the findings of the code review in PLAN.md): the ones that were real are fixed.** *HTTP and
+  security:* a folder beside the console's build folder with the same beginning (`static-x`) can no longer be read through a
+  `..` path (R15d-1); a session cookie that is refreshed is signed with the secret that checked the old one, so a password
+  change in between cannot give the old session a new cookie (R15d-2); every error message passes the redactor (R15d-3); the
+  upload of a backup is capped at 10 MiB, a member of a backup that unpacks to more than that is refused, the download is
+  `no-store` (R15d-5); logout no longer waits for the database on the event loop (R15d-6); a failed `COMMIT` leaves no open
+  transaction on the shared connection (R15c-1). *Contract:* `retranslate`, `variant` and `judge` refuse an `estimate_only`
+  or `again` that is not a boolean (a queued job is not an estimate), restore and copy of a glossary no longer say that `lang`
+  is required in the query (the console sends it in the body), `API_NEVER_IMPORTS` covers the whole `jobs` layer, the
+  boundary test reads `__init__.py` too, and `doccheck` no longer takes `store/auth.py` for `services/auth.py`. *Queue:* a job
+  of the strong tier never goes back to the default model, and a hard job goes up to a strong model that is only resting and
+  waits there instead of failing (R17-1); a task model the provider does not know (memory, research, judge) makes its job wait
+  a time instead of being sent round again on every tick, and the unknown model named is the one the call was made on
+  (R15-3, R16-1); the judge's quota and outages no longer rest the translation models (R15-3); a request for what is in line
+  lifts it by id and can no longer make a job with an empty payload (R17-2); the choice of a second research request reaches
+  the job already in line (R16-8). *Research:* a `403` of the search tool is a failed search, not a refused key (R16-6); two
+  passages with the same words are two passages (R16-3); the research budget does not count the tries the provider turned
+  away (R16-2); a redirect to another redirect is not a page (R16-5); a search display older than two years is not served and
+  one that nothing points at is dropped (R16-4). *Versions:* a cue edit keeps `memory_hash`, `context_complete` and
+  `missing_units` of the translation, and a revert its `memory_hash` (R17-3); an adopted candidate undoes the cue edits it does
+  not contain (R17-4); a cue edit is credited to the job that wrote the text, not to an unadopted variant (R15-4); a refused
+  retranslation writes no correction (R17-5); an empty list of edits is refused (R17-7); an A/B verdict is recorded once it has
+  been acted on (R15-9); the four Estimate boxes of a single episode count the story-fact reads that come first (R15g-1).
+  *Insights:* a job that also read story facts is named after its translation prompt (R15-1); a short window after a long rest
+  no longer leaves days that are never rolled up (R15-2); the escalation rates are over jobs that ended (R15-5); a range
+  retranslation counts only the cues it translated in the review (R15-6); two languages edited on one day are two edits
+  (R15-10); a golden set copy that was closed meanwhile no longer writes the old series to the clipboard (R15-11).
 - **P17: the large files are split, with no change in behaviour.** `apps/web/src/api/queries.ts` (1226 lines) is now one file per
   area under `api/queries/` (`core`, `catalog`, `jobs`, `units`, `corrections`, `style`, `glossary`, `settings`, `memory`,
   `suggestions`, `research`, `insights`, `keys`, and the internal `refresh`) and `queries.ts` re-exports them, so no page

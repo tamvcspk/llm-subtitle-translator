@@ -163,3 +163,14 @@ class AdoptBody(RequestObject):
     lang: str | None = None
     apply_style: StrictBool | None = None
     dry_run: StrictBool | None = None
+
+
+class EstimateBody(RequestObject):
+    """A request that spends model calls (retranslate, a variant): ``estimate_only`` is the price, so a client that sends
+    ``"true"`` or ``1`` gets a 400, not a job that was queued for real."""
+
+    estimate_only: StrictBool | None = None
+
+
+class JudgeBody(EstimateBody):
+    again: StrictBool | None = None

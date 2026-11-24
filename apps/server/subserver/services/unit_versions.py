@@ -90,13 +90,6 @@ class VersionsMixin:
             lang=out.target_lang, variant_version=version, label=params.get("label"), preset=params.get("preset"),
             style=params.get("style"), model=view["model"], prompt_version=SUBCORE_PROMPT_VERSION,
         )
-        for n, winner in sorted(chosen.items()):
-            self.telemetry.signal(
-                "ab", unit_id=unit.id, cue=n, before=by_cue[n]["current"] or "", after=by_cue[n]["variant"] or "",
-                winner=winner, **meta,
-            )
-        if whole:
-            self.telemetry.signal("ab", unit_id=unit.id, winner=whole, whole_episode=True, **meta)
         applied: dict[str, Any] = {}
         if body.get("apply"):
             edits = [{"cue": n, "text": by_cue[n]["variant"]} for n, w in sorted(chosen.items())
@@ -109,6 +102,14 @@ class VersionsMixin:
                     "lang": out.target_lang, "kind": "cue_edit", "payload": {"edits": edits},
                 })
                 applied = {"edited_cues": [e["cue"] for e in edits], "version": result.get("version")}
+        # Written once what the verdict asked has been done: a request that was refused (and sent again) is one verdict.
+        for n, winner in sorted(chosen.items()):
+            self.telemetry.signal(
+                "ab", unit_id=unit.id, cue=n, before=by_cue[n]["current"] or "", after=by_cue[n]["variant"] or "",
+                winner=winner, **meta,
+            )
+        if whole:
+            self.telemetry.signal("ab", unit_id=unit.id, winner=whole, whole_episode=True, **meta)
         return {"ok": True, "recorded": len(chosen) + (1 if whole else 0), "applied": applied}
 
     def list_versions(self, unit_id: int, lang: str | None = None) -> dict[str, Any]:
@@ -146,6 +147,7 @@ class VersionsMixin:
         if not apply_style:
             published = self.versions.adopt(out.output_path, version)
             self._stamp_adopted_variant(unit, out, version)
+            self._reconcile_cue_edits(unit, out)
             self._bazarr_refresh(unit)
             return {"ok": True, "version": published.version, "adopted": version}
         preset, style = self._variant_style(out, version)
@@ -160,6 +162,7 @@ class VersionsMixin:
         published = self.versions.adopt(out.output_path, version)
         self.library.styles.save_owner_style(kind, key, preset, style.to_doc())
         self._stamp_adopted_variant(unit, out, version)  # after the style is saved: the rules are the ones now stored
+        self._reconcile_cue_edits(unit, out)
         self.telemetry.event(
             "style.saved", unit_id=unit.id, preset=preset or None, stale=impact["would_stale"],
             reason="the admin used a variant and kept its style for the whole series; translations made without it are flagged stale, not redone",
@@ -255,7 +258,13 @@ class VersionsMixin:
             "revert", unit_id=unit.id, version=published.version, lang=out.target_lang, restored=version,
             replaced=before.version if before else None, model=before.model if before else "",
         )
-        # Cue edits that the restored text no longer contains are undone, so they stop locking their cues.
+        self._reconcile_cue_edits(unit, out)
+        self._bazarr_refresh(unit)
+        return {"ok": True, "version": published.version, "restored": version}
+
+    def _reconcile_cue_edits(self, unit: Unit, out: Output) -> None:
+        """After a text replaced the file (a revert, an adopted candidate): cue edits that it no longer contains are undone,
+        so they stop locking their cues and the next translation does not put an old hand edit back."""
         restored = self._target(out)
         for correction in self.catalog.corrections(unit.id, out.target_lang):
             if correction.kind != "cue_edit":
@@ -263,5 +272,3 @@ class VersionsMixin:
             ordinal = int(correction.payload["cue"])
             if not 1 <= ordinal <= len(restored) or restored[ordinal - 1].text != correction.payload["text"]:
                 self.catalog.deactivate_correction(correction.id)
-        self._bazarr_refresh(unit)
-        return {"ok": True, "version": published.version, "restored": version}

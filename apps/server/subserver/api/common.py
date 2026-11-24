@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
+from ..domain import redaction
 from .schemas import RequestObject
 
 JSON_TYPE = "application/json; charset=utf-8"
@@ -36,7 +37,8 @@ def json_response(payload: Any, status: int = 200, headers: dict[str, str] | Non
 
 
 def error_response(message: str, status: int = 400, headers: dict[str, str] | None = None) -> Response:
-    return json_response({"error": message}, status=status, headers=headers)
+    # Every text that leaves the process passes the redactor: an error message can quote a URL with ``?key=`` in it.
+    return json_response({"error": redaction.DEFAULT.redact(message)}, status=status, headers=headers)
 
 
 def download_response(text: str, content_type: str, filename: str) -> Response:
@@ -69,8 +71,22 @@ def payload(body: BaseModel | None) -> dict[str, Any]:
     return {} if body is None else body.model_dump(exclude_unset=True)
 
 
+MAX_BINARY_BODY = 10 * 1024 * 1024  # a backup is a few JSON files; this is generous
+
+
 async def binary_body(request: Request) -> bytes:
-    raw = await request.body()
+    """The body of a request that sends a file, read up to ``MAX_BINARY_BODY`` bytes (a longer one is refused unread)."""
+    announced = request.headers.get("content-length", "")
+    if announced.isdigit() and int(announced) > MAX_BINARY_BODY:
+        raise ValueError(f"the file is larger than {MAX_BINARY_BODY // (1024 * 1024)} MiB")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_BINARY_BODY:
+            raise ValueError(f"the file is larger than {MAX_BINARY_BODY // (1024 * 1024)} MiB")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
     if not raw:
         raise ValueError("request body is empty")
     return raw
@@ -186,7 +202,10 @@ def add_table_routes(
                 result = await blocking(invoke, ctx, service, method, request.url.path, query_of(request), payload(body))
                 if result is None:
                     return error_response("not found", status=404)
-                return json_response(result[1], status=result[0])
+                status, answer = result
+                if status >= 400 and isinstance(answer, dict) and set(answer) == {"error"} and isinstance(answer["error"], str):
+                    return error_response(answer["error"], status=status)  # a pure router's refusal says it in the same words
+                return json_response(answer, status=status)
 
             if method not in BODY_METHODS:
                 async def endpoint(request: Request) -> Response:

@@ -59,7 +59,8 @@ def subcore_modules(package: Path = SUBCORE) -> list[str]:
 def missing_modules(architecture: str, server: list[str], subcore: list[str]) -> list[str]:
     problems = []
     for name in server:
-        if not re.search(rf"(?<![\w.]){re.escape(name)}\.py\b", architecture):
+        # No ``/`` before the name either: ``store/auth.py`` does not document ``services/auth.py``.
+        if not re.search(rf"(?<![\w./]){re.escape(name)}\.py\b", architecture):
             problems.append(f"docs/ARCHITECTURE.md does not name subserver/{name}.py")
     for name in subcore:
         if not re.search(rf"subcore\.{re.escape(name)}(?![\w])", architecture):

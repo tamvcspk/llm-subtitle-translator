@@ -208,6 +208,7 @@ class FailureMappingTests(unittest.TestCase):
 
     def test_an_unknown_model_names_the_model(self):
         env = self.failing(ModelNotFound("no such model"))
+        env.fake.model = "m-1"  # a real provider is made for the model the job asked for, and names it
         with self.assertRaises(ModelNotFoundError) as raised:
             env.run(settings={"gst_model": "m-1"})
         self.assertEqual(raised.exception.model, "m-1")

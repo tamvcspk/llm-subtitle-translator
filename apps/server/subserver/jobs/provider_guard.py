@@ -119,7 +119,13 @@ class BudgetedProvider:
 
     def generate(self, req):
         self.budget.spend()
-        return self.inner.generate(req)
+        try:
+            return self.inner.generate(req)
+        except ModelNotFound as exc:
+            # A job can call two models (a research searches on one and reads on another): the one that is unknown is
+            # the one this provider was asked to call, whatever the job's own model is.
+            exc.model_name = self.inner.model  # type: ignore[attr-defined]
+            raise
 
 
 class JobProviders:
@@ -173,7 +179,7 @@ def mapped_errors(settings: dict[str, Any], model: str = ""):
     except ModelNotFound as exc:
         raise ModelNotFoundError(
             error_message("The provider does not know the model (check the model in Settings)", exc, settings),
-            model=model or str(settings.get("gst_model") or ""),
+            model=str(getattr(exc, "model_name", "") or model or settings.get("gst_model") or ""),
         ) from None
     except MissingApiKey as exc:
         raise RuntimeError(str(exc)) from None

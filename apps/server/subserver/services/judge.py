@@ -109,7 +109,14 @@ class JudgeService:
     ) -> dict[int, tuple[tuple[str, str], str, str]]:
         """cue -> ((current text, variant text) it judged, winner, why): the newest verdict of the current rubric (with
         ``job_id``, only the verdicts that job stored)."""
-        found: dict[int, tuple[tuple[str, str], str, str]] = {}
+        return {
+            cue: ((signal.before, signal.after), str(signal.meta["winner"]), str(signal.meta.get("why") or ""))
+            for cue, signal in self._newest(unit_id, lang, version, job_id).items()
+        }
+
+    def _newest(self, unit_id: int, lang: str, version: int, job_id: str = "") -> dict[int, Any]:
+        """cue -> the newest stored verdict (a signal) of the current rubric for it."""
+        found: dict[int, Any] = {}
         for signal in self.store.signals(kind=SIGNAL, unit_id=unit_id, limit=SIGNALS_READ):  # newest first
             meta = signal.meta
             if signal.version != version or meta.get("lang") != lang or meta.get("prompt_version") != JUDGE_PROMPT_VERSION:
@@ -118,7 +125,7 @@ class JudgeService:
                 continue
             if signal.cue is None or signal.cue in found or meta.get("winner") not in ("variant", "current", "tie"):
                 continue
-            found[signal.cue] = ((signal.before, signal.after), str(meta["winner"]), str(meta.get("why") or ""))
+            found[signal.cue] = signal
         return found
 
     # -- the request ----------------------------------------------------------------------------------------------------------
@@ -178,6 +185,10 @@ class JudgeService:
             # very job already judged: only the ones it has not stored a verdict for are asked.
             mine = self._verdicts(unit_id, lang, version, job_id=job_id) if job_id else {}
             asked = [r for r in asked if mine.get(r["n"], (None,))[0] != (self._seen(r["current"]), self._seen(r["variant"]))]
+            # More cues than one run may ask: the ones the judge looked at longest ago come first, so asking again covers the
+            # whole episode over a few runs and not the same first cues each time (a cue never judged is the oldest of all).
+            stored = self._newest(unit_id, lang, version)
+            asked.sort(key=lambda r: stored[r["n"]].at if r["n"] in stored else float("-inf"))
         else:
             asked = [r for r in asked if "judge" not in r]
         limit = cue_limit(self._settings())

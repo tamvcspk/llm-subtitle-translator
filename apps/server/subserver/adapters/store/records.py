@@ -53,9 +53,12 @@ class RecordsRepo(Repo):
 
     def calls_for_series(self, series_id: int, task: str) -> int:
         """Calls of one task recorded for one series, over its whole life: what ``research_max_calls_per_series`` counts
-        (FR-7.6). Read from the calls, not from ``jobs``, whose finished rows are cleaned up."""
+        (FR-7.6). Read from the calls, not from ``jobs``, whose finished rows are cleaned up. A try the provider turned
+        away (busy, down, out of quota) is not a call of the budget: one call is recorded once per try, and two outages
+        would otherwise spend a series' whole life of research."""
         return int(self.query(
-            "SELECT COUNT(*) AS n FROM llm_calls WHERE series_id = ? AND task = ?", (int(series_id), task)
+            "SELECT COUNT(*) AS n FROM llm_calls WHERE series_id = ? AND task = ?"
+            " AND outcome NOT IN ('rate_limited', 'unavailable', 'quota_exhausted')", (int(series_id), task)
         )[0]["n"])
 
     def calls_since(self, at: float) -> int:

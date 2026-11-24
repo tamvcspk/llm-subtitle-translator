@@ -25,6 +25,22 @@ RETRY_ROWS_SHOWN = 200  # like a bulk request: the first rows are named, the res
 
 
 class RequestsMixin:
+    def _extract_calls(self, units: list[Unit]) -> int:
+        """Story-fact reads that translating these episodes would run first (P15g, FR-15.5.1): what the job's own memory
+        step makes sure of (each earlier episode with no facts yet, and the episode itself), once for the whole request.
+        Nothing is called; 0 when memory is off or the facts are there."""
+        if self.memory is None:
+            return 0
+        by_series: dict[int, list[Unit]] = {}
+        for unit in units:
+            if unit.series_id is not None:
+                by_series.setdefault(unit.series_id, []).append(unit)
+        settings = self._settings()
+        return sum(
+            len(self.memory.extract_needed(wanted, self.catalog.list_units(series_id), self.catalog.get_series(series_id), settings))
+            for series_id, wanted in by_series.items()
+        )
+
     def request_prerequisites(self, job_id: str, *, estimate_only: bool = False) -> dict[str, Any]:
         """The "request that episode" button of a job that waits for story facts: queue the earlier episodes it
         waits for, those whose source subtitle is on disk. The others cannot be translated yet and are named, so
@@ -39,6 +55,7 @@ class RequestsMixin:
         requested: list[str] = []
         unavailable: list[str] = []
         planned: list[dict[str, Any]] = []
+        planned_units: list[Unit] = []
         for unit_id in job.get("missing_unit_ids") or []:
             unit = self.catalog.get_unit(int(unit_id))
             if unit is None:
@@ -53,6 +70,7 @@ class RequestsMixin:
                     unavailable.append(unit_label(unit))
                     continue
                 planned.append({"title": unit_label(unit), "lang": lang, "cues": len(source), "calls": self.estimator.calls_for(source, None)})
+                planned_units.append(unit)
                 continue
             series = self.catalog.get_series(unit.series_id) if unit.series_id is not None else None
             made = self.jobs.enqueue({
@@ -64,7 +82,9 @@ class RequestsMixin:
             }, [{"code": lang, "language": language, "enabled": True}])
             requested.extend(made)
         if estimate_only:
-            estimate = self.estimator.of(len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned))
+            estimate = self.estimator.of(
+                len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned), self._extract_calls(planned_units),
+            )
             return {"estimate_only": True, "estimate": asdict(estimate), "planned_total": len(planned), "planned": planned,
                     "skipped_total": len(unavailable), "skipped_by_reason": {"no source subtitle": len(unavailable)} if unavailable else {},
                     "unavailable": unavailable}
@@ -85,32 +105,35 @@ class RequestsMixin:
             raise ValueError("there is no target subtitle yet; retranslate the whole episode")
 
         estimate_only = body.get("estimate_only") is True  # says what it would cost; makes no job and no correction
-        created: list[int] = []
-        for new in body.get("new_corrections") or []:
-            if not isinstance(new, dict):
-                raise ValueError("new_corrections must be a list of corrections")
-            if not estimate_only:
-                created.extend(self.add_correction(unit_id, {**new, "lang": lang}).get("ids", []))
-
+        job = {**self._job_payload(unit, out), "retranslate": {"range": window, "correction_ids": None}}
+        # Everything that would refuse the request is checked before the first correction is written: a request that ends
+        # in a 400 leaves nothing behind.
+        blocker = self.jobs.retranslation_blocker(job)
+        if blocker:
+            raise ValueError(blocker)
+        new_corrections = body.get("new_corrections") or []
+        if not all(isinstance(new, dict) for new in new_corrections):
+            raise ValueError("new_corrections must be a list of corrections")
         ids = body.get("correction_ids")
         if ids is not None:
             valid = {c.id for c in self.catalog.corrections(unit_id, lang)}
-            wanted = [int(i) for i in ids] + created
-            unknown = [i for i in wanted if i not in valid]
+            unknown = [int(i) for i in ids if int(i) not in valid]
             if unknown:
                 raise ValueError(f"unknown or inactive correction(s): {', '.join(map(str, unknown))}")
-            ids = sorted(set(wanted))
+        created: list[int] = []
+        if not estimate_only:
+            for new in new_corrections:
+                created.extend(self.add_correction(unit_id, {**new, "lang": lang}).get("ids", []))
+        if ids is not None:
+            ids = sorted(set([int(i) for i in ids] + created))
 
-        job = {**self._job_payload(unit, out), "retranslate": {"range": window, "correction_ids": ids}}
+        job["retranslate"]["correction_ids"] = ids
         if estimate_only:
-            blocker = self.jobs.retranslation_blocker(job)
-            if blocker:
-                raise ValueError(blocker)
             ordinals = list(range(window["first"], window["last"] + 1)) if window else None
             cues = len(ordinals) if ordinals else len(source)
             return {
                 "ok": True, "estimate_only": True, "range": window, "correction_ids": ids,
-                "estimate": asdict(self.estimator.of(1, cues, self.estimator.calls_for(source, ordinals))),
+                "estimate": asdict(self.estimator.of(1, cues, self.estimator.calls_for(source, ordinals), self._extract_calls([unit]))),
             }
         job_id = self.jobs.enqueue_retranslation(job)
         # An admin asking for a retranslation says the current translation was not good enough (FR-19.4).
@@ -159,7 +182,7 @@ class RequestsMixin:
                 raise ValueError("A variant of this episode is already queued")
             return {
                 "ok": True, "estimate_only": True, "label": variant["label"],
-                "estimate": asdict(self.estimator.of(1, len(source), self.estimator.calls_for(source))),
+                "estimate": asdict(self.estimator.of(1, len(source), self.estimator.calls_for(source), self._extract_calls([unit]))),
             }
         job_id = self.jobs.enqueue_variant(job)
         return {"ok": True, "job_id": job_id, "label": variant["label"]}
@@ -194,6 +217,7 @@ class RequestsMixin:
         ids = self._retry_ids(body)
         planned: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
+        retried_units: list[Unit] = []  # the episodes of the translations among them: their story facts may need reading first
         for job_id in dict.fromkeys(ids):
             job = store.get(job_id)
             row: dict[str, Any] = {"job_id": job_id, "title": "", "lang": "", "cues": 0, "calls": 0, "skip": "", "reason": ""}
@@ -223,11 +247,17 @@ class RequestsMixin:
                         ordinals = list(range(int(window["first"]), int(window["last"]) + 1))
                     cues = len(ordinals) if ordinals else len(source)
                     calls = self.estimator.calls_for(source, ordinals)
+                    unit = self.catalog.get_unit(int(job["unit_id"])) if job.get("unit_id") else None
+                    if unit is not None:
+                        retried_units.append(unit)
             if reason:
                 skipped.append({**row, "skip": reason, "reason": reason})
             else:
                 planned.append({**row, "cues": cues, "calls": calls})
-        estimate = self.estimator.of(len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned))
+        estimate = self.estimator.of(
+            len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned),
+            self._extract_calls(list({u.id: u for u in retried_units}.values())),
+        )
         counts: dict[str, int] = {}
         for row in skipped:
             counts[row["reason"]] = counts.get(row["reason"], 0) + 1

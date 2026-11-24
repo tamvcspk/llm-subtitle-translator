@@ -32,14 +32,16 @@ class InsightsRepo(Repo):
         ]
 
     def job_prompts(self, job_ids: Iterable[str]) -> list[JobPrompt]:
-        """The prompt version each of these jobs made its calls with (an event or a signal names only the job)."""
+        """The prompt version each of these jobs translated with (an event or a signal names only the job). Only the
+        translation calls say it: a job also reads story facts under its own prompt (``memory-x3``), which sorts first."""
         wanted = sorted({j for j in job_ids if j})
         out: list[JobPrompt] = []
         for start in range(0, len(wanted), self._PATH_CHUNK):
             chunk = wanted[start:start + self._PATH_CHUNK]
             rows = self.query(
                 "SELECT job_id, MIN(prompt_version) AS prompt_version FROM llm_calls"
-                f" WHERE job_id IN ({','.join('?' * len(chunk))}) AND prompt_version <> '' GROUP BY job_id", chunk,
+                f" WHERE job_id IN ({','.join('?' * len(chunk))}) AND task = 'translate' AND prompt_version <> ''"
+                " GROUP BY job_id", chunk,
             )
             out.extend(JobPrompt(job_id=r["job_id"], prompt_version=r["prompt_version"]) for r in rows)
         return out

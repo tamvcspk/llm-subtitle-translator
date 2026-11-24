@@ -50,7 +50,10 @@ class RedirectResolver:
                 where = response.getheader("Location") if 300 <= response.status < 400 else None
             finally:
                 connection.close()
-            return _page(where)
+            page = _page(where)
+            if page is not None and (urlsplit(page).hostname or "").lower() in self.hosts:
+                return None  # a redirect to another redirect is not a page: nothing is followed past the first hop
+            return page
         except (OSError, http.client.HTTPException, ValueError) as exc:
             logging.info("Could not follow a grounding link (%s)", type(exc).__name__)
             return None

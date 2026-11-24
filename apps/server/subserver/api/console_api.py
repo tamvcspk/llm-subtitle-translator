@@ -216,7 +216,8 @@ def register(router: APIRouter) -> None:
         name = backup.name.replace('"', "")
         return Response(
             await blocking(backup.read_bytes), media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+            # A backup can hold the API keys: no cache keeps a copy of it.
+            headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"},
         )
 
     @router.post("/api/backups/import", response_model=ans.ImportAnswer)

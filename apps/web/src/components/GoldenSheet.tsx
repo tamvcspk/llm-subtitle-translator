@@ -1,5 +1,5 @@
 import { Alert, Button, Drawer, Group, Stack, Text, Textarea } from "@mantine/core";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchGolden } from "../api/queries";
 import { routeUrl } from "../api/route";
 import { goldenFileName, preview } from "../lib/insights";
@@ -21,29 +21,44 @@ type Copy = { state: "idle" } | { state: "copying" } | { state: "copied"; cues: 
 export function GoldenSheet({ target, onClose }: { target: GoldenTarget | null; onClose: () => void }) {
   const [copy, setCopy] = useState<Copy>({ state: "idle" });
   const box = useRef<HTMLTextAreaElement>(null);
+  const reading = useRef<AbortController | null>(null);
+
+  // A read that is still out when the sheet closes, or opens for another series or language, must not write its answer
+  // to the clipboard or into the state of the next one.
+  const seriesId = target?.seriesId;
+  const lang = target?.lang;
+  useEffect(() => () => reading.current?.abort(), [seriesId, lang]);
 
   const close = () => {
+    reading.current?.abort();
     setCopy({ state: "idle" });
     onClose();
   };
 
   const copyText = async () => {
     if (!target) return;
+    reading.current?.abort();
+    const read = new AbortController();
+    reading.current = read;
     setCopy({ state: "copying" });
     let text: string;
     let cues: number;
     try {
-      const golden = await fetchGolden(target.seriesId, target.lang);
+      const golden = await fetchGolden(target.seriesId, target.lang, read.signal);
+      if (read.signal.aborted) return;
       text = JSON.stringify(golden, null, 2);
       cues = golden.cues.length;
     } catch (error) {
+      if (read.signal.aborted) return;
       setCopy({ state: "failed", message: error instanceof Error ? error.message : String(error) });
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
+      if (read.signal.aborted) return;
       setCopy({ state: "copied", cues });
     } catch {
+      if (read.signal.aborted) return;
       setCopy({ state: "blocked", text, cues });
       queueMicrotask(() => box.current?.select());
     }

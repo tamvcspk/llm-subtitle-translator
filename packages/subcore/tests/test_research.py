@@ -78,6 +78,29 @@ class GroundingParseTests(unittest.TestCase):
         }
         self.assertEqual(parse_grounding(meta, "Dũng sĩ Himmel")[2], "Dũng sĩ [0] Himmel")
 
+    def test_the_same_words_said_twice_are_two_passages_each_with_its_own_pages(self):
+        text = "Fern said hello. Then Fern said hello."
+        meta = {
+            "grounding_chunks": [
+                {"web": {"title": "wikipedia.org", "uri": REDIRECT + "a"}}, {"web": {"title": "fandom.com", "uri": REDIRECT + "b"}},
+            ],
+            "grounding_supports": [
+                {"grounding_chunk_indices": [0], "segment": {"text": "Fern said hello."}},
+                {"grounding_chunk_indices": [1], "segment": {"text": "Fern said hello."}},
+            ],
+        }
+        # The second support is the second sentence, not the first again: one page each, never both on the first.
+        self.assertEqual(parse_grounding(meta, text)[2], "Fern said hello. [0] Then Fern said hello. [1]")
+
+    def test_an_offset_that_is_a_boolean_or_outside_the_text_places_nothing(self):
+        for offset in (True, -3, 10_000):
+            with self.subTest(offset=offset):
+                meta = {
+                    "grounding_chunks": [{"web": {"title": "wikipedia.org", "uri": REDIRECT + "x"}}],
+                    "grounding_supports": [{"grounding_chunk_indices": [0], "segment": {"end_index": offset, "text": "gone"}}],
+                }
+                self.assertEqual(parse_grounding(meta, "Dũng sĩ Himmel")[2], "Dũng sĩ Himmel")
+
     def test_nothing_grounded_gives_nothing(self):
         self.assertEqual(parse_grounding(None, "text"), ((), (), ""))
         self.assertEqual(parse_grounding({"grounding_chunks": [{"retrieved_context": {}}]}, "text"), ((), (), ""))
