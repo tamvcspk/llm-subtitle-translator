@@ -30,7 +30,7 @@ describe("A series whose auto-request is waiting for its glossary (FR-15.12)", (
     expect(notice).toHaveTextContent("Auto-request is waiting for this series' glossary");
     expect(notice).toHaveTextContent("only its first 2 episodes were requested");
     expect(notice).toHaveTextContent("1 more waits until the suggestions are reviewed (4 waiting)");
-    expect(within(notice).getByRole("link", { name: "Review suggestions" })).toHaveAttribute("href", "/review");
+    expect(within(notice).getByRole("link", { name: "Review suggestions" })).toHaveAttribute("href", "/series/1/suggestions");
     const row = screen.getByText("S01E03").closest("li") as HTMLElement;
     expect(within(row).getByText("Missing · Waiting for glossary review")).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: "Translate S01E03" })).toBeInTheDocument(); // only the policy waits

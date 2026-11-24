@@ -93,21 +93,27 @@ class StoreBase(Repo):
                     raise
 
     def _fill_suggestion_identities(self) -> None:
-        """Give every suggestion from before migration 14 its identity (idempotent: rows that have one are left alone)."""
+        """Backfill empty identities (pre-migration 14) and normalise legacy 3-part ``address_rule`` identities to
+        the 2-part pair key (P18f, R18-4). Idempotent."""
         with self._lock:
-            rows = self._db.execute("SELECT id, kind, payload_json FROM suggestions WHERE identity = ''").fetchall()
-            if not rows:
+            rows = self._db.execute(
+                "SELECT id, kind, payload_json, identity FROM suggestions"
+                " WHERE identity = '' OR kind = 'address_rule'"
+            ).fetchall()
+            updates: list[tuple[str, int]] = []
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload_json"])
+                except ValueError:
+                    continue
+                key = identity_key(row["kind"], payload) if isinstance(payload, dict) else ""
+                if key and key != row["identity"]:
+                    updates.append((key, int(row["id"])))
+            if not updates:
                 return
             self._db.execute("BEGIN")
             try:
-                for row in rows:
-                    try:
-                        payload = json.loads(row["payload_json"])
-                    except ValueError:
-                        continue
-                    key = identity_key(row["kind"], payload) if isinstance(payload, dict) else ""
-                    if key:
-                        self._db.execute("UPDATE suggestions SET identity = ? WHERE id = ?", (key, row["id"]))
+                self._db.executemany("UPDATE suggestions SET identity = ? WHERE id = ?", updates)
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")

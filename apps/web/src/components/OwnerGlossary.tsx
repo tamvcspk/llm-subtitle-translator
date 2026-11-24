@@ -1,14 +1,26 @@
-import { Alert, Badge, Button, Card, Checkbox, Group, Loader, Stack, Text, TextInput, Title } from "@mantine/core";
+import { Alert, Badge, Button, Card, Checkbox, Group, Loader, Paper, SegmentedControl, Stack, Text, TextInput, Title } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
-import { IconPlus } from "@tabler/icons-react";
+import { IconPlus, IconSearch } from "@tabler/icons-react";
 import { useMemo, useState } from "react";
 import { useGlossary, useGlossaryDryRun, useSaveGlossary, type StyleOwner } from "../api/queries";
 import type { GlossaryAddress, GlossaryAnswer, GlossaryDoc, GlossaryTerm } from "../api/types";
-import { cleanDoc, glossaryImpact, patchAt, positionProblem, removeAt, sameDoc } from "../lib/glossary";
+import {
+  cleanDoc,
+  dedupeAddressRules,
+  filterAddressGroups,
+  filterTerms,
+  glossaryImpact,
+  groupAddressRules,
+  patchAt,
+  positionProblem,
+  removeAt,
+  sameDoc,
+} from "../lib/glossary";
 import { ConfirmSheet } from "./ConfirmSheet";
 import { CopySheet, ExportSheet, HistorySheet, ImportSheet } from "./GlossarySheets";
 
 type Sheet = "history" | "copy" | "import" | "export" | null;
+type SectionTab = "terms" | "address";
 
 function TermCard({ index, term, window, onChange, onDelete }: { index: number; term: GlossaryTerm; window: boolean; onChange: (patch: Partial<GlossaryTerm>) => void; onDelete: () => void }) {
   return (
@@ -132,6 +144,8 @@ function Editor({ owner, lang, answer }: { owner: StyleOwner; lang: string; answ
   const noun = movie ? "movie" : "episode";
   const [draft, setDraft] = useState<GlossaryDoc>(answer.doc);
   const [sheet, setSheet] = useState<Sheet>(null);
+  const [section, setSection] = useState<SectionTab>("terms");
+  const [filter, setFilter] = useState("");
   const [asking, setAsking] = useState(false);
   const save = useSaveGlossary(owner, lang);
 
@@ -146,8 +160,12 @@ function Editor({ owner, lang, answer }: { owner: StyleOwner; lang: string; answ
   const affected = impact.data?.would_stale ?? 0;
   const sentence = glossaryImpact(impact.data, "Saving", noun);
 
-  const terms = draft.terms ?? [];
-  const rules = draft.address_rules ?? [];
+  const terms = useMemo(() => draft.terms ?? [], [draft.terms]);
+  const rules = useMemo(() => draft.address_rules ?? [], [draft.address_rules]);
+  const visibleTerms = useMemo(() => filterTerms(terms, filter), [terms, filter]);
+  const groupedRules = useMemo(() => groupAddressRules(rules), [rules]);
+  const visibleGroups = useMemo(() => filterAddressGroups(groupedRules, filter), [groupedRules, filter]);
+  const deduped = useMemo(() => dedupeAddressRules(rules), [rules]);
   // A movie has one subtitle: a window in story order means nothing there.
   const window = !movie;
   const doSave = () => save.mutate({ doc: clean }, { onSuccess: () => setAsking(false) });
@@ -181,77 +199,166 @@ function Editor({ owner, lang, answer }: { owner: StyleOwner; lang: string; answ
       </Stack>
 
       <Stack gap="sm">
-        <Group justify="space-between">
-          <Title order={4}>Terms</Title>
-          <Button variant="light" leftSection={<IconPlus size={16} />} onClick={() => setDraft({ ...draft, terms: [...terms, { source: "", target: "" }] })}>
-            Add term
-          </Button>
-        </Group>
-        {terms.length === 0 && <Text c="dimmed">No terms yet. A term makes a name or a word come out the same way every time.</Text>}
-        {terms.map((term, index) => (
-          <TermCard
-            key={index}
-            index={index}
-            term={term}
-            window={window}
-            onChange={(patch) => setDraft({ ...draft, terms: patchAt(terms, index, patch) })}
-            onDelete={() => setDraft({ ...draft, terms: removeAt(terms, index) })}
-          />
-        ))}
+        <SegmentedControl
+          aria-label="Glossary section"
+          value={section}
+          onChange={(value) => setSection(value as SectionTab)}
+          data={[
+            { value: "terms", label: `Terms (${terms.length})` },
+            { value: "address", label: `Forms of address (${rules.length})` },
+          ]}
+        />
+        <TextInput
+          aria-label="Filter glossary"
+          placeholder={section === "terms" ? "Filter terms…" : "Filter forms of address…"}
+          leftSection={<IconSearch size={18} />}
+          value={filter}
+          onChange={(event) => setFilter(event.currentTarget.value)}
+        />
       </Stack>
 
-      <Stack gap="sm">
-        <Group justify="space-between">
-          <Title order={4}>Forms of address</Title>
-          <Button variant="light" leftSection={<IconPlus size={16} />} onClick={() => setDraft({ ...draft, address_rules: [...rules, { a: "", b: "" }] })}>
-            Add address rule
-          </Button>
-        </Group>
-        {rules.length === 0 && <Text c="dimmed">No forms of address yet. They say who calls whom how, from which episode on.</Text>}
-        {rules.map((rule, index) => (
-          <AddressCard
-            key={index}
-            index={index}
-            rule={rule}
-            window={window}
-            onChange={(patch) => setDraft({ ...draft, address_rules: patchAt(rules, index, patch) })}
-            onDelete={() => setDraft({ ...draft, address_rules: removeAt(rules, index) })}
-          />
-        ))}
-      </Stack>
-
-      <Stack gap="xs">
-        <Group justify="space-between" wrap="wrap" gap="sm">
-          <Stack gap={2}>
-            {dirty && (
-              <Badge color="yellow" variant="light" style={{ alignSelf: "flex-start" }}>
-                Unsaved changes
-              </Badge>
-            )}
-            <Text role="status" size="sm" c={impact.isError ? "red" : "dimmed"}>
-              {!dirty ? "No changes." : waiting || impact.isFetching ? "Checking…" : impact.isError ? impact.error.message : sentence}
-            </Text>
-          </Stack>
-          <Group gap="xs">
-            <Button variant="default" disabled={!dirty} onClick={() => setDraft(answer.doc)}>
-              Discard
-            </Button>
+      {section === "terms" && (
+        <Stack gap="sm">
+          <Group justify="space-between" wrap="wrap" gap="xs">
+            <Title order={4}>Terms</Title>
             <Button
-              disabled={!dirty || waiting || impact.isFetching || impact.isError}
-              loading={save.isPending && !asking}
-              onClick={() => (affected > 0 ? setAsking(true) : doSave())}
+              variant="light"
+              leftSection={<IconPlus size={16} />}
+              onClick={() => {
+                setFilter("");
+                setDraft({ ...draft, terms: [...terms, { source: "", target: "" }] });
+              }}
             >
-              Save
+              Add term
             </Button>
           </Group>
-        </Group>
-        {save.isError && !asking && <Alert color="red">{save.error.message}</Alert>}
-        {save.isSuccess && !dirty && (
-          <Text size="sm" c="teal.7">
-            Saved. Nothing was retranslated.
-          </Text>
-        )}
-      </Stack>
+          {terms.length === 0 ? (
+            <Text c="dimmed">No terms yet. A term makes a name or a word come out the same way every time.</Text>
+          ) : visibleTerms.length === 0 ? (
+            <Text c="dimmed">No terms match “{filter.trim()}”.</Text>
+          ) : (
+            visibleTerms.map(({ term, index }) => (
+              <TermCard
+                key={index}
+                index={index}
+                term={term}
+                window={window}
+                onChange={(patch) => setDraft({ ...draft, terms: patchAt(terms, index, patch) })}
+                onDelete={() => setDraft({ ...draft, terms: removeAt(terms, index) })}
+              />
+            ))
+          )}
+        </Stack>
+      )}
+
+      {section === "address" && (
+        <Stack gap="sm">
+          <Group justify="space-between" wrap="wrap" gap="xs">
+            <Title order={4}>Forms of address</Title>
+            <Group gap="xs" wrap="wrap">
+              {deduped.removed > 0 && (
+                <Button
+                  variant="light"
+                  color="orange"
+                  onClick={() => setDraft({ ...draft, address_rules: deduped.rules })}
+                >
+                  Clean up duplicates ({deduped.removed})
+                </Button>
+              )}
+              <Button
+                variant="light"
+                leftSection={<IconPlus size={16} />}
+                onClick={() => {
+                  setFilter("");
+                  setDraft({ ...draft, address_rules: [...rules, { a: "", b: "" }] });
+                }}
+              >
+                Add address rule
+              </Button>
+            </Group>
+          </Group>
+          {rules.length === 0 ? (
+            <Text c="dimmed">No forms of address yet. They say who calls whom how, from which episode on.</Text>
+          ) : visibleGroups.length === 0 ? (
+            <Text c="dimmed">No forms of address match “{filter.trim()}”.</Text>
+          ) : (
+            visibleGroups.map((group) => (
+              <Stack key={group.key} gap="xs" component="section" aria-label={group.label}>
+                <Group justify="space-between" wrap="wrap" gap="xs">
+                  <Text fw={600} size="sm">
+                    {group.label}
+                  </Text>
+                  {group.items.length > 1 && (
+                    <Badge variant="light" color="gray" size="sm">
+                      {group.items.length} stages
+                    </Badge>
+                  )}
+                </Group>
+                {group.items.map(({ rule, index }) => (
+                  <AddressCard
+                    key={index}
+                    index={index}
+                    rule={rule}
+                    window={window}
+                    onChange={(patch) => setDraft({ ...draft, address_rules: patchAt(rules, index, patch) })}
+                    onDelete={() => setDraft({ ...draft, address_rules: removeAt(rules, index) })}
+                  />
+                ))}
+              </Stack>
+            ))
+          )}
+        </Stack>
+      )}
+
+      <Paper
+        withBorder={dirty}
+        shadow={dirty ? "md" : undefined}
+        p={dirty ? "sm" : 0}
+        radius={dirty ? "md" : 0}
+        style={
+          dirty
+            ? {
+                position: "sticky",
+                bottom: 0,
+                zIndex: 20,
+                paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))",
+              }
+            : undefined
+        }
+      >
+        <Stack gap="xs">
+          <Group justify="space-between" wrap="wrap" gap="sm">
+            <Stack gap={2}>
+              {dirty && (
+                <Badge color="yellow" variant="light" style={{ alignSelf: "flex-start" }}>
+                  Unsaved changes
+                </Badge>
+              )}
+              <Text role="status" size="sm" c={impact.isError ? "red" : "dimmed"}>
+                {!dirty ? "No changes." : waiting || impact.isFetching ? "Checking…" : impact.isError ? impact.error.message : sentence}
+              </Text>
+            </Stack>
+            <Group gap="xs">
+              <Button variant="default" disabled={!dirty} onClick={() => setDraft(answer.doc)}>
+                Discard
+              </Button>
+              <Button
+                disabled={!dirty || waiting || impact.isFetching || impact.isError}
+                loading={save.isPending && !asking}
+                onClick={() => (affected > 0 ? setAsking(true) : doSave())}
+              >
+                Save
+              </Button>
+            </Group>
+          </Group>
+          {save.isError && !asking && <Alert color="red">{save.error.message}</Alert>}
+          {save.isSuccess && !dirty && (
+            <Text size="sm" c="teal.7">
+              Saved. Nothing was retranslated.
+            </Text>
+          )}
+        </Stack>
+      </Paper>
 
       <ConfirmSheet
         opened={asking}

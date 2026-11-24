@@ -16,8 +16,8 @@ export function BulkSheet({
   onDone: (answer: BulkAnswer, series: string) => void;
   onClose: () => void;
 }) {
-  const impact = useBulkImpact(group?.seriesId ?? 0, group !== null);
   const accept = useBulkAccept();
+  const impact = useBulkImpact(group?.seriesId ?? 0, group !== null && !accept.isPending && !accept.isSuccess);
   const close = () => {
     accept.reset();
     onClose();
@@ -31,7 +31,14 @@ export function BulkSheet({
             Accept {pendingLine(group.count)} for {group.series}? They are written to its glossary and character cards.
           </Text>
         )}
-        {impact.isPending && group !== null && <Loader size="sm" aria-label="Counting" />}
+        {impact.isPending && group !== null && (
+          <Group gap="xs" role="status">
+            <Loader size="sm" aria-label="Counting" />
+            <Text size="sm" c="dimmed">
+              Counting affected translations…
+            </Text>
+          </Group>
+        )}
         {impact.isError && <Alert color="red">{impact.error.message}</Alert>}
         {answer && (
           <Text size="sm" c="dimmed" role="status">
@@ -40,6 +47,14 @@ export function BulkSheet({
         )}
         {answer && group && answer.count !== group.count && (
           <Alert color="orange">The list has changed: {pendingLine(answer.count)} are waiting now. Close this and look again.</Alert>
+        )}
+        {accept.isPending && (
+          <Group gap="xs" role="status">
+            <Loader size="sm" aria-label="Applying" />
+            <Text size="sm" c="dimmed">
+              Applying suggestions and counting affected translations…
+            </Text>
+          </Group>
         )}
         {accept.isError && <Alert color="red">{accept.error.message}</Alert>}
         <Group justify="space-between">

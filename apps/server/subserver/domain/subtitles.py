@@ -26,11 +26,15 @@ def target_output_path(subtitle_path: str, target_code: str, source_code: str | 
 SUBTITLE_EXTENSIONS = (".srt", ".ass", ".ssa", ".sub", ".vtt")
 
 
-def existing_target_subtitle(subtitle_path: str, target_code: str, source_code: str | None = None) -> str | None:
+def existing_target_subtitle(
+    subtitle_path: str, target_code: str, source_code: str | None = None,
+    *, dir_cache: dict[Path, list[Path]] | None = None,
+) -> str | None:
     """A sibling subtitle of the same video that is already in ``target_code``, whatever its exact name.
 
     The target path the worker would write is not the only way a language can be present: Bazarr
     names files ``Name.vi.hi.srt`` or ``Name.vi.ass`` too. A forced-only track does not count.
+    ``dir_cache`` remembers ``iterdir()`` results per folder across one ``plan()`` pass (P18a).
     """
     path = Path(subtitle_path)
     code = str(target_code or "").strip().lower()
@@ -44,10 +48,18 @@ def existing_target_subtitle(subtitle_path: str, target_code: str, source_code: 
             stem = ".".join(parts[:idx])
             break
     prefix = stem.lower() + "."
-    try:
-        siblings = sorted(path.parent.iterdir())
-    except OSError:
-        return None
+    parent = path.parent
+    if dir_cache is not None and parent in dir_cache:
+        siblings = dir_cache[parent]
+    else:
+        try:
+            siblings = sorted(parent.iterdir())
+        except OSError:
+            if dir_cache is not None:
+                dir_cache[parent] = []
+            return None
+        if dir_cache is not None:
+            dir_cache[parent] = siblings
     for sibling in siblings:
         name = sibling.name.lower()
         if len(name) <= len(prefix) or not name.startswith(prefix) or not name.endswith(SUBTITLE_EXTENSIONS):

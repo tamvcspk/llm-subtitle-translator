@@ -6,14 +6,15 @@
   min-height: 44px;
 }
 
-.mantine-ActionIcon-root {
+.mantine-ActionIcon-root,
+.mantine-SegmentedControl-label {
   min-width: 44px;
 }
 
-/* The page body never scrolls sideways (UX §3 rule 6); wide tables scroll inside their own box. */
+/* The page body never scrolls sideways (UX §3 rule 6); clip (not hidden) keeps position: sticky working. */
 html,
 body {
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 body {

@@ -34,14 +34,14 @@ from subcore.glossary import Glossary
 from subcore.providers import Provider
 from subcore.suggest import (
     SUGGEST_PROMPT_VERSION, AddressItem, CharacterItem, Draft, Episode, SuggestError, TermItem,
-    address_drafts, address_items, character_drafts, character_items, term_drafts, term_items,
+    address_drafts, address_items, change_episode_key, character_drafts, character_items, term_drafts, term_items,
 )
 
 from ..domain import queue_policy as policy
 from .memory import StoryMemory, unit_label
 from ..domain.ports import Telemetry
 from ..jobs.queue import JobQueue
-from ..domain.suggestion_keys import identity_key
+from ..domain.suggestion_keys import identity, identity_key
 from .suggestions import Proposal, SuggestionService, normalise
 from ..adapters.telemetry import NULL
 from ..domain.translation import redact
@@ -130,8 +130,10 @@ class FactsProposer:
         owner, stored, episodes, cues_of, glossary = found.owner, found.stored, found.episodes, found.cues_of, found.glossary
         library = self.suggestions.library
         cards = library.styles.cards(owner.kind, owner.key) if library.styles else []
-        held = self._held(series_id, lang)  # taken out BEFORE each kind's limit, or they would crowd out the rest
-        address = address_items(episodes, cues_of, glossary=glossary, exclude=held["address_rule"])[:ADDRESS_PER_RUN]
+        held, held_changes = self._held(series_id, lang)  # taken out BEFORE each kind's limit, or they would crowd out the rest
+        address = address_items(
+            episodes, cues_of, glossary=glossary, exclude=held["address_rule"], exclude_changes=held_changes,
+        )[:ADDRESS_PER_RUN]
         terms = term_items(episodes, cues_of, glossary=glossary, exclude=held["term"])
         characters = character_items(
             episodes, cues_of, glossary=glossary, exclude=held["character"],
@@ -139,20 +141,47 @@ class FactsProposer:
         )
         return Scan(len(episodes), {unit_label(u): u.id for u, _ in stored}, address, terms, characters)
 
-    def _held(self, series_id: int, lang: str) -> dict[str, set[tuple[str, ...]]]:
+    def _held(self, series_id: int, lang: str) -> tuple[dict[str, set[tuple[str, ...]]], set[tuple[str, str, str]]]:
         """What a run must not ask about for this series and language: every identity the inbox holds, whatever its
-        status, and every candidate the model recently had no answer for (R13-5)."""
+        status, and every candidate the model recently had no answer for (R13-5). Legacy 3-part pending address_rule
+        rows (pre-P18f) are NOT held so a fresh run replaces them with one merged pair card (P18f)."""
         store = self.suggestions.store
-        keys = {row.identity or identity_key(row.kind, row.payload) for row in store.suggestions(series_id=series_id, target_lang=lang, limit=10_000)}
-        keys |= store.suggestion_skips(series_id, lang, SUGGEST_PROMPT_VERSION, time.time() - SKIP_DAYS * 86400)
         held: dict[str, set[tuple[str, ...]]] = {"address_rule": set(), "term": set(), "character": set()}
-        for key in keys:
+        held_changes: set[tuple[str, str, str]] = set()
+        for row in store.suggestions(series_id=series_id, target_lang=lang, limit=10_000):
+            key = row.identity or identity_key(row.kind, row.payload)
             try:
                 kind, *parts = json.loads(key)
             except ValueError:
                 continue
+            if kind == "address_rule":
+                # Legacy per-stage pending rows (from before P18f) are superseded when the generator runs again.
+                legacy_pending = row.status == "pending" and (
+                    len(parts) >= 3
+                    or (bool(row.payload.get("from")) and not row.payload.get("stages") and not row.payload.get("change_from"))
+                )
+                if legacy_pending:
+                    continue
+                pair = tuple(parts[:2])
+                held["address_rule"].add(pair)
+                change = change_episode_key(row.payload["change_from"]) if row.payload.get("change_from") else ""
+                if row.status == "rejected":
+                    # A rejected pair (or rejected change) is not proposed again (R18-3).
+                    held_changes.add((*pair, change))
+                elif change and row.status in ("pending", "accepted"):
+                    held_changes.add((*pair, change))
+                continue
             held.setdefault(kind, set()).add(tuple(parts))
-        return held
+        for key in store.suggestion_skips(series_id, lang, SUGGEST_PROMPT_VERSION, time.time() - SKIP_DAYS * 86400):
+            try:
+                kind, *parts = json.loads(key)
+            except ValueError:
+                continue
+            if kind == "address_rule" and len(parts) >= 3:
+                held_changes.add((parts[0], parts[1], change_episode_key(parts[2])))
+                continue
+            held.setdefault(kind, set()).add(tuple(parts))
+        return held, held_changes
 
     def estimate(self, series_id: int, lang: str) -> dict[str, Any]:
         return {"ok": True, "estimate_only": True, **self.scan(series_id, lang).to_json()}
@@ -197,7 +226,7 @@ class FactsProposer:
                 except ValueError:
                     continue
                 usable.append(draft)
-            answered = {identity_key(d.kind, d.payload) for d in usable}
+            answered: set[str] = set()
             if usable:
                 outcome = self.suggestions.propose(
                     series_id, lang,
@@ -209,6 +238,17 @@ class FactsProposer:
                 counts = report.setdefault("outcomes", {}).setdefault(source, {})
                 for field_name, value in outcome.to_json().items():
                     counts[field_name] = (counts.get(field_name, [] if isinstance(value, list) else 0)) + value
+                # R18-3: a change_from draft that propose() skipped (in_glossary / rejected_before) must still be
+                # recorded in suggestion_skips so the next run does not re-ask the model.
+                for d in usable:
+                    if d.kind == "address_rule" and d.payload.get("change_from"):
+                        if outcome.added > 0:
+                            answered.add(json.dumps(
+                                [d.kind, *identity(d.kind, d.payload), change_episode_key(d.payload["change_from"])],
+                                ensure_ascii=False,
+                            ))
+                    else:
+                        answered.add(identity_key(d.kind, d.payload))
             # What the model answered nothing usable for is remembered, or it would head the list of every run (R13-5).
             store.suggestion_skip(
                 series_id, lang, [k for k in (json.dumps([kind, *item.key], ensure_ascii=False) for item in items) if k not in answered],

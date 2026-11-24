@@ -5179,6 +5179,69 @@
         "type": "object",
         "title": "AcceptBody"
       },
+      "AddressProposalPayload": {
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "b": {
+            "type": "string"
+          },
+          "a_to_b": {
+            "type": "string"
+          },
+          "b_to_a": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "until": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/AddressStagePayload"
+            },
+            "type": "array"
+          },
+          "change_from": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "a",
+          "b"
+        ],
+        "description": "A pair-level ``address_rule`` proposal: flat for one stage, or carrying ``stages`` when a sturdy change point\nwas confirmed (P18f). ``change_from`` marks a change proposal for a pair the glossary already rules."
+      },
+      "AddressStagePayload": {
+        "properties": {
+          "a_to_b": {
+            "type": "string"
+          },
+          "b_to_a": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "until": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "description": "One time-windowed stage inside a multi-stage pair ``address_rule`` proposal (P18f)."
+      },
       "AdoptAnswer": {
         "properties": {
           "ok": {
@@ -8620,6 +8683,15 @@
           },
           "reason": {
             "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "translate",
+              "retranslate",
+              ""
+            ],
+            "description": "``translate`` (new) or ``retranslate`` (overwrite with version backup) for a planned row; ``\"\"`` when skipped."
           }
         },
         "additionalProperties": false,
@@ -8648,6 +8720,14 @@
           },
           "planned_total": {
             "type": "integer"
+          },
+          "translate_total": {
+            "type": "integer",
+            "description": "How many planned jobs translate an episode or movie that has no target subtitle yet."
+          },
+          "retranslate_total": {
+            "type": "integer",
+            "description": "How many planned jobs retranslate an existing target subtitle (keeping the previous file as a version first)."
           },
           "planned": {
             "items": {
@@ -12007,7 +12087,7 @@
                 "$ref": "#/components/schemas/GlossaryTerm"
               },
               {
-                "$ref": "#/components/schemas/GlossaryAddress"
+                "$ref": "#/components/schemas/AddressProposalPayload"
               },
               {
                 "$ref": "#/components/schemas/CharacterPayload"

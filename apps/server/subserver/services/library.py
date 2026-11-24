@@ -313,10 +313,12 @@ class Library:
     def target_info(
         self, unit: Unit, output: Output, *, glossary: g.Glossary | None = None, cache: dict | None = None,
         styles: StyleLayers | None = None, page: VersionPage | None = None, exists: bool | None = None,
+        trusting_stat: bool | None = None, check_modified: bool = True,
     ) -> dict[str, Any]:
         """``page`` (the history of a whole page of files, read once) and ``exists`` (the caller just looked) save
         the queries and the stat a listing would repeat for every target; a file is also not read again while its
-        size and time are what they were (display only, see ``TranslationVersions.is_system_file``)."""
+        size and time are what they were (display only, see ``TranslationVersions.is_system_file``). Set
+        ``check_modified=False`` when only staleness is needed (``impact_units``), so no target file is hashed."""
         lang, output_path = output.target_lang, output.output_path
         if exists is None:
             exists = Path(output_path).is_file()
@@ -343,24 +345,42 @@ class Library:
             current.glossary_hash != self.unit_rules(unit, lang, glossary=glossary, cache=cache, styles=styles).hash
             or (self.memory is not None and self.memory.is_stale(unit, current, cache))
         )
+        trust = (page is not None) if trusting_stat is None else trusting_stat
+        modified_outside = (
+            not self.versions.is_system_file(output_path, current=current, trusting_stat=trust)
+            if check_modified else False
+        )
         info.update(
             version=current.version, trigger=current.trigger, model=current.model,
             missing_units=list(current.missing_units),
             updated_at=current.created_at,
-            modified_outside=not self.versions.is_system_file(
-                output_path, current=current, trusting_stat=page is not None
-            ),
+            modified_outside=modified_outside,
             status="stale" if stale else ("current" if current.context_complete else "incomplete"),
         )
         return info
 
-    def unit_summary(self, unit: Unit, *, cache: dict | None = None) -> dict[str, Any]:
-        targets = [self.target_info(unit, out, cache=cache) for out in self.catalog.outputs(unit.id)]
+    def unit_summary(
+        self, unit: Unit, *, cache: dict | None = None, page: VersionPage | None = None,
+        outputs: list[Output] | None = None, trusting_stat: bool = True,
+    ) -> dict[str, Any]:
+        unit_outputs = self.catalog.outputs(unit.id) if outputs is None else outputs
+        targets = [
+            self.target_info(unit, out, cache=cache, page=page, trusting_stat=trusting_stat)
+            for out in unit_outputs
+        ]
         status = min((t["status"] for t in targets), key=_ATTENTION.__getitem__, default="untranslated")
         return {
             "id": unit.id, "series_id": unit.series_id, "season": unit.season, "episode": unit.episode,
             "title": unit.title, "source_code": unit.source_code, "targets": targets, "status": status,
         }
+
+    def _summaries(self, units: list[Unit], cache: dict) -> list[dict[str, Any]]:
+        outputs_by_unit = {u.id: self.catalog.outputs(u.id) for u in units}
+        page = self.versions.page(out.output_path for outs in outputs_by_unit.values() for out in outs)
+        return [
+            self.unit_summary(u, cache=cache, page=page, outputs=outputs_by_unit[u.id], trusting_stat=True)
+            for u in units
+        ]
 
     # -- listings ------------------------------------------------------------
     def series_list(self) -> list[dict[str, Any]]:
@@ -369,8 +389,8 @@ class Library:
         for series in self.catalog.list_series():
             counts = dict.fromkeys(STATUSES, 0)
             units = self.catalog.list_units(series.id)
-            for unit in units:
-                counts[self.unit_summary(unit, cache=cache)["status"]] += 1
+            for summary in self._summaries(units, cache):
+                counts[summary["status"]] += 1
             out.append({
                 "id": series.id, "key": series.key, "title": series.title,
                 "stale_policy": series.stale_policy, "units": len(units), "counts": counts,
@@ -384,7 +404,7 @@ class Library:
         if status and status not in STATUSES:
             raise ValueError(f"status must be one of {', '.join(STATUSES)}")
         cache: dict = {}
-        units = [self.unit_summary(u, cache=cache) for u in self.catalog.list_units(series_id)]
+        units = self._summaries(self.catalog.list_units(series_id), cache)
         languages = sorted({t["lang"] for u in units for t in u["targets"]})
         if status:
             units = [u for u in units if u["status"] == status]
@@ -399,7 +419,7 @@ class Library:
         if status and status not in STATUSES:
             raise ValueError(f"status must be one of {', '.join(STATUSES)}")
         cache: dict = {}
-        units = [self.unit_summary(u, cache=cache) for u in self.catalog.list_units(movies=True)]
+        units = self._summaries(self.catalog.list_units(movies=True), cache)
         return [u for u in units if not status or u["status"] == status]
 
     # -- glossary preview (how many translations a save would make stale) ---------
@@ -440,19 +460,25 @@ class Library:
         if glossary is not None and not lang:
             raise ValueError("a glossary is per language: say which one")
         series_cache: dict = {}
-        now = after = would = 0
+        pairs: list[tuple[Unit, Output]] = []
         for unit in units:
             for out in self.catalog.outputs(unit.id):
-                if lang and out.target_lang != lang:
-                    continue
-                before = self.target_info(unit, out, cache=series_cache)["status"]
-                later = self.target_info(
-                    unit, out, glossary=glossary, styles=layers(unit) if layers else None,
-                    cache=series_cache if glossary is None else None,
-                )["status"]
-                now += before == "stale"
-                after += later == "stale"
-                would += before != "stale" and later == "stale"
+                if not lang or out.target_lang == lang:
+                    pairs.append((unit, out))
+        page = self.versions.page(out.output_path for _, out in pairs)
+        now = after = would = 0
+        for unit, out in pairs:
+            exists = Path(out.output_path).is_file()
+            before = self.target_info(
+                unit, out, cache=series_cache, page=page, exists=exists, check_modified=False,
+            )["status"]
+            later = self.target_info(
+                unit, out, glossary=glossary, styles=layers(unit) if layers else None,
+                cache=series_cache, page=page, exists=exists, check_modified=False,
+            )["status"]
+            now += before == "stale"
+            after += later == "stale"
+            would += before != "stale" and later == "stale"
         return {"stale_now": now, "stale_after": after, "would_stale": would}
 
     def owners_using_preset(self, preset_id: str) -> list[Owner]:

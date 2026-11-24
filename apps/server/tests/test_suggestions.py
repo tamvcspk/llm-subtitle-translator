@@ -240,6 +240,42 @@ class BulkTests(unittest.TestCase):
         self.assertEqual((done["count"], len(done["failed"])), (2, 1))
         self.assertEqual(done["failed"][0]["id"], broken["id"])
 
+    def test_bulk_accept_folds_writes_and_counts_impact_once_with_per_item_undo(self):
+        env = Env(self)
+        env.propose(
+            term(source="Kyber crystal", target="tinh thể Kyber"),
+            term(source="Hextech", target="Hextech"),
+            rule(),
+            character(name="Vi", card={"speech": "direct"}),
+            character(name="Jinx", card={"speech": "playful"}),
+        )
+        impact_calls = 0
+        real_impact = env.library.impact_units
+
+        def count_impact(*args, **kwargs):
+            nonlocal impact_calls
+            impact_calls += 1
+            return real_impact(*args, **kwargs)
+
+        env.library.impact_units = count_impact
+        done = env.suggestions.bulk(env.series, expect=5)
+        self.assertEqual((done["count"], done["failed"], done["would_stale"]), (5, [], 2))
+        self.assertEqual(impact_calls, 1)  # counted once for the whole language batch, not 5 times
+        # Glossary was written once (version 1, no intermediate history revisions).
+        stored = env.glossaries.stored("series", "bazarr-7", "vi")
+        self.assertEqual(stored.version, 1)
+        self.assertEqual(env.glossaries.history("series", "bazarr-7", "vi"), [])
+        self.assertEqual({c.name for c in env.styles.cards("series", "bazarr-7")}, {"Vi", "Jinx"})
+        # Each suggestion still has its own undo record and can be undone individually.
+        accepted_items = env.suggestions.listing(status=SUGGESTION_ACCEPTED)["items"]
+        self.assertEqual(len(accepted_items), 5)
+        hextech = next(i for i in accepted_items if i["payload"].get("source") == "Hextech")
+        env.suggestions.undo(hextech["id"])
+        self.assertEqual([t.source for t in env.glossary().terms], ["Kyber crystal"])
+        vi = next(i for i in accepted_items if i["payload"].get("name") == "Vi")
+        env.suggestions.undo(vi["id"])
+        self.assertEqual([c.name for c in env.styles.cards("series", "bazarr-7")], ["Jinx"])
+
 
 class AutoAcceptTests(unittest.TestCase):
     def test_21f_a_kind_with_auto_accept_on_is_applied_shown_in_the_history_and_can_be_undone(self):
@@ -434,6 +470,66 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((asked["count"], asked["saved"]), (2, False))
         done = self.call(env, "POST", "/api/suggestions/bulk", body={"series_id": env.series, "expect": 2})[1]
         self.assertEqual((done["count"], done["failed"]), (2, []))
+
+    def test_r18_5_change_from_and_existing_pair_address_rules_never_auto_accept(self):
+        env = Env(self, settings={"auto_accept_address_rules": True})
+        # Admin already has a rule for Kyber <-> Jinx.
+        owner = env.library.series_owner(env.series)
+        env.glossaries.save_doc(owner.kind, owner.key, "vi", {
+            "version": 1,
+            "address_rules": [{"a": "Kyber", "b": "Jinx", "a_to_b": "anh–em", "b_to_a": "em–anh"}],
+        })
+        change = Proposal("address_rule", {
+            "a": "Kyber", "b": "Jinx", "a_to_b": "anh–em", "b_to_a": "em–anh", "change_from": "S02E01",
+            "stages": [
+                {"a_to_b": "anh–em", "b_to_a": "em–anh", "until": "S02E01"},
+                {"a_to_b": "tôi–cô", "b_to_a": "tôi–anh", "from": "S02E01"},
+            ],
+        })
+        report = env.propose(change)
+        self.assertEqual((report.added, report.auto_accepted), (1, 0))
+        self.assertEqual(len(env.pending()), 1)
+        # Admin's existing glossary rule is untouched until admin accepts.
+        self.assertEqual(len(env.glossary().address_rules), 1)
+
+    def test_r18_8_and_r18_9_bulk_isolates_language_commit_error_and_reports_single_stale_total(self):
+        recorded: list[tuple[str, dict]] = []
+
+        class SpyTelemetry:
+            def event(self, kind, **fields):
+                recorded.append((kind, fields))
+
+            def signal(self, *a, **kw):
+                pass
+
+            def llm_call(self, *a, **kw):
+                pass
+
+        env = Env(self)
+        env.suggestions.telemetry = SpyTelemetry()
+        env.suggestions.propose(env.series, "en", [term(source="A", target="a")], source="facts")
+        env.suggestions.propose(env.series, "vi", [term(source="B", target="b"), term(source="C", target="c")], source="facts")
+
+        # First: normal bulk over 2 vi items + 1 en item -> per-item events omit `stale`, bulk event carries exact total.
+        orig_commit = env.suggestions._commit
+        def fail_vi(owner, lang, folded, *, note):
+            if lang == "vi":
+                raise ValueError("glossary invalid for vi")
+            return orig_commit(owner, lang, folded, note=note)
+
+        env.suggestions._commit = fail_vi  # type: ignore[method-assign]
+        res = env.suggestions.bulk(env.series, expect=3)
+        self.assertEqual(res["ok"], False)
+        self.assertEqual(res["count"], 1)  # `en` succeeded
+        self.assertEqual(len(res["failed"]), 2)  # both `vi` items recorded in failed
+        self.assertTrue(all("glossary invalid for vi" in f["error"] for f in res["failed"]))
+        item_events = [fields for kind, fields in recorded if kind == "suggestion.accepted"]
+        bulk_events = [fields for kind, fields in recorded if kind == "suggestions.bulk_accepted"]
+        self.assertEqual(len(item_events), 1)
+        self.assertNotIn("stale", item_events[0])
+        self.assertEqual(len(bulk_events), 1)
+        self.assertEqual(bulk_events[0]["count"], 1)
+        self.assertEqual(bulk_events[0]["stale"], res["would_stale"])
 
 
 class NormaliseTests(unittest.TestCase):

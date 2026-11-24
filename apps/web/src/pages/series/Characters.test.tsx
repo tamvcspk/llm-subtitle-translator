@@ -189,4 +189,20 @@ describe("Series Characters tab", () => {
     show("/series/1/characters");
     expect(await screen.findByText(/keeps nothing for this series yet/)).toBeInTheDocument();
   });
+
+  it("groups multi-stage forms of address by partner with episode windows", async () => {
+    const stagedDoc = {
+      ...doc,
+      address_rules: [
+        { a: "Powder", b: "Vi", a_to_b: "tôi–cô", b_to_a: "tôi–em", from: "S02E01" },
+        { a: "Vi", b: "Powder", a_to_b: "chị–em", b_to_a: "em–chị", until: "S02E01" },
+      ],
+    };
+    serve(characters([vi], stagedDoc));
+    show("/series/1/characters");
+    const card = await screen.findByRole("region", { name: "Vi" });
+    expect(within(card).getByText("with Powder:")).toBeInTheDocument();
+    expect(within(card).getByText("until S02E01: chị–em / em–chị")).toBeInTheDocument();
+    expect(within(card).getByText("from S02E01: tôi–em / tôi–cô")).toBeInTheDocument();
+  });
 });

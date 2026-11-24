@@ -3,12 +3,12 @@
 import json
 import unittest
 
-from subcore.glossary import Glossary, loads
+from subcore.glossary import AddressRule, Glossary, loads, merge
 from subcore.memory import Character, Facts, FactTerm, RelationshipEvent
 from subcore.providers import FakeProvider
 from subcore.suggest import (
-    Episode, SuggestError, address_drafts, address_items, character_drafts, character_items, is_group, term_drafts,
-    term_items,
+    CHANGE_MIN_EPISODES, Episode, SuggestError, address_drafts, address_items, character_drafts, character_items,
+    is_group, term_drafts, term_items,
 )
 
 from .helpers import make_cues
@@ -31,20 +31,49 @@ def cues_of(label):
 
 
 class AddressItemTests(unittest.TestCase):
-    def test_a_pair_that_turns_from_lovers_to_enemies_has_two_states_with_the_timecode_of_the_turn(self):
+    def test_lovers_ep_1_to_3_then_enemies_ep_6_to_8_is_one_pair_item_with_two_stages(self):
         episodes = [
             episode(1, events=[event("Alice", "Bob", "romantic", 2)]),
-            episode(2),
+            episode(2, events=[event("Alice", "Bob", "romantic", 3)]),
+            episode(3, events=[event("Alice", "Bob", "romantic", 1)]),
             episode(6, events=[event("Alice", "Bob", "enemy", 4)]),
+            episode(7, events=[event("Alice", "Bob", "enemy", 2)]),
+            episode(8, events=[event("Alice", "Bob", "enemy", 5)]),
         ]
-        first, second = address_items(episodes, cues_of)
-        window = lambda item: (str(item.start or ""), str(item.until or ""))  # noqa: E731
+        (item,) = address_items(episodes, cues_of)
+        self.assertEqual(CHANGE_MIN_EPISODES, 2)
+        self.assertEqual((item.a.name, item.b.name, len(item.stages)), ("Alice", "Bob", 2))
+        first, second = item.stages
+        window = lambda st: (str(st.start or ""), str(st.until or ""))  # noqa: E731
         self.assertEqual((first.relation, *window(first)), ("romantic", "", "S01E06 00:00:06"))
         self.assertEqual((second.relation, *window(second)), ("enemy", "S01E06 00:00:06", ""))
-        # the evidence is the cue itself: number, timecode (from the source) and its text
-        (proof,) = second.evidence
+        # the evidence carries the cue itself: number, timecode (from the source) and its text
+        proof = second.evidence[0]
         self.assertEqual((proof["episode"], proof["cue"], proof["timecode"]), ("S01E06", 4, "00:00:06,000"))
         self.assertEqual(proof["text"], "S01E06 line 4")
+
+    def test_siblings_oscillating_friend_rival_family_over_10_episodes_is_one_stage(self):
+        labels = ["family", "rival", "friend", "family", "rival", "friend", "family", "rival", "friend", "family"]
+        hiers = ["a_above", "equal", "a_above", "a_above", "b_above", "a_above", "a_above", "equal", "a_above", "a_above"]
+        episodes = [
+            episode(n, events=[event("Malcolm", "Reese", rel, 2, hierarchy=h, detail="brothers")])
+            for n, (rel, h) in enumerate(zip(labels, hiers), start=1)
+        ]
+        (item,) = address_items(episodes, cues_of)
+        self.assertEqual((item.relation, item.hierarchy, len(item.stages)), ("family", "a_above", 1))
+        self.assertIsNone(item.stages[0].start)
+        self.assertIsNone(item.stages[0].until)
+
+    def test_one_deviant_episode_in_the_middle_does_not_open_a_stage(self):
+        episodes = [
+            episode(1, events=[event("Alice", "Bob", "friend", 1)]),
+            episode(2, events=[event("Alice", "Bob", "friend", 1)]),
+            episode(3, events=[event("Alice", "Bob", "rival", 1, confidence=0.9)]),
+            episode(4, events=[event("Alice", "Bob", "friend", 1)]),
+            episode(5, events=[event("Alice", "Bob", "friend", 1)]),
+        ]
+        (item,) = address_items(episodes, cues_of)
+        self.assertEqual((item.relation, len(item.stages)), ("friend", 1))
 
     def test_an_unchanged_state_is_one_item_and_a_repeated_event_adds_evidence(self):
         episodes = [
@@ -66,17 +95,32 @@ class AddressItemTests(unittest.TestCase):
         self.assertEqual(address_items(episodes, cues_of), [])
         held = loads("address_rules:\n  - {a: Bob, b: Alice, a_to_b: em}\n")
         episodes = [episode(1, events=[event("Alice", "Bob", "friend", 1)])]
-        self.assertEqual(address_items(episodes, cues_of, glossary=held), [])  # the admin's rule wins, either way round
+        self.assertEqual(address_items(episodes, cues_of, glossary=held), [])  # no new change point -> admin's rule wins
         self.assertEqual(len(address_items(episodes, cues_of, glossary=Glossary())), 1)
+
+    def test_existing_pair_gets_change_proposal_when_sturdy_change_appears(self):
+        held = loads("address_rules:\n  - {a: Bob, b: Alice, a_to_b: anh–em, b_to_a: em–anh}\n")
+        episodes = [
+            episode(1, events=[event("Alice", "Bob", "romantic", 2)]),
+            episode(2, events=[event("Alice", "Bob", "romantic", 2)]),
+            episode(6, events=[event("Alice", "Bob", "enemy", 4)]),
+            episode(7, events=[event("Alice", "Bob", "enemy", 2)]),
+        ]
+        (item,) = address_items(episodes, cues_of, glossary=held)
+        self.assertEqual(str(item.change_from), "S01E06 00:00:06")
+        self.assertEqual(len(item.stages), 2)
+        self.assertEqual(len(item.existing), 1)
 
     def test_without_the_source_cues_there_is_still_a_proposal_but_no_timecode(self):
         episodes = [
             episode(1, events=[event("Alice", "Bob", "romantic", 2, quote="I love you")]),
-            episode(2, events=[event("Alice", "Bob", "enemy", 3)]),
+            episode(2, events=[event("Alice", "Bob", "romantic", 2)]),
+            episode(3, events=[event("Alice", "Bob", "enemy", 3)]),
+            episode(4, events=[event("Alice", "Bob", "enemy", 3)]),
         ]
-        first, second = address_items(episodes, lambda label: [])
-        self.assertEqual(str(second.start), "S01E02")
-        self.assertEqual((first.evidence[0].get("timecode"), first.evidence[0]["text"]), (None, "I love you"))  # no key, not ""
+        (item,) = address_items(episodes, lambda label: [])
+        self.assertEqual(str(item.stages[1].start), "S01E03")
+        self.assertEqual((item.stages[0].evidence[0].get("timecode"), item.stages[0].evidence[0]["text"]), (None, "I love you"))
 
     def test_an_alias_met_later_still_folds_the_earlier_events_into_one_person(self):
         early = Episode("S01E01", 1, 1, Facts(
@@ -84,11 +128,21 @@ class AddressItemTests(unittest.TestCase):
         ))
         late = Episode("S01E02", 1, 2, Facts((Character("Alice", ("Ali",)), Character("Bob")), (), (), ""))
         (item,) = address_items([early, late], cues_of)  # "Ali" is Alice, not a third person
-        self.assertEqual((item.a.name, len(item.evidence)), ("Alice", 2))
+        self.assertEqual((item.a.name, len(item.evidence)), ("Alice", 1))  # 1 dominant reading per episode
+
+    def test_glossary_with_address_rule_and_merge_treat_pair_order_symmetrically(self):
+        g1 = loads("address_rules:\n  - {a: Alice, b: Bob, a_to_b: em–anh, b_to_a: anh–em}\n")
+        updated = g1.with_address_rule(AddressRule("Bob", "Alice", a_to_b="tôi–cô", b_to_a="tôi–anh"))
+        self.assertEqual(len(updated.address_rules), 1)
+        self.assertEqual(updated.address_rules[0].a, "Bob")
+        g2 = loads("address_rules:\n  - {a: Bob, b: Alice, a_to_b: tao–mày, b_to_a: tao–mày}\n")
+        merged = merge(g1, g2)
+        self.assertEqual(len(merged.address_rules), 1)
+        self.assertEqual(merged.address_rules[0].a_to_b, "tao–mày")
 
 
 class DoubtTests(unittest.TestCase):
-    """What the first run on real episodes got wrong (PLAN P14, follow-up 5)."""
+    """What the first run on real episodes got wrong (PLAN P14, follow-up 5; updated for P18f)."""
 
     def test_a_name_that_lists_several_people_is_not_a_person(self):
         group = "Malcolm, Reese and Dewey"
@@ -111,16 +165,15 @@ class DoubtTests(unittest.TestCase):
             episode(3, events=[event("Alice", "Bob", "friend", 1)]),
         ]
         (item,) = address_items(flip, cues_of)  # friends, a misread, friends again: one stage
-        self.assertEqual((item.relation, item.start, item.until, len(item.evidence)), ("friend", None, None, 2))
+        self.assertEqual((item.relation, len(item.stages), item.start, item.until), ("friend", 1, None, None))
 
-    def test_a_confident_or_repeated_change_is_still_a_stage(self):
-        confident = [episode(1, events=[event("Alice", "Bob", "friend", 1)]), episode(2, events=[event("Alice", "Bob", "rival", 1, confidence=0.9)])]
-        self.assertEqual([i.relation for i in address_items(confident, cues_of)], ["friend", "rival"])
-        repeated = [
+    def test_an_explicit_high_confidence_turning_event_opens_a_stage(self):
+        turning = [
             episode(1, events=[event("Alice", "Bob", "friend", 1)]),
-            episode(2, events=[event("Alice", "Bob", "rival", 1, confidence=0.55), event("Alice", "Bob", "rival", 5, confidence=0.55)]),
+            episode(2, events=[event("Alice", "Bob", "romantic", 3, confidence=0.9, detail="wedding ceremony")]),
         ]
-        self.assertEqual([i.relation for i in address_items(repeated, cues_of)], ["friend", "rival"])
+        (item,) = address_items(turning, cues_of)
+        self.assertEqual([st.relation for st in item.stages], ["friend", "romantic"])
 
 
 class TermAndCharacterItemTests(unittest.TestCase):
@@ -177,14 +230,32 @@ class FormsTests(unittest.TestCase):
         (call,) = provider.calls
         self.assertIn("why", call.system)
 
-    def test_a_state_after_the_first_carries_its_window(self):
+    def test_multi_stage_pair_keeps_distinct_stages_and_collapses_identical_forms(self):
         items = address_items([
-            episode(1, events=[event("Alice", "Bob", "romantic", 2)]), episode(2, events=[event("Alice", "Bob", "enemy", 3)]),
+            episode(1, events=[event("Alice", "Bob", "romantic", 2)]),
+            episode(2, events=[event("Alice", "Bob", "romantic", 2)]),
+            episode(6, events=[event("Alice", "Bob", "enemy", 4)]),
+            episode(7, events=[event("Alice", "Bob", "enemy", 2)]),
         ], cues_of)
-        provider = FakeProvider(handler=lambda req, n: {"rules": [{"i": i, "a_to_b": "x", "b_to_a": ""} for i in range(2)]})
-        first, second = address_drafts(provider, items, lang="vi")
-        self.assertEqual((first.payload.get("from"), first.payload.get("until")), (None, "S01E02 00:00:04"))
-        self.assertEqual((second.payload.get("from"), second.payload.get("until")), ("S01E02 00:00:04", None))
+        # Distinct forms across stages -> one draft with two stages and contiguous from/until.
+        distinct = FakeProvider(handler=lambda req, n: {"rules": [{
+            "i": 0, "a_to_b": "em–anh", "b_to_a": "anh–em", "why": "lovers",
+            "stages": [{"stage": 1, "confirm": True, "a_to_b": "tôi–anh", "b_to_a": "tôi–cô", "why": "enemies"}],
+        }]})
+        (draft,) = address_drafts(distinct, items, lang="vi")
+        self.assertEqual(len(draft.payload["stages"]), 2)
+        self.assertEqual((draft.payload["stages"][0].get("from"), draft.payload["stages"][0].get("until")), (None, "S01E06 00:00:06"))
+        self.assertEqual((draft.payload["stages"][1].get("from"), draft.payload["stages"][1].get("until")), ("S01E06 00:00:06", None))
+
+        # Identical forms returned for both stages -> collapsed into one flat rule with no stages/from/until.
+        same = FakeProvider(handler=lambda req, n: {"rules": [{
+            "i": 0, "a_to_b": "tôi–cậu", "b_to_a": "tôi–cậu", "why": "same",
+            "stages": [{"stage": 1, "confirm": True, "a_to_b": "tôi–cậu", "b_to_a": "tôi–cậu"}],
+        }]})
+        (collapsed,) = address_drafts(same, items, lang="vi")
+        self.assertNotIn("stages", collapsed.payload)
+        self.assertIsNone(collapsed.payload.get("from"))
+        self.assertIsNone(collapsed.payload.get("until"))
 
     def test_empty_forms_unknown_items_and_junk_entries_are_dropped(self):
         answer = {"rules": [{"i": 0, "a_to_b": "", "b_to_a": " "}, {"i": 7, "a_to_b": "x"}, "junk", {"a_to_b": "x"}]}
@@ -218,6 +289,69 @@ class FormsTests(unittest.TestCase):
         alice, bob = character_drafts(provider, items, lang="vi")
         self.assertEqual(alice.payload, {"name": "Alice", "target": "Alice", "gender": "f", "description": "the lead", "card": {"speech": "clipped"}})
         self.assertEqual(bob.payload, {"name": "Bob", "gender": "m"})  # nothing invented
+
+    def test_r18_1_asymmetric_two_vs_three_stages_uses_stage_zero_as_base(self):
+        # 2 episodes romantic then 3 episodes enemy -> overall majority is enemy,
+        # but base (stage 0) sent to the model MUST be romantic, and candidate stage 1 enemy.
+        eps = [
+            episode(1, events=[event("Alice", "Bob", "romantic", 1, quote="lovers", detail="dating")]),
+            episode(2, events=[event("Alice", "Bob", "romantic", 1, quote="lovers", detail="dating")]),
+            episode(5, events=[event("Alice", "Bob", "enemy", 2, quote="betrayal", detail="rivals")]),
+            episode(6, events=[event("Alice", "Bob", "enemy", 1, quote="hate", detail="rivals")]),
+            episode(7, events=[event("Alice", "Bob", "enemy", 1, quote="hate", detail="rivals")]),
+        ]
+        (item,) = address_items(eps, cues_of)
+        self.assertEqual(item.relation, "romantic")
+        self.assertEqual([st.relation for st in item.stages], ["romantic", "enemy"])
+
+    def test_r18_2_stray_family_episode_among_romantic_episodes_is_not_kinship(self):
+        # 9 romantic episodes + 1 stray family reading (e.g. visiting in-laws) -> NOT kinship, base stays romantic.
+        eps = [
+            episode(n, events=[event(
+                "Alice", "Bob", "family" if n == 4 else "romantic", 1, quote="line",
+                detail="family dinner" if n == 4 else "husband and wife",
+            )])
+            for n in range(1, 11)
+        ]
+        (item,) = address_items(eps, cues_of)
+        self.assertEqual(item.relation, "romantic")
+
+        # And a genuine breakup later can still open a second stage.
+        breakup = [
+            *[episode(n, events=[event("Alice", "Bob", "family" if n == 2 else "romantic", 1, quote="love")]) for n in range(1, 6)],
+            *[episode(n, events=[event("Alice", "Bob", "enemy", 1, quote="divorce")]) for n in range(6, 9)],
+        ]
+        (split,) = address_items(breakup, cues_of)
+        self.assertEqual([st.relation for st in split.stages], ["romantic", "enemy"])
+
+    def test_r18_6_existing_rule_without_timecode_covers_cue_level_change_in_same_episode(self):
+        # Admin wrote `from: S01E05` (no timecode); facts give `S01E05 00:00:02` -> same episode, already covered.
+        eps = [
+            episode(1, events=[event("Alice", "Bob", "romantic", 1, quote="love")]),
+            episode(2, events=[event("Alice", "Bob", "romantic", 1, quote="love")]),
+            episode(5, events=[event("Alice", "Bob", "enemy", 2, quote="betray")]),
+            episode(6, events=[event("Alice", "Bob", "enemy", 1, quote="hate")]),
+        ]
+        existing = loads(
+            "version: 1\naddress_rules:\n"
+            "  - {a: Alice, b: Bob, a_to_b: anh-em, b_to_a: em-anh, until: S01E05}\n"
+            "  - {a: Alice, b: Bob, a_to_b: toi-co, b_to_a: toi-anh, from: S01E05}\n"
+        )
+        self.assertEqual(address_items(eps, cues_of, glossary=existing), [])
+
+        # And exclude_changes matches by episode code even if timecode shifts.
+        base_only = loads(
+            "version: 1\naddress_rules:\n"
+            "  - {a: Alice, b: Bob, a_to_b: anh-em, b_to_a: em-anh}\n"
+        )
+        self.assertEqual(
+            address_items(eps, cues_of, glossary=base_only, exclude_changes={("alice", "bob", "s01e05")}),
+            [],
+        )
+        self.assertEqual(
+            address_items(eps, cues_of, glossary=base_only, exclude_changes={("alice", "bob", "")}),
+            [],
+        )
 
 
 if __name__ == "__main__":

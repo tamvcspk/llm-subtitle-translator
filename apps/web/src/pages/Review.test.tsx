@@ -128,40 +128,81 @@ describe("Review", () => {
     expect(within(screen.getByRole("listitem", { name: "Form of address: Vi ↔ Jinx" })).queryByTitle("Google Search Suggestions")).toBeNull();
   });
 
-  it("says how many translations accepting each one flags stale, from the worker's dry run, with no Check button", async () => {
+  it("does not run per-card dry runs on load; counts affected translations only when the disclosure is opened", async () => {
     serve(inbox());
     show("/review");
     const term = await screen.findByRole("listitem", { name: "Term: Kyber crystal → tinh thể Kyber" });
+    expect(sent("/api/suggestions/1/accept")).toHaveLength(0);
+    expect(sent("/api/suggestions/2/accept")).toHaveLength(0);
+    expect(sent("/api/suggestions/3/accept")).toHaveLength(0);
+    await userEvent.click(within(term).getByText("Affected translations"));
     expect(await within(term).findByText("Accepting flags 12 translations stale. Nothing is redone.")).toBeInTheDocument();
-    expect(await within(screen.getByRole("listitem", { name: "Form of address: Vi ↔ Jinx" })).findByText("No translation is affected.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /check/i })).toBeNull();
-    expect(sent("/api/suggestions/1/accept")[0]).toEqual({ dry_run: true });
+    expect(sent("/api/suggestions/1/accept")).toEqual([{ dry_run: true }]);
+    expect(sent("/api/suggestions/2/accept")).toHaveLength(0);
   });
 
-  it("does not ask the worker for the impact of a suggestion it has just decided (it would refuse with a 400)", async () => {
+  it("does not invalidate or refetch other cards' dry-run impact after accepting one card", async () => {
     serve(inbox());
     show("/review");
     const term = await screen.findByRole("listitem", { name: "Term: Kyber crystal → tinh thể Kyber" });
+    await userEvent.click(within(term).getByText("Affected translations"));
     await within(term).findByText("Accepting flags 12 translations stale. Nothing is redone.");
     await userEvent.click(within(term).getByRole("button", { name: "Accept Kyber crystal → tinh thể Kyber" }));
     await screen.findByText(/Accepted “Kyber crystal → tinh thể Kyber”/);
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input) === "/api/suggestions?status=pending")).toBe(true));
     expect(sent("/api/suggestions/1/accept").filter((body) => body?.dry_run)).toHaveLength(1);
+    expect(sent("/api/suggestions/2/accept")).toHaveLength(0);
   });
 
-  it("asks for the impact again when an accept fails, since the card stays", async () => {
-    serve(
-      inbox({
-        "/api/suggestions/1/accept": (body: Record<string, unknown> | null) =>
-          body?.dry_run ? impact(12) : { status: 409, body: { error: "the entry changed since" } },
+  it("runs parallel accepts independently without stopping or losing either card's notice", async () => {
+    let resolveFirst!: (value: Response) => void;
+    let resolveSecond!: (value: Response) => void;
+    const base = inbox();
+    const jsonResponse = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/suggestions/1/accept" && init?.method === "POST") {
+          return new Promise<Response>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        if (url === "/api/suggestions/2/accept" && init?.method === "POST") {
+          return new Promise<Response>((resolve) => {
+            resolveSecond = resolve;
+          });
+        }
+        const entry = (base as Record<string, unknown>)[url] as { body: unknown } | undefined;
+        if (!entry) return Promise.resolve(new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "Content-Type": "application/json" } }));
+        return Promise.resolve(jsonResponse(entry.body));
       }),
     );
     show("/review");
-    const term = await screen.findByRole("listitem", { name: "Term: Kyber crystal → tinh thể Kyber" });
-    await within(term).findByText("Accepting flags 12 translations stale. Nothing is redone.");
-    await userEvent.click(within(term).getByRole("button", { name: "Accept Kyber crystal → tinh thể Kyber" }));
-    expect(await screen.findByText("the entry changed since")).toBeInTheDocument();
-    await waitFor(() => expect(sent("/api/suggestions/1/accept").filter((body) => body?.dry_run)).toHaveLength(2));
+    const btn1 = await screen.findByRole("button", { name: "Accept Kyber crystal → tinh thể Kyber" });
+    const btn2 = screen.getByRole("button", { name: "Accept Vi ↔ Jinx" });
+    await userEvent.click(btn1);
+    await userEvent.click(btn2);
+    // Both cards are busy simultaneously (neither stopped the other).
+    expect(screen.getAllByText("Applying and counting affected translations…")).toHaveLength(2);
+    resolveFirst(
+      jsonResponse({
+        ...impact(12, true).body,
+        suggestion: suggestion(1, { status: "accepted", decided_at: 1, undoable: true }),
+      }),
+    );
+    expect(await screen.findByText(/Accepted “Kyber crystal → tinh thể Kyber”/)).toBeInTheDocument();
+    // Second card is still in flight.
+    expect(screen.getAllByText("Applying and counting affected translations…")).toHaveLength(1);
+    resolveSecond(
+      jsonResponse({
+        ...impact(0, true).body,
+        suggestion: { ...rule, status: "accepted", decided_at: 2, undoable: true },
+      }),
+    );
+    expect(await screen.findByText(/Accepted “Vi ↔ Jinx”/)).toBeInTheDocument();
+    expect(screen.getByText(/Accepted “Kyber crystal → tinh thể Kyber”/)).toBeInTheDocument();
   });
 
   it("accepts with one tap, says what it did, and Undo puts it back", async () => {
@@ -229,6 +270,11 @@ describe("Review", () => {
     await userEvent.click(within(sheet).getByRole("button", { name: "Accept 2" }));
     await waitFor(() => expect(sent("/api/suggestions/bulk")).toContainEqual({ series_id: 7, expect: 2 }));
     expect(await screen.findByText(/Accepted 2 suggestions for Arcane\. 12 translations are now Stale; none is redone\./)).toBeInTheDocument();
+    // F3: confirming Accept all must not fire an extra dry_run bulk request while the sheet closes.
+    expect(sent("/api/suggestions/bulk")).toEqual([
+      { series_id: 7, dry_run: true },
+      { series_id: 7, expect: 2 },
+    ]);
   });
 
   it("stops the accept-all when the list has changed since the number was shown", async () => {

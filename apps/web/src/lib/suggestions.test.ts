@@ -16,6 +16,30 @@ describe("describe", () => {
       title: "Vi ↔ Jinx",
       details: ["Vi calls Jinx “chị”"],
     });
+    expect(
+      describeSuggestion({
+        kind: "address_rule",
+        payload: {
+          a: "Hal",
+          b: "Lois",
+          a_to_b: "anh–em",
+          b_to_a: "em–anh",
+          change_from: "S03E05",
+          stages: [
+            { a_to_b: "tôi–cô", b_to_a: "tôi–anh", until: "S03E05" },
+            { a_to_b: "anh–em", b_to_a: "em–anh", from: "S03E05" },
+          ],
+          note: "married",
+        } as Suggestion["payload"],
+      }),
+    ).toEqual({
+      title: "Hal ↔ Lois · change from S03E05?",
+      details: [
+        "Until S03E05: Hal calls Lois “tôi–cô” · Lois calls Hal “tôi–anh”",
+        "From S03E05: Hal calls Lois “anh–em” · Lois calls Hal “em–anh”",
+        "married",
+      ],
+    });
     expect(describeSuggestion({ kind: "character", payload: { name: "Vi", target: "Vi", gender: "f", card: { name: "Vi", speech: "blunt" } } })).toEqual({
       title: "Vi",
       details: ["Gender: f", "Voice: blunt"],
@@ -58,6 +82,28 @@ describe("editing", () => {
       card: { name: "Vi", speech: "soft", catchphrases: ["hey"] },
     });
     expect(payloadOf(character, { ...draftOf(character), speech: "" })).toEqual({ name: "Vi", card: { name: "Vi", catchphrases: ["hey"] } });
+  });
+
+  it("syncs stage 0 when editing a multi-stage address_rule proposal", () => {
+    const multi: Draftable = {
+      kind: "address_rule",
+      payload: {
+        a: "A",
+        b: "B",
+        a_to_b: "tôi–cô",
+        b_to_a: "tôi–anh",
+        stages: [
+          { a_to_b: "tôi–cô", b_to_a: "tôi–anh", until: "S02E01" },
+          { a_to_b: "anh–em", b_to_a: "em–anh", from: "S02E01" },
+        ],
+      } as Suggestion["payload"],
+    };
+    const edited = payloadOf(multi, { ...draftOf(multi), c: "mình–cậu" }) as Record<string, unknown>;
+    expect(edited.a_to_b).toBe("mình–cậu");
+    expect(edited.stages).toEqual([
+      { a_to_b: "mình–cậu", b_to_a: "tôi–anh", until: "S02E01" },
+      { a_to_b: "anh–em", b_to_a: "em–anh", from: "S02E01" },
+    ]);
   });
 
   it("says what is missing before the worker would refuse it", () => {

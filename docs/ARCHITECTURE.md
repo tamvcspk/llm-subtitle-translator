@@ -111,8 +111,8 @@ application's own database is not behind a port).
   different hash than the stored `glossary_hash` means stale);
 - `gather.py`: gathers one `TranslationBundle` from the episode's rules, story memory and metadata (the worker's half of
   the bundle contract);
-- `suggestion_keys.py`: the *identity* of a suggestion (kind, name or pair, `from`; case and spacing folded);
-- `subtitles.py`: subtitle path mapping, local source scanning, `existing_target_subtitle`;
+- `suggestion_keys.py`: the *identity* of a suggestion (`term` name, `character` name, or unordered `(low, high)` pair for `address_rule` — no `from` since P18f; case and spacing folded);
+- `subtitles.py`: subtitle path mapping, local source scanning, `existing_target_subtitle` (accepts a per-pass `dir_cache` so planning a season lists each folder once);
 - `translation.py`: the failure classes the queue acts on (`ProviderUnavailableError`, `DailyQuotaExceededError`,
   `HardJobError`, `ContextGapError`) and `redact`;
 - `redaction.py`: the one secret filter (known values plus secret shapes) used by the log formatter, events, prompt
@@ -134,7 +134,7 @@ application's own database is not behind a port).
 - `catalog.py` (`CatalogSync` the guarded read of Bazarr into `catalog_items`, and `CatalogPaths`, which finds a job's
   files again by Bazarr's id), `catalog_view.py` (`CatalogView`, the Library read model: the label of each (item,
   language) is derived on reading, never stored), `catalog_actions.py` (the Library page's use cases),
-  `job_requests.py` (`JobRequests`: planning, estimate and creation of requests, `POST /api/jobs`), `auto_request.py`
+  `job_requests.py` (`JobRequests`: planning, estimate and creation of requests, `POST /api/jobs`; `mode: "auto"` plans missing items as `translate` and existing targets as `retranslate` for manual selections, forbidden for automatic jobs), `auto_request.py`
   (`AutoRequest`, the policy), `bootstrap.py` (the first episodes `auto_request` may ask for while a series has nothing
   approved) and `estimates.py` (`Estimator`: what an action that spends model calls would cost, said before it runs;
   a Translate request's estimate also counts the fact reads its jobs would run first, `extract_calls`, through
@@ -341,8 +341,8 @@ version live in `app.db`. `rules.py` merges the glossary with the unit's active 
 terms and address rules carry `from`/`until` windows (`until` exclusive; timecodes are turned into cue numbers before they
 reach the prompt). Hand-edited cues (`cue_edit`) are outside the hash: they are locked output, and so are few-shot examples
 made from them (a cue edit must never flag a series stale, ADR-14 point 9). `Library.impact_units` is the one place that
-counts the stale translations a change would cause; every save, restore, copy, adoption or deletion that changes a hash
-asks it first and answers `stale_now`, `stale_after`, `would_stale` (`dry_run` only counts). A glossary change counts one
+counts the stale translations a change would cause (skips `modified_outside` file hashing); every save, restore, copy, adoption or deletion that changes a hash
+asks it first and answers `stale_now`, `stale_after`, `would_stale` (`dry_run` only counts). Read-only status views (`unit_summary`) use `trusting_stat=True`, while overwrite paths in `versions.py` always re-hash the target file. A glossary change counts one
 language; a style, card, preset or an episode's style counts every language.
 
 A retranslation is a job (`trigger: retranslate`, priority 100, `retranslate.range`, `retranslate.correction_ids`); the
@@ -363,9 +363,9 @@ glossary and is never lost by re-extraction.
 `memory.py` (`StoryMemory`) decides which facts a unit sees. Story order is `(season, episode)` as Bazarr numbers them;
 season 0 sits outside the chain and sees the state after `series.specials_after` (default: the end of season 1). Before a
 unit is translated `plan()` asks Bazarr for the series' episodes and registers them; reads the facts of each earlier unit
-whose source exists and has none stored for that sha256 and `EXTRACT_PROMPT_VERSION` (stored facts are kept when the source
+whose source exists and has none stored for that sha256 (cached in memory by `(mtime_ns, size)`) and `EXTRACT_PROMPT_VERSION` (stored facts are kept when the source
 has gone; a unit with neither is a *gap*); while there is a gap and `memory_gap_wait_seconds` has not passed raises
-`ContextGapError` (the queue defers the job, `wait_reason: context`, rechecked every 5 minutes; a retranslation does not
+`ContextGapError` (the queue defers the job, `wait_reason: context`, rechecked every 5 minutes; during the gap wait `plan()` only stats the missing units and skips hashing earlier episodes until a missing source arrives or the wait expires; a retranslation does not
 wait); then builds the bundle (older summaries are condensed by one `summarize` call cached in `summaries_cache` if the
 story exceeds `memory_budget_tokens`). Prerequisites run inline in the same attempt (one job at a time), not as separate
 jobs; `extract` jobs exist for the admin's own "extract facts" request. Relationship events with `confidence < 0.3` are
@@ -383,12 +383,12 @@ checking staleness alike; keep it that way. A version made with memory off never
 One table (`suggestions`), one use case. `SuggestionService` (routes in `suggestion_api.py`, in
 `RuntimeContext.suggestions`) is the only place that stores a generator's proposals (`propose`), decides them (`accept`,
 `reject`, `undo`, `bulk`) and applies them; a generator hands it a list of `Proposal`s and has no review logic of its own.
-Generators: `proposals.py` (`FactsProposer`: address rules and terms from facts, characters from memory; `subcore.suggest` is
+Generators: `proposals.py` (`FactsProposer`: pair-level address rules with hysteresis-gated stages and `change_from` updates for already-accepted pairs, plus terms from facts and characters from memory; `subcore.suggest` (`s4`) is
 the pure part, one `extract`-task call per kind returning target-language forms, no timecode to the model; reached through a
 `suggest` job), `feedback.py` (`FeedbackProposer`, over `subcore.feedback`: a swap of words repeated in three or more
 corrected cues becomes a `term`, no model call, must never raise into a cue edit), and research grounding (`research.py`, below).
 Accepting goes through `Glossaries.save_doc` (and `write_character` when a character carries its voice, in one
-transaction) and counts the stale translations with `Library.impact_units`; it never retranslates. Undo restores exactly
+transaction; `bulk` folds all valid items of a language into the glossary, writes once and counts impact once while keeping per-item undo records) and counts the stale translations with `Library.impact_units`; it never retranslates. Undo restores exactly
 what an accept replaced and refuses when the entry changed since. A decided suggestion is kept (a few bytes) and never
 cleaned up: the **identity** of `suggestion_keys.py` is why the same entry is not proposed again; the content fingerprint
 stays only as the unique key. `auto_accept_*` goes through the same `accept`; a `term` is applied by itself only with two

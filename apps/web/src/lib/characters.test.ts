@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressFor, cardOf, draftOf, people, plan, sameDraft, styleSummary, withEntry, withoutEntry } from "./characters";
+import { addressFor, cardOf, draftOf, formatAddressWindow, people, plan, sameDraft, styleSummary, withEntry, withoutEntry } from "./characters";
 
 const doc = {
   version: 1,
@@ -49,10 +49,37 @@ describe("characters", () => {
     expect(withoutEntry(doc, "vi").characters).toEqual([]);
   });
 
-  it("reads forms of address from either side of a rule, as self–other of this character", () => {
-    expect(addressFor(doc, "Vi")).toEqual([{ with: "Powder", says: "chị–em", hears: "em–chị" }]);
-    expect(addressFor(doc, "Powder")).toEqual([{ with: "Vi", says: "em–chị", hears: "chị–em" }]);
+  it("reads forms of address from either side of a rule, grouped per partner in story order", () => {
+    expect(addressFor(doc, "Vi")).toEqual([
+      { with: "Powder", says: "chị–em", hears: "em–chị", stages: [{ says: "chị–em", hears: "em–chị" }] },
+    ]);
+    expect(addressFor(doc, "Powder")).toEqual([
+      { with: "Vi", says: "em–chị", hears: "chị–em", stages: [{ says: "em–chị", hears: "chị–em" }] },
+    ]);
     expect(addressFor(doc, "Caitlyn")).toEqual([]);
+
+    const stagedDoc = {
+      version: 1,
+      address_rules: [
+        { a: "Powder", b: "Vi", a_to_b: "tôi–cô", b_to_a: "tôi–em", from: "S02E01" },
+        { a: "Vi", b: "Powder", a_to_b: "chị–em", b_to_a: "em–chị", until: "S02E01" },
+      ],
+    };
+    expect(addressFor(stagedDoc, "Vi")).toEqual([
+      {
+        with: "Powder",
+        says: "chị–em",
+        hears: "em–chị",
+        stages: [
+          { says: "chị–em", hears: "em–chị", until: "S02E01" },
+          { says: "tôi–em", hears: "tôi–cô", from: "S02E01" },
+        ],
+      },
+    ]);
+    expect(formatAddressWindow({ from: "S01E01", until: "S02E01" })).toBe("S01E01–S02E01");
+    expect(formatAddressWindow({ from: "S02E01" })).toBe("from S02E01");
+    expect(formatAddressWindow({ until: "S02E01" })).toBe("until S02E01");
+    expect(formatAddressWindow({})).toBe("");
   });
 
   it("summarises the style of a card in the words of the form", () => {

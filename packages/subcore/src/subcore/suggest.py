@@ -19,20 +19,24 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Callable, Collection, Sequence
 
 import json_repair
 
 from . import srt
-from .glossary import Glossary, Position
+from .glossary import AddressRule, Glossary, Position
 from .memory.facts import Character, Facts, RelationshipEvent
 from .memory.fold import _Names
 from .providers.base import BadOutput, LLMRequest, Provider
 
 __all__ = [
+    "CHANGE_MIN_EPISODES",
+    "EVENT_CHANGE_CONFIDENCE",
     "SUGGEST_PROMPT_VERSION",
     "AddressItem",
+    "AddressStage",
     "CharacterItem",
     "Draft",
     "Episode",
@@ -42,6 +46,7 @@ __all__ = [
     "address_items",
     "character_drafts",
     "character_items",
+    "collapse_stages",
     "is_group",
     "term_drafts",
     "term_items",
@@ -50,14 +55,25 @@ __all__ = [
 # Bump when a prompt below changes: it is on the call record, so a change can be told apart.
 # s2: an address rule says why (`why`), the two directions must agree, and an unclear hierarchy gets the neutral form.
 # s3: a character is read only up to the episode where it qualified (no `appears_in`, no facts of later episodes).
-SUGGEST_PROMPT_VERSION = "s3"
+# s4: one address proposal per character pair (base + sturdy candidate change points only; P18f).
+SUGGEST_PROMPT_VERSION = "s4"
 
 MIN_CONFIDENCE = 0.5  # a doubtful reading of the dialogue is not worth a person's attention
 MIN_UNITS = 2  # a name or a character must show in this many episodes (FR-6.2)
+CHANGE_MIN_EPISODES = 2  # P18f hysteresis: at least this many episodes on each side of a change point
+EVENT_CHANGE_CONFIDENCE = 0.85  # a single explicit turning-point event (wedding, breakup, betrayal...) needs this confidence
 MAX_STATES_PER_PAIR = 4  # the latest ones: a pair that flips more often than this is noise
-STAGE_MIN_CONFIDENCE = 0.7  # a stage after the first that rests on one reading needs at least this much confidence
 MAX_EVIDENCE = 3
 _QUOTE = 200
+
+_KINSHIP_DETAIL = re.compile(
+    r"\b(mother|father|mom|dad|son|daughter|brother|sister|sibling|parent|child|cousin|uncle|aunt|grand(?:mother|father|ma|pa|son|daughter)|nephew|niece|family|mẹ|bố|cha|anh|chị|em|con|ông|bà)\b",
+    re.IGNORECASE,
+)
+_TURNING_EVENT = re.compile(
+    r"\b(marr(?:y|ied|iage)|wedding|engaged|engagement|divorc(?:e|ed)|break\s*up|broke\s*up|split\s*up|betray(?:ed|al)?|secret\s+identity|reveal(?:ed)?\s+(?:identity|truth)|became\s+enemies|fell\s+in\s+love)\b",
+    re.IGNORECASE,
+)
 
 CuesOf = Callable[[str], Sequence[srt.Cue]]  # an episode label -> its source cues ([] when unknown)
 
@@ -66,9 +82,23 @@ class SuggestError(ValueError):
     """The model's answer could not be used."""
 
 
+_EP_PREFIX = re.compile(r"^\s*s(\d+)e(\d+)\b", re.IGNORECASE)
+
+
 def _fold(value: Any) -> str:
     """Case and spacing folded: how two candidates are told to be the same (the server folds a stored proposal alike)."""
     return " ".join(str(value).split()).casefold()
+
+
+def change_episode_key(value: Any) -> str:
+    """Normalise a ``Position`` or episode/timecode string to ``sXXeYY`` (R18-3/R18-6)."""
+    if isinstance(value, Position):
+        return f"s{value.season:02d}e{value.episode:02d}"
+    text = _fold(value)
+    match = _EP_PREFIX.match(text)
+    if match:
+        return f"s{int(match.group(1)):02d}e{int(match.group(2)):02d}"
+    return text
 
 
 @dataclass(frozen=True)
@@ -89,8 +119,26 @@ class Draft:
 
 
 @dataclass(frozen=True)
+class AddressStage:
+    """One stretch of a pair's relationship within an :class:`AddressItem`."""
+
+    relation: str
+    hierarchy: str  # a_above | equal | b_above
+    intimacy: int
+    detail: str
+    start: Position | None  # None for the base (first) stage
+    until: Position | None  # None for the last stage
+    evidence: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
 class AddressItem:
-    """How two characters stand to each other during one stretch of the story. ``a`` sorts before ``b`` by name."""
+    """One pair of characters across the whole series (P18f). ``a`` sorts before ``b`` by name.
+
+    ``relation``/``hierarchy``/``detail`` hold the pair's *base* standing (majority across all episodes);
+    ``stages`` has one entry when no sturdy change point was found and ≥ 2 entries when a sturdy change point
+    (hysteresis ``CHANGE_MIN_EPISODES`` on each side, or a high-confidence turning event) was detected.
+    ``change_from`` is set when the glossary already has rule(s) for this pair and a newer change point appeared."""
 
     a: Character
     b: Character
@@ -98,13 +146,26 @@ class AddressItem:
     hierarchy: str  # a_above | equal | b_above
     intimacy: int
     detail: str
-    start: Position | None  # None for the first state of the pair
-    until: Position | None  # None for the last
+    stages: tuple[AddressStage, ...]
     evidence: tuple[dict[str, Any], ...]
+    timeline: tuple[dict[str, str], ...] = ()
+    change_from: Position | None = None
+    existing: tuple[AddressRule, ...] = ()
 
     @property
-    def key(self) -> tuple[str, str, str]:
-        return (_fold(self.a.name), _fold(self.b.name), _fold(self.start or ""))
+    def start(self) -> Position | None:
+        return self.stages[0].start if self.stages else None
+
+    @property
+    def until(self) -> Position | None:
+        return self.stages[0].until if self.stages else None
+
+    @property
+    def key(self) -> tuple[str, ...]:
+        pair = (_fold(self.a.name), _fold(self.b.name))
+        if self.change_from is not None:
+            return (*pair, change_episode_key(self.change_from))
+        return pair
 
 
 @dataclass(frozen=True)
@@ -196,32 +257,137 @@ def is_group(name: str) -> bool:
     return bool(_GROUP.search(name))
 
 
-# -- forms of address ----------------------------------------------------------------------------------------------
+# -- forms of address (P18f: one proposal per pair, two layers + hysteresis) ----------------------------------------
 
 
-@dataclass
-class _State:
-    relation: str
-    hierarchy: str
-    intimacy: int
-    detail: str
-    first: tuple[Episode, RelationshipEvent]
-    seen: list[tuple[Episode, RelationshipEvent]] = field(default_factory=list)
+def _majority_relation(ep_readings: Sequence[tuple[Episode, RelationshipEvent, list[RelationshipEvent]]]) -> str:
+    non_stranger = [ev.relation for _, ev, _ in ep_readings if ev.relation != "stranger"]
+    counts = Counter(non_stranger)
+    if not counts:
+        return "stranger"
+    best_count = max(counts.values())
+    for rel in non_stranger:
+        if counts[rel] == best_count:
+            return rel
+    return non_stranger[0]
+
+
+def _majority_hierarchy(
+    ep_readings: Sequence[tuple[Episode, RelationshipEvent, list[RelationshipEvent]]],
+    preferred_relation: str = "",
+) -> str:
+    counts = Counter(ev.hierarchy for _, ev, _ in ep_readings)
+    best_count = max(counts.values())
+    top = [h for h, c in counts.items() if c == best_count]
+    if len(top) == 1:
+        return top[0]
+    if preferred_relation:
+        pref = Counter(ev.hierarchy for _, ev, _ in ep_readings if ev.relation == preferred_relation)
+        if pref:
+            best_pref = max(pref.values())
+            top_pref = [h for h, c in pref.items() if c == best_pref]
+            if len(top_pref) == 1:
+                return top_pref[0]
+    return "equal" if "equal" in top else top[0]
+
+
+def _is_kinship_pair(ep_readings: Sequence[tuple[Episode, RelationshipEvent, list[RelationshipEvent]]]) -> bool:
+    """Blood kinship (family) never auto-opens relationship stages (P18f, R18-2).
+
+    Requires ``family`` to be the plurality relation across episodes (never a single stray reading among
+    other relations), or a top tie backed by an explicit kinship detail (mother, brother, etc.)."""
+    counts = Counter(ev.relation for _, ev, _ in ep_readings)
+    family_eps = counts.get("family", 0)
+    if family_eps == 0:
+        return False
+    best = max(counts.values())
+    if family_eps < best:
+        return False
+    top = [rel for rel, c in counts.items() if c == best]
+    if top == ["family"]:
+        return True
+    return any(_KINSHIP_DETAIL.search(ev.detail or "") for _, _, evs in ep_readings for ev in evs)
+
+
+def _is_turning_event(events: Sequence[RelationshipEvent]) -> bool:
+    return any(ev.confidence >= EVENT_CHANGE_CONFIDENCE and bool(_TURNING_EVENT.search(ev.detail or "")) for ev in events)
+
+
+def _detect_cuts(
+    ep_readings: Sequence[tuple[Episode, RelationshipEvent, list[RelationshipEvent]]],
+    *,
+    is_kinship: bool,
+) -> list[int]:
+    """Indices into ``ep_readings`` where a sturdy change of relation occurs. Always begins with 0.
+
+    Hysteresis rule (P18f):
+    - Blood kinship (``is_kinship``) never opens a new stage.
+    - Otherwise, a shift from ``cur_rel`` to ``new_rel`` at ``idx`` opens a new stage only when:
+      (a) ``cur_rel`` appeared in at least ``CHANGE_MIN_EPISODES`` episodes before ``idx``, ``new_rel`` appears in
+          at least ``CHANGE_MIN_EPISODES`` episodes from ``idx`` onwards, and ``cur_rel`` does not return after ``idx``;
+      OR
+      (b) an event at ``idx`` is an explicit high-confidence turning-point event (``>= EVENT_CHANGE_CONFIDENCE``)
+          and ``cur_rel`` does not return after ``idx``.
+    """
+    if is_kinship or len(ep_readings) < 2:
+        return [0]
+    cuts = [0]
+    cur_start = 0
+    cur_rel = ep_readings[0][1].relation
+    for idx in range(1, len(ep_readings)):
+        _, ev, all_evs = ep_readings[idx]
+        new_rel = ev.relation
+        if new_rel == cur_rel:
+            continue
+        returns_to_old = any(r_ev.relation == cur_rel for _, r_ev, _ in ep_readings[idx + 1 :])
+        if returns_to_old:
+            continue
+        before_count = sum(1 for _, b_ev, _ in ep_readings[cur_start:idx] if b_ev.relation == cur_rel)
+        after_count = sum(1 for _, a_ev, _ in ep_readings[idx:] if a_ev.relation == new_rel)
+        sturdy = before_count >= CHANGE_MIN_EPISODES and after_count >= CHANGE_MIN_EPISODES
+        explicit = _is_turning_event(all_evs)
+        if sturdy or explicit:
+            cuts.append(idx)
+            cur_start = idx
+            cur_rel = new_rel
+    return cuts
+
+
+def _best_detail(ep_readings: Sequence[tuple[Episode, RelationshipEvent, list[RelationshipEvent]]], relation: str) -> str:
+    for _, ev, all_evs in ep_readings:
+        for candidate in (ev, *all_evs):
+            if candidate.relation == relation and candidate.detail:
+                return candidate.detail
+    for _, ev, _ in ep_readings:
+        if ev.detail:
+            return ev.detail
+    return ""
+
+
+def _pair_rules(glossary: Glossary | None, pair: tuple[str, str]) -> tuple[AddressRule, ...]:
+    if glossary is None:
+        return ()
+    matched = [r for r in glossary.address_rules if tuple(sorted((r.a.casefold(), r.b.casefold()))) == pair]
+    matched.sort(key=lambda r: (r.start is not None, r.start or Position(0, 0)))
+    return tuple(matched)
 
 
 def address_items(
     episodes: Sequence[Episode], cues_of: CuesOf, *, glossary: Glossary | None = None,
     exclude: Collection[tuple[str, ...]] = (),
+    exclude_changes: Collection[tuple[str, str, str]] = (),
 ) -> list[AddressItem]:
-    """One item per state of every pair whose relationship the facts show. Pairs the glossary already has a rule for
-    are left alone: the admin's rule wins (FR-4.3) and a proposal would only argue with it. ``exclude`` are the keys
-    of states not to ask about."""
+    """One item per unordered character pair whose relationship the facts show (P18f).
+
+    Pairs the glossary already has rules for are skipped unless a newer sturdy change point appeared that the existing
+    rules do not yet cover (in which case ``change_from`` is set on the item so a change proposal is created).
+    ``exclude`` are pair keys ``(low, high)`` not to ask about for new pairs; ``exclude_changes`` are
+    ``(low, high, change_from)`` keys already decided or pending for change proposals."""
     names = _names(episodes)
-    held = {frozenset((r.a.casefold(), r.b.casefold())) for r in (glossary.address_rules if glossary else ())}
     pairs: dict[tuple[str, str], list[tuple[Episode, RelationshipEvent]]] = {}
     for episode in episodes:
         for event in episode.facts.relationship_events:  # sorted by cue
-            if event.confidence < MIN_CONFIDENCE or event.relation == "stranger":
+            if event.confidence < MIN_CONFIDENCE:
                 continue
             if is_group(event.a) or is_group(event.b):
                 continue
@@ -233,47 +399,137 @@ def address_items(
                 pair, event = (pair[1], pair[0]), _flipped(event)
                 a, b = b, a
             pairs.setdefault(pair, []).append((episode, event))
+
     items: list[AddressItem] = []
     for pair, events in pairs.items():
-        if frozenset(pair) in held:
+        if all(ev.relation == "stranger" for _, ev in events):
             continue
-        states: list[_State] = []
-        for episode, event in events:
-            current = states[-1] if states else None
-            if current and (current.relation, current.hierarchy) == (event.relation, event.hierarchy):
-                current.seen.append((episode, event))
-                continue
-            states.append(_State(event.relation, event.hierarchy, event.intimacy, event.detail, (episode, event), [(episode, event)]))
-        states = _settled(states)[-MAX_STATES_PER_PAIR:]
-        a, b = _person(names, events[0][1].a), _person(names, events[0][1].b)
-        starts = [None] + [_start_of(s.first[0], s.first[1].cue, cues_of) for s in states[1:]]
-        for n, state in enumerate(states):
-            evidence = tuple(
+        # Collapse to one dominant reading per episode (highest confidence, preferring non-stranger) in story order.
+        by_ep: dict[str, tuple[Episode, list[RelationshipEvent]]] = {}
+        for episode, ev in events:
+            slot = by_ep.get(episode.label)
+            if slot is None:
+                by_ep[episode.label] = (episode, [ev])
+            else:
+                slot[1].append(ev)
+        ep_readings: list[tuple[Episode, RelationshipEvent, list[RelationshipEvent]]] = []
+        for episode, evs in by_ep.values():
+            best = max(evs, key=lambda e: (e.relation != "stranger", e.confidence))
+            ep_readings.append((episode, best, evs))
+
+        is_kinship = _is_kinship_pair(ep_readings)
+        base_relation = "family" if is_kinship else _majority_relation(ep_readings)
+        base_hierarchy = _majority_hierarchy(ep_readings, preferred_relation=base_relation)
+        base_detail = _best_detail(ep_readings, base_relation)
+        base_intimacy = round(sum(ev.intimacy for _, ev, _ in ep_readings) / len(ep_readings))
+
+        cuts = _detect_cuts(ep_readings, is_kinship=is_kinship)
+        if len(cuts) > MAX_STATES_PER_PAIR:
+            cuts = [0, *cuts[-(MAX_STATES_PER_PAIR - 1) :]]
+
+        # Build stages from the detected cuts.
+        raw_slices = [
+            ep_readings[cuts[n] : (cuts[n + 1] if n + 1 < len(cuts) else len(ep_readings))]
+            for n in range(len(cuts))
+        ]
+        stage_starts: list[Position | None] = [None]
+        for sl in raw_slices[1:]:
+            first_ep, first_ev, _ = sl[0]
+            stage_starts.append(_start_of(first_ep, first_ev.cue, cues_of))
+
+        stages: list[AddressStage] = []
+        for n, sl in enumerate(raw_slices):
+            rel = base_relation if n == 0 and len(raw_slices) == 1 else _majority_relation(sl)
+            hier = base_hierarchy if n == 0 and len(raw_slices) == 1 else _majority_hierarchy(sl, preferred_relation=rel)
+            det = base_detail if n == 0 and len(raw_slices) == 1 else _best_detail(sl, rel)
+            intim = base_intimacy if n == 0 and len(raw_slices) == 1 else round(sum(ev.intimacy for _, ev, _ in sl) / len(sl))
+            st_evidence = tuple(
                 _cue_evidence(e.label, ev.cue, ev.evidence, cues_of, f"{ev.relation}, {ev.hierarchy.replace('_', ' ')}")
-                for e, ev in state.seen[:MAX_EVIDENCE]
+                for e, ev, _ in sl[:MAX_EVIDENCE]
             )
-            item = AddressItem(
-                a, b, state.relation, state.hierarchy, state.intimacy, state.detail,
-                starts[n], starts[n + 1] if n + 1 < len(states) else None, evidence,
-            )
-            if item.key not in exclude:
-                items.append(item)
+            stages.append(AddressStage(
+                relation=rel, hierarchy=hier, intimacy=intim, detail=det,
+                start=stage_starts[n], until=stage_starts[n + 1] if n + 1 < len(raw_slices) else None,
+                evidence=st_evidence,
+            ))
+
+        existing = _pair_rules(glossary, pair)
+        change_from: Position | None = None
+        if existing:
+            # Pair already has glossary rule(s): only propose if a newer sturdy change point appeared in an
+            # episode not already covered by an existing rule start (R18-6: compare by (season, episode)).
+            existing_eps = {(r.start.season, r.start.episode) for r in existing if r.start is not None}
+            new_starts = [
+                st.start for st in stages[1:]
+                if st.start is not None and (st.start.season, st.start.episode) not in existing_eps
+            ]
+            if not new_starts:
+                continue
+            change_from = new_starts[-1]
+            change_keys = {(*pair, ""), (*pair, change_episode_key(change_from)), (*pair, _fold(change_from))}
+            if change_keys & set(exclude_changes):
+                continue
+        else:
+            if pair in exclude:
+                continue
+
+        a, b = _person(names, events[0][1].a), _person(names, events[0][1].b)
+        # Gather evidence across stages (for a change point: before and after).
+        if len(stages) == 1:
+            combined_evidence = stages[0].evidence
+        else:
+            combined: list[dict[str, Any]] = []
+            for st in stages:
+                combined.extend(st.evidence[:2])
+            combined_evidence = tuple(combined)
+        timeline = tuple(
+            {
+                "episode": e.label,
+                "relation": ev.relation,
+                "standing": _SENIOR.get(ev.hierarchy, "equals"),
+                **({"detail": ev.detail} if ev.detail else {}),
+            }
+            for e, ev, _ in ep_readings
+        )
+        # R18-1: when multiple stages exist, stage 0 describes the stretch before the first change point
+        # (not the majority across all episodes, which could be the post-change relation).
+        lead = stages[0]
+        items.append(AddressItem(
+            a=a, b=b, relation=lead.relation, hierarchy=lead.hierarchy, intimacy=lead.intimacy, detail=lead.detail,
+            stages=tuple(stages), evidence=combined_evidence, timeline=timeline,
+            change_from=change_from, existing=existing,
+        ))
     return items
 
 
-def _settled(states: list[_State]) -> list[_State]:
-    """Drop the stages that rest on one doubtful reading. Each episode is read alone, so a pair that is "friends" in two
-    episodes, "rivals" in the third and "friends" again is one stage with a misread in the middle, not three: a new
-    stage after the first needs a second reading or a confident one. Neighbours left with the same standing are one."""
-    kept: list[_State] = []
-    for n, state in enumerate(states):
-        if n and len(state.seen) == 1 and state.first[1].confidence < STAGE_MIN_CONFIDENCE:
-            continue
-        if kept and (kept[-1].relation, kept[-1].hierarchy) == (state.relation, state.hierarchy):
-            kept[-1].seen.extend(state.seen)
-            continue
-        kept.append(state)
-    return kept
+def collapse_stages(stages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge adjacent stages that carry the exact same ``(a_to_b, b_to_a)`` forms (P18f)."""
+    merged: list[dict[str, Any]] = []
+    for raw in stages:
+        stage = dict(raw)
+        if merged:
+            prev = merged[-1]
+            same_a = _fold(prev.get("a_to_b") or "") == _fold(stage.get("a_to_b") or "")
+            same_b = _fold(prev.get("b_to_a") or "") == _fold(stage.get("b_to_a") or "")
+            if same_a and same_b:
+                if stage.get("until"):
+                    prev["until"] = stage["until"]
+                else:
+                    prev.pop("until", None)
+                continue
+        merged.append(stage)
+    # Re-stitch boundaries cleanly.
+    if len(merged) == 1:
+        merged[0].pop("from", None)
+        merged[0].pop("until", None)
+    else:
+        merged[0].pop("from", None)
+        for n in range(len(merged) - 1):
+            nxt_from = merged[n + 1].get("from")
+            if nxt_from:
+                merged[n]["until"] = nxt_from
+        merged[-1].pop("until", None)
+    return merged
 
 
 def _flipped(event: RelationshipEvent) -> RelationshipEvent:
@@ -399,16 +655,19 @@ _AN_ANSWER = "Output a single JSON object and nothing else."
 
 _ADDRESS_SYSTEM = """\
 You decide how characters of a story address each other in subtitles translated into the language with code `{lang}`.
-Each item is one pair of characters (A and B) during one stretch of the story. Give `a_to_b`, how A speaks to B, and
-`b_to_a`, how B speaks to A, each as a "self–other" pair joined with an en dash: the word the speaker uses for themself,
-then the word used for the listener. In Vietnamese, "anh–em" means the speaker says "anh" of themself and "em" of the
-listener. Choose what a native speaker would use for exactly this relationship, ages, genders and seniority.
-Use only what the item says; do not invent. If the language has no such forms, or plain names are what people would
-say, answer an empty string for that direction. The two directions must fit together (if A calls B "chị", B is a woman
-older than A, and B does not call A "chị" back). When the item does not make age or seniority clear, choose the neutral form for the
-relationship rather than guess a hierarchy. `why` is one short sentence naming what in the item decided the answer
-(for example "Lois is Craig's boss"), so a reviewer can check it. {answer}
-Shape: {{"rules": [{{"i": <item number>, "a_to_b": "...", "b_to_a": "...", "why": "..."}}]}}"""
+Each item is ONE pair of characters (A and B) across the whole series, showing their base standing, their episode
+timeline, sample lines, and (only when there is strong evidence of a lasting shift) a list of `candidate_changes`.
+Give `a_to_b`, how A speaks to B, and `b_to_a`, how B speaks to A, each as a "self–other" pair joined with an en dash:
+the word the speaker uses for themself, then the word used for the listener. In Vietnamese, "anh–em" means the speaker
+says "anh" of themself and "em" of the listener. Choose what a native speaker would use for exactly this relationship,
+ages, genders and seniority. Use only what the item says; do not invent. If the language has no such forms, or plain
+names are what people would say, answer an empty string for that direction. The two directions must fit together (if A
+calls B "chị", B is a woman older than A, and B does not call A "chị" back). When the item does not make age or
+seniority clear, choose the neutral form for the relationship rather than guess a hierarchy. `why` is one short sentence
+naming what in the item decided the answer (for example "Lois is Craig's boss"), so a reviewer can check it.
+When `candidate_changes` is present, you may confirm or reject each candidate change in `stages` (`stage` number,
+`confirm`: true/false, `a_to_b`, `b_to_a`, `why`); NEVER invent new stages that are not in `candidate_changes`. {answer}
+Shape: {{"rules": [{{"i": <item number>, "a_to_b": "...", "b_to_a": "...", "why": "...", "stages": [{{"stage": 1, "confirm": true, "a_to_b": "...", "b_to_a": "...", "why": "..."}}]}}]}}"""
 
 _TERM_SYSTEM = """\
 You translate proper names and invented terms of a story for subtitles in the language with code `{lang}`. Each item
@@ -489,21 +748,71 @@ def _text(value: Any, limit: int = 120) -> str:
 _SENIOR = {"a_above": "A is senior to B", "b_above": "B is senior to A", "equal": "equals"}
 
 
+def _address_schema() -> dict[str, Any]:
+    stage = {
+        "type": "object",
+        "properties": {
+            "stage": {"type": "integer"},
+            "confirm": {"type": "boolean"},
+            "a_to_b": {"type": "string"},
+            "b_to_a": {"type": "string"},
+            "why": {"type": "string"},
+        },
+        "required": ["stage", "confirm"],
+    }
+    entry = {
+        "type": "object",
+        "properties": {
+            "i": {"type": "integer"},
+            "a_to_b": {"type": "string"},
+            "b_to_a": {"type": "string"},
+            "why": {"type": "string"},
+            "stages": {"type": "array", "items": stage},
+        },
+        "required": ["i"],
+    }
+    return {"type": "object", "properties": {"rules": {"type": "array", "items": entry}}, "required": ["rules"]}
+
+
 def address_drafts(provider: Provider, items: Sequence[AddressItem], *, lang: str) -> list[Draft]:
-    """Ask for the forms of address of ``items`` (one call) and return a draft for each pair the model answered."""
+    """Ask ONCE per character pair for its base forms and any confirmed candidate stages (P18f)."""
     if not items:
         return []
-    lines = [
-        {
-            "i": n, "A": _person_line(item.a), "B": _person_line(item.b), "relation": item.relation,
-            "detail": item.detail, "standing": _SENIOR.get(item.hierarchy, "equals"), "closeness": f"{item.intimacy}/5",
+    lines = []
+    for n, item in enumerate(items):
+        line: dict[str, Any] = {
+            "i": n,
+            "A": _person_line(item.a),
+            "B": _person_line(item.b),
+            "relation": item.relation,
+            "detail": item.detail,
+            "standing": _SENIOR.get(item.hierarchy, "equals"),
+            "closeness": f"{item.intimacy}/5",
+            "timeline": list(item.timeline),
             "lines": _lines(item.evidence),
         }
-        for n, item in enumerate(items)
-    ]
+        if len(item.stages) > 1:
+            line["candidate_changes"] = [
+                {
+                    "stage": k,
+                    "from": str(st.start),
+                    "relation": st.relation,
+                    "standing": _SENIOR.get(st.hierarchy, "equals"),
+                    "detail": st.detail,
+                    "lines": _lines(st.evidence),
+                }
+                for k, st in enumerate(item.stages[1:], start=1)
+                if st.start is not None
+            ]
+        if item.existing:
+            line["existing_rules"] = [
+                {k: v for k, v in (("a", r.a), ("b", r.b), ("a_to_b", r.a_to_b), ("b_to_a", r.b_to_a),
+                                   ("from", str(r.start or "")), ("until", str(r.until or ""))) if v}
+                for r in item.existing
+            ]
+        lines.append(line)
     answers = _by_item(
-        _ask(provider, _ADDRESS_SYSTEM.format(lang=lang, answer=_AN_ANSWER), lines, "rules",
-             _schema("rules", {"a_to_b": "string", "b_to_a": "string", "why": "string"}), len(items)),
+        _ask(provider, _ADDRESS_SYSTEM.format(lang=lang, answer=_AN_ANSWER), lines, "rules", _address_schema(), len(items)),
         len(items),
     )
     drafts = []
@@ -514,18 +823,66 @@ def address_drafts(provider: Provider, items: Sequence[AddressItem], *, lang: st
         a_to_b, b_to_a = _text(answer.get("a_to_b"), 40), _text(answer.get("b_to_a"), 40)
         if not (a_to_b or b_to_a):
             continue
-        payload: dict[str, Any] = {"a": item.a.name, "b": item.b.name}
-        if a_to_b:
-            payload["a_to_b"] = a_to_b
-        if b_to_a:
-            payload["b_to_a"] = b_to_a
-        if item.start:
-            payload["from"] = str(item.start)
-        if item.until:
-            payload["until"] = str(item.until)
-        note = f"{item.relation}: {item.detail}" if item.detail else item.relation
+        base_note = f"{item.relation}: {item.detail}" if item.detail else item.relation
         why = _text(answer.get("why"), 100)
-        payload["note"] = f"{note}. {why}" if why else note
+        full_note = f"{base_note}. {why}" if why else base_note
+
+        # Build base stage + any candidate change confirmed by the model (model may never invent stages).
+        raw_stages: list[dict[str, Any]] = []
+        base_stage: dict[str, Any] = {}
+        if a_to_b:
+            base_stage["a_to_b"] = a_to_b
+        if b_to_a:
+            base_stage["b_to_a"] = b_to_a
+        if full_note:
+            base_stage["note"] = full_note
+        raw_stages.append(base_stage)
+
+        if len(item.stages) > 1 and isinstance(answer.get("stages"), list):
+            by_idx: dict[int, dict[str, Any]] = {}
+            for entry in answer["stages"]:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    st_idx = int(entry.get("stage"))
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= st_idx < len(item.stages) and st_idx not in by_idx:
+                    by_idx[st_idx] = entry
+            for k, st in enumerate(item.stages[1:], start=1):
+                reply = by_idx.get(k)
+                if not reply or reply.get("confirm") is False or st.start is None:
+                    continue
+                st_a, st_b = _text(reply.get("a_to_b"), 40), _text(reply.get("b_to_a"), 40)
+                if not (st_a or st_b):
+                    continue
+                st_doc: dict[str, Any] = {"from": str(st.start)}
+                if st_a:
+                    st_doc["a_to_b"] = st_a
+                if st_b:
+                    st_doc["b_to_a"] = st_b
+                st_base = f"{st.relation}: {st.detail}" if st.detail else st.relation
+                st_why = _text(reply.get("why"), 100)
+                st_doc["note"] = f"{st_base}. {st_why}" if st_why else st_base
+                raw_stages.append(st_doc)
+
+        merged = collapse_stages(raw_stages)
+        if len(merged) == 1:
+            if item.change_from is not None:
+                # A change proposal whose forms did not actually change has nothing to propose.
+                continue
+            payload: dict[str, Any] = {"a": item.a.name, "b": item.b.name, **merged[0]}
+        else:
+            payload = {
+                "a": item.a.name,
+                "b": item.b.name,
+                **({"a_to_b": merged[0]["a_to_b"]} if merged[0].get("a_to_b") else {}),
+                **({"b_to_a": merged[0]["b_to_a"]} if merged[0].get("b_to_a") else {}),
+                "stages": merged,
+                "note": full_note,
+            }
+            if item.change_from is not None:
+                payload["change_from"] = str(item.change_from)
         drafts.append(Draft("address_rule", payload, item.evidence))
     return drafts
 

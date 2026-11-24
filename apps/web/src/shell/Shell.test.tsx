@@ -2,6 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetSession } from "../api/session";
+import { seriesPage } from "../test/fixtures";
 import { serve, show } from "../test/render";
 
 const healthy = {
@@ -89,5 +90,29 @@ describe("Shell", () => {
     show();
     await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("Your session expired."));
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+  });
+
+  it("remembers the last visited Library route when leaving and returning, and returns to /library on second tap", async () => {
+    serve({
+      ...healthy,
+      "/api/catalog/series/1": { body: seriesPage([]) },
+      "/api/library/series/9/units": { body: { languages: ["vi"], units: [] } },
+      "/api/queue": { body: { counts: {}, total: 0, daily_quota_pause: null, providers: [], processing: [], pending: [], deferred: [], done: [], failed: [] } },
+    });
+    show("/series/1/episodes");
+    expect(await screen.findByRole("heading", { name: "Arcane" })).toBeInTheDocument();
+
+    // Leave Library area for Activity, then click Library -> returns to /series/1/episodes.
+    const nav = screen.getByRole("navigation", { name: "Main" });
+    await userEvent.click(within(nav).getByRole("link", { name: "Activity" }));
+    expect(await screen.findByRole("heading", { name: "Activity" })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "Library" })).toHaveAttribute("href", "/series/1/episodes");
+    await userEvent.click(within(nav).getByRole("link", { name: "Library" }));
+    expect(await screen.findByRole("heading", { name: "Arcane" })).toBeInTheDocument();
+
+    // While already inside Library area, Library link points back to /library.
+    expect(within(nav).getByRole("link", { name: "Library" })).toHaveAttribute("href", "/library");
+    await userEvent.click(within(nav).getByRole("link", { name: "Library" }));
+    expect(await screen.findByRole("textbox", { name: "Search by title" })).toBeInTheDocument();
   });
 });

@@ -15,7 +15,7 @@ from subserver.services.catalog_actions import CatalogActions
 from subserver.api.catalog_api import handle
 from subserver.services.catalog_view import CatalogView
 from subserver.services.glossaries import Glossaries
-from subserver.services.job_requests import JobRequests
+from subserver.services.job_requests import JobRequests, Selection
 from subserver.services.library import Library, identify_job
 from subserver.domain.ports import CatalogEntry, CatalogSubtitle, MediaLibraryError
 from subserver.jobs.queue import JobQueue
@@ -443,6 +443,31 @@ class Criterion13e(CatalogCase):
         job = env.queue.jobs.get(fill)
         self.assertEqual((job["mode"], job["trigger"]), ("replace", "retranslate"))
         self.assertEqual(len(env.jobs_open()), 1)
+
+    def test_p18c_auto_mode_plans_and_creates_translate_and_retranslate_together(self):
+        env = self.env()
+        env.episode(1)  # missing -> translate (fill)
+        env.episode(2, vi=True)  # already has vi -> retranslate (replace)
+        env.episode(3, source=False)  # no source -> skipped
+        env.sync.run()
+        ids = env.ids("7101", "7102", "7103")
+        est = env.actions.request({"items": ids, "mode": "auto", "estimate_only": True})
+        self.assertEqual((est["mode"], est["planned_total"], est["translate_total"], est["retranslate_total"]), ("auto", 2, 1, 1))
+        self.assertEqual(est["skipped_total"], 1)
+        actions_by_item = {row["item_id"]: row["action"] for row in est["planned"]}
+        self.assertEqual(actions_by_item, {ids[0]: "translate", ids[1]: "retranslate"})
+        self.assertEqual(env.jobs_open(), [])  # estimate makes nothing
+
+        made = env.actions.request({"items": ids, "mode": "auto"})
+        self.assertEqual((made["count"], made["translate_total"], made["retranslate_total"]), (2, 1, 1))
+        jobs = env.jobs_open()
+        self.assertEqual({(j["media_id"], j["mode"], j.get("trigger", "auto")) for j in jobs}, {
+            ("7101", "fill", "auto"),
+            ("7102", "replace", "retranslate"),
+        })
+        # Policy (automatic=True) must never allow mode=auto or replace.
+        with self.assertRaises(ValueError):
+            env.requests.plan(Selection(everything=True), "auto", automatic=True)
 
     def test_13e_what_cannot_be_requested_says_why(self):
         env = self.env()

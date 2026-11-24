@@ -1,7 +1,9 @@
 import { Alert, Button, Drawer, Group, Loader, Stack, Text } from "@mantine/core";
+import { useState } from "react";
 import { useRequestJobs, useEstimate, type CostRequest } from "../api/queries";
 import type { Estimate, EstimateAnswer } from "../api/types";
 import { clock } from "../lib/format";
+import { languageName } from "../lib/home";
 
 /** `action` is "Translate missing · Arcane": what the person is about to pay for. */
 export type EstimateRequest = { action: string } & CostRequest;
@@ -52,14 +54,41 @@ function skippedNote(answer: EstimateAnswer): string | null {
   return `Left out: ${reasons.join(", ")}.`;
 }
 
+/** Two-group breakdown for multi-item Translate / Retranslate requests (P18c). */
+export function planBreakdown(answer: EstimateAnswer, langCode?: string): string[] {
+  const newCount = answer.translate_total ?? 0;
+  const retranslateCount = answer.retranslate_total ?? 0;
+  if (retranslateCount === 0 && answer.mode !== "auto") return [];
+  const code = langCode || answer.planned?.[0]?.lang || "";
+  const langLabel = code ? languageName(code) : "target";
+  const lines: string[] = [];
+  if (newCount > 0) {
+    lines.push(
+      `New translations: ${newCount.toLocaleString()} ${newCount === 1 ? "episode" : "episodes"} (no ${langLabel} subtitle yet)`,
+    );
+  }
+  if (retranslateCount > 0) {
+    lines.push(
+      `Retranslations: ${retranslateCount.toLocaleString()} ${retranslateCount === 1 ? "episode" : "episodes"} (already translated; previous file kept as a version)`,
+    );
+  }
+  return lines;
+}
+
 /** The bottom sheet every button that spends model calls goes through (UX §6.4). */
 export function EstimateSheet({ request, onClose }: { request: EstimateRequest | null; onClose: () => void }) {
   const estimate = useEstimate(request ? withoutAction(request) : null);
   const make = useRequestJobs();
+  const [confirmFor, setConfirmFor] = useState<EstimateRequest | null>(null);
+  const confirmOverwrite = request !== null && confirmFor === request;
   const answer = estimate.data;
   const done = make.data;
+  const retranslateCount = answer?.retranslate_total ?? 0;
+  const langCode = request && "selector" in request ? request.selector.languages?.[0] : undefined;
+  const breakdown = answer ? planBreakdown(answer, langCode) : [];
 
   const close = () => {
+    setConfirmFor(null);
     make.reset();
     onClose();
   };
@@ -91,6 +120,11 @@ export function EstimateSheet({ request, onClose }: { request: EstimateRequest |
                 {estimateLines(answer.estimate).map(([label, value]) => (
                   <Line key={label} label={label} value={value} />
                 ))}
+                {breakdown.map((line) => (
+                  <Text key={line} size="sm">
+                    {line}
+                  </Text>
+                ))}
                 {answer.estimate.jobs === 0 && <Text c="dimmed">Nothing to translate.</Text>}
                 {skippedNote(answer) && (
                   <Text size="sm" c="dimmed">
@@ -99,18 +133,38 @@ export function EstimateSheet({ request, onClose }: { request: EstimateRequest |
                 )}
               </Stack>
             )}
+            {confirmOverwrite && retranslateCount > 0 && (
+              <Alert color="orange" title={`Overwrite ${retranslateCount.toLocaleString()} ${retranslateCount === 1 ? "translation" : "translations"}?`}>
+                Each existing subtitle is kept as a version before it is replaced, so you can revert it any time.
+              </Alert>
+            )}
             {make.isError && <Alert color="red">{make.error.message}</Alert>}
             <Group justify="space-between">
-              <Button variant="default" onClick={close}>
-                Cancel
-              </Button>
-              <Button
-                disabled={!answer || answer.estimate.jobs === 0}
-                loading={make.isPending}
-                onClick={() => request && make.mutate(withoutAction(request))}
-              >
-                Confirm
-              </Button>
+              {confirmOverwrite ? (
+                <Button variant="default" onClick={() => setConfirmFor(null)}>
+                  Back
+                </Button>
+              ) : (
+                <Button variant="default" onClick={close}>
+                  Cancel
+                </Button>
+              )}
+              {retranslateCount > 0 && !confirmOverwrite ? (
+                <Button disabled={!answer || answer.estimate.jobs === 0} onClick={() => setConfirmFor(request)}>
+                  Confirm
+                </Button>
+              ) : (
+                <Button
+                  color={confirmOverwrite ? "orange" : undefined}
+                  disabled={!answer || answer.estimate.jobs === 0}
+                  loading={make.isPending}
+                  onClick={() => request && make.mutate(withoutAction(request))}
+                >
+                  {confirmOverwrite
+                    ? `Overwrite ${retranslateCount.toLocaleString()} ${retranslateCount === 1 ? "translation" : "translations"}`
+                    : "Confirm"}
+                </Button>
+              )}
             </Group>
           </>
         )}

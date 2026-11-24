@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { saveHomeScroll } from "../lib/navigation";
 import { movie, series, target } from "../test/fixtures";
 import { sent, serve, show } from "../test/render";
 
@@ -105,5 +106,17 @@ describe("Home", () => {
     show("/library");
     await screen.findByText("Missing · Running");
     await waitFor(() => expect(screen.queryByRole("button", { name: "Translate missing" })).not.toBeInTheDocument());
+  });
+
+  it("initialises search and filter from URL query params and restores saved scroll", async () => {
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+    saveHomeScroll(320);
+    serve(catalog([series({ title: "Severance", missing: { vi: 5 } }), series({ id: 2, title: "Shogun" })]));
+    show("/library?q=sev&filter=missing");
+    const list = await screen.findByRole("list", { name: "Library" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByRole("textbox", { name: "Search by title" })).toHaveValue("sev");
+    expect(screen.getByRole("radio", { name: "Missing Vietnamese" })).toBeChecked();
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(0, 320));
   });
 });

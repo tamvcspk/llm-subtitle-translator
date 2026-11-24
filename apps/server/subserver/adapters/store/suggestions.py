@@ -32,16 +32,20 @@ class SuggestionRepo(Repo):
     def suggestion_add(
         self, series_id: int, target_lang: str, kind: str, source: str, fingerprint: str, payload: dict[str, Any],
         evidence: list[Any], sources: list[str], *, identity: str = "", display_id: int = 0,
+        allow_after_accepted: bool = False,
     ) -> Suggestion | None:
         """Store a pending suggestion; ``None`` when the series already has one with that fingerprint, or about the same
         thing (``identity``), in that language (pending, accepted or rejected: a rejected one is exactly what must not
-        come back, however the model worded it this time)."""
+        come back, however the model worded it this time). ``allow_after_accepted`` lets a pair-change proposal (P18f)
+        be added after an earlier proposal for that pair was already accepted (never if pending or rejected)."""
         with self.transaction() as db:
-            if identity and db.execute(
-                "SELECT 1 FROM suggestions WHERE series_id = ? AND target_lang = ? AND identity = ?",
-                (series_id, target_lang, identity),
-            ).fetchone():
-                return None
+            if identity:
+                sql = (
+                    "SELECT 1 FROM suggestions WHERE series_id = ? AND target_lang = ? AND identity = ?"
+                    + (" AND status <> 'accepted'" if allow_after_accepted else "")
+                )
+                if db.execute(sql, (series_id, target_lang, identity)).fetchone():
+                    return None
             cursor = db.execute(
                 "INSERT INTO suggestions (series_id, target_lang, kind, source, fingerprint, payload_json, evidence_json,"
                 " sources_json, created_at, identity, display_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -56,6 +60,31 @@ class SuggestionRepo(Repo):
                 return None
             row = db.execute("SELECT * FROM suggestions WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return _suggestion_from_row(row)
+
+    def suggestion_drop_pending_pair(self, series_id: int, target_lang: str, a: str, b: str) -> int:
+        """Delete legacy per-stage pending ``address_rule`` rows for the unordered pair ``(a, b)`` so a fresh
+        pair-level proposal merges them into one card (P18f)."""
+        pair = sorted((" ".join(a.split()).casefold(), " ".join(b.split()).casefold()))
+        rows = self.query(
+            "SELECT id, payload_json FROM suggestions WHERE series_id = ? AND target_lang = ?"
+            " AND kind = 'address_rule' AND status = 'pending'",
+            (series_id, target_lang),
+        )
+        doomed: list[int] = []
+        for row in rows:
+            try:
+                data = json.loads(row["payload_json"])
+                other = sorted((" ".join(str(data.get("a") or "").split()).casefold(),
+                                " ".join(str(data.get("b") or "").split()).casefold()))
+            except Exception:  # noqa: BLE001
+                continue
+            if other == pair:
+                doomed.append(int(row["id"]))
+        if not doomed:
+            return 0
+        with self.transaction() as db:
+            db.executemany("DELETE FROM suggestions WHERE id = ?", [(i,) for i in doomed])
+        return len(doomed)
 
     def search_display_add(
         self, series_id: int, target_lang: str, html: str, queries: Iterable[str], *, now: float | None = None,

@@ -83,29 +83,94 @@ class Env(MemoryEnv):
 
 
 class AddressRuleTests(unittest.TestCase):
-    def test_21a_a_pair_with_a_clear_relationship_gets_pending_rules_with_cue_and_timecode_and_nothing_is_applied(self):
+    def test_21a_a_pair_with_a_clear_relationship_gets_one_pending_rule_with_cue_and_timecode_and_nothing_is_applied(self):
         env = Env(self, suggest_from_facts=False)
         env.translate(6)
         before = env.statuses()
         report = env.generate()
 
-        first, second = sorted(env.pending("address_rule"), key=lambda i: i["payload"].get("from", ""))
-        self.assertEqual((first["source"], first["status"], first["lang"]), ("facts", "pending", "vi"))
-        self.assertEqual(first["payload"]["a"], "Alice")
-        self.assertEqual((first["payload"]["a_to_b"], first["payload"]["b_to_a"]), ("anh", "em"))
-        self.assertEqual(first["payload"]["until"], "S01E06 00:00:06")  # lovers until the turn ...
-        self.assertEqual(second["payload"]["from"], "S01E06 00:00:06")  # ... enemies from it, to the second
-        self.assertEqual(
-            [(e["episode"], e["cue"], e["timecode"], e["text"]) for e in second["evidence"]],
-            [("S01E06", 4, "00:00:06,000", "Line 4 of episode 6")],
-        )
-        self.assertEqual(second["evidence"][0]["unit_id"], env.unit_id(6))  # the page links to the episode
-        self.assertEqual(first["evidence"][0]["episode"], "S01E01")
-        self.assertEqual(first["evidence"][0]["timecode"], "00:00:02,000")  # cue 2 of episode 1
+        # P18f: one proposal per character pair (Alice & Bob have 1 ep romantic, 1 ep enemy -> 1 base stage).
+        (pair,) = env.pending("address_rule")
+        self.assertEqual((pair["source"], pair["status"], pair["lang"]), ("facts", "pending", "vi"))
+        self.assertEqual((pair["payload"]["a"], pair["payload"]["b"]), ("Alice", "Bob"))
+        self.assertEqual((pair["payload"]["a_to_b"], pair["payload"]["b_to_a"]), ("anh", "em"))
+        self.assertEqual(pair["evidence"][0]["episode"], "S01E01")
+        self.assertEqual(pair["evidence"][0]["timecode"], "00:00:02,000")
+        self.assertEqual(pair["evidence"][0]["unit_id"], env.unit_id(1))
         self.assertEqual(report["added"], len(env.pending()))
         # not applied: the glossary is empty, no translation changed state, nothing was queued
         self.assertTrue(env.glossary().is_empty())
         self.assertEqual(env.statuses(), before)
+
+    def test_p18f_multi_stage_pair_and_change_proposal_replace_and_undo_cleanly(self):
+        env = Env(self, suggest_from_facts=False)
+        # Seed sturdy 2+2 facts: ep 1-2 romantic, ep 5-6 enemy.
+        for ep in (1, 2):
+            env.add_source(ep)
+        env.translate(6)
+        # Write 2 romantic + 2 enemy episodes directly in facts so hysteresis (2 each side) triggers.
+        from pathlib import Path
+        from subcore.memory import Character, EXTRACT_PROMPT_VERSION, Facts, RelationshipEvent
+        from subserver.services.versions import sha256_file
+        for ep, rel, cue in ((1, "romantic", 2), (2, "romantic", 2), (5, "enemy", 3), (6, "enemy", 4)):
+            uid = env.unit_id(ep)
+            u = env.store.get_unit(uid)
+            env.store.save_facts(
+                uid, sha256_file(Path(u.source_path)), EXTRACT_PROMPT_VERSION, model="fake",
+                facts=Facts(
+                    (Character("Alice", gender="f"), Character("Bob", gender="m")),
+                    (RelationshipEvent("Alice", "Bob", rel, cue, 3, "equal", f"ep {ep}", 0.9),),
+                    (), f"ep {ep}",
+                ),
+            )
+        real_handler = env.fake.handler
+
+        def staged_handler(req, call_no):
+            if req.meta.get("kind") == "suggest" and req.meta.get("what") == "rules":
+                return {"rules": [{
+                    "i": 0, "a_to_b": "em–anh", "b_to_a": "anh–em", "why": "lovers",
+                    "stages": [{"stage": 1, "confirm": True, "a_to_b": "tôi–anh", "b_to_a": "tôi–cô", "why": "enemies"}],
+                }]}
+            return real_handler(req, call_no)
+
+        env.fake.handler = staged_handler
+        # Existing rule in reversed order (Bob, Alice): a sturdy change point generates a change proposal!
+        env.glossaries.write("series", "bazarr-7", "vi", "address_rules:\n  - {a: Bob, b: Alice, a_to_b: anh–em, b_to_a: em–anh}\n")
+        env.generate()
+        (card,) = env.pending("address_rule")
+        self.assertEqual(card["payload"]["change_from"], "S01E05 00:00:04")
+        self.assertEqual(len(card["payload"]["stages"]), 2)
+        # Accept replaces the old (Bob, Alice) rule with both new stages.
+        env.suggestions.accept(card["id"])
+        rules = env.glossary().address_rules
+        self.assertEqual(len(rules), 2)
+        self.assertEqual((rules[0].a_to_b, str(rules[0].until)), ("em–anh", "S01E05 00:00:04"))
+        self.assertEqual((rules[1].a_to_b, str(rules[1].start)), ("tôi–anh", "S01E05 00:00:04"))
+        # Undo restores the exact original (Bob, Alice) rule.
+        env.suggestions.undo(card["id"])
+        restored = env.glossary().address_rules
+        self.assertEqual(len(restored), 1)
+        self.assertEqual((restored[0].a, restored[0].b, restored[0].a_to_b), ("Bob", "Alice", "anh–em"))
+
+    def test_p18f_legacy_pending_cards_of_same_pair_merge_into_one_when_regenerated(self):
+        env = Env(self, suggest_from_facts=False)
+        env.translate(6)
+        # Simulate two pre-P18f pending cards with legacy 3-part identities for Alice-Bob.
+        env.store.suggestion_add(
+            env.series_id, "vi", "address_rule", "facts", "fp-old-1",
+            {"a": "Alice", "b": "Bob", "a_to_b": "em–anh", "from": "S01E01"}, [], [],
+            identity=json.dumps(["address_rule", "alice", "bob", "s01e01"]),
+        )
+        env.store.suggestion_add(
+            env.series_id, "vi", "address_rule", "facts", "fp-old-2",
+            {"a": "Bob", "b": "Alice", "a_to_b": "tôi–cô", "from": "S01E03"}, [], [],
+            identity=json.dumps(["address_rule", "alice", "bob", "s01e03"]),
+        )
+        self.assertEqual(len(env.pending("address_rule")), 2)
+        env.generate()
+        # Old per-stage pending cards were replaced by ONE pair card.
+        (merged,) = env.pending("address_rule")
+        self.assertEqual((merged["payload"]["a"], merged["payload"]["b"]), ("Alice", "Bob"))
 
     def test_a_pair_the_admin_already_has_a_rule_for_is_not_asked_about(self):
         env = Env(self, suggest_from_facts=False)
@@ -302,6 +367,28 @@ class RunTests(unittest.TestCase):
         env.suggestions.generator = None
         with self.assertRaises(ValueError):
             env.suggestions.generate(1, "vi")
+
+    def test_r18_3_unconfirmed_change_proposal_is_skipped_and_second_run_makes_zero_calls(self):
+        # Model rejects the candidate change (confirm: False -> collapsed to 1 stage -> no draft returned).
+        def reject_change(req, n):
+            if "rules" in str(req.response_schema):
+                return {"rules": [{"i": 0, "a_to_b": "anh–em", "b_to_a": "em–anh", "stages": [{"stage": 1, "confirm": False}]}]}
+            return _script(req, n)
+
+        env = Env(self, suggest_from_facts=False, handler=reject_change)
+        env.translate(6)  # episodes 1..6: romantic 1-3, enemy 4-6 -> change at S01E04
+        # Pre-seed an existing glossary rule for Alice-Bob so the candidate is a `change_from` item.
+        owner = env.library.series_owner(env.series_id)
+        env.glossaries.save_doc(owner.kind, owner.key, "vi", {
+            "version": 1,
+            "address_rules": [{"a": "Alice", "b": "Bob", "a_to_b": "anh–em", "b_to_a": "em–anh"}],
+        })
+        first = env.generate()
+        self.assertGreater(first["calls"], 0)
+        # Second run over unchanged facts MUST make 0 calls (the unconfirmed change was remembered in suggestion_skips).
+        second = env.generate()
+        self.assertEqual(second["calls"], 0)
+        self.assertEqual(second["address_rules"], 0)
 
 
 if __name__ == "__main__":

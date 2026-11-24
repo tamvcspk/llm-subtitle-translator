@@ -201,13 +201,14 @@ class GlossaryRepo(Repo):
         *,
         glossary: tuple[dict[str, Any], str] | None = None,
         card: tuple[str, dict[str, Any], str | None] | None = None,
+        cards: list[tuple[str, dict[str, Any], str | None]] | tuple[tuple[str, dict[str, Any], str | None], ...] = (),
         delete_card: str | None = None,
         note: str = "console",
     ) -> None:
         """One character is two rows: its Name in the glossary and its Voice in a card. They are written (or the card is
         deleted) in ONE transaction, so a failure leaves neither half behind. ``glossary`` is ``(document, rules hash)``,
-        ``card`` is ``(name, document, replaces)``. A card to delete that is not there is an error and rolls back.
-        ``note`` is what the glossary history says made the change."""
+        ``card`` (or ``cards`` for a bulk accept) is ``(name, document, replaces)``. A card to delete that is not there
+        is an error and rolls back. ``note`` is what the glossary history says made the change."""
         with self.transaction() as db:
             if delete_card is not None:
                 removed = db.execute(
@@ -220,3 +221,5 @@ class GlossaryRepo(Repo):
                 self._glossary_write(db, owner_kind, owner_key, lang, glossary[0], glossary[1], note)
             if card is not None:
                 self._card_write(db, owner_kind, owner_key, card[0], card[1], card[2])
+            for c_name, c_doc, c_replaces in cards:
+                self._card_write(db, owner_kind, owner_key, c_name, c_doc, c_replaces)

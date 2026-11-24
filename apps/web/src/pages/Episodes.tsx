@@ -1,4 +1,4 @@
-import { Alert, Anchor, Badge, Button, Card, Checkbox, Chip, Group, Stack, Text } from "@mantine/core";
+import { Alert, Anchor, Badge, Box, Button, Card, Checkbox, Chip, Group, Stack, Text } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { Link, useOutletContext, useSearchParams } from "react-router";
 import { useIgnore, useSeriesUnits, useStopJob } from "../api/queries";
@@ -86,22 +86,39 @@ function EpisodeCard({
   return (
     <Card withBorder padding="sm" radius="md" component="li" style={{ listStyle: "none" }}>
       <Group align="flex-start" wrap="nowrap" gap="xs">
-        <Checkbox
-          size="lg"
-          p={8}
-          aria-label={`Select ${row.code}`}
-          checked={selected}
-          disabled={row.gone}
-          onChange={onToggle}
-        />
+        <Box
+          component="label"
+          style={{
+            minWidth: 44,
+            minHeight: 44,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: row.gone ? "default" : "pointer",
+            flexShrink: 0,
+          }}
+        >
+          <Checkbox
+            size="lg"
+            aria-label={`Select ${row.code}`}
+            checked={selected}
+            disabled={row.gone}
+            onChange={onToggle}
+          />
+        </Box>
         <Group justify="space-between" align="center" wrap="wrap" gap="sm" style={{ flex: 1, minWidth: 0 }}>
           <Stack gap={4} style={{ flex: "1 1 14rem", minWidth: 0 }}>
-            <Group gap="xs" wrap="nowrap">
+            <Group gap="xs" wrap="nowrap" align="center">
               <Text fw={600} style={{ flexShrink: 0 }}>
                 {row.code}
               </Text>
               {row.to ? (
-                <Anchor component={Link} to={row.to} truncate>
+                <Anchor
+                  component={Link}
+                  to={row.to}
+                  truncate
+                  style={{ display: "inline-flex", alignItems: "center", minHeight: 44 }}
+                >
                   {row.title}
                 </Anchor>
               ) : (
@@ -154,14 +171,26 @@ function SeasonHeader({
   return (
     <Group justify="space-between" wrap="wrap" gap="xs" component="header">
       <Group gap="xs" wrap="nowrap">
-        <Checkbox
-          size="lg"
-          p={8}
-          aria-label={`Select all of ${season.title}`}
-          checked={all}
-          indeterminate={selected > 0 && !all}
-          onChange={onToggle}
-        />
+        <Box
+          component="label"
+          style={{
+            minWidth: 44,
+            minHeight: 44,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          <Checkbox
+            size="lg"
+            aria-label={`Select all of ${season.title}`}
+            checked={all}
+            indeterminate={selected > 0 && !all}
+            onChange={onToggle}
+          />
+        </Box>
         <Text fw={700} tt="uppercase" size="sm" c="dimmed">
           {season.title}
         </Text>
@@ -178,7 +207,11 @@ function SeasonHeader({
 /** Episodes tab (wireframe 2a): one row per episode with its label and its one button; Translate by season, series or selection. */
 export function Episodes() {
   const { page, lang } = useOutletContext<SeriesContext>();
-  const units = useSeriesUnits(page.series.series_id);
+  const hasActiveJob = useMemo(
+    () => page.items.some((item) => item.targets.some((t) => t.job === "running" || t.job === "requested" || t.job === "waiting")),
+    [page.items],
+  );
+  const units = useSeriesUnits(page.series.series_id, hasActiveJob);
   const stop = useStopJob();
   const ignore = useIgnore();
   const [params, setParams] = useSearchParams();
@@ -234,7 +267,7 @@ export function Episodes() {
                 onClick={() =>
                   setEstimating({
                     action: `Translate selected · ${chosen.length} ${chosen.length === 1 ? "episode" : "episodes"}`,
-                    selector: { items: chosen, languages: [lang] },
+                    selector: { items: chosen, languages: [lang], mode: "auto" },
                   })
                 }
               >

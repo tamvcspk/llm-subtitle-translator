@@ -16,12 +16,14 @@ import type { CharacterCard, GlossaryDoc, Style } from "../api/types";
 import {
   addressFor,
   draftOf,
+  formatAddressWindow,
   people,
   plan,
   sameDraft,
   styleSummary,
   withEntry,
   withoutEntry,
+  type Address,
   type Person,
   type PersonDraft,
 } from "../lib/characters";
@@ -41,6 +43,36 @@ function Fact({ label, children }: { label: string; children: string | undefined
       </Text>{" "}
       {children}
     </Text>
+  );
+}
+
+function AddressSummary({ form }: { form: Address }) {
+  if (form.stages.length === 1) {
+    const stage = form.stages[0]!;
+    const win = formatAddressWindow(stage);
+    const pair = [stage.says, stage.hears].filter(Boolean).join(" / ");
+    return (
+      <Text size="sm">
+        with {form.with}: {pair}
+        {win ? ` (${win})` : ""}
+      </Text>
+    );
+  }
+  return (
+    <Stack gap={2}>
+      <Text size="sm" fw={500}>
+        with {form.with}:
+      </Text>
+      {form.stages.map((stage, idx) => {
+        const win = formatAddressWindow(stage) || "base";
+        const pair = [stage.says, stage.hears].filter(Boolean).join(" / ");
+        return (
+          <Text size="sm" pl="sm" key={`${form.with}-${idx}`}>
+            {win}: {pair}
+          </Text>
+        );
+      })}
+    </Stack>
   );
 }
 
@@ -91,9 +123,7 @@ function PersonCard({ person, doc, onEdit, onDelete }: { person: Person; doc: Gl
             </Text>
           )}
           {forms.map((form) => (
-            <Text size="sm" key={form.with}>
-              with {form.with}: {[form.says, form.hears].filter(Boolean).join(" / ")}
-            </Text>
+            <AddressSummary key={form.with} form={form} />
           ))}
           {(card?.address ?? []).map((item) => (
             <Text size="sm" key={`card-${item.to}`}>
@@ -217,9 +247,7 @@ function PersonSheet({
             </Text>
           )}
           {forms.map((form) => (
-            <Text size="sm" key={form.with}>
-              with {form.with}: {[form.says, form.hears].filter(Boolean).join(" / ")}
-            </Text>
+            <AddressSummary key={form.with} form={form} />
           ))}
           {draft.address.map((item) => (
             <Text size="sm" key={`card-${item.to}`}>

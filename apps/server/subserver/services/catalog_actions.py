@@ -25,14 +25,17 @@ IGNORED = "ignored"
 
 def _row(job: PlannedJob) -> dict[str, Any]:
     return {"item_id": job.item_id, "title": job.title, "lang": job.lang, "cues": job.cues, "calls": job.calls,
-            "skip": job.skip, "reason": job.reason}
+            "skip": job.skip, "reason": job.reason, "action": job.action}
 
 
 def plan_json(plan: RequestPlan, skipped: tuple[PlannedJob, ...] | None = None) -> dict[str, Any]:
     skipped = plan.skipped if skipped is None else skipped
     return {
         "mode": plan.mode, "estimate": asdict(plan.estimate),
-        "planned_total": len(plan.planned), "planned": [_row(j) for j in plan.planned[:ROWS_SHOWN]],
+        "planned_total": len(plan.planned),
+        "translate_total": sum(1 for j in plan.planned if j.action == "translate"),
+        "retranslate_total": sum(1 for j in plan.planned if j.action == "retranslate"),
+        "planned": [_row(j) for j in plan.planned[:ROWS_SHOWN]],
         "skipped_total": len(skipped), "skipped_by_reason": dict(Counter(j.reason for j in skipped)),
         "skipped": [_row(j) for j in skipped[:ROWS_SHOWN]],
     }

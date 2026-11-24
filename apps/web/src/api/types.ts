@@ -137,14 +137,15 @@ export type JobsSelector = (
 ) & {
   /** Only these target languages (default: every enabled one). */
   languages?: string[];
-  /** `fill` (default) never overwrites; `replace` is a retranslation. */
-  mode?: "fill" | "replace";
+  /** `fill` (default) never overwrites; `replace` is a retranslation; `auto` translates missing and retranslates existing (P18c). */
+  mode?: "fill" | "replace" | "auto";
 };
 
 export type Estimate = Schemas["Estimate"];
 export type JobsAnswer = Schemas["JobsAnswer"];
 /** What the Estimate sheet reads from the answer of any route that can say a price (`estimate_only`): the price, how many jobs, what was left out. */
-export type EstimateAnswer = Pick<JobsAnswer, "estimate_only" | "estimate" | "planned_total" | "skipped_total" | "skipped_by_reason">;
+export type EstimateAnswer = Pick<JobsAnswer, "estimate_only" | "estimate" | "planned_total" | "skipped_total" | "skipped_by_reason"> &
+  Partial<Pick<JobsAnswer, "mode" | "translate_total" | "retranslate_total" | "planned" | "skipped">>;
 
 // -- Review inbox (`/api/suggestions`, P13) ---------------------------------------------------------------------------
 

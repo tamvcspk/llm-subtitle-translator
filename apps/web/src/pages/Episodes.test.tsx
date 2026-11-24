@@ -108,13 +108,46 @@ describe("Episodes", () => {
     expect(screen.getByText("Selected 2")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Translate selected" }));
     await waitFor(() => expect(sent("/api/jobs")).toHaveLength(1));
-    expect(sent("/api/jobs")[0]).toEqual({ items: [1001, 1003], languages: ["vi"], estimate_only: true });
+    expect(sent("/api/jobs")[0]).toEqual({ items: [1001, 1003], languages: ["vi"], mode: "auto", estimate_only: true });
     await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
 
     await userEvent.click(screen.getByRole("checkbox", { name: "Select all of Season 1" }));
     expect(screen.getByText("Selected 3")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("checkbox", { name: "Select all of Season 1" }));
     expect(screen.getByText("Selected 0")).toBeInTheDocument();
+  });
+
+  it("shows new vs retranslate breakdown and asks overwrite confirmation before creating retranslate jobs", async () => {
+    const mixed = {
+      ...estimate,
+      mode: "auto",
+      translate_total: 1,
+      retranslate_total: 1,
+      skipped_total: 1,
+      skipped_by_reason: { "no source subtitle in a configured source language": 1 },
+    };
+    serve({
+      ...base,
+      ...page([episode(1), episode(2, { targets: [target({ content: "translated" })] }), episode(3)]),
+      "/api/jobs": (body) => (body?.estimate_only ? { body: mixed } : { body: { ...mixed, estimate_only: false, count: 2 } }),
+    });
+    show("/series/1/episodes");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select S01E01" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select S01E02" }));
+    await userEvent.click(screen.getByRole("button", { name: "Translate selected" }));
+    const sheet = await screen.findByRole("dialog");
+    expect(await within(sheet).findByText(/New translations: 1 episode \(no Vietnamese subtitle yet\)/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/Retranslations: 1 episode \(already translated; previous file kept as a version\)/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/Left out: 1 no source subtitle/)).toBeInTheDocument();
+
+    // First click on Confirm opens the overwrite confirmation step; no jobs created yet.
+    await userEvent.click(within(sheet).getByRole("button", { name: "Confirm" }));
+    expect(sent("/api/jobs")).toHaveLength(1);
+    expect(within(sheet).getByText(/Overwrite 1 translation\?/)).toBeInTheDocument();
+
+    await userEvent.click(within(sheet).getByRole("button", { name: "Overwrite 1 translation" }));
+    expect(await within(sheet).findByText(/2 jobs are in line/)).toBeInTheDocument();
+    expect(sent("/api/jobs")[1]).toEqual({ items: [1001, 1002], languages: ["vi"], mode: "auto" });
   });
 
   it("ignores the selection at once, with no estimate, and clears it", async () => {

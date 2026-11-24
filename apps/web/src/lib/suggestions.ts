@@ -38,13 +38,35 @@ export function describe(suggestion: Pick<Suggestion, "kind" | "payload">): { ti
     return { title: `${term.source} → ${term.target}`, details };
   }
   if (kind === "address_rule") {
-    const rule = payload as GlossaryAddress;
+    const rule = payload as GlossaryAddress & {
+      stages?: Array<{ a_to_b?: string; b_to_a?: string; from?: string; until?: string; note?: string }>;
+      change_from?: string;
+    };
     const details: string[] = [];
-    if (rule.a_to_b) details.push(`${rule.a} calls ${rule.b} “${rule.a_to_b}”`);
-    if (rule.b_to_a) details.push(`${rule.b} calls ${rule.a} “${rule.b_to_a}”`);
-    if (rule.from) details.push(`From ${rule.from}${rule.until ? ` until ${rule.until}` : ""}`);
-    if (rule.note) details.push(rule.note);
-    return { title: `${rule.a} ↔ ${rule.b}`, details };
+    if (rule.stages && rule.stages.length > 1) {
+      for (const stage of rule.stages) {
+        const win = stage.from
+          ? `From ${stage.from}${stage.until ? ` until ${stage.until}` : ""}`
+          : stage.until
+            ? `Until ${stage.until}`
+            : "Base";
+        const forms = [
+          stage.a_to_b ? `${rule.a} calls ${rule.b} “${stage.a_to_b}”` : "",
+          stage.b_to_a ? `${rule.b} calls ${rule.a} “${stage.b_to_a}”` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        details.push(`${win}: ${forms}`);
+      }
+      if (rule.note) details.push(rule.note);
+    } else {
+      if (rule.a_to_b) details.push(`${rule.a} calls ${rule.b} “${rule.a_to_b}”`);
+      if (rule.b_to_a) details.push(`${rule.b} calls ${rule.a} “${rule.b_to_a}”`);
+      if (rule.from) details.push(`From ${rule.from}${rule.until ? ` until ${rule.until}` : ""}`);
+      if (rule.note) details.push(rule.note);
+    }
+    const baseTitle = `${rule.a} ↔ ${rule.b}`;
+    return { title: rule.change_from ? `${baseTitle} · change from ${rule.change_from}?` : baseTitle, details };
   }
   const character = payload as CharacterPayload;
   const details: string[] = [];
@@ -158,13 +180,25 @@ export function payloadOf(suggestion: Pick<Suggestion, "kind" | "payload">, draf
     return put(payload as GlossaryTerm, { source: text(draft.a), target: text(draft.b), note: text(draft.note), locked: draft.locked });
   }
   if (kind === "address_rule") {
-    return put(payload as GlossaryAddress, {
+    const rule = payload as GlossaryAddress & {
+      stages?: Array<{ a_to_b?: string; b_to_a?: string; from?: string; until?: string; note?: string }>;
+    };
+    const next = put(rule, {
       a: text(draft.a),
       b: text(draft.b),
       a_to_b: text(draft.c),
       b_to_a: text(draft.d),
       note: text(draft.note),
     });
+    if (Array.isArray(rule.stages) && rule.stages.length > 0) {
+      const first = { ...rule.stages[0] };
+      if (text(draft.c)) first.a_to_b = text(draft.c);
+      else delete first.a_to_b;
+      if (text(draft.d)) first.b_to_a = text(draft.d);
+      else delete first.b_to_a;
+      next.stages = [first, ...rule.stages.slice(1)];
+    }
+    return next;
   }
   const character = payload as CharacterPayload;
   const next = put(character, { name: text(draft.a), target: text(draft.b), gender: text(draft.c), description: text(draft.d) });

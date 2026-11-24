@@ -190,6 +190,8 @@ class JobRow(Answer):
     calls: int
     skip: str
     reason: str
+    action: Literal["translate", "retranslate", ""] = ""
+    """``translate`` (new) or ``retranslate`` (overwrite with version backup) for a planned row; ``""`` when skipped."""
 
 
 class JobsAnswer(Answer):
@@ -199,6 +201,10 @@ class JobsAnswer(Answer):
     mode: str
     estimate: Estimate
     planned_total: int
+    translate_total: int = 0
+    """How many planned jobs translate an episode or movie that has no target subtitle yet."""
+    retranslate_total: int = 0
+    """How many planned jobs retranslate an existing target subtitle (keeping the previous file as a version first)."""
     planned: list[JobRow]
     """The first 200 rows of each list; the totals count them all."""
     skipped_total: int

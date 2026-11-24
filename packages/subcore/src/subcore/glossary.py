@@ -188,9 +188,9 @@ class Glossary:
         return replace(self, terms=(*kept, term))
 
     def with_address_rule(self, rule: AddressRule) -> "Glossary":
-        """Add ``rule``, replacing an entry for the same pair and start."""
-        key = (rule.a.casefold(), rule.b.casefold(), str(rule.start or ""))
-        kept = tuple(r for r in self.address_rules if (r.a.casefold(), r.b.casefold(), str(r.start or "")) != key)
+        """Add ``rule``, replacing an entry for the same unordered pair and start (P18f)."""
+        key = (*_pair_key(rule.a, rule.b), str(rule.start or ""))
+        kept = tuple(r for r in self.address_rules if (*_pair_key(r.a, r.b), str(r.start or "")) != key)
         return replace(self, address_rules=(*kept, rule))
 
     def active_address_rules(
@@ -400,12 +400,18 @@ def to_doc(glossary: Glossary) -> dict[str, Any]:
     return data
 
 
+def _pair_key(a: str, b: str) -> tuple[str, str]:
+    """Order-independent pair key: ``(A, B)`` and ``(B, A)`` are the same pair (P18f)."""
+    low, high = sorted((a.strip().casefold(), b.strip().casefold()))
+    return (low, high)
+
+
 def merge(*glossaries: Glossary) -> Glossary:
     """Combine glossaries; later ones win on conflicts.
 
     Terms merge by case-insensitive ``(source, from)``, characters by ``name``, address rules by
-    ``(a, b, from)``. A non-empty ``style``/``target_lang`` from a later glossary replaces
-    the earlier one.
+    unordered pair ``(min(a, b), max(a, b), from)``. A non-empty ``style``/``target_lang`` from a later glossary
+    replaces the earlier one.
     """
     terms: dict[tuple[str, str], Term] = {}
     characters: dict[str, Character] = {}
@@ -419,7 +425,7 @@ def merge(*glossaries: Glossary) -> Glossary:
         for c in g.characters:
             characters[c.name.casefold()] = c
         for r in g.address_rules:
-            rules[(r.a.casefold(), r.b.casefold(), str(r.start or ""))] = r
+            rules[(*_pair_key(r.a, r.b), str(r.start or ""))] = r
     return Glossary(
         target_lang=target_lang,
         style=style,

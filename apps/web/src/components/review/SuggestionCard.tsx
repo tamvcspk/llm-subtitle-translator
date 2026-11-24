@@ -1,4 +1,5 @@
 import { Anchor, Badge, Button, Card, Group, Stack, Text } from "@mantine/core";
+import { useState } from "react";
 import { Link } from "react-router";
 import { useSuggestionImpact } from "../../api/queries";
 import type { Suggestion } from "../../api/types";
@@ -84,7 +85,10 @@ export function PendingCard({
   onReject: (suggestion: Suggestion) => void;
 }) {
   const { title, details } = describe(suggestion);
-  const impact = useSuggestionImpact(suggestion.id, null, true);
+  // P18a: compute dry-run stale impact only when the admin opens the disclosure on this card (or opens Edit),
+  // never automatically for every pending card on page load.
+  const [showImpact, setShowImpact] = useState(false);
+  const impact = useSuggestionImpact(suggestion.id, null, showImpact);
   const line = impact.isError ? impact.error.message : impactLine(impact.data?.would_stale);
   return (
     <Card withBorder padding="md" radius="md" component="li" style={{ listStyle: "none" }} aria-label={`${KIND_LABEL[suggestion.kind]}: ${title}`}>
@@ -108,9 +112,23 @@ export function PendingCard({
         ))}
         <Evidence suggestion={suggestion} />
         <SearchSuggestions id={suggestion.search_display_id} />
-        <Text size="sm" c={impact.isError ? "red" : "dimmed"} role="status">
-          {line ?? "Counting…"}
-        </Text>
+        <details onToggle={(event) => setShowImpact(event.currentTarget.open)}>
+          <summary style={{ minHeight: 44, display: "flex", alignItems: "center", cursor: "pointer" }}>
+            <Text size="sm" c="dimmed">
+              Affected translations
+            </Text>
+          </summary>
+          {showImpact && (
+            <Text size="sm" c={impact.isError ? "red" : "dimmed"} role="status">
+              {line ?? "Counting affected translations…"}
+            </Text>
+          )}
+        </details>
+        {busy && (
+          <Text size="sm" c="dimmed" role="status">
+            Applying and counting affected translations…
+          </Text>
+        )}
         <Group gap="xs" wrap="wrap">
           <Button loading={busy} onClick={() => onAccept(suggestion)} aria-label={`Accept ${title}`}>
             Accept

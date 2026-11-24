@@ -30,6 +30,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from subcore import glossary as g
+from subcore.suggest import collapse_stages
 from subcore.style import CharacterCard, StyleError
 
 from ..domain.config import SUGGESTION_BOOL_CONFIG_KEYS
@@ -84,7 +85,8 @@ class ProposeReport:
 
 def normalise(kind: str, payload: Any) -> dict[str, Any]:
     """The content of a suggestion as the glossary would store it, or a ``ValueError`` naming what is wrong. A
-    character may carry the card of its voice (``card``); the card takes the character's name."""
+    character may carry the card of its voice (``card``); an ``address_rule`` may carry a ``stages`` list (P18f) and
+    optional ``change_from`` marker."""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
     if not isinstance(payload, dict):
@@ -99,8 +101,42 @@ def normalise(kind: str, payload: Any) -> dict[str, Any]:
                     raise ValueError("card must be an object")
                 doc = {**doc, "card": CharacterCard.from_doc({**card, "name": doc["name"]}, "card").to_doc()}
             return doc
+        if kind == "address_rule" and payload.get("stages") is not None:
+            raw_stages = payload.get("stages")
+            if not isinstance(raw_stages, list) or not raw_stages:
+                raise ValueError("stages must be a non-empty list")
+            a = str(payload.get("a") or "").strip()
+            b = str(payload.get("b") or "").strip()
+            if not a or not b:
+                raise ValueError("address_rules[0]: missing required field 'a' or 'b'")
+            cleaned: list[dict[str, Any]] = []
+            for st in raw_stages:
+                if not isinstance(st, dict):
+                    raise ValueError("each stage must be an object")
+                row = g.to_doc(g.from_doc({"address_rules": [{**st, "a": a, "b": b}]}))["address_rules"][0]
+                cleaned.append({k: v for k, v in row.items() if k not in ("a", "b")})
+            merged = collapse_stages(cleaned)
+            change_from = str(payload.get("change_from") or "").strip()
+            note = str(payload.get("note") or "").strip()
+            if len(merged) == 1:
+                out = {"a": a, "b": b, **merged[0]}
+                if note and not out.get("note"):
+                    out["note"] = note
+                return out
+            out = {
+                "a": a, "b": b,
+                **({"a_to_b": merged[0]["a_to_b"]} if merged[0].get("a_to_b") else {}),
+                **({"b_to_a": merged[0]["b_to_a"]} if merged[0].get("b_to_a") else {}),
+                "stages": merged,
+            }
+            if note:
+                out["note"] = note
+            if change_from:
+                out["change_from"] = change_from
+            return out
         section = SECTION[kind]
-        return g.to_doc(g.from_doc({section: [payload]}))[section][0]
+        clean = {k: v for k, v in payload.items() if not (kind == "address_rule" and k == "change_from")}
+        return g.to_doc(g.from_doc({section: [clean]}))[section][0]
     except (g.GlossaryError, StyleError) as exc:
         raise ValueError(str(exc)) from None
 
@@ -151,13 +187,26 @@ def independent_sources(sources: Any) -> int:
     return len({host for host in (source_host(item) for item in (sources or ()) if isinstance(item, str)) if host})
 
 
+def _pair_key(a: Any, b: Any) -> tuple[str, str]:
+    low, high = sorted((" ".join(str(a or "").split()).casefold(), " ".join(str(b or "").split()).casefold()))
+    return (low, high)
+
+
 def _identity(kind: str, entry: dict[str, Any]) -> tuple[str, ...]:
-    """What makes two entries of a glossary the same one (the keys of ``Glossary.with_term`` and its siblings)."""
+    """What makes two entries of a glossary the same one. Address rules match by unordered pair (P18f)."""
     if kind == "term":
         return (str(entry["source"]).casefold(), str(entry.get("from") or ""))
     if kind == "address_rule":
-        return (str(entry["a"]).casefold(), str(entry["b"]).casefold(), str(entry.get("from") or ""))
+        return _pair_key(entry["a"], entry["b"])
     return (str(entry["name"]).casefold(),)
+
+
+def _expand_address_rules(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Turn a pair-level ``address_rule`` payload (flat or multi-stage) into the glossary rule entries it writes."""
+    if isinstance(payload.get("stages"), list) and payload["stages"]:
+        a, b = payload["a"], payload["b"]
+        return [{"a": a, "b": b, **{k: v for k, v in st.items() if k not in ("a", "b")}} for st in payload["stages"]]
+    return [{k: v for k, v in payload.items() if k not in ("change_from", "stages")}]
 
 
 @dataclass
@@ -261,25 +310,35 @@ class SuggestionService:
                 continue
             digest = fingerprint(series_id, lang, proposal.kind, payload)
             key = identity_key(proposal.kind, payload)
-            # What the series decided about this entry holds however the model worded it this time (R13-6).
+            is_pair_change = proposal.kind == "address_rule" and bool(payload.get("change_from"))
+            # What the series decided about this entry holds however the model worded it this time (R13-6),
+            # except a pair-change proposal (P18f) may follow an already-accepted base rule for that pair.
             known = self.store.suggestion_by_identity(series_id, lang, key) or self.store.suggestion_by_fingerprint(series_id, lang, digest)
-            if known is not None:
+            if known is not None and not (is_pair_change and known.status == SUGGESTION_ACCEPTED and known.fingerprint != digest):
                 counts[{SUGGESTION_PENDING: "pending_already", SUGGESTION_ACCEPTED: "accepted_before"}.get(known.status, "rejected_before")] += 1
                 continue
             probe = _blank(series_id, lang, proposal.kind, source)
             with self._lock:
-                if self._fold(owner, lang, [(probe, payload)]).unchanged:
+                folded = self._fold(owner, lang, [(probe, payload)])
+                if folded.unchanged:
                     counts["in_glossary"] += 1
                     continue
+                replaces_existing_address = proposal.kind == "address_rule" and (
+                    is_pair_change or bool(folded.records and folded.records[0].get("before"))
+                )
+                if proposal.kind == "address_rule":
+                    # Merge any legacy per-stage pending cards of the same pair into this single pair card (P18f).
+                    self.store.suggestion_drop_pending_pair(series_id, lang, payload["a"], payload["b"])
                 stored = self.store.suggestion_add(
                     series_id, lang, proposal.kind, source, digest, payload, list(proposal.evidence), list(proposal.sources),
-                    identity=key, display_id=proposal.display_id,
+                    identity=key, display_id=proposal.display_id, allow_after_accepted=is_pair_change,
                 )
             if stored is None:  # raced with another proposal of the same content
                 counts["pending_already"] += 1
                 continue
             counts["added"] += 1
-            if self._auto(stored, auto_accept):
+            # R18-5 (FR-4.3): never auto-accept an address_rule that would overwrite existing pair rules in the glossary.
+            if not replaces_existing_address and self._auto(stored, auto_accept):
                 try:
                     self.accept(stored.id, auto=True)
                     counts["auto_accepted"] += 1
@@ -299,6 +358,8 @@ class SuggestionService:
             return False
         if suggestion.kind == "term":  # FR-4.4: only when independent sources agree
             return independent_sources(suggestion.sources) >= MIN_INDEPENDENT_SOURCES
+        if suggestion.kind == "address_rule" and suggestion.payload.get("change_from"):
+            return False  # R18-5: a change proposal for an existing pair always waits for the admin
         return True
 
     # -- reading ------------------------------------------------------------------------------------------
@@ -417,12 +478,16 @@ class SuggestionService:
                     self.store.suggestion_decide(suggestion.id, SUGGESTION_PENDING)
                 return {"ok": True, "saved": not dry_run, "stale_now": 0, "stale_after": 0, "would_stale": 0}
             doc = g.to_doc(self.library.glossaries.load(owner.kind, owner.key, lang))
-            section, after, before = applied["section"], applied["after"], list(applied.get("before") or [])
+            section, before = applied["section"], list(applied.get("before") or [])
+            after_list = list(applied["after_list"]) if "after_list" in applied else [applied["after"]]
             items = list(doc.get(section) or [])
-            if after not in items:
+            if not after_list or any(entry not in items for entry in after_list):
                 raise ValueError("the glossary no longer has this entry as it was accepted; change it on the Glossary page")
-            at = items.index(after)
-            doc[section] = [*items[:at], *before, *items[at + 1:]]
+            first_at = min(items.index(entry) for entry in after_list)
+            remaining = list(items)
+            for entry in after_list:
+                remaining.remove(entry)
+            doc[section] = [*remaining[:first_at], *before, *remaining[first_at:]]
             if not doc[section]:
                 del doc[section]
             cards = {c.name.casefold(): c for c in self.library.styles.cards(owner.kind, owner.key)} if self.library.styles else {}
@@ -461,9 +526,11 @@ class SuggestionService:
     def bulk(
         self, series_id: int, *, lang: str | None = None, expect: Any = None, dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Accept every pending suggestion of ONE series (optionally one language). ``expect`` is the number the admin
-        saw and confirmed: if the inbox has changed since, nothing is applied. ``dry_run`` counts the translations
-        all of them together would make stale."""
+        """Accept every pending suggestion of ONE series (optionally one language) in one pass per language: fold once,
+        count impact once, write the glossary once, while keeping an individual undo record on each suggestion (P18b).
+        ``expect`` is the number the admin saw and confirmed: if the inbox has changed since, nothing is applied.
+        ``dry_run`` uses the same folding and impact path and writes nothing."""
+        events: list[Suggestion] = []
         with self._lock:
             owner = self.library.series_owner(series_id)
             pending = self.store.suggestions(
@@ -478,24 +545,64 @@ class SuggestionService:
                     raise ValueError("expect must be a number") from None
                 if expected != len(pending):
                     raise ValueError(f"the list changed: {len(pending)} are pending now, not {expected}; nothing was applied")
-            if dry_run:
-                totals = {"stale_now": 0, "stale_after": 0, "would_stale": 0}
-                for language in sorted({s.target_lang for s in pending}):
-                    batch = [s for s in pending if s.target_lang == language]
-                    folded = self._fold(owner, language, [(s, normalise(s.kind, s.payload)) for s in batch])
-                    for key, value in self._impact(owner, language, folded).items():
-                        totals[key] += value
-                return {"ok": True, "saved": False, "count": len(pending), **totals}
-            done, failed = 0, []
-            totals = {"would_stale": 0}
-            for s in pending:
+            totals = {"stale_now": 0, "stale_after": 0, "would_stale": 0}
+            done = 0
+            failed: list[dict[str, Any]] = []
+            for language in sorted({s.target_lang for s in pending}):
+                batch = [s for s in pending if s.target_lang == language]
+                valid: list[tuple[Suggestion, dict[str, Any]]] = []
+                for s in batch:
+                    try:
+                        valid.append((s, normalise(s.kind, s.payload)))
+                    except (ValueError, LookupError) as exc:
+                        if not dry_run:
+                            failed.append({"id": s.id, "error": str(exc)})
+                if not valid:
+                    continue
                 try:
-                    result = self.accept(s.id)
-                    totals["would_stale"] += result["would_stale"]
-                    done += 1
+                    folded = self._fold(owner, language, valid)
+                    impact = self._impact(owner, language, folded)
+                    if not dry_run:
+                        self._commit(owner, language, folded, note="suggestion")
                 except (ValueError, LookupError) as exc:
-                    failed.append({"id": s.id, "error": str(exc)})
-        return {"ok": not failed, "saved": True, "count": done, "failed": failed, "series": owner.title, **totals}
+                    if dry_run:
+                        raise
+                    # R18-8: a commit/validation failure in one language records its items in `failed`
+                    # instead of aborting after earlier languages already committed.
+                    for s, _ in valid:
+                        failed.append({"id": s.id, "error": str(exc)})
+                    continue
+                for key, value in impact.items():
+                    totals[key] += value
+                if dry_run:
+                    continue
+                for (s, clean), record in zip(valid, folded.records):
+                    self.store.suggestion_decide(s.id, SUGGESTION_ACCEPTED, payload=clean, applied=dict(record), auto=False)
+                    done += 1
+                    events.append(s)
+        if dry_run:
+            return {"ok": True, "saved": False, "count": len(pending), **totals}
+        for s in events:
+            # R18-9: omit batch-level `stale` from per-item events so telemetry does not multiply it by N.
+            self.telemetry.event(
+                "suggestion.accepted",
+                reason=(
+                    f"the {s.source} generator's {s.kind} was applied to the glossary of {owner.title}"
+                    "; translations made without it are flagged stale, not redone"
+                ),
+                suggestion=s.id, series=owner.title, lang=s.target_lang, suggestion_kind=s.kind,
+                source=s.source, edited=False, bulk=True,
+            )
+        if done:
+            self.telemetry.event(
+                "suggestions.bulk_accepted",
+                reason=f"the admin accepted {done} pending suggestion(s) for {owner.title}",
+                series=owner.title, count=done, stale=totals["would_stale"], failed=len(failed),
+            )
+        return {
+            "ok": not failed, "saved": True, "count": done, "failed": failed, "series": owner.title,
+            "would_stale": totals["would_stale"],
+        }
 
     # -- laying suggestions on a glossary ----------------------------------------------------------------------
     def _fold(self, owner: Owner, lang: str, items: list[tuple[Suggestion, dict[str, Any]]]) -> _Folded:
@@ -508,12 +615,26 @@ class SuggestionService:
         for suggestion, payload in items:
             kind = suggestion.kind
             section = SECTION[kind]
-            entry = {k: v for k, v in payload.items() if k != "card"}
             existing = list(doc.get(section) or [])
+            if kind == "address_rule":
+                pair = _pair_key(payload["a"], payload["b"])
+                new_rules = _expand_address_rules(payload)
+                before = [e for e in existing if _pair_key(e["a"], e["b"]) == pair]
+                record: dict[str, Any] = {
+                    "section": section, "before": before, "after_list": new_rules,
+                    **({"after": new_rules[0]} if len(new_rules) == 1 else {}),
+                }
+                if before == new_rules:
+                    record["noop"] = True
+                else:
+                    doc[section] = [e for e in existing if _pair_key(e["a"], e["b"]) != pair] + new_rules
+                records.append(record)
+                continue
+            entry = {k: v for k, v in payload.items() if k != "card"}
             before = [e for e in existing if _identity(kind, e) == _identity(kind, entry)]
             if kind == "character" and len(before) == 1:  # the fields the proposal says; what the admin wrote stays (R13-3)
                 entry = {**before[0], **entry}
-            record: dict[str, Any] = {"section": section, "before": before, "after": entry}
+            record = {"section": section, "before": before, "after": entry}
             if before == [entry]:
                 record["noop"] = True
             else:
@@ -548,14 +669,17 @@ class SuggestionService:
         return self.library.impact_units(owner.units, lang, glossary=candidate, layers=layers)
 
     def _commit(self, owner: Owner, lang: str, folded: _Folded, *, note: str) -> None:
-        """Write one accepted suggestion: the glossary document and, for a character with a voice, its card, together."""
+        """Write one or more accepted suggestions: the glossary document and any changed character cards, together."""
         if folded.unchanged:
             return
-        (record,) = folded.records
-        part = record.get("card")
-        if part and not part.get("noop"):
+        card_writes: dict[str, tuple[str, dict[str, Any], str | None]] = {}
+        for record in folded.records:
+            part = record.get("card")
+            if part and not part.get("noop"):
+                card_writes[str(part["name"]).casefold()] = (part["name"], part["after"], None)
+        if card_writes:
             self.library.glossaries.write_character(
-                owner.kind, owner.key, lang, glossary_doc=folded.doc, card=(part["name"], part["after"], None), note=note,
+                owner.kind, owner.key, lang, glossary_doc=folded.doc, cards=list(card_writes.values()), note=note,
             )
         else:
             self.library.glossaries.save_doc(owner.kind, owner.key, lang, folded.doc, note=note)

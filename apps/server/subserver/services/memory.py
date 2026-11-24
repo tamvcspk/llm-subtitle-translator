@@ -104,6 +104,8 @@ class MemoryPlan:
 
 
 class StoryMemory:
+    _SHA_LIMIT = 4096  # source subtitles remembered by ``_source_hash`` across ``plan`` / ``needs_extract`` calls
+
     def __init__(
         self,
         facts: Store,
@@ -118,6 +120,22 @@ class StoryMemory:
         self._settings_source = settings_source
         self.media = media
         self.clock = clock
+        self._source_sha: dict[str, tuple[tuple[int, int], str]] = {}
+
+    def _source_hash(self, path: Path) -> str:
+        """SHA-256 of a source subtitle, cached by ``(mtime_ns, size)`` so unchanged files are not re-read on every
+        ``plan`` or estimate check (P18a)."""
+        stat = path.stat()
+        mark = (stat.st_mtime_ns, stat.st_size)
+        key = str(path)
+        known = self._source_sha.get(key)
+        if known is not None and known[0] == mark:
+            return known[1]
+        if len(self._source_sha) >= self._SHA_LIMIT:
+            self._source_sha.clear()
+        digest = sha256_file(path)
+        self._source_sha[key] = (mark, digest)
+        return digest
 
     # -- policy ------------------------------------------------------------------
     def options(self, settings: dict[str, Any] | None = None) -> MemoryOptions:
@@ -190,7 +208,7 @@ class StoryMemory:
             return (kept, "stored") if kept is not None else (None, "no-source")
         path = Path(unit.source_path)
         try:
-            sha = sha256_file(path)
+            sha = self._source_hash(path)
         except OSError:
             return (kept, "stored") if kept is not None else (None, "failed")
         row = self.facts.get_facts(unit_id, sha, EXTRACT_PROMPT_VERSION, touch=True)
@@ -224,7 +242,7 @@ class StoryMemory:
         if not self.has_source(unit):
             return False
         try:
-            sha = sha256_file(Path(unit.source_path))
+            sha = self._source_hash(Path(unit.source_path))
         except OSError:
             return False
         return self.facts.get_facts(unit.id, sha, EXTRACT_PROMPT_VERSION) is None
@@ -310,7 +328,38 @@ class StoryMemory:
         options = self.options(settings)
         series = self.units.get_series(unit.series_id)
         title = series.title
-        self.refresh_catalog(unit, series, str(job.get("source_code") or unit.source_code or ""))
+        source_code = str(job.get("source_code") or unit.source_code or "")
+        refreshed = False
+
+        # Fast-path while waiting for a gap (P18a): only stat the missing episodes; run full ``plan()`` again only
+        # when one of them has a source (or stored facts) or ``gap_wait`` has passed.
+        if (
+            job.get("trigger") != RETRANSLATE
+            and options.gap_wait_seconds > 0
+            and job.get("gap_since")
+            and job.get("missing_unit_ids")
+        ):
+            now = self.clock()
+            since = float(job["gap_since"])
+            if now - since < options.gap_wait_seconds:
+                self.refresh_catalog(unit, series, source_code)
+                refreshed = True
+                missing_ids = [int(uid) for uid in job["missing_unit_ids"]]
+                missing_units = [self.units.get_unit(uid) for uid in missing_ids]
+                if missing_units and all(u is not None for u in missing_units):
+                    present = [u for u in missing_units if u is not None]
+                    stored = self._stored(present)
+                    still_missing = [u for u in present if u.id not in stored and not self.has_source(u)]
+                    if len(still_missing) == len(present):
+                        retry_at = now + min(GAP_RECHECK_SECONDS, since + options.gap_wait_seconds - now)
+                        labels = [unit_label(u) for u in still_missing]
+                        raise ContextGapError(
+                            f"Waiting for the source subtitle of {', '.join(labels)} before translating {unit_label(unit)}",
+                            retry_at=retry_at, since=since, missing=labels, missing_ids=[u.id for u in still_missing],
+                        )
+
+        if not refreshed:
+            self.refresh_catalog(unit, series, source_code)
         units = self.units.list_units(series.id)
 
         prior: list[tuple[Unit, Facts]] = []
@@ -441,7 +490,7 @@ class StoryMemory:
         if not self.has_source(unit):
             return "no-source"
         try:
-            sha = sha256_file(Path(unit.source_path))
+            sha = self._source_hash(Path(unit.source_path))
         except OSError:
             return "no-source"
         latest = self.facts.latest_facts([unit.id], EXTRACT_PROMPT_VERSION).get(unit.id)

@@ -50,9 +50,9 @@ function Form({ suggestion, onDone, onClose }: { suggestion: Suggestion; onDone:
       )}
       {suggestion.kind === "character" && <TextInput label="Voice (how they speak)" value={draft.speech} onChange={(event) => set({ speech: event.currentTarget.value })} />}
       {suggestion.kind !== "character" && <TextInput label="Note" value={draft.note} onChange={(event) => set({ note: event.currentTarget.value })} />}
-      {line && (
+      {(line || (problem === null && (waiting || impact.isPending))) && (
         <Text size="sm" c={problem ? "red" : "dimmed"} role="status">
-          {line}
+          {line ?? "Counting affected translations…"}
         </Text>
       )}
       {impact.isError && <Alert color="red">{impact.error.message}</Alert>}

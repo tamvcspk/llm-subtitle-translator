@@ -2,7 +2,7 @@ import { Alert, Anchor, Button, Card, Group, SegmentedControl, Select, Skeleton,
 import { IconChevronLeft } from "@tabler/icons-react";
 import { Link, Outlet, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../api/client";
-import { useReleaseBootstrap, useSeriesPage, useSetAutoRequest } from "../api/queries";
+import { useReleaseBootstrap, useSeriesPage, useSetAutoRequest, useSuggestionSummary } from "../api/queries";
 import type { SeriesPage } from "../api/types";
 import { MemoryControls } from "../components/MemoryControls";
 import { RouteTabs } from "../components/RouteTabs";
@@ -34,6 +34,7 @@ export function Series() {
   const { id } = useParams();
   const seriesId = Number(id);
   const page = useSeriesPage(seriesId);
+  const summary = useSuggestionSummary();
   const policy = useSetAutoRequest(seriesId);
   const release = useReleaseBootstrap(seriesId);
   const [params, setParams] = useSearchParams();
@@ -67,6 +68,12 @@ export function Series() {
   const asked = params.get("lang");
   const lang = asked && languages.includes(asked) ? asked : (languages[0] ?? "");
   const context: SeriesContext = { page: page.data, lang };
+  const pendingSuggestions =
+    series.series_id !== null ? (summary.data?.series.find((row) => row.series_id === series.series_id)?.pending ?? 0) : 0;
+  const tabs = [
+    ...TABS,
+    { value: "suggestions", label: pendingSuggestions > 0 ? `Suggestions (${pendingSuggestions})` : "Suggestions" },
+  ];
 
   const chooseLanguage = (value: string | null) => {
     if (!value) return;
@@ -126,7 +133,7 @@ export function Series() {
             </Text>
             <Group gap="xs" wrap="wrap">
               {series.bootstrap.pending > 0 && (
-                <Button component={Link} to="/review" variant="light">
+                <Button component={Link} to={`/series/${seriesId}/suggestions`} variant="light">
                   Review suggestions
                 </Button>
               )}
@@ -143,7 +150,7 @@ export function Series() {
       {release.isError && <Alert color="red">{release.error.message}</Alert>}
       {series.series_id !== null && <MemoryControls storedId={series.series_id} />}
 
-      <RouteTabs base={`/series/${seriesId}`} tabs={TABS} keep={["lang"]} />
+      <RouteTabs base={`/series/${seriesId}`} tabs={tabs} keep={["lang"]} />
 
       <Outlet context={context} />
     </Stack>

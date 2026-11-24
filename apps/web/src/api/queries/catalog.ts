@@ -35,6 +35,7 @@ export function useCatalog() {
     queryKey: keys.catalog,
     queryFn: ({ signal }) => api<AnswerOf<"/api/catalog", "get">>("/api/catalog", { signal }),
     refetchInterval: 15_000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -43,6 +44,7 @@ export function useMovies() {
     queryKey: keys.movies,
     queryFn: ({ signal }) => api<AnswerOf<"/api/catalog/movies", "get">>("/api/catalog/movies", { signal }),
     refetchInterval: 15_000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -50,17 +52,23 @@ export function useSeriesPage(id: number) {
   return useQuery({
     queryKey: keys.series(id),
     queryFn: ({ signal }) => api<AnswerOf<"/api/catalog/series/{p1}", "get">>(`/api/catalog/series/${id}`, { signal }),
-    refetchInterval: 10_000,
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      const active = items.some((item) => item.targets.some((t) => t.job === "running" || t.job === "requested" || t.job === "waiting"));
+      return active ? 15_000 : 120_000;
+    },
+    refetchOnWindowFocus: false,
   });
 }
 
-/** Version, model and age of each episode's file; only series the worker keeps (a stored id) have them. */
-export function useSeriesUnits(storedId: number | null | undefined) {
+/** Version, model and age of each episode's file; poll densely only while the series has an open job (P18a). */
+export function useSeriesUnits(storedId: number | null | undefined, active = false) {
   return useQuery({
     queryKey: keys.seriesUnits(storedId ?? 0),
     queryFn: ({ signal }) => api<AnswerOf<"/api/library/series/{p1}/units", "get">>(`/api/library/series/${storedId}/units`, { signal }),
     enabled: typeof storedId === "number",
-    refetchInterval: 30_000,
+    refetchInterval: active ? 30_000 : 180_000,
+    refetchOnWindowFocus: false,
   });
 }
 

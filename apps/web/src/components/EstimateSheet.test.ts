@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Estimate } from "../api/types";
-import { estimateLines } from "./EstimateSheet";
+import { estimateLines, planBreakdown } from "./EstimateSheet";
 
 const base: Estimate = {
   jobs: 1,
@@ -29,5 +29,27 @@ describe("estimateLines", () => {
 
   it("says 'call' for one and leaves the model out when the answer names none", () => {
     expect(estimateLines({ ...base, extract_calls: 1 })[3]).toEqual(["Extract facts", "1 call"]);
+  });
+});
+
+describe("planBreakdown", () => {
+  it("lists new translations and retranslations with reasons for mode=auto", () => {
+    const lines = planBreakdown(
+      {
+        estimate_only: true,
+        mode: "auto",
+        estimate: { ...base, jobs: 3 },
+        planned_total: 3,
+        translate_total: 1,
+        retranslate_total: 2,
+        skipped_total: 0,
+        skipped_by_reason: {},
+      },
+      "vi",
+    );
+    expect(lines).toEqual([
+      "New translations: 1 episode (no Vietnamese subtitle yet)",
+      "Retranslations: 2 episodes (already translated; previous file kept as a version)",
+    ]);
   });
 });

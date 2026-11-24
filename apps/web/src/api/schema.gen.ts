@@ -1557,6 +1557,29 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * @description A pair-level ``address_rule`` proposal: flat for one stage, or carrying ``stages`` when a sturdy change point
+         *     was confirmed (P18f). ``change_from`` marks a change proposal for a pair the glossary already rules.
+         */
+        AddressProposalPayload: {
+            a: string;
+            b: string;
+            a_to_b?: string;
+            b_to_a?: string;
+            from?: string;
+            until?: string;
+            note?: string;
+            stages?: components["schemas"]["AddressStagePayload"][];
+            change_from?: string;
+        };
+        /** @description One time-windowed stage inside a multi-stage pair ``address_rule`` proposal (P18f). */
+        AddressStagePayload: {
+            a_to_b?: string;
+            b_to_a?: string;
+            from?: string;
+            until?: string;
+            note?: string;
+        };
+        /**
          * @description ``POST /api/units/{id}/versions/{v}/adopt``. With ``apply_style`` the answer adds the style kept and what it flags
          *     stale in the other episodes; with ``dry_run`` only that, and ``adopted`` is ``null``.
          */
@@ -2470,6 +2493,11 @@ export interface components {
             calls: number;
             skip: string;
             reason: string;
+            /**
+             * @description ``translate`` (new) or ``retranslate`` (overwrite with version backup) for a planned row; ``""`` when skipped.
+             * @enum {string}
+             */
+            action?: "translate" | "retranslate" | "";
         };
         /** @description ``POST /api/jobs``: the plan and what it costs; a real request adds ``created``, ``count`` and ``merged``. */
         JobsAnswer: {
@@ -2477,6 +2505,10 @@ export interface components {
             mode: string;
             estimate: components["schemas"]["Estimate"];
             planned_total: number;
+            /** @description How many planned jobs translate an episode or movie that has no target subtitle yet. */
+            translate_total?: number;
+            /** @description How many planned jobs retranslate an existing target subtitle (keeping the previous file as a version first). */
+            retranslate_total?: number;
             /** @description The first 200 rows of each list; the totals count them all. */
             planned: components["schemas"]["JobRow"][];
             skipped_total: number;
@@ -3322,7 +3354,7 @@ export interface components {
             /** @enum {string} */
             source: "facts" | "memory" | "feedback" | "research";
             /** @description The glossary entry it would add (a term, an address rule or a character). */
-            payload: components["schemas"]["GlossaryTerm"] | components["schemas"]["GlossaryAddress"] | components["schemas"]["CharacterPayload"];
+            payload: components["schemas"]["GlossaryTerm"] | components["schemas"]["AddressProposalPayload"] | components["schemas"]["CharacterPayload"];
             evidence: (components["schemas"]["EvidenceItem"] | string)[];
             /** @description URLs of a research answer. */
             sources: string[];

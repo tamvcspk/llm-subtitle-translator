@@ -14,20 +14,22 @@ export function useSuggestionSummary() {
 }
 
 /** The pending ones, or the decided ones (accepted and rejected, newest first) for the History tab. */
-export function useSuggestions(status: SuggestionStatus | "decided", enabled = true) {
+export function useSuggestions(status: SuggestionStatus | "decided", enabled = true, seriesId?: number) {
   return useQuery({
-    queryKey: ["suggestions", "list", status] as const,
+    queryKey: ["suggestions", "list", status, seriesId ?? null] as const,
     enabled,
     queryFn: async ({ signal }): Promise<SuggestionList> => {
-      if (status !== "decided") return apiGet("/api/suggestions", { query: { status } }, signal);
+      const base = seriesId !== undefined ? { series: seriesId } : {};
+      if (status !== "decided") return apiGet("/api/suggestions", { query: { ...base, status } }, signal);
       const [accepted, rejected] = await Promise.all([
-        apiGet("/api/suggestions", { query: { status: "accepted" } }, signal),
-        apiGet("/api/suggestions", { query: { status: "rejected" } }, signal),
+        apiGet("/api/suggestions", { query: { ...base, status: "accepted" } }, signal),
+        apiGet("/api/suggestions", { query: { ...base, status: "rejected" } }, signal),
       ]);
       const items: Suggestion[] = [...accepted.items, ...rejected.items].sort((a, b) => b.decided_at - a.decided_at);
       return { ...accepted, items };
     },
     refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -39,6 +41,7 @@ export function useSearchSuggestions(id: number | null | undefined) {
     enabled: typeof id === "number",
     staleTime: Infinity,
     retry: false,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -56,6 +59,7 @@ export function useSuggestionImpact(id: number, payload: SuggestionPayload | nul
     staleTime: 20_000,
     gcTime: 20_000,
     retry: false,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -69,27 +73,22 @@ export function useBulkImpact(seriesId: number, enabled: boolean) {
     gcTime: 0,
     staleTime: 0,
     retry: false,
+    refetchOnWindowFocus: false,
   });
 }
 
 /**
  * A decision changes the badge, the lists, and (an accept or an undo) the glossary and every label that says Stale.
- * `decided` names what was just accepted or rejected, and only when that succeeded: its card is about to leave the inbox
- * and the worker refuses a dry run of a decided suggestion (400), so its impact is not asked again. `"all"` (a bulk
- * accept) first lets the list drop every card it decided, then refreshes the impact of the ones still showing. After a
- * failure nothing is left out: the card stays and its count is looked at again.
+ * Never invalidate or remove `suggestion-impact` here (P18a): cards only fetch impact on demand and deciding one card
+ * must never trigger dry-run refetches on the decided card or on remaining cards.
  */
 function useRefreshSuggestions() {
   const client = useQueryClient();
-  return async (decided?: number | "all") => {
-    if (decided === "all") await client.invalidateQueries({ queryKey: ["suggestions"] });
+  return async () => {
     await Promise.all([
-      decided === "all" ? undefined : client.invalidateQueries({ queryKey: ["suggestions"] }),
-      client.invalidateQueries({
-        queryKey: ["suggestion-impact"],
-        predicate: (query) => typeof decided !== "number" || query.queryKey[1] !== decided,
-      }),
-      client.invalidateQueries({ queryKey: ["suggestion-bulk-impact"] }),
+      client.invalidateQueries({ queryKey: ["suggestions"] }),
+      // R18-10: mark cached per-card impact stale without triggering any background refetch (P18a).
+      client.invalidateQueries({ queryKey: ["suggestion-impact"], refetchType: "none" }),
       client.invalidateQueries({ queryKey: ["research-estimate"] }),
       client.invalidateQueries({ queryKey: ["glossary"] }),
       client.invalidateQueries({ queryKey: ["style"] }),
@@ -106,7 +105,7 @@ export function useAcceptSuggestion() {
   return useMutation({
     mutationFn: (args: { id: number; payload?: SuggestionPayload }) =>
       api<AnswerOf<"/api/suggestions/{p1}/accept", "post">>(`/api/suggestions/${args.id}/accept`, { method: "POST", body: args.payload ? { payload: args.payload } : {} }),
-    onSettled: (_answer, error, args) => void refresh(error ? undefined : args.id),
+    onSettled: () => void refresh(),
   });
 }
 
@@ -115,7 +114,7 @@ export function useRejectSuggestion() {
   const refresh = useRefreshSuggestions();
   return useMutation({
     mutationFn: (id: number) => api<AnswerOf<"/api/suggestions/{p1}/reject", "post">>(`/api/suggestions/${id}/reject`, { method: "POST", body: {} }),
-    onSettled: (_answer, error, id) => void refresh(error ? undefined : id),
+    onSettled: () => void refresh(),
   });
 }
 
@@ -134,6 +133,6 @@ export function useBulkAccept() {
   return useMutation({
     mutationFn: (args: { seriesId: number; expect: number }) =>
       api<AnswerOf<"/api/suggestions/bulk", "post">>("/api/suggestions/bulk", { method: "POST", body: { series_id: args.seriesId, expect: args.expect } }),
-    onSettled: (_answer, error) => void refresh(error ? undefined : "all"),
+    onSettled: () => void refresh(),
   });
 }

@@ -13,6 +13,7 @@ import { Settings } from "./pages/Settings";
 import { SeriesContextTab } from "./pages/series/ContextTab";
 import { SeriesCharacters, SeriesGlossary } from "./pages/series/GlossaryTab";
 import { SeriesStyle } from "./pages/series/StyleTab";
+import { SeriesSuggestions } from "./pages/series/SuggestionsTab";
 import { Corrections } from "./pages/unit/Corrections";
 import { UnitStyle } from "./pages/unit/StyleTab";
 import { Context } from "./pages/unit/Context";
@@ -36,6 +37,7 @@ export function AppRoutes() {
           <Route path="glossary" element={<SeriesGlossary />} />
           <Route path="characters" element={<SeriesCharacters />} />
           <Route path="context" element={<SeriesContextTab />} />
+          <Route path="suggestions" element={<SeriesSuggestions />} />
           <Route path="*" element={<Navigate to="episodes" replace />} />
         </Route>
         <Route path="unit/:id/compare/:version" element={<Compare />} />

@@ -57,12 +57,53 @@ describe("Series Glossary tab", () => {
     expect(within(term).getByRole("checkbox", { name: /Locked/ })).toBeChecked();
     expect(within(term).getByRole("textbox", { name: "From episode" })).toHaveValue("S01E01");
     expect(within(term).getByText("Also matches: Enforcers")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Form of address 1" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: "Forms of address (1)" }));
     const rule = screen.getByRole("region", { name: "Form of address 1" });
     expect(within(rule).getByRole("textbox", { name: /A calls B/ })).toHaveValue("chị–em");
     expect(screen.getByText("No changes.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     // Characters have a tab of their own, not a sub-tab here.
     expect(screen.queryByRole("heading", { name: "Characters" })).not.toBeInTheDocument();
+  });
+
+  it("groups address rules by pair, filters rows, and cleans up duplicates", async () => {
+    const dupDoc = {
+      version: 1,
+      target_lang: "vi",
+      terms: [
+        { source: "Enforcer", target: "Cảnh vệ" },
+        { source: "Hextech", target: "Hextech" },
+      ],
+      address_rules: [
+        { a: "Vi", b: "Powder", a_to_b: "chị–em", b_to_a: "em–chị" },
+        { a: "Powder", b: "Vi", a_to_b: "em–chị", b_to_a: "chị–em", from: "S01E03" },
+        { a: "Vi", b: "Powder", a_to_b: "tôi–cô", b_to_a: "tôi–chị", from: "S02E01" },
+      ],
+    };
+    serve(
+      glossary({
+        "/api/series/9/glossary?lang=vi": (body: Record<string, unknown> | null) =>
+          body === null
+            ? { body: { ...answer, doc: dupDoc } }
+            : { body: { ok: true, saved: body.dry_run !== true, version: body.dry_run ? null : 5, stale_now: 0, stale_after: 1, would_stale: 1 } },
+      }),
+    );
+    show("/series/1/glossary");
+    await screen.findByRole("region", { name: "Term 1" });
+    await userEvent.type(screen.getByRole("textbox", { name: "Filter glossary" }), "hex");
+    expect(screen.queryByRole("region", { name: "Term 1" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Term 2" })).toBeInTheDocument();
+
+    await userEvent.clear(screen.getByRole("textbox", { name: "Filter glossary" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Forms of address (3)" }));
+    const pairGroup = screen.getByRole("region", { name: "Vi ↔ Powder" });
+    expect(within(pairGroup).getByText("3 stages")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Clean up duplicates (1)" }));
+    expect(screen.getByRole("radio", { name: "Forms of address (2)" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Clean up duplicates/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
   });
 
   it("counts what a change flags, live, and saves the whole document only after a confirmation", async () => {

@@ -34,6 +34,8 @@ from ..domain.subtitles import existing_target_subtitle, target_output_path
 from ..adapters.telemetry import NULL as NULL_TELEMETRY
 from .versions import TranslationVersions
 
+AUTO_MODE = "auto"
+
 REASONS = {
     "ignored": "ignored by the admin",
     "same-language": "the source and the target language are the same",
@@ -91,13 +93,15 @@ class Selection:
 
 @dataclass(frozen=True)
 class PlannedJob:
-    """One (item, language) of a request. ``skip`` is a key of ``REASONS`` when no job would be made, else ''."""
+    """One (item, language) of a request. ``skip`` is a key of ``REASONS`` when no job would be made, else ''.
+    ``action`` is ``translate`` (fill) or ``retranslate`` (replace) for a planned job, and '' when skipped."""
 
     item_id: int
     title: str
     lang: str
     language: str = ""
     skip: str = ""
+    action: str = ""
     source_path: str = ""
     output_path: str = ""
     source_code: str = ""
@@ -207,8 +211,10 @@ class JobRequests:
         only takes languages Bazarr lists as missing and never what the admin removed (FR-15.4, FR-16.6).
         ``entries`` replaces the selection with items already chosen. ``measure`` reads each source subtitle to
         count its cues and calls (the estimate of a bulk request); the policy does not need that every few minutes."""
-        if mode not in (FILL, REPLACE):
-            raise ValueError("mode must be 'fill' or 'replace'")
+        if mode not in (FILL, REPLACE, AUTO_MODE):
+            raise ValueError("mode must be 'fill', 'replace' or 'auto'")
+        if automatic and mode != FILL:
+            raise ValueError("automatic policy only supports 'fill' mode")
         config = self._config()
         sources, targets = enabled_source_languages(config), enabled_target_languages(config)
         if selection.languages:
@@ -216,6 +222,7 @@ class JobRequests:
         chosen = list(entries) if entries is not None else self.leaves(selection)
         ignored = self.store.decisions()
         series_cache: dict[int, CatalogEntry | None] = {}
+        dir_cache: dict[Path, list[Path]] = {}
         planned: list[PlannedJob] = []
         skipped: list[PlannedJob] = []
         for entry in chosen:
@@ -227,6 +234,7 @@ class JobRequests:
             for target in targets:
                 job = self._evaluate(
                     entry, title, unit.id if unit else None, picked, target, mode, ignored, automatic, measure,
+                    dir_cache=dir_cache,
                 )
                 (skipped if job.skip else planned).append(job)
         return RequestPlan(tuple(planned), tuple(skipped), self.estimate(planned, extract=measure), mode)
@@ -234,7 +242,7 @@ class JobRequests:
     def _evaluate(
         self, entry: CatalogEntry, title: str, unit_id: int | None,
         picked: tuple[Any, dict[str, Any]] | None, target: dict[str, Any], mode: str, ignored: set[tuple[int, str]],
-        automatic: bool, measure: bool,
+        automatic: bool, measure: bool, *, dir_cache: dict[Path, list[Path]] | None = None,
     ) -> PlannedJob:
         lang = str(target["code"])
         language = str(target["language"])
@@ -266,11 +274,16 @@ class JobRequests:
             ended = self.queue.jobs.last_ended_state(job_key(subtitle.path, output, lang), unit_id, lang)
             if ended in (FAILED, CANCELLED):
                 return no(ended, **found)
-        if mode == FILL:
+        has_target = False
+        if mode in (FILL, AUTO_MODE):
             listed = any(s.code == lang.lower() and not s.forced for s in entry.subtitles)
-            if listed or Path(output).exists() or existing_target_subtitle(subtitle.path, lang, source_code):
+            has_target = listed or Path(output).exists() or bool(
+                existing_target_subtitle(subtitle.path, lang, source_code, dir_cache=dir_cache)
+            )
+            if mode == FILL and has_target:
                 return no("has-target", **found)
-        if self._open_job(unit_id, subtitle.path, output, lang, mode) is not None:
+        effective_mode = REPLACE if (mode == REPLACE or (mode == AUTO_MODE and has_target)) else FILL
+        if self._open_job(unit_id, subtitle.path, output, lang, effective_mode) is not None:
             return no("requested", **found)
         count = calls = 0
         if measure:
@@ -280,7 +293,9 @@ class JobRequests:
                 return no("unreadable", **found)
             count, calls = len(cues), self._calls(cues)
         return PlannedJob(
-            entry.id, title, lang, language, source_path=subtitle.path, output_path=output, source_code=source_code,
+            entry.id, title, lang, language,
+            action="retranslate" if effective_mode == REPLACE else "translate",
+            source_path=subtitle.path, output_path=output, source_code=source_code,
             source_language=str(source["language"]), cues=count, calls=calls,
         )
 
@@ -358,7 +373,8 @@ class JobRequests:
             if limit is not None and len(created) + merged >= limit:
                 capped = len(plan.planned) - n  # what the limit kept back, not what enqueue skipped for another reason
                 break
-            made = self._make(job, plan.mode, origin, prio)
+            job_mode = REPLACE if job.action == "retranslate" else (FILL if job.action == "translate" else plan.mode)
+            made = self._make(job, job_mode, origin, prio)
             if made is None:
                 skipped.append(dataclasses.replace(job, skip="requested"))
             elif made[1]:

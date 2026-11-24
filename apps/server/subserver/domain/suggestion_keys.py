@@ -25,7 +25,7 @@ def identity(kind: str, payload: dict[str, Any]) -> tuple[str, ...]:
         return (_fold(payload["source"]), _fold(payload.get("from")))
     if kind == "address_rule":
         low, high = sorted((_fold(payload["a"]), _fold(payload["b"])))
-        return (low, high, _fold(payload.get("from")))
+        return (low, high)
     if kind == "character":
         return (_fold(payload["name"]),)
     raise KeyError(kind)

@@ -1,5 +1,5 @@
 import type { CharacterCard, GlossaryCharacter, GlossaryDoc, Style } from "../api/types";
-import { cleanCharacter } from "./glossary";
+import { cleanCharacter, comparePosition } from "./glossary";
 import { AXES, INHERIT, axisValue, cleanStyle } from "./style";
 
 /** One character as the page shows it: its Name (an entry of the glossary) and its Voice (a card); either may be missing. */
@@ -137,19 +137,60 @@ export function styleSummary(style: Style): string {
   return parts.join(" · ");
 }
 
-export interface Address {
-  with: string;
+export interface AddressStageView {
   /** What this character calls the other, and what the other calls this one (`self–other`). */
   says: string;
   hears: string;
+  from?: string;
+  until?: string;
 }
 
-/** The forms of address of the glossary that name this character (read only here; they are edited in Forms of address). */
+export interface Address {
+  with: string;
+  /** First stage's forms (convenience for single-stage display). */
+  says: string;
+  hears: string;
+  /** All stages for this partner, sorted by `from` (P18d). */
+  stages: AddressStageView[];
+}
+
+export function formatAddressWindow(stage: Pick<AddressStageView, "from" | "until">): string {
+  if (stage.from && stage.until) return `${stage.from}–${stage.until}`;
+  if (stage.from) return `from ${stage.from}`;
+  if (stage.until) return `until ${stage.until}`;
+  return "";
+}
+
+/** The forms of address of the glossary that name this character, grouped by partner with `from–until` windows (P18d). */
 export function addressFor(doc: GlossaryDoc, name: string): Address[] {
-  const out: Address[] = [];
+  const byPartner = new Map<string, { with: string; stages: AddressStageView[] }>();
   for (const rule of doc.address_rules ?? []) {
-    if (same(rule.a, name)) out.push({ with: rule.b, says: rule.a_to_b ?? "", hears: rule.b_to_a ?? "" });
-    else if (same(rule.b, name)) out.push({ with: rule.a, says: rule.b_to_a ?? "", hears: rule.a_to_b ?? "" });
+    let partner: string | null = null;
+    let says = "";
+    let hears = "";
+    if (same(rule.a, name)) {
+      partner = rule.b;
+      says = rule.a_to_b ?? "";
+      hears = rule.b_to_a ?? "";
+    } else if (same(rule.b, name)) {
+      partner = rule.a;
+      says = rule.b_to_a ?? "";
+      hears = rule.a_to_b ?? "";
+    }
+    if (partner === null) continue;
+    const key = partner.trim().toLowerCase();
+    const entry = byPartner.get(key) ?? { with: partner, stages: [] };
+    entry.stages.push({
+      says,
+      hears,
+      ...(rule.from ? { from: rule.from } : {}),
+      ...(rule.until ? { until: rule.until } : {}),
+    });
+    byPartner.set(key, entry);
   }
-  return out;
+  return [...byPartner.values()].map((group) => {
+    group.stages.sort((a, b) => comparePosition(a.from, b.from));
+    const first = group.stages[0]!;
+    return { with: group.with, says: first.says, hears: first.hears, stages: group.stages };
+  });
 }

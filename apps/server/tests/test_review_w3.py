@@ -81,14 +81,16 @@ class IdentityTests(unittest.TestCase):
         env.propose(rule(note="one"))
         flipped = env.propose(Proposal("address_rule", {"a": "Jinx", "b": "Kyber", "a_to_b": "em", "b_to_a": "anh", "note": "two"}))
         self.assertEqual((flipped.added, flipped.pending_already), (0, 1))
-        later = env.propose(rule(**{"from": "S01E02"}))  # the same pair from another point is another entry
-        self.assertEqual(later.added, 1)
+        # P18f: one pair has one pending proposal regardless of `from`.
+        later = env.propose(rule(**{"from": "S01E02"}))
+        self.assertEqual((later.added, later.pending_already), (0, 1))
 
     def test_the_identity_ignores_case_and_spacing_and_the_free_text(self):
         one = identity_key("term", {"source": "Kyber  Crystal", "target": "x", "note": "n"})
         two = identity_key("term", {"source": "kyber crystal", "target": "y"})
         self.assertEqual(one, two)
-        self.assertEqual(identity("address_rule", {"a": "B", "b": "A"}), ("a", "b", ""))
+        self.assertEqual(identity("address_rule", {"a": "B", "b": "A"}), ("a", "b"))
+        self.assertEqual(identity("address_rule", {"a": "B", "b": "A", "from": "S02E01"}), ("a", "b"))
         self.assertEqual(identity_key("term", {"target": "no source"}), "")  # a payload without one has no identity
 
     def test_a_rejection_made_before_the_identity_existed_still_holds_after_the_start_up_fills_it(self):
@@ -113,6 +115,20 @@ class IdentityTests(unittest.TestCase):
         self.assertIsNotNone(env.store.suggestion_add(*args, "fp1", TERM_PAYLOAD, [], [], identity=key))
         self.assertIsNone(env.store.suggestion_add(*args, "fp2", {**TERM_PAYLOAD, "target": "x"}, [], [], identity=key))
         self.assertEqual(len(env.store.suggestions()), 1)
+
+    def test_r18_4_legacy_three_part_rejected_address_rule_is_migrated_and_blocks_new_proposals(self):
+        env = Env(self)
+        env.propose(rule(**{"from": "S01E02"}))
+        row_id = env.pending()[0]["id"]
+        env.suggestions.reject(row_id)
+        # Simulate pre-P18f 3-part identity stored in SQLite.
+        legacy_key = '["address_rule", "jinx", "kyber", "s01e02"]'
+        env.store._db.execute("UPDATE suggestions SET identity = ? WHERE id = ?", (legacy_key, row_id))
+        env.store._fill_suggestion_identities()
+        self.assertEqual(env.store.suggestions()[0].identity, '["address_rule", "jinx", "kyber"]')
+        # A new proposal from another source (e.g. feedback) for the same pair is blocked as rejected_before.
+        again = env.propose(Proposal("address_rule", {"a": "Jinx", "b": "Kyber", "a_to_b": "em", "b_to_a": "anh"}), source="feedback")
+        self.assertEqual((again.added, again.rejected_before), (0, 1))
 
 
 TERM_PAYLOAD = {"source": "Kyber crystal", "target": "tinh thể Kyber"}

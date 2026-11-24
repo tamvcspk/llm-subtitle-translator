@@ -77,3 +77,129 @@ export const NOTE_LABEL: Record<string, string> = {
   restore: "restored",
   copy: "copied from another series",
 };
+
+/** Unordered pair key: `(A, B)` and `(B, A)` map to the same group (P18d, P18f). */
+export function addressPairKey(a: string, b: string): string {
+  const pair = [text(a).toLowerCase(), text(b).toLowerCase()].sort();
+  return `${pair[0]}\0${pair[1]}`;
+}
+
+/** Sort key for an episode/time position (`""` sorts first, then season, episode, seconds). */
+export function positionOrder(value: string | undefined): [number, number, number, number] {
+  const v = text(value);
+  if (!v) return [0, 0, 0, 0];
+  const match = /^S(\d+)E(\d+)(?:\s+(\d+):(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?)?$/i.exec(v);
+  if (!match) return [2, 0, 0, 0];
+  const season = Number(match[1]);
+  const episode = Number(match[2]);
+  const h = match[3] ? Number(match[3]) : 0;
+  const m = match[4] ? Number(match[4]) : 0;
+  const s = match[5] ? Number(match[5]) : 0;
+  const ms = match[6] ? Number(match[6].padEnd(3, "0")) : 0;
+  return [1, season, episode, ((h * 60 + m) * 60 + s) * 1000 + ms];
+}
+
+export function comparePosition(a: string | undefined, b: string | undefined): number {
+  const pa = positionOrder(a);
+  const pb = positionOrder(b);
+  for (let i = 0; i < pa.length; i++) {
+    if (pa[i]! !== pb[i]!) return pa[i]! - pb[i]!;
+  }
+  return 0;
+}
+
+export interface AddressPairGroup {
+  key: string;
+  label: string;
+  items: Array<{ rule: GlossaryAddress; index: number }>;
+}
+
+/** Group forms of address by unordered character pair and sort each pair's stages by `from` (P18d). */
+export function groupAddressRules(rules: readonly GlossaryAddress[]): AddressPairGroup[] {
+  const groups = new Map<string, AddressPairGroup>();
+  rules.forEach((rule, index) => {
+    const a = text(rule.a);
+    const b = text(rule.b);
+    const isBlank = !a && !b;
+    const key = isBlank ? `__new_${index}` : addressPairKey(a, b);
+    const group = groups.get(key) ?? {
+      key,
+      label: isBlank ? `New form of address` : `${a || "?"} ↔ ${b || "?"}`,
+      items: [],
+    };
+    group.items.push({ rule, index });
+    groups.set(key, group);
+  });
+  for (const group of groups.values()) {
+    group.items.sort((x, y) => comparePosition(x.rule.from, y.rule.from) || x.index - y.index);
+  }
+  return [...groups.values()];
+}
+
+const sameFold = (a: string | undefined, b: string | undefined) => text(a).toLowerCase() === text(b).toLowerCase();
+
+/**
+ * Collapse duplicate or adjacent identical forms of address of the same unordered pair (P18f): `(A, B)` and `(B, A)`
+ * are compared in the same orientation and adjacent rules with identical forms merge into one window.
+ */
+export function dedupeAddressRules(rules: readonly GlossaryAddress[]): { rules: GlossaryAddress[]; removed: number } {
+  const result: GlossaryAddress[] = [];
+  for (const group of groupAddressRules(rules)) {
+    if (group.key.startsWith("__new_")) {
+      for (const item of group.items) result.push(item.rule);
+      continue;
+    }
+    const anchor = group.items[0]!.rule;
+    const anchorA = text(anchor.a).toLowerCase();
+    const merged: GlossaryAddress[] = [];
+    for (const { rule } of group.items) {
+      const reversed = text(rule.a).toLowerCase() !== anchorA && text(rule.b).toLowerCase() === anchorA;
+      const oriented: GlossaryAddress = reversed
+        ? {
+            ...rule,
+            a: anchor.a,
+            b: anchor.b,
+            a_to_b: rule.b_to_a,
+            b_to_a: rule.a_to_b,
+          }
+        : { ...rule };
+      const prev = merged.at(-1);
+      // R18-7: only merge when windows are contiguous (prev has no `until`, or prev.until matches oriented.from).
+      // Keep prev.from (never widen into earlier episodes) and take `until` from the last merged rule.
+      const contiguous = prev !== undefined && (!text(prev.until) || sameFold(prev.until, oriented.from));
+      if (prev && contiguous && sameFold(prev.a_to_b, oriented.a_to_b) && sameFold(prev.b_to_a, oriented.b_to_a)) {
+        if (oriented.until) prev.until = oriented.until;
+        else delete prev.until;
+        if (!prev.note && oriented.note) prev.note = oriented.note;
+        continue;
+      }
+      merged.push(oriented);
+    }
+    result.push(...merged);
+  }
+  return { rules: result, removed: rules.length - result.length };
+}
+
+export function filterTerms(terms: readonly GlossaryTerm[], query: string): Array<{ term: GlossaryTerm; index: number }> {
+  const needle = text(query).toLowerCase();
+  return terms
+    .map((term, index) => ({ term, index }))
+    .filter(({ term }) => {
+      if (!needle) return true;
+      return [term.source, term.target, term.note ?? "", ...(term.aliases ?? [])].some((part) => part.toLowerCase().includes(needle));
+    });
+}
+
+export function filterAddressGroups(groups: readonly AddressPairGroup[], query: string): AddressPairGroup[] {
+  const needle = text(query).toLowerCase();
+  if (!needle) return [...groups];
+  return groups.filter(
+    (group) =>
+      group.label.toLowerCase().includes(needle) ||
+      group.items.some(({ rule }) =>
+        [rule.a, rule.b, rule.a_to_b ?? "", rule.b_to_a ?? "", rule.from ?? "", rule.until ?? "", rule.note ?? ""].some((part) =>
+          part.toLowerCase().includes(needle),
+        ),
+      ),
+  );
+}

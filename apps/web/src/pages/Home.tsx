@@ -1,10 +1,13 @@
 import { Anchor, Badge, Button, Card, Chip, Group, Skeleton, Stack, Text, TextInput } from "@mantine/core";
 import { IconSearch } from "@tabler/icons-react";
-import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { useCatalog, useMovies, useSyncCatalog } from "../api/queries";
 import { EstimateSheet, type EstimateRequest } from "../components/EstimateSheet";
 import { buildRows, filterRows, languageName, type Filter, type Row } from "../lib/home";
+import { readHomeScroll, saveHomeScroll } from "../lib/navigation";
+
+const VALID_FILTERS = new Set<string>(["all", "missing", "running", "failed", "ignored"]);
 
 const FILTERS: Array<{ value: Filter; label: (language: string) => string }> = [
   { value: "all", label: () => "All" },
@@ -25,7 +28,7 @@ function RowCard({ row, onTranslate }: { row: Row; onTranslate: (request: Estima
               {row.kind}
             </Badge>
             {row.to ? (
-              <Anchor component={Link} to={row.to} fw={600} truncate>
+              <Anchor component={Link} to={row.to} fw={600} truncate style={{ display: "inline-flex", alignItems: "center", minHeight: 44 }}>
                 {row.title}
               </Anchor>
             ) : (
@@ -61,15 +64,18 @@ function RowCard({ row, onTranslate }: { row: Row; onTranslate: (request: Estima
   );
 }
 
-/** Home: ask by name, not by queue (UX §3 rule 1). */
+/** Home: ask by name, not by queue (UX §3 rule 1). Search & filter live in URL (`?q=&filter=`) and scroll restores (P18e). */
 export function Home() {
   const catalog = useCatalog();
   const movies = useMovies();
   const sync = useSyncCatalog();
   const navigate = useNavigate();
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
+  const [params, setParams] = useSearchParams();
+  const query = params.get("q") ?? "";
+  const rawFilter = params.get("filter") ?? "all";
+  const filter: Filter = VALID_FILTERS.has(rawFilter) ? (rawFilter as Filter) : "all";
   const [estimating, setEstimating] = useState<EstimateRequest | null>(null);
+  const restored = useRef(false);
 
   const rows = useMemo(() => buildRows(catalog.data, movies.data?.items), [catalog.data, movies.data]);
   const shown = useMemo(() => filterRows(rows, query, filter), [rows, query, filter]);
@@ -78,10 +84,56 @@ export function Home() {
   const loading = catalog.isPending || movies.isPending;
   const failed = catalog.isError || movies.isError;
 
-  const clear = () => {
-    setQuery("");
-    setFilter("all");
-  };
+  useEffect(() => {
+    const onScroll = () => {
+      if (restored.current) saveHomeScroll(window.scrollY);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      if (restored.current) saveHomeScroll(window.scrollY);
+      window.removeEventListener("scroll", onScroll);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (loading || restored.current) return;
+    restored.current = true;
+    const saved = readHomeScroll();
+    if (saved > 0) window.scrollTo(0, saved);
+  }, [loading]);
+
+  const setQuery = (nextQuery: string) =>
+    setParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        if (nextQuery) next.set("q", nextQuery);
+        else next.delete("q");
+        return next;
+      },
+      { replace: true },
+    );
+
+  const setFilter = (nextFilter: Filter) =>
+    setParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        if (nextFilter === "all") next.delete("filter");
+        else next.set("filter", nextFilter);
+        return next;
+      },
+      { replace: true },
+    );
+
+  const clear = () =>
+    setParams(
+      (previous) => {
+        const next = new URLSearchParams(previous);
+        next.delete("q");
+        next.delete("filter");
+        return next;
+      },
+      { replace: true },
+    );
 
   return (
     <Stack gap="md">

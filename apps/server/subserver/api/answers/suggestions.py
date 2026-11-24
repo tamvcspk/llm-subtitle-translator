@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import Field
+
 from . import Answer, maybe
 from .library import GlossaryAddress, GlossaryCharacter, GlossaryTerm, Impact
 from .style import CharacterCard
@@ -11,6 +13,24 @@ from .style import CharacterCard
 SuggestionKind = Literal["term", "address_rule", "character"]
 SuggestionSource = Literal["facts", "memory", "feedback", "research"]
 SuggestionStatus = Literal["pending", "accepted", "rejected"]
+
+
+class AddressStagePayload(Answer):
+    """One time-windowed stage inside a multi-stage pair ``address_rule`` proposal (P18f)."""
+
+    a_to_b: str = maybe()
+    b_to_a: str = maybe()
+    from_: str = Field(default=None, alias="from")
+    until: str = maybe()
+    note: str = maybe()
+
+
+class AddressProposalPayload(GlossaryAddress):
+    """A pair-level ``address_rule`` proposal: flat for one stage, or carrying ``stages`` when a sturdy change point
+    was confirmed (P18f). ``change_from`` marks a change proposal for a pair the glossary already rules."""
+
+    stages: list[AddressStagePayload] = maybe()
+    change_from: str = maybe()
 
 
 class CharacterPayload(GlossaryCharacter):
@@ -38,7 +58,7 @@ class Suggestion(Answer):
     lang: str
     kind: SuggestionKind
     source: SuggestionSource
-    payload: GlossaryTerm | GlossaryAddress | CharacterPayload
+    payload: GlossaryTerm | AddressProposalPayload | CharacterPayload
     """The glossary entry it would add (a term, an address rule or a character)."""
     evidence: list[EvidenceItem | str]
     sources: list[str]

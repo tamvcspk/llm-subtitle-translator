@@ -26,6 +26,7 @@ from subserver.services.library import Library
 from subserver.domain.ports import KIND_EPISODE, KIND_MOVIE, KIND_SERIES, CatalogEntry, CatalogSubtitle
 from subserver.adapters.store import Store
 from subserver.services.styles import Styles
+from subserver.services.suggestions import Proposal, SuggestionService
 from subserver.jobs.translation_attempt import TranslationAttempt
 from subserver.services.versions import TranslationVersions
 
@@ -98,6 +99,65 @@ def seed_facts(store: Store, show: Path) -> None:
         )
 
 
+EVIDENCE = [{"unit": 1, "cue": 5, "timecode": "00:00:10,000", "text": "Then tell me where we go."}]
+
+
+def seed_review(store: Store, library: Library, glossaries: Glossaries, entries: list[CatalogEntry]) -> None:
+    """What P18 changed on the Review, Suggestions-tab, Glossary and Characters screens needs rows the older seed lacked:
+    seven pending cards on "Arcane Demo" (three terms, a pair with two stages, a plain pair, a change of an existing pair,
+    a character) and a series "Forms Demo" whose glossary has adjacent identical forms of address to clean up."""
+    series_id = store.upsert_series("bazarr-7", title="Arcane Demo", bazarr_id="7")
+    service = SuggestionService(store, library, settings_source=lambda: {})
+    ev = tuple(EVIDENCE)
+    proposals = [
+        Proposal("term", {"source": "Old Observatory", "target": "Đài quan sát cũ"}, evidence=ev),
+        Proposal("term", {"source": "Hextech Gate", "target": "Cổng Hextech"}, evidence=ev),
+        Proposal("term", {"source": "Lone Pass", "target": "Đèo Cô Độc"}, evidence=ev),
+        Proposal("address_rule", {
+            "a": "Zed", "b": "Vi", "stages": [
+                {"a_to_b": "anh–em", "b_to_a": "em–anh"},
+                {"from": "S01E03", "a_to_b": "tôi–em", "b_to_a": "em–anh"},
+            ],
+        }, evidence=ev),
+        Proposal("address_rule", {"a": "Zed", "b": "Mira", "a_to_b": "tớ–cậu", "b_to_a": "cậu–tớ"}, evidence=ev),
+        # The glossary already has Kyber-Zed (`tôi–anh`): this one proposes a change of that pair from S01E03.
+        Proposal("address_rule", {
+            "a": "Kyber", "b": "Zed", "change_from": "S01E03", "stages": [
+                {"a_to_b": "tôi–anh", "b_to_a": "anh–tôi"},
+                {"from": "S01E03", "a_to_b": "tao–mày", "b_to_a": "mày–tao"},
+            ],
+        }, evidence=ev),
+        Proposal("character", {"name": "Mira", "target": "Mira", "gender": "f"}, evidence=ev),
+    ]
+    service.propose(series_id, "vi", proposals, source="facts", auto_accept=False)
+
+    store.upsert_series("bazarr-13", title="Forms Demo", bazarr_id="13")
+    forms = [
+        "terms:",
+        "  - {source: Old Observatory, target: Đài quan sát cũ}",
+        "  - {source: Hextech Gate, target: Cổng Hextech}",
+        "  - {source: Lone Pass, target: Đèo Cô Độc, locked: true}",
+        "characters:",
+        "  - {name: Zed, target: Zed, gender: m}",
+        "  - {name: Vi, target: Vi, gender: f}",
+        "address_rules:",
+        "  - {a: Zed, b: Vi, a_to_b: 'anh–em', b_to_a: 'em–anh', from: S01E01}",
+        "  - {a: Zed, b: Vi, a_to_b: 'anh–em', b_to_a: 'em–anh', from: S01E04}",
+        "  - {a: Zed, b: Vi, a_to_b: 'anh–em', b_to_a: 'em–anh', from: S01E07}",
+        "  - {a: Vi, b: Zed, a_to_b: 'em–anh', b_to_a: 'anh–em', from: S01E09}",
+        "  - {a: Mira, b: Kyber, a_to_b: 'tớ–cậu', b_to_a: 'cậu–tớ', from: S01E01, until: S01E04}",
+        "  - {a: Mira, b: Kyber, a_to_b: 'tôi–anh', b_to_a: 'anh–tôi', from: S01E05}",
+        # R18-7: the same words across a gap (until S01E04, then from S01E07) must stay two rules after Clean up...
+        "  - {a: Ekko, b: Vi, a_to_b: 'tớ–cậu', b_to_a: 'cậu–tớ', until: S01E04}",
+        "  - {a: Ekko, b: Vi, a_to_b: 'tớ–cậu', b_to_a: 'cậu–tớ', from: S01E07}",
+        # ...and two identical rules that start in season 2 merge into one that still starts at S02E01.
+        "  - {a: Jinx, b: Ekko, a_to_b: 'tao–mày', b_to_a: 'mày–tao', from: S02E01}",
+        "  - {a: Jinx, b: Ekko, a_to_b: 'tao–mày', b_to_a: 'mày–tao', from: S02E05}",
+    ]
+    glossaries.write("series", "bazarr-13", "vi", "\n".join(forms) + "\n", note="import")
+    entries.append(CatalogEntry(KIND_SERIES, "13", series_key="bazarr-13", title="Forms Demo"))
+
+
 def write_old_queue(state: Path) -> None:
     """What an older worker (before P10) and Bazarr's script leave in ``<state>/queue``, so the start-up has something
     to settle: a refusal of episode 3 (becomes Ignored) and a file the script dropped for the movie that nobody approved
@@ -129,6 +189,7 @@ def write_old_queue(state: Path) -> None:
 
 def seed(
     state: Path, translated: tuple[int, ...] = (1, 2), *, edit_demo: bool = False, candidate: bool = False, facts: bool = False,
+    review: bool = False,
 ) -> str:
     media = state / "preview-media"
     show = media / "Arcane Demo" / "Season 1"
@@ -220,6 +281,8 @@ def seed(
         ))
     if facts:
         seed_facts(store, show)
+    if review:
+        seed_review(store, library, glossaries, entries)
     store.catalog_apply(entries, time.time())
 
     store.close()
@@ -244,7 +307,7 @@ def main() -> int:
         shutil.rmtree(state)
     state.mkdir(parents=True)
     (state / MARK).write_text("made by tests/preview_seed.py; --reset may delete this folder\n", encoding="utf-8")
-    seed(state, () if args.live else (1, 2), edit_demo=args.live, facts=True)
+    seed(state, () if args.live else (1, 2), edit_demo=args.live, facts=True, review=True)
     if args.old_queue:
         write_old_queue(state)
     print(f"seeded {state}")
