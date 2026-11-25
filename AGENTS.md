@@ -96,3 +96,12 @@ Skills in `.claude/skills/`, agents in `.claude/agents/`:
 | Architecture | `architect` | ADRs, package boundaries, doccheck; with `design-docs` for the Vietnamese design docs |
 | QA | `qa` agent, `test-plan`, `web-test`, `ci-check` | check a change against SPEC section 6; the browser hand-off; the CI pipeline locally |
 | Upstream | `upstream-sync` | cherry-pick of upstream fixes |
+
+## Luật chung của kit (project-kit, Mode 1)
+
+- Chỉ báo "xong" khi `bash scripts/check` thoát mã 0 (gom các lệnh CI ở trên); dán dòng kết quả cuối khi báo cáo.
+- Việc ngoài phạm vi spec (`docs/design/SPEC.md`) và PLAN.md không tự làm; ghi vào mục ý tưởng để sau.
+- Không làm mục Non-goals trong `docs/design/SPEC.md`.
+- Quyết định có đánh đổi ghi vào `docs/DECISIONS.md` (chỉ thêm; ADR chi tiết vẫn ở `docs/design/ARCHITECTURE.md`).
+- Trước khi chuyển sang tool khác: ghi đè `docs/HANDOFF.md` (≤30 dòng) và commit.
+- Không ghi giá trị trong `.env` vào bất kỳ file nào được commit.

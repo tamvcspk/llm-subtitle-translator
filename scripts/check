@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Một lệnh kiểm tra duy nhất: toàn bộ bước CI local (Python workspace + web).
+# Chỉ in phần lỗi. Thoát mã khác 0 nếu có bước nào lỗi.
+# Dùng: bash scripts/check
+# Lệnh bên dưới lấy từ AGENTS.md và .github/workflows/ci.yml; không thêm runner mới.
+set -u
+cd "$(dirname "$0")/.."
+
+fail=0
+run() {
+  local name="$1"; shift
+  local out
+  if out="$("$@" 2>&1)"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name"
+    printf '%s\n' "$out" | tail -n 60
+    fail=1
+  fi
+}
+
+# ---- Python (uv workspace) ----
+run "server tests"      uv run --locked python -m unittest discover -s apps/server/tests -t apps/server
+run "subcore tests"     uv run --locked python -m unittest discover -s packages/subcore/tests -t packages/subcore
+run "compileall"        uv run --locked python -m compileall -q -f apps/server/worker.py apps/server/subserver packages/subcore/src
+run "subcore cli"       uv run --locked subcore --help
+run "openapi --check"   uv run --locked --directory apps/server python -m subserver.api.openapi --check
+run "doccheck"          uv run --locked python scripts/doccheck.py
+
+# ---- Console (apps/web) ----
+# npm test trên Windows cần đường dẫn có ổ đĩa viết hoa (xem AGENTS.md).
+run "web typecheck"     bash -c 'cd apps/web && npm run typecheck'
+run "web lint"          bash -c 'cd apps/web && npm run lint'
+run "web test"          bash -c 'cd apps/web && npm test --silent'
+run "web build"         bash -c 'cd apps/web && npm run build'
+
+if [ "$fail" -ne 0 ]; then
+  echo "check: FAILED"
+  exit 1
+fi
+echo "check: OK"
