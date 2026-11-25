@@ -40,6 +40,7 @@ Trạng thái: `[x]` xong · `[~]` đang làm / chờ xác nhận · `[ ]` chưa
 | **P16** | Research grounding (FR-7), làm cuối cùng nhưng vẫn bắt buộc của v1 (FR-7.4); làm **sau P15f**, trên cấu trúc mới | Tiêu chí 23 a–g: một lần mỗi series, URL từ grounding metadata, kết quả vào `suggestions`, `term` ≥ 2 nguồn tự áp dụng khi bật, provider không có `web_search` thì bỏ qua, có ngân sách lời gọi; job riêng tự xếp sau facts khi `research_enabled`, chạy trước các tập dịch còn chờ, lỗi không chặn dịch; ngân sách đúng sau khi dọn `jobs` | `[x]` (CI xanh trên `5ff369c`; còn mở: điều khoản hiển thị grounding của Google, đo cải thiện trên cue sửa thật) |
 | **P17** | Tách file lớn, không đổi hành vi (ADR-18 phần 4): `apps/web/src/api/queries.ts` (1226 dòng, 100 export) thành thư mục theo nhóm; `services/units.py` (1160) và `jobs/queue.py` (993), `pages/Insights.tsx` (583), `domain/ports.py` (646) thành các module nhỏ theo nhóm việc | Toàn bộ test (server, subcore, web) pass, số test không giảm; `docs/openapi.json` và `schema.gen.ts` không đổi; 48 import `api/queries` của web chạy nguyên; `test_core_boundary.py` và `doccheck.py` sạch; không file nào trong năm file trên còn quá ~500 dòng | `[x]` (CI xanh trên `b1ecf33`) |
 | **P18** | Sửa theo feedback UX đợt 1–2 (2026-11-24) và báo cáo ổ đĩa không ngủ được: đọc đĩa, Review, Translate/Retranslate nhiều tập, xưng hô theo cặp, Glossary, điều hướng | Xem mục P18: không còn đọc toàn văn file chỉ để hiển thị; accept song song không mất thao tác; Translate selected tách dịch mới/dịch lại có Confirm; mỗi cặp nhân vật một đề xuất, giai đoạn chỉ khi có điểm đổi vững | `[x]` P18a–P18f + 10/10 review fixes (R18-1..R18-10) xong; CI GitHub xanh (`45447539080`) và Docker image xanh (`45447538958`) trên `e4fdfdb` *(P18g và đo lại trên homeserver là bước vận hành riêng)* |
+| **P19** | Sửa feedback Giai đoạn 1: Dịch & Glossary (trace Malcolm 2026-11-25, `docs/DECISIONS.md` D-02): harness đo trước/sau, danh xưng chung không thành nhân vật hay alias, TMDB cast làm chuẩn tên và phạm vi tập, prompt dịch không mâu thuẫn, model theo tác vụ hiện rõ, Bootstrap qua Estimate | Xem mục P19: prompt S02E04 sau sửa không còn mâu thuẫn Glossary ↔ Relationship state, không còn nhân vật `Mom`, Forms of address chỉ gồm cast chính và nhân vật của tập; A/B ~30 câu xưng hô không kém mốc | `[ ]` Đã chốt phạm vi (D-02); chưa sửa SPEC, chưa code |
 
 **Thứ tự làm là thứ tự số.** Mỗi phase chỉ cần các phase đứng trước nó:
 
@@ -599,6 +600,59 @@ Review mức `high` trên working tree của nhánh `p18-plan` (chưa commit, so
 - [x] **R18-9 (thấp, P18b)** `suggestions.py:565` Mỗi sự kiện `suggestion.accepted` của bulk mang `would_stale` của cả lô ngôn ngữ, không phải của riêng nó: 5 đề xuất cùng làm 2 bản dịch stale thì telemetry/Insights cộng ra 10. Hướng sửa: một sự kiện bulk mang tổng, hoặc bỏ `stale` khỏi sự kiện từng mục.
 - [x] **R18-10 (thấp, P18a/P18b)** `apps/web/src/api/queries/suggestions.ts:82` Sau khi accept/reject/undo một thẻ, số impact đang hiện trên các thẻ khác không còn được làm mới (`useRefreshSuggestions` không invalidate `suggestion-impact` nữa, `refetchOnWindowFocus` tắt), nên sai tới khi hết cache 20 s. Admin mở "Affected translations" ở A và B (đều 3), accept A làm stale cùng các tập, B vẫn báo 3. Hướng sửa: đánh dấu stale mà không refetch (`refetchType: 'none'`), hoặc chỉ invalidate thẻ đang mở, trừ thẻ vừa quyết định. Giữ đúng mục tiêu của P18a là không tính lại impact cho mọi thẻ.
 
+## P19 — Sửa feedback Giai đoạn 1: Dịch & Glossary `[ ]`
+
+Nguồn: trace read-only trên homeserver (`llm-translator` `v1.0.0-rc.2`, *Malcolm in the Middle*, `/state/app.db` và `2026-11-25.001.jsonl`), ghi ở `local-state/handoff/P19-TRACE-AND-PLAN.md` (git-ignored), feedback `local-state/feedback/UX-FEEDBACK-01..03.md`. Phạm vi chốt 2026-11-26 sau review chéo: `docs/DECISIONS.md` D-02.
+
+**Vấn đề thấy trên dữ liệu thật** (prompt dịch S02E04):
+1. Nhân vật tách đôi: `Mom, also called Lois` và `Lois` cùng tồn tại; `Caroline Miller`/`Carolyn Miller`. Gốc: `_Names.add` (`fold.py:134-157`) coi hai mục cùng một tập là hai người kể cả khi mục này khai mục kia là alias; thêm nữa, extract nhận danh xưng chung (`Mom`, `Dad`) làm tên. Đã tái hiện: `[Mom(aka Lois), Lois]` + `[Lois(aka Mom), Ida(aka Mom)]` → 3 nhân vật.
+2. Mâu thuẫn trong cùng system prompt: Glossary ghi `mẹ–con`, Relationship state ghi `Malcolm & Lois: Malcolm is the senior of the two` (và Malcolm "senior" hơn cô giáo Caroline Miller). Các dòng sai cùng một chiều: nhiều khả năng model đảo enum `a_above`/`b_above`.
+3. Prompt phình: 72 dòng Forms of address của cả 7 season (cả nhân vật một tập), 19 đoạn Story so far (~2.500 từ) vì chưa chạm trần 8.000 token.
+4. Model theo tác vụ không thấy được: đổi `gst_model` sang `gemini-3.8-flash` mà để trống `memory_model`/`summarize_model`/`research_model` thì mọi tác vụ chạy model mạnh (đúng thiết kế FR-9.3, `config.py` dòng 210-222, nhưng UI không cho thấy).
+
+**Không làm trong P19:** LLM-as-a-Judge đóng băng nguyên trạng (`judge_enabled = false`, không sửa code); `speaker`/`addressee` trong output dịch nằm ở backlog "Sau v1"; diarization, ASS/VTT/OCR, kiểm phụ đề nguồn lệch giờ, toast toàn cục để sau v1.
+
+**Giới hạn còn lại (ghi để không kỳ vọng sai):** SRT không có người nói. P19 bỏ nhiễu và mâu thuẫn khỏi prompt, không bảo đảm model đoán đúng ai nói với ai.
+
+**Thứ tự:** P19-0 → P19b → P19c → P19a → P19d. P19-0 đứng đầu vì không có mốc thì không biết P19 có sửa được không. Docs (SPEC FR mới, `docs/design/ARCHITECTURE.md`, UX.md cho P19a/P19d) ghi trước khi code từng mục. Mỗi mục kèm unit test (fake provider, không gọi mạng), `bash scripts/check` xanh, `CHANGELOG.md`.
+
+### P19-0 — Harness đo trước/sau
+- [ ] Lấy bundle S02E04 từ homeserver (read-only, `docker exec`, khi được cho phép; không chép khoá) vào `local-state/p19/` (git-ignored).
+- [ ] Mốc 0 call: `subcore render-prompt --bundle` lưu thành `baseline-prompt.txt`. Sau P19b/P19c chạy lại và diff.
+- [ ] Bộ ~30 câu nặng xưng hô của S02E04 (Malcolm ↔ Lois/Hal/Reese/Francis, Malcolm ↔ cô giáo) làm golden; A/B bằng `subcore compare` trước và sau, chạy `-Live` với giới hạn call của `preview.ps1`. Người dùng chấm câu nào đúng.
+- [ ] Script nhỏ (không vào package) đếm trên prompt: số dòng Forms of address, số nhân vật, có/không cặp vừa có rule trong Glossary vừa có dòng ở Relationship state, số token ước lượng. Dùng cho tiêu chí của P19b/P19c.
+
+### P19b — Danh tính nhân vật: danh xưng chung, alias, TMDB cast
+- [ ] **Danh xưng chung không là tên, không là alias.** Danh sách chặn theo ngôn ngữ nguồn trong `subcore.memory` (en: Mom, Mommy, Mother, Dad, Daddy, Father, Grandma, Grandpa, Sir, Ma'am, Honey, Sweetie, Son, Kid, Boss, Doc, Coach…; tách được để thêm ngôn ngữ). Lọc trước `fold()` và trước bộ sinh đề xuất: mục có `name` là danh xưng mà có alias là tên riêng thì lấy tên riêng làm `name`; không có tên riêng thì bỏ mục. Sự kiện quan hệ có một đầu là danh xưng mà không quy được về tên riêng trong cùng tập thì bỏ. Lý do (D-02): Lois gọi Ida là "Mom"; alias toàn cục quy mọi "X & Mom" về Lois (lỗi `Hal ↔ Mom` S05E15).
+- [ ] **Sửa `_Names.add`:** trong một tập, mục khai alias trùng tên một mục khác của cùng tập thì gộp (khai báo alias thắng quy tắc "cùng tập là hai người"); hai mục chỉ trùng biệt danh mà không khai nhau vẫn là hai người. Tên canonical ưu tiên tên riêng dài hơn, không bao giờ là danh xưng.
+- [ ] **Prompt extract `x4`:** yêu cầu tên riêng cho `characters` và `relationship_events`, không dùng danh xưng làm tên; `hierarchy` đổi thành `senior: <tên> | "equal"`. Parser vẫn đọc facts `x3` cũ (map `a_above`/`b_above` như hiện tại) để không bắt đọc lại; facts cũ chỉ được làm sạch bằng danh sách chặn. Không tự extract lại (tốn call); dòng impact/Estimate nói rõ nếu admin chọn extract lại.
+- [ ] **TMDB cast làm chuẩn tên (0 model call):** adapter `tmdb.py` lấy `/tv/{id}/aggregate_credits` (cast chính kèm số tập) và `guest_stars` của `/tv/{id}/season/{s}/episode/{e}` (endpoint đã gọi, cache sẵn). Bỏ hậu tố như `(voice)`, mục `Self`/`Himself`. Đưa qua port `Metadata` vào bundle (`subcore` không biết TMDB: chỉ nhận danh sách tên). Dùng để: gộp biến thể chính tả gần đúng (Carolyn → Caroline Miller) khi chỉ một tên TMDB khớp; xếp hạng cast chính. Không có khoá TMDB hay không tìm được series thì bỏ qua, hành vi như sau các mục trên.
+- [ ] **Glossary:** `glossary.Character` thêm `aliases` (YAML, DB, API, OpenAPI sinh lại); Forms of address gộp được rule trùng nhau qua alias (cùng đường "Dọn trùng" của P18f, có version).
+- [ ] Test: `fold` với `[Mom(aka Lois), Lois]` → một `Lois`; `Ida(aka Mom)` không gộp vào Lois; danh xưng không xuất hiện trong `Characters so far`; sự kiện `Malcolm & Mom` không quy được thì bỏ; parser `senior` và facts `x3` cũ; TMDB fake gộp Carolyn → Caroline Miller, hai tên gần đúng thì không gộp; không khoá TMDB vẫn chạy.
+
+### P19c — Prompt dịch sạch và gọn
+- [ ] **Glossary thắng, không in đè.** Cặp đã có `ActiveRule` trong tập thì không có dòng ở Relationship state và Character voices không nhắc xưng hô cho cặp đó. So cặp sau khi quy alias (P19b).
+- [ ] **Forms of address theo phạm vi tập.** Giữ rule khi cả hai người thuộc: cast chính (TMDB `aggregate_credits` xếp hạng, hoặc nhân vật có mặt ở ≥ N tập facts khi không có TMDB) ∪ nhân vật của tập (TMDB `guest_stars` ∪ facts của chính tập). Không lọc theo từ trong câu (docstring `render_system`: hai người nói cả cảnh bằng đại từ). Không có dữ liệu phạm vi nào thì giữ hết như cũ.
+- [ ] **Story so far gọn.** Nén các tập cũ khi số tập cũ > 3 (`DEFAULT_RECENT_UNITS`), không đợi trần 8.000 token; dùng `compress` có cache như hiện tại, lỗi thì cắt câu đầu. Estimate đếm lời gọi `summarize` mới.
+- [ ] `PROMPT_VERSION` tăng; fingerprint đổi thì bản dịch cũ hiện Stale nhưng **không tự dịch lại** (bất biến).
+- [ ] Test: prompt có rule `Malcolm–Lois` thì không có dòng `Malcolm & Lois` ở Relationship state; nhân vật một tập ở season khác không vào Forms of address; nhân vật không có trong TMDB nhưng có trong facts của tập vẫn giữ rule; > 3 tập cũ thì Story so far nén; P19-0 diff trên S02E04 đạt tiêu chí ở bảng tổng quan.
+
+### P19a — Model theo tác vụ hiện rõ
+- [ ] Settings hiện model thực sự chạy cho từng tác vụ (`translate`, fallback, `extract`, `summarize`, `suggest`, `research`, `judge`) kèm "(dùng chung model dịch)" khi ô trống; đổi `gst_model` mà các ô phụ trống thì cảnh báo mọi tác vụ sẽ chạy model đó. Không đổi luật fallback của FR-9.3.
+- [ ] Hộp Estimate ghi model theo từng nhóm lời gọi.
+- [ ] UX.md trước (`designer`); test Vitest cho nhãn và cảnh báo; test server cho model trả về theo tác vụ.
+
+### P19d — Bootstrap an toàn
+- [ ] Nút `Continue` ở hộp vàng Bootstrap đi qua Estimate/Confirm: số tập sẽ extract, số lời gọi, cảnh báo khi Glossary rỗng. Cho khoá lại được.
+- [ ] Hai con số `121 wait` và `99 missing` phải cùng một định nghĩa hoặc ghi rõ khác nhau ở đâu (đọc code trước, ghi lý do vào đây).
+- [ ] UX.md trước; test server và Vitest.
+
+### Docs và đóng phase
+- [ ] SPEC: FR mới hoặc sửa FR-5.2/FR-5.8 (danh xưng chung, tên riêng, `senior`, nén sớm), FR-4 (`aliases` của nhân vật, phạm vi Forms of address theo tập), FR-9.3 (hiển thị model theo tác vụ), tiêu chí nghiệm thu ở §6. `docs/design/ARCHITECTURE.md`: TMDB cast qua port `Metadata` vào bundle (ADR nếu cần, skill `architect`).
+- [ ] `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/CONFIGURATION.md`, `CONTEXT.md` (thuật ngữ "danh xưng chung", "cast chính"), `CHANGELOG.md`; `python scripts/doccheck.py` sạch.
+- [ ] Chạy lại P19-0 sau P19c, ghi kết quả (diff prompt, điểm A/B) vào đây. Nếu xưng hô vẫn sai nhiều thì mở mục `speaker`/`addressee` ở backlog.
+- [ ] CI GitHub xanh; triển khai homeserver chỉ khi được yêu cầu.
+
 ---
 
 ## Code review P10–P14 (2026-11-19) `[~]` đã review xong, chưa sửa (39 phát hiện: P10 9, P11 10, P12 10, P13/P14 10; P12b đã review và sửa trước)
@@ -814,4 +868,5 @@ Review mức `high`, từng nhóm phase một, toàn bộ đã đối chiếu tr
 
 - **v1.1:** thông báo ntfy/Apprise/Telegram khi có mục `pending` mới hoặc job fail, kèm link trang duyệt (SPEC quyết định #6); hỗ trợ VTT; policy tự yêu cầu theo đường dẫn hoặc ngôn ngữ (FR-15.4); `dry_run` cho `PUT /api/series/{id}/memory` để hiện dòng impact của Memory và Specials after (cần hàm tính stale theo chính sách ứng viên trong `StoryMemory`; ở v1 hai trường đó lưu bằng Apply không có impact, quyết định 2026-11-16).
 - **Sau P15f, tuỳ chọn:** gom các module ở gốc `subcore` (`quality/`: compare, golden, judge, feedback; `rules/`: glossary, style, matching, fewshot). Giữ layout `src/` (thư viện được build). Lợi ích thấp, đổi import của mọi bên dùng (quyết định #27).
+- **Ý tưởng sau P19 (chốt 2026-11-26, chỉ làm nếu harness P19 cho thấy xưng hô vẫn sai):** output dịch có thêm `speaker`/`addressee` tuỳ chọn cho từng câu; kiểm tra tất định cặp xưng hô so với rule của glossary (giống `locked_violations`) và repair khi lệch; không tốn call thêm. Ngoài SPEC hiện tại (cần FR mới).
 - Ngoài v1: plugin Jellyfin/Plex "báo câu sai"; ASS/SSA giữ style; liên kết bối cảnh franchise; multi-user.
