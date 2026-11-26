@@ -1,29 +1,32 @@
 # Handoff
+
 Ghi đè toàn bộ file mỗi lần chuyển tool. Tối đa 30 dòng.
 
-- Thời điểm: 2026-11-26 +07:00
-- Từ: Claude Code → Sang: (phiên kế tiếp)
-- Nhánh / worktree: main (commit cuối: 297d614 chore: adopt project-kit; thay đổi dưới đây chưa commit)
+- Thời điểm: 2026-11-27
+- Từ: Claude Code → Sang: phiên kế tiếp (Claude Code hoặc Antigravity)
+- Nhánh / worktree: main (5 file docs sửa, chưa commit)
+- Commit cuối: 9999037 feat(P19): add scope and details for Phase 19
 - `scripts/check`: check: OK (exit 0, 10/10 bước)
 
 ## Mục tiêu đang làm
-P19 (Giai đoạn 1: Dịch & Glossary) theo trace *Malcolm in the Middle* trên homeserver.
+P19 (Dịch & Glossary) theo trace *Malcolm in the Middle*; hiện ở bước spec xong, chưa code.
 
 ## Đã xong
-- Review chéo và chốt phạm vi P19: `docs/DECISIONS.md` D-02.
-- Ghi mục **P19** vào `PLAN.md` (dòng tổng quan + mục chi tiết sau P18): P19-0 harness, P19b danh tính (danh xưng chung, `_Names.add`, extract `x4` với `senior`, TMDB cast, `Character.aliases`), P19c prompt sạch (Glossary thắng, Forms of address theo phạm vi tập, nén Story so far > 3 tập), P19a model theo tác vụ, P19d Bootstrap qua Estimate; ý tưởng `speaker`/`addressee` ở backlog.
+- P19-0: mốc trên 3 tập (S02E04, S01E03, S01E05) trong `local-state/p19/` (git-ignored); Prod sai 6/66, chạy lại sai 9/66; số mốc ở `PLAN.md` mục P19-0.
+- SPEC v0.22 (FR-5.9 đến 5.12, tiêu chí 25, #30), ARCHITECTURE v0.22 ("Quyết định P19"), `docs/DECISIONS.md` D-03.
 
 ## Đang dở
-- Chưa sửa SPEC/ARCHITECTURE/UX, chưa code.
+- Chưa code P19b/P19c. P19a và P19d chưa có spec/UX. Chưa chạy "sau" (cần code trước).
 
 ## File đã đụng
-- `PLAN.md`, `docs/DECISIONS.md`, `docs/HANDOFF.md`; `local-state/handoff/P19-TRACE-AND-PLAN.md` (git-ignored).
+- `PLAN.md`, `docs/DECISIONS.md`, `docs/HANDOFF.md`, `docs/design/SPEC.md`, `docs/design/ARCHITECTURE.md`.
 
 ## Việc tiếp theo (theo thứ tự)
-1. Commit các file docs trên (khi người dùng cho phép).
-2. P19-0: xin phép đọc homeserver, lấy bundle S02E04 vào `local-state/p19/`, lưu `render-prompt` làm mốc, chọn ~30 câu xưng hô.
-3. SPEC/ARCHITECTURE cho P19b (skill `design-docs`, `architect`), rồi code P19b → P19c → P19a → P19d theo `PLAN.md`.
+1. Commit 5 file docs trên (khi người dùng cho phép).
+2. Kiểm `Facts.hash` và tra cứu facts theo `prompt_version` (`adapters/store/memory.py`): đổi `x3` → `x4` không được kéo extract lại.
+3. Code P19b → P19c kèm unit test; rồi chạy "sau" (`render-prompt`, `measure.py`, chấm tay 66 câu; gọi model cần hỏi người dùng, key ở `local-state/secrets/gemini.key`). Sau đó P19a, P19d (docs/UX trước).
 
 ## Lưu ý cho người nhận
-- "Mom/Dad" là danh xưng tương đối, không bao giờ làm alias toàn cục. `subcore` không biết TMDB: chỉ nhận danh sách tên qua bundle.
-- Không ghi `.env`/secret homeserver vào file commit; đối chiếu `local-state/feedback/UX-FEEDBACK-01..03.md`.
+- "Mom/Dad" là danh xưng tương đối, không bao giờ làm alias toàn cục. `subcore` không biết TMDB, chỉ nhận danh sách tên qua bundle.
+- Production là container `llm-translator` (v1.0.0-rc.2) trên 192.168.1.60, chỉ đọc (DB `mode=ro`). Windows cần `PYTHONUTF8=1` cho `subcore`.
+- Không ghi `.env`/secret homeserver vào file commit.
