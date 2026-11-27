@@ -1,6 +1,6 @@
 # Wireframe v2.1 — khổ dọc là chính
 
-> Trạng thái: **v2.2** · 2026-11-23 · Vẽ theo [UX.md](UX.md) v0.20 và [wireframe-prompt.md](wireframe-prompt.md). v2.2 thêm mục 5b (Insights, nút Golden set mở bottom sheet có Download và Copy), 5c (Review) và biến thể Research (0d, 2c, Activity, Settings). **Khi khác UX.md thì UX.md thắng.** Điểm còn mở: UX §8.
+> Trạng thái: **v2.4** · 2026-11-27 · Vẽ theo [UX.md](UX.md) v0.24 và [wireframe-prompt.md](wireframe-prompt.md). v2.4 cập nhật P19d (mục 2 Header): hộp vàng Bootstrap đồng nhất số đếm theo ngôn ngữ đích có phụ đề nguồn, phân biệt 4 trạng thái thông điệp, nút `Auto-request remaining N…` qua hộp Estimate/Confirm có cảnh báo cam khi glossary rỗng, và dải `Hold again` kèm tuỳ chọn huỷ job `policy` đang chờ. v2.3 cập nhật P19a/P19b: hộp Estimate (0d, 2e) hiện model theo từng nhóm lời gọi + `Total calls (est.)`; Settings `2. Translation` (6) gom đủ các ô chọn model, placeholder động, cảnh báo dùng chung model và bảng `Active models by task`; Glossary `2c` (SegmentedControl, gom cặp & dọn trùng qua `aliases`, cảnh báo danh xưng chung trên rule cũ) và Characters `2d` (`Aliases` ở phần `Name`, chặn danh xưng chung khi sửa). v2.2 thêm mục 5b (Insights, nút Golden set mở bottom sheet có Download và Copy), 5c (Review) và biến thể Research (0d, 2c, Activity, Settings). **Khi khác UX.md thì UX.md thắng.** Điểm còn mở: UX §8.
 > Bản v2.1 vẽ lại v2: khổ **DỌC (~820 px, iPad cầm dọc)** là khổ chính; khổ ngang chỉ ghi phần khác (mục 8). Đã sửa 9 sai lệch của v2, bỏ phần "đề xuất thêm" và "tự rà soát" (kết luận nằm ở UX.md và SPEC #26).
 
 ## Cách đọc
@@ -83,18 +83,22 @@ Không có "Forgot password".
 
 ### 0d) Hộp Estimate (bottom sheet dùng chung)
 
-Dùng cho: Translate (tập, mùa, series, tất cả), Translate again, Retranslate, Retry, Retry all failed, Extract facts, Compare on a whole episode, Request that episode, Research terms (biến thể bên dưới).
+Dùng cho: Translate (tập, mùa, series, tất cả), Translate again, Retranslate, Retry, Retry all failed, Compare on a whole episode, Ask the judge, Request that episode; biến thể Extract facts (2e) và Research terms (bên dưới).
 
 ```text
 +------------------------------------------------------------------------------+
 | {action [UI]: Translate season 1}                           (Bottom Sheet)   |
 +------------------------------------------------------------------------------+
-| Jobs                {estimate.jobs: 8}                                        |
-| Cues                {estimate.cues: 2,740}                                    |
-| Model calls (est.)  {estimate.calls: 16}   ("unknown" for Retry and range)    |
-| Calls left today    {estimate.calls_left_today: 42}   (hidden when no cap)    |
-| Paused until        {estimate.paused_until: 00:00}    (only when quota spent) |
-| Time                {estimate.minutes: ~4} min · done ~{estimate.finish_at}   |
+| Jobs                {estimate.jobs: 8}                                       |
+| Cues                {estimate.cues: 2,740}                                   |
+| Translate (est.)    {estimate.calls: 16} calls · {estimate.model [NEW]}      |
+|   ("Judge (est.)" cho Ask the judge; "unknown · {model}" khi Retry không rõ) |
+| Extract facts       {estimate.extract_calls: 3} calls · {extract_model}      |
+| Condense story      {estimate.summarize_calls: 1} call · {summarize_model}   |
+| Total calls (est.)  {total [UI]: 20}   (chỉ hiện khi có ≥ 2 nhóm lời gọi)    |
+| Calls left today    {estimate.calls_left_today: 42}   (hidden when no cap)   |
+| Paused until        {estimate.paused_until: 00:00}    (only when quota spent)|
+| Time                {estimate.minutes: ~5} min · done ~{estimate.finish_at}  |
 |                                                                              |
 | [ Cancel ]                                                      [ Confirm ]  |
 +------------------------------------------------------------------------------+
@@ -195,7 +199,7 @@ Trạng thái:
 
 ## 2. Series (`#/series/:id/...`)
 
-### Header chung (cả 5 tab)
+### Header chung (cả 6 tab)
 
 ```text
 +------------------------------------------------------------------------------+
@@ -207,7 +211,57 @@ Trạng thái:
 |   Changing Memory or Specials after can flag translations stale.             |
 |                                   [ Apply ]   (hiện khi một trong hai đổi)   |
 +------------------------------------------------------------------------------+
-| [Episodes] [Style] [Glossary] [Characters] [Context]                         |
+| (khi bootstrap.locked = true — P19d: chỉ đếm tập có phụ đề nguồn theo lang)  |
+| [!] Auto-request is holding {held_by_lang[lang]: 99} episodes for glossary   |
+| Only the first {limit: 2} episodes with source subtitles were requested      |
+| ({no_source: 22} other episodes have no source subtitle yet).                |
+| {message [UI]: theo 1 trong 4 trạng thái: pending > 0 / job đang chạy /      |
+|  Story memory đang tắt / 0 đề xuất và glossary đang rỗng}                    |
+| [ Review suggestions (4) | View in Activity | Open Glossary ]                |
+|                                   [ Auto-request 99 without glossary… ]      |
++------------------------------------------------------------------------------+
+| (khi bootstrap.released = true & chưa có glossary/card được duyệt — P19d)    |
+| Glossary hold is off ({queued_policy_jobs: 14} auto-requests in line).       |
+|                                                             [ Hold again ]   |
++------------------------------------------------------------------------------+
+| [Episodes] [Style] [Glossary] [Characters] [Context] [Suggestions (4)]       |
++------------------------------------------------------------------------------+
+```
+
+**Hộp Estimate khi bấm `[ Auto-request {N} without glossary… ]`** (P19d, `PUT /api/catalog/series/{id}/bootstrap` với `estimate_only: true`; xác nhận gọi `AutoRequest.run()` ngay):
+
+```text
++------------------------------------------------------------------------------+
+| Auto-request remaining episodes · {title}                   (Bottom Sheet)   |
++------------------------------------------------------------------------------+
+| Episodes to release   {estimate.jobs: 99}                                    |
+|   (khi daily_cap > 0: "up to {cap_left} today · daily cap {daily_cap}")      |
+| Cues                  {estimate.cues: 48,210}                                |
+| Translate (est.)      {estimate.calls: 99} calls · {estimate.model}          |
+| Extract facts         {estimate.extract_calls: 99} calls · {extract_model}   |
+| Condense story        {estimate.summarize_calls: 96} calls · {summarize_mdl} |
+| Total calls (est.)    {total [UI]: 294}                                      |
+| Calls left today      {estimate.calls_left_today: 1,000}                     |
+| Time                  {estimate.minutes: ~28} min · done ~{finish_at}        |
+|                                                                              |
+| [!] ORANGE WARNING (khi bootstrap.glossary_empty = true)                     |
+| Glossary is empty                                                            |
+| No terms, characters, or forms of address are approved yet. Character names  |
+| and pronouns may vary across seasons.                                        |
+|                                                                              |
+| [ Cancel ]                         [ Release & auto-request ({jobs: 99}) ]   |
++------------------------------------------------------------------------------+
+```
+
+**Hộp xác nhận `[ Hold again ]`** (khi `queued_policy_jobs > 0`; bằng 0 thì khoá lại ngay không mở hộp):
+
+```text
++------------------------------------------------------------------------------+
+| Hold auto-request for {title}?                              (Bottom Sheet)   |
+| Auto-request will stop queueing further episodes until the glossary is set.  |
+| [x] Also cancel {queued_policy_jobs: 14} queued auto-request jobs            |
+|     (running jobs finish their current batch; manual jobs are untouched)     |
+| [ Cancel ]                                                   [ Hold again ]  |
 +------------------------------------------------------------------------------+
 ```
 
@@ -382,31 +436,50 @@ Xác nhận **Save** (chỉ khi N > 0):
 
 ```text
 +------------------------------------------------------------------------------+
-| Version v{version: 4}                                                        |
-| Saving flags {stale_after: 5} episodes stale.                    [ Save ]    |
-| [ Research terms (14) ] [ History ] [ Copy from another series ]             |
-| [ Import YAML ] [ Export YAML ]                                              |
+| RESEARCH TERMS                                                               |
+| [ Research terms (14) ]                                                      |
+| (dải trạng thái job research hiện ngay bên dưới khi có job)                  |
 +------------------------------------------------------------------------------+
-| (một dải trạng thái, chỉ hiện một trong các trạng thái ở dưới)               |
+| Version v{version: 4}   [ History ] [ Copy from another series ]             |
+|                         [ Import YAML ] [ Export YAML ]                      |
 +------------------------------------------------------------------------------+
-| TERMS                                                       [ + Add term ]   |
+| [ Terms (18)                      | Forms of address (76)                  ] |
+| [ Filter forms of address…                                        {filter} ] |
++------------------------------------------------------------------------------+
+| (khi tab = Terms)                                            [ + Add term ]  |
 | +--------------------------------------------------------------------------+ |
-| | Source ({source})  [ Enforcer             ]                              | |
-| | Target ({target})  [ Cảnh vệ              ]                              | |
+| | Source ({source})  [ Enforcer             ]  Target [ Cảnh vệ          ] | |
 | | [x] Locked ({locked})                                                    | |
 | | Note ({note})      [ Piltover police      ]                              | |
-| | From episode ({from}) [ S01E01 ]   Until ({until}) [        ]            | |
-| |                                                     [ Delete ]          | |
+| | From episode ({from}) [ S01E01 ]   Until ({until}) [        ] [ Delete ] | |
 | +--------------------------------------------------------------------------+ |
 |                                                                              |
-| FORMS OF ADDRESS                                     [ + Add address rule ]  |
+| (khi tab = Forms of address)                                                 |
+| [ Clean up duplicates (4) ]                           [ + Add address rule ] |
+|                                                                              |
+| Malcolm ↔ Caroline Miller                                     [ 2 stages ]   |
 | +--------------------------------------------------------------------------+ |
-| | Pair  [ {a: Vi} ]  <->  [ {b: Powder} ]                                  | |
-| | A calls B ({a_to_b})  [ chị–em ]   (self–other)                          | |
-| | B calls A ({b_to_a})  [ em–chị ]   (self–other)                          | |
-| | From ({from})  [ S01E01 ]          (episode or timecode)                 | |
-| |                                                     [ Delete ]          | |
+| | Person A [ {a: Malcolm}         ]  Person B [ {b: Caroline Miller}     ] | |
+| | A calls B ({a_to_b}) [ em–cô    ]  B calls A ({b_to_a}) [ cô–em        ] | |
+| | From ({from}) [          ]         Until ({until}) [          ][ Delete ]| |
 | +--------------------------------------------------------------------------+ |
+| | Written via alias: Carolyn Miller (merges on Clean up duplicates)        | |
+| | Person A [ {a: Malcolm}         ]  Person B [ {b: Carolyn Miller}      ] | |
+| | A calls B ({a_to_b}) [ em–cô    ]  B calls A ({b_to_a}) [ cô–em        ] | |
+| | From ({from}) [          ]         Until ({until}) [          ][ Delete ]| |
+| +--------------------------------------------------------------------------+ |
+|                                                                              |
+| Malcolm ↔ Mom                                                                |
+| +--------------------------------------------------------------------------+ |
+| | [!] "Mom" is a generic form of address, not a character. Replace it with | |
+| |     a proper name (e.g. Lois) or delete this rule.                       | |
+| | Person A [ {a: Malcolm}         ]  Person B [ {b: Mom}                 ] | |
+| | A calls B ({a_to_b}) [ con–mẹ   ]  B calls A ({b_to_a}) [ mẹ–con       ] | |
+| |                                                                [ Delete ]| |
+| +--------------------------------------------------------------------------+ |
++------------------------------------------------------------------------------+
+| [● Unsaved changes]  Saving flags {stale_after: 5} episodes stale.           |
+| (sticky bottom bar, safe-area)                    [ Discard ]     [ Save ]   |
 +------------------------------------------------------------------------------+
 ```
 
@@ -497,30 +570,30 @@ Không có sub-tab Characters ở đây. Hộp thoại:
 
 ### 2d) Characters (`#/series/:id/characters`)
 
-Mỗi nhân vật một thẻ gồm **Name** (glossary `characters`) và **Voice** (thẻ nhân vật). Xưng hô chỉ đọc, sửa ở Forms of address. **Không có ô nhập `address`.**
+Mỗi nhân vật một thẻ gồm **Name** (glossary `characters`, gồm cả `aliases` — P19b) và **Voice** (thẻ nhân vật). Xưng hô chỉ đọc (gom theo cặp kèm cửa sổ `from–until` và nhận biết cả rule viết bằng `aliases`), sửa ở Forms of address. **Không có ô nhập `address`, không có ô `Aliases` thứ hai ở Voice.**
 
 ```text
 +------------------------------------------------------------------------------+
-| Saving flags {stale_after: 0} … (dòng impact trực tiếp)   [ + Add character ]|
+| A character is a name and a voice…                        [ + Add character ]|
 +------------------------------------------------------------------------------+
 | +--------------------------------------------------------------------------+ |
 | | NAME                                                                     | |
-| | Source name   {name: Vi}        Translated {target: Vi}                  | |
+| | {name: Caroline Miller}                                                  | |
+| | Translated    {target: Caroline Miller}                                  | |
+| | Aliases       {aliases: Carolyn Miller}                                  | |
 | | Gender        {gender: f}                                                | |
-| | Description   {description: Brawler from Zaun, Powder's sister}         | |
+| | Description   {description: Malcolm's Krelboyne teacher}                 | |
 | |                                                                          | |
 | | VOICE                                                                    | |
-| | Speech        {speech: Blunt, street slang, short sentences}             | |
-| | Aliases       {aliases: Violet}                                          | |
-| | Catchphrases  {catchphrases: "Cupcake"}                                  | |
+| | Speech        {speech: Warm, enthusiastic, slightly overwhelmed}         | |
+| | Catchphrases  {catchphrases: "Class!"}                                   | |
 | | Samples       {samples: 2 lines}                                         | |
-| | Style         {style: Swearing = Keep}                                   | |
-| | [x] Always include in the prompt ({always})                              | |
+| | Style         {style: Formality = Neutral}                               | |
+| | [x] Always in the prompt ({always})                                      | |
 | |                                                                          | |
-| | Forms of address (read only)                                             | |
-| |   with Powder: chị–em / em–chị                                           | |
-| |   with Caitlyn: tôi–cô / tôi–cô                                          | |
-| |   [ Manage in Forms of address → ]                                       | |
+| | FORMS OF ADDRESS (READ ONLY)                                             | |
+| |   with Malcolm: cô–em / em–cô                                            | |
+| |   [ Manage in Forms of address → ]        (trong sheet Add/Edit)         | |
 | |                                                                          | |
 | | [ Edit ]                                                    [ Delete ]   | |
 | +--------------------------------------------------------------------------+ |
@@ -529,7 +602,7 @@ Mỗi nhân vật một thẻ gồm **Name** (glossary `characters`) và **Voice
 ```
 
 - Trạng thái rỗng: `No character cards yet. Add characters to define their names and voices.   [ + Add character ]`
-- **Add/Edit** (bottom sheet): hai phần Name và Voice với đủ trường trên, `Style` là các Segmented Control có Inherit đầu tiên, dòng impact trực tiếp, `[ Cancel ]` `[ Save ]` (lưu ghi vào hai nơi, impact cộng cả hai). Thẻ đã lưu sẵn `address` thì hiện chỉ đọc dưới Voice.
+- **Add/Edit** (bottom sheet): hai phần **Name** (`Source name *`, `Translated name`, `Aliases` phân tách dấu phẩy, `Gender`, `Description`) và **Voice** (`Speech`, `Catchphrases`, `Samples`, `Style` có Inherit đầu tiên, `Always include in the prompt`), dòng impact trực tiếp, `[ Cancel ]` `[ Save ]` (lưu ghi `aliases` vào `glossary.characters` và đồng bộ sang `card.aliases` nếu có Voice; nhân vật chưa có Voice không tạo `CharacterCard` rỗng). Nhập danh xưng chung (`Mom`, `Dad`, `Sir`…) vào `Source name` hoặc `Aliases`, hoặc nhập alias trùng nhân vật khác, hiện lỗi đỏ ngay dưới ô (`"Mom" is a relative form of address, not a character's name.`) và tắt nút `[ Save ]`.
 - **Delete**: bottom sheet `[ Cancel ]` `[ Confirm delete ]` kèm dòng impact.
 
 ### 2e) Context (`#/series/:id/context`)
@@ -540,15 +613,27 @@ Mỗi nhân vật một thẻ gồm **Name** (glossary `characters`) và **Voice
 | {missing_facts [UI]: 2} episodes have a source subtitle but no facts.        |
 |                                         [ Extract facts (2 episodes) ]       |
 +------------------------------------------------------------------------------+
-| 1 · S01E01 · {title}                       Source ✓ · Facts ✓                |
-| 2 · S01E02 · {title}                       Source ✓ · Facts ✓                |
+| 1 · S01E01 · {title}                       Source ✓ · Facts ✓     [ Show ]   |
+| 2 · S01E02 · {title}                       Source ✓ · Facts ✓     [ Show ]   |
 | 3 · S01E03 · {title}                       Source ✓ · Facts ✗                |
 | 4 · S01E04 · {title}                       Source ✓ · Facts ✗                |
 | 5 · S01E05 · {title}                       Source ✗ · Facts ✗                |
 +------------------------------------------------------------------------------+
 ```
 
-`{has_source}` và `{has_facts}` theo thứ tự câu chuyện. Không có token đã dùng, không có trạng thái "generating". **Extract facts** → Estimate: số tập có source mà chưa có facts, một lời gọi mỗi tập (`memory_model`).
+`{has_source}` và `{has_facts}` theo thứ tự câu chuyện (facts `x3` cũ vẫn là `Facts ✓`, không có nút extract lại hàng loạt). **Extract facts** mở bottom sheet Estimate riêng hiện rõ tên model (`extract_model`):
+
+```text
++------------------------------------------------------------------------------+
+| Extract facts                                               (Bottom Sheet)   |
++------------------------------------------------------------------------------+
+| Episodes            {count [UI]: 2}                                          |
+| Extract facts       {count [UI]: 2} calls · {extract_model [NEW]}            |
+| One call per episode. Nothing is translated. The jobs wait in line with the  |
+| translations and stop for the day's quota like them.                         |
+| [ Cancel ]                                                      [ Confirm ]  |
++------------------------------------------------------------------------------+
+```
 
 ---
 
@@ -1022,13 +1107,36 @@ Bảy thẻ gập, mỗi thẻ có **Save** riêng và chỉ báo `● Unsaved c
 +------------------------------------------------------------------------------+
 | [v] 2. TRANSLATION                                              [ Save ]     |
 +------------------------------------------------------------------------------+
-| Default model ({gst_model})          [ gemini-3.1-flash-lite   v ]           |
-| Strong model ({gst_fallback_model})  [ gemini-3.5-flash  v ]  [ Clear ]      |
-| Research model ({research_model})    [ (same as Default)       v ]           |
+| Default model ({gst_model})          [ gemini-3.8-flash        v ]           |
+| Strong model ({gst_fallback_model})  [ (none)              v ]  [ Clear ]    |
+| Memory model ({memory_model})        [ Same as Default (gemini-3.8-flash) v ]|
+|   Runs Extract facts, Suggest from facts, and step 2 of Web research.        |
+| Summarize model ({summarize_model})  [ Same as Default (gemini-3.8-flash) v ]|
+|   Condenses old story summaries (falls back to Memory, then Default).        |
+| Research model ({research_model})    [ Same as Default (gemini-3.8-flash) v ]|
 |   Uses Google Search grounding (Gemini only; skipped on OpenAI-compatible).  |
-|   Only models with grounding are listed.                                     |
-| Max research calls per series ({research_max_calls_per_series})  [ 10 ]      |
-|   [ ] No cap   (spends search quota without limit; off by default)           |
+| Judge model ({judge_model})          [ Same as Default (gemini-3.8-flash) v ]|
+|   A stronger model than the one that translated judges better.               |
+|                                                                              |
+| [!] YELLOW ALERT (khi đổi gst_model mà còn ô phụ trống, hoặc trùng Strong):  |
+| Extract facts, Condense story, Suggest from facts, and Web research have no  |
+| model of their own and will also run on gemini-3.8-flash.                    |
+|                                                                              |
+| ACTIVE MODELS BY TASK ({task_models [NEW]}, cập nhật trực tiếp theo draft)   |
+| +--------------------------------------------------------------------------+ |
+| | Translate            gemini-3.8-flash                                    | |
+| | Strong fallback      Off (single model)                                  | |
+| | Extract facts        gemini-3.8-flash  (uses Default model)              | |
+| | Condense story       gemini-3.8-flash  (uses Default model)              | |
+| | Suggest from facts   gemini-3.8-flash  (uses Extract facts model)        | |
+| | Web research         gemini-3.8-flash  (uses Default model)              | |
+| | LLM judge            Off  (gemini-3.8-flash when enabled)                | |
+| +--------------------------------------------------------------------------+ |
+|                                                                              |
+| [ ] Research terms by itself ({research_enabled})                            |
+| Research budget, calls per series ({research_max_calls_per_series})  [ 10 ]  |
+|   (0 = no cap)                                                               |
+| [ ] LLM judge ({judge_enabled})                                              |
 | Temperature ({gst_temperature})      [ 0.7 ]                                 |
 | Thinking budget ({gst_thinking_budget}) [ 2048 ]                             |
 | [ ] No thinking ({gst_no_thinking})   [ ] Paid quota tier ({gst_paid_quota}) |
@@ -1064,8 +1172,6 @@ Bảy thẻ gập, mỗi thẻ có **Save** riêng và chỉ báo `● Unsaved c
 | [>] 5. STORY AND STYLE                                          [ Save ]     |
 +------------------------------------------------------------------------------+
 | Story memory ({memory_enabled})        [ Off | On ]                         |
-| Memory model ({memory_model})          [ (same as Default)  v ]              |
-| Summarize model ({summarize_model})    [ (same as Memory)   v ]              |
 | Gap wait, seconds ({memory_gap_wait_seconds})   [ 1800 ]  (0 = never wait)   |
 | Memory budget, tokens ({memory_budget_tokens})  [ 8000 ]                     |
 | Recent episodes ({memory_recent_episodes})      [ 3 ]                        |
