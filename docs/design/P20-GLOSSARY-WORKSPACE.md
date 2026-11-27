@@ -256,3 +256,5 @@ Khi mở phiên kế tiếp, kiểm tra chéo các câu hỏi phản biện sau 
 2. **P20 (`P20-GLOSSARY-WORKSPACE.md`):**
    - Khi gộp 3 tab thành 1 tab `Glossary`, các link hiện có từ `Insights` (`#/series/:id/glossary`), `Review` và `Series.tsx` (`Review suggestions` ở hộp vàng Bootstrap P19d) nên trỏ thẳng tới `#/series/:id/glossary?view=triage` kèm redirect từ đường dẫn cũ `/characters` và `/suggestions` như thế nào?
    - Cơ chế khoá chuyển giữa View 1–3 (đang có bản nháp `dirty`) và View 4 (`Triage` ghi thẳng DB) dùng hộp xác nhận `Save / Discard` hay cho phép lưu nháp tự động theo yêu cầu?
+
+**Đã phản biện 2026-11-27:** câu trả lời và các phát hiện W1–W8 ở [REVIEW-P19-P20.md](REVIEW-P19-P20.md). Ba điểm chặn phải chốt trước khi viết FR: **W1** (§3 sai khi nói P20a không đổi API: một Save cho cả glossary và nhiều card cần route lưu hàng loạt), **W2** (không có `base_version`/409, nháp sống lâu bị auto-accept và Triage ghi đè), **W3** (pin Timeline không được đọc SRT để lấy timecode; dùng số cue). Ngoài ra bỏ trường `Solo / audience self-pronoun` (W5) và `Auto-mirror` chỉ gợi ý khi ô kia trống (W6).

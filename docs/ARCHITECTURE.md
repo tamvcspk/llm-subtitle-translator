@@ -138,7 +138,8 @@ application's own database is not behind a port).
   (`AutoRequest`, the policy), `bootstrap.py` (the first episodes `auto_request` may ask for while a series has nothing
   approved) and `estimates.py` (`Estimator`: what an action that spends model calls would cost, said before it runs;
   a Translate request's estimate also counts the fact reads its jobs would run first, `extract_calls`, through
-  `StoryMemory.extract_needed`, which follows the same rule as `ensure_facts` and calls nothing);
+  `StoryMemory.extract_needed`, which follows the same rule as `ensure_facts` and calls nothing, and the calls that
+  condense old story summaries, `summarize_calls`, through `StoryMemory.summarize_needed`, which also calls nothing);
 - `memory.py` (`StoryMemory`): story order, prerequisite fact extraction, gap waiting, the context bundle and its
   staleness;
 - `glossaries.py`, `styles.py`, `style_service.py`: the glossary, genre presets, series and episode styles and character
@@ -360,6 +361,24 @@ sent), `subcore.memory.fold` folds the facts of the units before N into the *sto
 call. Facts come from source subtitles, never from translations, and are immutable: a correction layers over them in the
 glossary and is never lost by re-extraction.
 
+Generic forms of address ("Mom", "Dad", "Sir") are relative, so they are never a character name or alias (P19b, FR-5.9):
+`subcore.memory.address` strips them from each unit's facts at read time (`clean_facts`: a character named "Mom" with the alias
+"Lois" becomes Lois; an event whose end is a form of address that no single proper name in that unit stands for is dropped;
+`merge_declared` joins entries of one unit when one declares the other as an alias). Nothing stored is edited, so `Facts.hash`
+and every translation fingerprint stay as they were. The extraction prompt is `x4` (proper names only, `senior: <name>|equal`);
+facts stored under `x3` are still read (`FACTS_VERSIONS`, newest preferred) so moving to `x4` never re-extracts an episode.
+
+Who is in an episode (P19b, P19c): `subcore.memory.cast` (`episode_cast`) turns the facts and, when the worker has one, a list of
+main-cast and guest names into the episode's cast, a list of names only (`subcore` never learns TMDB: `Metadata.cast` returns
+a `Cast`, `adapters/tmdb.py` reads `/tv/{id}/aggregate_credits` and the episode's `guest_stars`, 0 model calls, empty when there
+is no key or no match). `StoryMemory.plan` puts it in `MemoryPlan.cast`, `gather` in the bundle (`cast`, bundle version 3, in the
+hash only when known). `subcore.translate.scope` then decides at prompt time, from names alone and never from the words of a
+line: a form-of-address rule is listed only when both people are in the cast (none known: every rule stays), and a pair that has
+an active rule is not printed again in *Relationship state* (`memory.fold.drop_pairs`) or in a character voice's `Addresses` lines
+(the glossary wins). The stored glossary is not touched by any of it. Old story summaries are condensed (`compress`, cached) as
+soon as there are more of them than `memory_recent_episodes`, not when the token budget runs out. Glossary characters take
+`aliases`, used only to recognise a name; a form of address is never an alias.
+
 `memory.py` (`StoryMemory`) decides which facts a unit sees. Story order is `(season, episode)` as Bazarr numbers them;
 season 0 sits outside the chain and sees the state after `series.specials_after` (default: the end of season 1). Before a
 unit is translated `plan()` asks Bazarr for the series' episodes and registers them; reads the facts of each earlier unit
@@ -511,7 +530,8 @@ package's own tests keep it so). Modules:
   `BadOutput`, `AuthError`, `ModelNotFound`), `subcore.providers.gemini`, `subcore.providers.openai_compat`,
   `subcore.providers.fake` (deterministic, for tests and dry runs) and `subcore.providers.limiter` (`RateLimiter`,
   `ResilientProvider`: RPM/TPM/RPD windows, retry with backoff, key failover);
-- `subcore.memory.facts`, `subcore.memory.fold`, `subcore.memory.compress`; `subcore.suggest`, `subcore.feedback`,
+- `subcore.memory.facts`, `subcore.memory.fold`, `subcore.memory.address`, `subcore.memory.cast`, `subcore.memory.compress`,
+  `subcore.translate.scope`; `subcore.suggest`, `subcore.feedback`,
   `subcore.research`, `subcore.golden`, `subcore.compare` and `subcore.judge`;
 - `subcore.cli`: the `subcore` command (`translate`, `bundle`, `render-prompt`, `validate`, `compare`); it knows no
   database, queue or HTTP. A bundle's `params.model` empty and `max_output_tokens` 0 mean "decided by the provider that runs

@@ -302,6 +302,14 @@ summary. Read from the source subtitle only, never from a translation, and store
 per source sha256 and extraction prompt version, so they do not depend on the order
 episodes are translated in.
 
+**Generic form of address** (P19b, `subcore.memory.address`):
+A word that says how one person addresses another ("Mom", "Dad", "Sir", "Honey"). It is relative, so it is never a character
+name or alias: reading the facts strips it (stored facts are not edited). _Avoid_: nickname, alias.
+
+**Cast** (P19b, bundle field `cast`):
+The names of the characters of one episode: the series' main cast (TMDB when known, else who the facts show in three or more
+episodes) plus the episode's own. It decides which forms of address the prompt lists; empty means unknown and every rule stays.
+
 **Story state @N**:
 The deterministic fold of the facts of every episode before episode N in story
 order: the characters, the latest relationship of each pair, the summaries of the

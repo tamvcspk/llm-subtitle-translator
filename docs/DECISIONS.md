@@ -51,3 +51,11 @@ Các ADR chi tiết nằm ở [docs/design/ARCHITECTURE.md](design/ARCHITECTURE.
 - Vì: đồng nhất tập mẫu giữa Bootstrap và `JobRequests.plan` xoá sạch độ lệch số và lỗi kẹt cứng; kích hoạt `AutoRequest.run()` ngay sau Confirm giúp người dùng thấy tức thì kết quả của hành động vừa trả giá thay vì nhảy số lặng lẽ sau 5 phút.
 - Đã loại: giữ hành vi chờ chu kỳ sync kế tiếp sau khi mở khoá; chỉ đặt `released = false` mà bắt người dùng vào Activity huỷ tay từng job trong hàng trăm job `policy`.
 - Giới hạn: các job `origin = policy` đã vào trạng thái `running` vẫn hoàn tất tập/batch đang dịch dở (chỉ huỷ `queued`/`waiting`, hoặc người dùng Stop riêng ở Activity).
+
+## D-07 · 2026-11-27 · Sửa thiết kế P19d sau phản biện đối chiếu code (thay một phần D-05)
+
+- Bối cảnh: phản biện chéo ([docs/design/REVIEW-P19-P20.md](design/REVIEW-P19-P20.md)) đối chiếu D-05 với code: (1) `jobs/enqueue.py` (luật D4) không cho policy xin lại tập có job kết thúc `failed` **hoặc `cancelled`**, nên `Hold again` huỷ job policy làm các tập đó không bao giờ được tự xin lại, và job của 2 tập bootstrap cũng bị huỷ thì series kẹt 0 job; (2) `policy_jobs_since` đếm cả job đã huỷ vào trần ngày; (3) `AutoRequest.run()` dùng khoá `acquire(blocking=False)` và quét mọi series, nên gọi trong request HTTP có thể trả 0 job im lặng hoặc chạy lâu; (4) `is_locked` trả `False` khi đã có đề xuất được quyết định và 0 `pending`, nên `Hold again` ở trạng thái đó không có tác dụng.
+- Chọn: job rút bởi `Hold again` kết thúc `cancelled` với lý do `bootstrap_hold`; D4 và trần ngày bỏ qua lý do này; không rút job của tập bootstrap `allowed`; `Hold again` chỉ hiện khi `relockable`; lượt policy ngay sau Confirm chỉ cho series đó, chạy nền, route trả `started`; pool bootstrap bỏ cả tập `failed`/`cancelled`.
+- Vì: giữ lịch sử job ở Activity (không xoá dòng), không đổi luật D4 cho việc admin tự huỷ, và mở khoá lại cho đúng các tập đã rút.
+- Đã loại: xoá hẳn dòng job (mất lịch sử, job `waiting` có thể đã có attempt); chỉ đặt `released = false` không rút job; chạy `run()` đồng bộ trong request.
+- Giới hạn: cần thêm chỗ lưu lý do kết thúc (cột hoặc trường có sẵn của `jobs`), kiểm khi code.

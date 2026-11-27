@@ -457,7 +457,7 @@ automatic policy), `"estimate_only": true`.
 
 With `estimate_only` nothing is made. The answer (and the real answer too) is
 `{"estimate_only", "mode", "estimate": {"jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at",
-"extract_calls", "extract_model"}, "planned_total", "translate_total", "retranslate_total", "planned": [...first 200 rows], "skipped_total", "skipped_by_reason": {"already requested": 2, ...},
+"extract_calls", "extract_model", "summarize_calls", "summarize_model"}, "planned_total", "translate_total", "retranslate_total", "planned": [...first 200 rows], "skipped_total", "skipped_by_reason": {"already requested": 2, ...},
 "skipped": [...first 200 rows]}`; a real request adds `"created": [job ids]`, `"count"` and `"merged"` (a replace
 request that turned an open `fill` job into the replacement). A row is `{"item_id", "title", "lang", "cues", "calls",
 "skip", "reason", "action"}` where `action` is `"translate"`, `"retranslate"` or `""` when skipped. `calls` is the planner's count of model calls to translate; repairs and splits add some.
@@ -466,7 +466,10 @@ planned one in story order, and the planned one, that has a source subtitle and 
 extraction prompt version, each counted once for the whole request, on `extract_model` (the `memory_model`; `""` when there
 are none); 0 when memory is off or the facts are there. `calls_left_today` is what `max_calls_per_day` still allows (null:
 no cap); `minutes` and `finish_at` use the average of recent calls over `calls + extract_calls` (null until a call was
-timed) and a spent quota (`paused_until`).
+timed) and a spent quota (`paused_until`). `summarize_calls` (P19c) is the calls that condense old story summaries (from the
+fourth old episode on; one per planned episode at most, none where the same summaries were condensed before), on
+`summarize_model` (`summarize_model`, else `memory_model`); both are absent or 0 when there are none, and they count in
+`minutes`.
 
 A request for something that already has an open job makes no second job (it lifts the first to the interactive
 class). The reasons an item is left out: `ignored by the admin`, `the source and the target language are the same`,
@@ -819,7 +822,9 @@ retranslates (FR-5.6). Errors are `{"error": "..."}` with `400` (a payload the g
 
 A suggestion has an `id`, its series and language, a `kind`, a `source`, the `payload` it would write, its `evidence` and `sources`, a `status` and what was decided about it (`auto_accepted`, `decided_at`, `undoable`, `edited`):
 
-- `kind` is `term` (`payload` is a glossary term: `source`, `target`, optional `aliases`, `locked`, `note`, `from`, `until`),
+- `kind` is `term` (`payload` is a glossary term: `source`, `target`, optional `aliases`, `locked`, `note`, `from`, `until`; a glossary
+  character in a document has `name`, `target`, `gender`, `description` and, since P19b, optional `aliases`: other names of the
+  same person, never a form of address like "Mom"),
   `address_rule` (`a`, `b`, `a_to_b`, `b_to_a`, `from`, `until`, `note`) or `character` (`name`, `target`, `gender`,
   `description`, and optionally the character's voice as `card`, a character card, whose name is the character's).
 - `source` is `facts`, `memory`, `feedback` or `research`. `evidence` is a list of what shows why (a cue with its

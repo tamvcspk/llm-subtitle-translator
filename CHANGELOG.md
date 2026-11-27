@@ -1,5 +1,15 @@
 # Unreleased
 
+- **P19b/P19c: clean characters and a shorter, consistent translation prompt (in progress).**
+  - *Characters:* "Mom", "Dad", "Sir" and the like are no longer character names or aliases (`subcore.memory.address`, read-time, stored
+    facts untouched, so no translation turns stale and nothing is extracted again); an entry that declares another as its alias merges
+    inside one episode (`Mom (aka Lois)` + `Lois` is one Lois, `Ida (aka Mom)` stays Ida). Extraction prompt `x4` asks for proper
+    names and `senior: <name>|equal`; `x3` facts are still read (`FACTS_VERSIONS`). Glossary characters take `aliases`.
+  - *Prompt (`p19-1`, bundle version 3):* the bundle carries the episode's `cast` (TMDB `aggregate_credits` and `guest_stars` through
+    `Metadata.cast`, else the facts); a form-of-address rule is listed only when both people are in it, a pair the glossary has a rule
+    for is not printed again in *Relationship state* or in a character voice, and old story summaries are condensed from the fourth on.
+    The Estimate box counts the new condensing calls (`summarize_calls`).
+
 ## 1.0.0-rc.2 (2026-11-25)
 Second release candidate: Phase 18 (P18a–P18f) UX round 1–2 fixes, disk I/O reduction, pair-level address proposals with hysteresis, and P18 code review fixes (R18-1..R18-10).
 
