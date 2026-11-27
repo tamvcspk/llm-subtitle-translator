@@ -3,7 +3,7 @@
 import unittest
 
 from subserver.adapters.http import MemoryCache
-from subserver.domain.ports import Metadata
+from subserver.domain.ports import Cast, Metadata
 from subserver.adapters.tmdb import TmdbMetadata
 
 MOVIE_JOB = {"media_type": "movie", "video_path": "/media/The.Matrix.(1999).{tmdb-603}.mkv", "subtitle_path": "x"}
@@ -18,6 +18,9 @@ class InMemoryMetadata:
         if job.get("media_type") == "movie" and "{tmdb-603}" in job.get("video_path", ""):
             return EXPECTED
         return ""
+
+    def cast(self, job):
+        return Cast()
 
     def genres(self, job):
         if job.get("media_type") == "movie" and "{tmdb-603}" in job.get("video_path", ""):
@@ -57,6 +60,11 @@ class MetadataContract:
         """FR-18.4: the genres a style preset is suggested from."""
         self.assertEqual(self.repo.genres(MOVIE_JOB), ("Sci-Fi",))
         self.assertEqual(self.repo.genres({"media_type": "movie", "video_path": "/media/Unknown.mkv"}), ())
+
+
+    def test_a_movie_or_an_unknown_item_has_no_cast_and_it_is_never_an_error(self):
+        self.assertEqual(self.repo.cast(MOVIE_JOB), Cast())
+        self.assertEqual(self.repo.cast({"media_type": "movie", "video_path": "/media/Unknown.mkv"}), Cast())
 
 
 class InMemoryMetadataTests(MetadataContract, unittest.TestCase):

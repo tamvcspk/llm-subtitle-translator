@@ -20,7 +20,7 @@ from ..domain.config import DEFAULT_MODEL
 from ..domain.gather import gather
 from ..services.library import Library
 from ..services.memory import StoryMemory
-from ..domain.ports import ProviderFactory, Telemetry, Unit
+from ..domain.ports import Cast, ProviderFactory, Telemetry, Unit
 from .provider_guard import JobProviders, int_setting, mapped_errors, prompt_version_of
 from ..services.proposals import FactsProposer
 from ..adapters.store import Store
@@ -99,10 +99,13 @@ class TranslationAttempt:
         description: str,
         settings: dict[str, Any],
         on_progress: Callable[[int, int], None] | None = None,
+        cast: Cast | None = None,
     ) -> str:
+        """``cast`` is the character list an outside source (TMDB) gave for the item, names only; it is optional and
+        only narrows the prompt (FR-5.11)."""
         after = _AfterRun()
         try:
-            result = self._run(job, description, settings, on_progress, after)
+            result = self._run(job, description, settings, on_progress, after, cast)
         except (ContextGapError, HardJobError):
             # The provider is well and the facts were paid for: look for proposals in them all the same.
             self._propose(job, settings, after)
@@ -124,6 +127,7 @@ class TranslationAttempt:
         settings: dict[str, Any],
         on_progress: Callable[[int, int], None] | None,
         after: "_AfterRun",
+        cast: Cast | None = None,
     ) -> str:
         source = Path(str(job["subtitle_path"]))
         target_code = str(job.get("target_code") or "vi")
@@ -192,7 +196,7 @@ class TranslationAttempt:
         plan = None
         if self.memory is not None and unit is not None and self.memory.enabled_for(unit, settings):
             with mapped_errors(settings):
-                plan = self.memory.plan(unit, job, settings, provider_for, extracted=after.extracted)
+                plan = self.memory.plan(unit, job, settings, provider_for, extracted=after.extracted, cast=cast)
         ctx_hash = context_hash(model, target_code, description, temperature, rules.hash, plan.fingerprint if plan else "")
         published = dict(
             trigger=trigger, source_path=str(source), source_sha256=source_sha,
@@ -284,6 +288,7 @@ class TranslationAttempt:
                 target_name=str(job.get("target_language") or ""),
                 source_code=str(job.get("source_code") or ""),
                 extra_sections=[(redact(title, settings), redact(body, settings)) for title, body in (plan.sections if plan else [])],
+                cast=plan.cast if plan else [],
                 model=str(getattr(provider, "model", "") or ""),
                 max_output_tokens=provider.caps.max_output_tokens,
                 temperature=temperature,

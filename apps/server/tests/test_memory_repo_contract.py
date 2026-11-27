@@ -83,6 +83,25 @@ class MemoryRepoContract:
         self.assertEqual(self.repo.latest_facts([second], PV), {})
         self.assertEqual(set(self.repo.latest_facts([second], "old")), {second})
 
+    def test_several_versions_prefer_the_first_one_stored(self):
+        """P19b: facts of the older prompt are read where the newer one has none (``FACTS_VERSIONS``)."""
+        both, only_old = self.unit(), self.unit()
+        self.repo.save_facts(both, "a", "x3", model="m", facts=facts("old"))
+        time.sleep(0.02)
+        self.repo.save_facts(both, "a", "x4", model="m", facts=facts("new"))
+        time.sleep(0.02)
+        self.repo.save_facts(only_old, "b", "x3", model="m", facts=facts("only old"))
+        self.assertEqual(self.repo.get_facts(both, "a", ("x4", "x3")).prompt_version, "x4")
+        self.assertEqual(self.repo.get_facts(both, "a", ("x3", "x4")).prompt_version, "x3")
+        self.assertEqual(self.repo.get_facts(only_old, "b", ("x4", "x3")).prompt_version, "x3")
+        self.assertIsNone(self.repo.get_facts(only_old, "b", ("x4",)))
+        got = self.repo.latest_facts([both, only_old], ("x4", "x3"))
+        self.assertEqual({uid: row.prompt_version for uid, row in got.items()}, {both: "x4", only_old: "x3"})
+        self.repo.get_facts(both, "a", "x3", touch=True)  # the older row used last does not outrank the newer version
+        self.assertEqual(self.repo.latest_facts([both], ("x4", "x3"))[both].prompt_version, "x4")
+        self.assertEqual(self.repo.latest_facts([both], ("x3",))[both].prompt_version, "x3")
+        self.assertEqual(self.repo.latest_facts([both], ()), {})
+
     def test_summaries_are_cached_by_input_hash(self):
         series = self.series()
         self.repo.put_summary(series, 7, "h1", "the arc so far")

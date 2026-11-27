@@ -19,13 +19,14 @@ function cleanAddress(rule: GlossaryAddress): GlossaryAddress {
 export function cleanCharacter(character: GlossaryCharacter): GlossaryCharacter {
   const out: GlossaryCharacter = { name: text(character.name) };
   for (const key of ["target", "gender", "description"] as const) if (text(character[key])) out[key] = text(character[key]);
+  if (character.aliases && character.aliases.length > 0) out.aliases = character.aliases; // not edited here yet: kept as stored
   return out;
 }
 
 /** A row the admin added and has not filled in: it is not sent (the worker would refuse it) and does not count as a change. */
 const blankTerm = (term: GlossaryTerm) => Object.values(cleanTerm(term)).every((value) => value === "" || (Array.isArray(value) && value.length === 0));
 const blankAddress = (rule: GlossaryAddress) => Object.keys(cleanAddress(rule)).every((key) => text(rule[key as keyof GlossaryAddress]) === "");
-const blankCharacter = (character: GlossaryCharacter) => Object.keys(cleanCharacter(character)).every((key) => text(character[key as keyof GlossaryCharacter]) === "");
+const blankCharacter = (character: GlossaryCharacter) => Object.values(cleanCharacter(character)).every((value) => value === "" || (Array.isArray(value) && value.length === 0));
 
 /** What would be stored: blank text trimmed away, empty rows and empty lists left out. Fields the form does not edit stay. */
 export function cleanDoc(doc: GlossaryDoc): GlossaryDoc {

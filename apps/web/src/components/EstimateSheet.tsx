@@ -29,6 +29,12 @@ export function estimateLines(estimate: Estimate): Array<[string, string]> {
     const model = estimate.extract_model ? ` · ${estimate.extract_model}` : "";
     lines.push(["Extract facts", `${estimate.extract_calls.toLocaleString()} ${estimate.extract_calls === 1 ? "call" : "calls"}${model}`]);
   }
+  // Condensing the old story summaries is memory work too (FR-5.8): its own row, on its own model.
+  const condensing = estimate.summarize_calls ?? 0;
+  if (condensing > 0) {
+    const model = estimate.summarize_model ? ` · ${estimate.summarize_model}` : "";
+    lines.push(["Condense story", `${condensing.toLocaleString()} ${condensing === 1 ? "call" : "calls"}${model}`]);
+  }
   if (estimate.calls_left_today !== null) lines.push(["Calls left today", estimate.calls_left_today.toLocaleString()]);
   if (estimate.paused_until !== null) lines.push(["Paused until", clock(estimate.paused_until)]);
   if (estimate.minutes !== null) {

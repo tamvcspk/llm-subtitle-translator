@@ -190,9 +190,22 @@ class MediaLibrary(Protocol):
         """Ask the library to rescan the item's subtitles. Raises when it cannot be reached."""
 
 
+@dataclass(frozen=True)
+class Cast:
+    """The characters an outside list (TMDB) gives for the item of a job: ``main`` is ``(name, episodes)`` of the
+    series' main cast, most episodes first, and ``guests`` the names of the episode's guest roles. Names only (the
+    engine learns nothing of TMDB); both empty when there is no key, no match or the lookup failed."""
+
+    main: tuple[tuple[str, int], ...] = ()
+    guests: tuple[str, ...] = ()
+
+
 @runtime_checkable
 class Metadata(Protocol):
     """Descriptive text about the item of a job (TMDB), prepended to the prompt as context. Empty when unknown."""
+
+    def cast(self, job: dict[str, Any]) -> Cast:
+        """The character names of the job's item and episode (0 model calls); empty ``Cast`` when unknown."""
 
     def description(self, job: dict[str, Any]) -> str:
         """The description for the job's item; ``""`` when there is no key, no match, or the lookup failed."""

@@ -20,6 +20,7 @@ from ..providers.base import BadOutput, LLMRequest, Provider
 
 __all__ = [
     "EXTRACT_PROMPT_VERSION",
+    "FACTS_VERSIONS",
     "FACTS_SCHEMA",
     "HIERARCHY",
     "INTIMACY_MAX",
@@ -38,7 +39,12 @@ __all__ = [
 # and translations made from them are flagged stale (FR-5.5).
 # x2: fiancés and spouses are `romantic` (x1 called them `family` on real episodes).
 # x3: events carry `detail` ("mother and son"), since `family` alone hides parent / sibling / in-law.
-EXTRACT_PROMPT_VERSION = "x3"
+# x4 (P19b): `characters` and events use proper names, never forms of address ("Mom", "Sir"); `senior` names the
+#     senior person (or "equal") instead of `a_above`/`b_above`, which the model kept swapping.
+EXTRACT_PROMPT_VERSION = "x4"
+# Facts stored under any of these versions are read, newest preference first: moving to x4 must not pull every
+# episode through extraction again (FR-5.9.3, "no spend without a decision"). Only new extractions write x4.
+FACTS_VERSIONS = ("x4", "x3")
 
 RELATIONS = ("romantic", "family", "friend", "rival", "enemy", "professional", "stranger")
 HIERARCHY = ("a_above", "equal", "b_above")
@@ -78,7 +84,7 @@ FACTS_SCHEMA: dict[str, Any] = {
                     "b": {"type": "string"},
                     "relation": {"type": "string", "enum": list(RELATIONS)},
                     "intimacy": {"type": "integer"},
-                    "hierarchy": {"type": "string", "enum": list(HIERARCHY)},
+                    "senior": {"type": "string"},
                     "cue": {"type": "integer"},
                     "evidence": {"type": "string"},
                     "confidence": {"type": "number"},
@@ -107,6 +113,20 @@ class FactsError(ValueError):
 
 def _text(value: Any, limit: int = 200) -> str:
     return " ".join(str(value).split())[:limit] if isinstance(value, (str, int, float)) else ""
+
+
+def _hierarchy(raw: dict[str, Any], a: str, b: str) -> str:
+    """``a_above`` | ``equal`` | ``b_above`` from an event: ``senior`` (x4: a name, or "equal") when given, else the
+    older ``hierarchy`` (x3). Stored facts keep the three-way form, so ``Facts.hash`` does not change."""
+    senior = _text(raw.get("senior"), 80).casefold()
+    if senior:
+        if senior == a.casefold():
+            return "a_above"
+        if senior == b.casefold():
+            return "b_above"
+        return "equal"
+    old = _text(raw.get("hierarchy"), 12).lower()
+    return old if old in HIERARCHY else "equal"
 
 
 @dataclass(frozen=True)
@@ -217,9 +237,9 @@ class Facts:
                 confidence = max(0.0, min(1.0, float(raw.get("confidence", 0.5))))
             except (TypeError, ValueError):
                 confidence = 0.5
-            hierarchy = _text(raw.get("hierarchy"), 12).lower()
+            hierarchy = _hierarchy(raw, a, b)
             events.append(RelationshipEvent(
-                a, b, relation, cue, intimacy, hierarchy if hierarchy in HIERARCHY else "equal",
+                a, b, relation, cue, intimacy, hierarchy,
                 _text(raw.get("evidence"), _MAX_EVIDENCE), round(confidence, 2), _text(raw.get("detail"), 60),
             ))
         terms: list[FactTerm] = []
@@ -247,9 +267,11 @@ You read the subtitles of ONE episode (or film) of a story and report, as struct
 dialogue shows about it. Subtitles carry no speaker names, so only report what the lines make clear.
 
 Report:
-- characters: every named character who speaks or is spoken about. Use the most common spelling as
-  `name`; put other names, nicknames and titles for the same person in `aliases`. gender is f, m, other
-  or unknown. age_hint is a rough label such as "teen", "20s", "middle-aged", "elderly". role is a few
+- characters: every named character who speaks or is spoken about. `name` is a proper name, the most
+  common spelling; never a form of address ("Mom", "Dad", "Sir", "Honey", "Coach"): those are relative, since
+  one person's "Mom" is another's "Lois". Put other proper names and nicknames of the same person in
+  `aliases`, never a form of address. A person known only as "Mom" or "the Principal" is left out.
+  gender is f, m, other or unknown. age_hint is a rough label such as "teen", "20s", "middle-aged", "elderly". role is a few
   words ("the lead", "Alice's mother", "the villain").
 - relationship_events: moments where the dialogue shows how two characters stand to each other. One
   event per change of state; do not repeat an unchanged relationship. `cue` is the item number (`i`)
@@ -258,9 +280,9 @@ Report:
   spouse is romantic, never family). detail names the exact relationship in a few words, `a` first
   ("mother and son", "husband and wife", "older sister and younger brother", "boss and subordinate",
   "ex-girlfriend"). intimacy is 0 (hostile or distant)
-  to 5 (very close). hierarchy is a_above, equal or b_above (who holds authority or seniority over
-  whom, `a` and `b` as written in the event). `evidence` is a short quote copied from that item.
-  confidence is 0..1; use low values when the dialogue only hints at it.
+  to 5 (very close). senior is the name (exactly as in `a` or `b`) of the one who holds authority or
+  seniority over the other, or "equal". `a` and `b` are proper names, never forms of address. `evidence`
+  is a short quote copied from that item. confidence is 0..1; use low values when the dialogue only hints at it.
 - terms: proper names of places, organisations, objects and invented terms a translator must keep
   consistent (not the characters' own names).
 - summary: what happens in this episode, in English, at most 150 words, spoilers included.

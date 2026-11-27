@@ -31,6 +31,13 @@ describe("glossary document", () => {
     });
   });
 
+  it("keeps the aliases of a character the form does not edit, and still drops a blank character", () => {
+    const doc = cleanDoc({
+      characters: [{ name: " Caroline Miller ", aliases: ["Carolyn Miller"] }, { name: "", aliases: [] }, { name: "" }],
+    });
+    expect(doc).toEqual({ characters: [{ name: "Caroline Miller", aliases: ["Carolyn Miller"] }] });
+  });
+
   it("does not count an added row nobody filled in as a change, and does count a filled one", () => {
     const stored = { version: 1, terms: [{ source: "A", target: "B" }] };
     expect(sameDoc({ ...stored, terms: [...stored.terms, { source: "", target: "" }] }, stored)).toBe(true);

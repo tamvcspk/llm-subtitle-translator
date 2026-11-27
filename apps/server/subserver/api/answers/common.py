@@ -33,6 +33,10 @@ class Estimate(Answer):
     """Story-fact reads the jobs would run first (memory on, an episode before the one translated with no facts yet), each episode once for the whole request; 0 when memory is off or the facts are there. Counted apart from ``calls``."""
     extract_model: str
     """The model those reads use (``memory_model``), empty when ``extract_calls`` is 0."""
+    summarize_calls: int = 0
+    """Calls that condense the old story summaries (memory on, more old episodes than the recent ones kept in full), counted apart from ``calls``; 0 when none."""
+    summarize_model: str = ""
+    """The model those calls use (``summarize_model``, else ``memory_model``), empty when ``summarize_calls`` is 0."""
 
 
 class PlannedRow(Answer):

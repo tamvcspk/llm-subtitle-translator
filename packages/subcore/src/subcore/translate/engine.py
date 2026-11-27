@@ -176,6 +176,7 @@ def make_bundle(
         active_rules=active,
         style=ctx.style,
         voices=tuple(ctx.voices),
+        cast=tuple(dict.fromkeys(str(n).strip() for n in ctx.cast if str(n).strip())),
         sections=tuple((str(t), str(b)) for t, b in ctx.extra_sections),
         few_shot=tuple((str(s), str(t)) for s, t in ctx.few_shot),
         requested=None if only is None else tuple(sorted({int(n) for n in only})),

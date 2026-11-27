@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from subcore.memory import Facts
 
@@ -21,18 +21,28 @@ def _facts_from_row(row: sqlite3.Row) -> StoredFacts:
     )
 
 
+def _versions(prompt_version: str | Sequence[str]) -> tuple[str, ...]:
+    return (prompt_version,) if isinstance(prompt_version, str) else tuple(prompt_version)
+
+
 class MemoryRepo(Repo):
     """Story memory: facts, summaries and snapshots (P4)."""
 
     def get_facts(
-        self, unit_id: int, source_sha256: str, prompt_version: str, *, touch: bool = False
+        self, unit_id: int, source_sha256: str, prompt_version: str | Sequence[str], *, touch: bool = False
     ) -> StoredFacts | None:
-        """Stored facts for exactly this source and prompt version. ``touch`` marks them as the newest in use."""
+        """Stored facts for exactly this source and prompt version. ``touch`` marks them as the newest in use.
+
+        ``prompt_version`` may list several versions, preferred first (``FACTS_VERSIONS``): the first one stored wins."""
         with self._lock:
-            row = self._db.execute(
-                "SELECT * FROM facts WHERE unit_id = ? AND source_sha256 = ? AND prompt_version = ?",
-                (unit_id, source_sha256, prompt_version),
-            ).fetchone()
+            row = None
+            for version in _versions(prompt_version):
+                row = self._db.execute(
+                    "SELECT * FROM facts WHERE unit_id = ? AND source_sha256 = ? AND prompt_version = ?",
+                    (unit_id, source_sha256, version),
+                ).fetchone()
+                if row is not None:
+                    break
             if row is not None and touch:
                 self._db.execute("UPDATE facts SET created_at = ? WHERE id = ?", (time.time(), row["id"]))
         return _facts_from_row(row) if row else None
@@ -52,18 +62,29 @@ class MemoryRepo(Repo):
                  facts.hash, tokens_in, tokens_out, time.time()),
             )
 
-    def latest_facts(self, unit_ids: Iterable[int], prompt_version: str) -> dict[int, StoredFacts]:
-        """The facts most recently saved or used for each unit under ``prompt_version``."""
+    def latest_facts(self, unit_ids: Iterable[int], prompt_version: str | Sequence[str]) -> dict[int, StoredFacts]:
+        """The facts most recently saved or used for each unit under ``prompt_version``.
+
+        With several versions (preferred first) a unit takes its newest facts under the most preferred version it has
+        any under: facts of an older version are only read where the newer one has none."""
         ids = list(unit_ids)
-        if not ids:
+        versions = _versions(prompt_version)
+        if not ids or not versions:
             return {}
         marks = ",".join("?" * len(ids))
+        vmarks = ",".join("?" * len(versions))
         with self._lock:
             rows = self._db.execute(
-                f"SELECT * FROM facts WHERE prompt_version = ? AND unit_id IN ({marks}) ORDER BY created_at, id",
-                (prompt_version, *ids),
+                f"SELECT * FROM facts WHERE prompt_version IN ({vmarks}) AND unit_id IN ({marks}) ORDER BY created_at, id",
+                (*versions, *ids),
             ).fetchall()
-        return {int(row["unit_id"]): _facts_from_row(row) for row in rows}  # later rows overwrite earlier ones
+        rank = {version: n for n, version in enumerate(versions)}
+        best: dict[int, sqlite3.Row] = {}
+        for row in rows:  # later rows overwrite earlier ones, unless an earlier one is of a more preferred version
+            held = best.get(int(row["unit_id"]))
+            if held is None or rank[row["prompt_version"]] <= rank[held["prompt_version"]]:
+                best[int(row["unit_id"])] = row
+        return {uid: _facts_from_row(row) for uid, row in best.items()}
 
     def get_summary(self, input_hash: str) -> str | None:
         with self._lock:

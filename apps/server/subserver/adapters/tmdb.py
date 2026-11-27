@@ -4,6 +4,9 @@ import logging
 import re
 from typing import Any, Callable
 
+from subcore.memory import clean_cast_name
+
+from ..domain.ports import Cast
 from .http import HTTPClient, MemoryCache, cached_get_json, first_data
 
 
@@ -77,6 +80,14 @@ class TmdbMetadata:
         )
 
 
+    def cast(self, job: dict[str, Any]) -> Cast:
+        settings = self._settings()
+        return build_tmdb_cast(
+            job, bazarr=self.http, tmdb=self.http, bazarr_url=str(settings.get("bazarr_url") or ""),
+            bazarr_api_key=str(settings.get("bazarr_api_key") or ""), tmdb_api_key=str(settings.get("tmdb_api_key") or ""),
+            cache=self.cache,
+        )
+
     def genres(self, job: dict[str, Any]) -> tuple[str, ...]:
         settings = self._settings()
         return build_tmdb_genres(
@@ -84,6 +95,71 @@ class TmdbMetadata:
             bazarr_api_key=str(settings.get("bazarr_api_key") or ""), tmdb_api_key=str(settings.get("tmdb_api_key") or ""),
             cache=self.cache,
         )
+
+
+def _characters(entry: dict[str, Any]) -> list[str]:
+    """The character names of one cast entry: an aggregate credit has ``roles``, an episode's guest star ``character``."""
+    names = [str(r.get("character") or "") for r in entry.get("roles") or [] if isinstance(r, dict)]
+    names.append(str(entry.get("character") or ""))
+    out: list[str] = []
+    for raw in names:
+        for part in raw.split("/"):  # "Mom / Lois" is two roles in one string
+            name = clean_cast_name(part)
+            if name and name not in out:
+                out.append(name)
+    return out
+
+
+def build_tmdb_cast(
+    job: dict[str, Any], bazarr: HTTPClient, tmdb: HTTPClient, bazarr_url: str, bazarr_api_key: str, tmdb_api_key: str,
+    cache: MemoryCache, main_limit: int = 20,
+) -> Cast:
+    """The character names TMDB lists for a series and one of its episodes (P19b, FR-5.9.4): the main cast with the
+    number of episodes each is in (``/tv/{id}/aggregate_credits``) and the episode's guest stars. Empty when there is no
+    key, no match, or the lookup failed: a cast list only narrows the prompt and is never an error. A movie has none."""
+    if not tmdb_api_key or job.get("media_type") != "series":
+        return Cast()
+    try:
+        headers = {"X-API-KEY": bazarr_api_key}
+        series = first_data(bazarr.get_json(
+            f"{bazarr_url}/api/series", params={"seriesid[]": str(job.get("series_id", ""))}, headers=headers,
+        ))
+        tv_id = tmdb_find_tv_id(series, tmdb, tmdb_api_key, cache)
+        if not tv_id:
+            return Cast()
+        credits = cached_get_json(
+            cache, tmdb, f"{TMDB_BASE_URL}/tv/{tv_id}/aggregate_credits", {"api_key": tmdb_api_key, "language": "en-US"},
+        )
+        ranked: list[tuple[int, int, str]] = []
+        for order, entry in enumerate(credits.get("cast", []) if isinstance(credits, dict) else []):
+            if not isinstance(entry, dict):
+                continue
+            episodes = int(entry.get("total_episode_count") or max((int(r.get("episode_count") or 0) for r in entry.get("roles") or [] if isinstance(r, dict)), default=0))
+            for name in _characters(entry):
+                ranked.append((-episodes, order, name))
+        seen: set[str] = set()
+        main: list[tuple[str, int]] = []
+        for neg, _, name in sorted(ranked):
+            if name.casefold() not in seen:
+                seen.add(name.casefold())
+                main.append((name, -neg))
+        episode = first_data(bazarr.get_json(
+            f"{bazarr_url}/api/episodes", params={"episodeid[]": str(job.get("media_id", ""))}, headers=headers,
+        ))
+        guests: list[str] = []
+        season, number = int(episode.get("season") or 0), int(episode.get("episode") or 0)
+        if season and number:
+            detail = cached_get_json(
+                cache, tmdb, f"{TMDB_BASE_URL}/tv/{tv_id}/season/{season}/episode/{number}",
+                {"api_key": tmdb_api_key, "language": "en-US"},
+            )
+            for entry in detail.get("guest_stars", []) if isinstance(detail, dict) else []:
+                if isinstance(entry, dict):
+                    guests.extend(n for n in _characters(entry) if n not in guests)
+        return Cast(tuple(main[:main_limit]), tuple(guests))
+    except Exception:  # noqa: BLE001
+        logging.exception("Could not read the TMDB cast for %s", job.get("series_id") or job.get("video_path"))
+        return Cast()
 
 
 def build_tmdb_genres(

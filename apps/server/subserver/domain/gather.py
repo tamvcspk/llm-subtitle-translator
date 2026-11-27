@@ -36,6 +36,7 @@ def gather(
     keep: dict[int, str] | None,
     few_shot: Iterable[tuple[str, str]] = (),
     glossary_filter_threshold: int = 50,
+    cast: Iterable[str] = (),
 ) -> TranslationBundle:
     """The bundle of one attempt. ``extra_sections`` are the story memory's sections (corrections come from ``rules``,
     and so do the effective style and the voices of the characters the dialogue names)."""
@@ -54,6 +55,7 @@ def gather(
         few_shot=list(few_shot),
         style=rules.style,
         voices=list(rules.voices),
+        cast=list(cast),
     )
     return make_bundle(
         cues,

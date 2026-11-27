@@ -544,12 +544,14 @@ class GlossaryTerm(Answer):
 
 
 class GlossaryCharacter(Answer):
-    """The Name of a character: the translated name, gender and a short description."""
+    """The Name of a character: the translated name, gender and a short description. ``aliases`` are other names the
+    source calls the same person (never a form of address like "Mom")."""
 
     name: str
     target: str = maybe()
     gender: str = maybe()
     description: str = maybe()
+    aliases: list[str] = maybe()
 
 
 class GlossaryAddress(Answer):

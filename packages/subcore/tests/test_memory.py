@@ -230,6 +230,23 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(context.compressed, "")
         self.assertIn("S01E01: summary 1", context.sections[0][1])
 
+    def test_more_than_the_recent_episodes_condense_the_old_ones_before_the_budget_runs_out(self):
+        """P19c, FR-5.8: from the fourth old episode on, the old ones are condensed whatever the budget says."""
+        seen = []
+        enough = build_context(self.units(6), None, compress=lambda entries: seen.append(entries) or "ARC")  # 3 old
+        self.assertEqual((seen, enough.compressed), ([], ""))
+        context = build_context(self.units(7), None, compress=lambda entries: seen.append([n for n, _ in entries]) or "ARC")
+        self.assertEqual(seen, [["S01E01", "S01E02", "S01E03", "S01E04"]])
+        self.assertEqual(context.compressed, "model")
+        story = context.sections[0][1]
+        self.assertIn("ARC", story)
+        self.assertIn("S01E05: summary 5", story)  # the three recent ones are kept in full
+        self.assertNotIn("S01E02: summary 2", story)
+
+    def test_without_a_compressor_the_old_ones_are_cut_to_their_first_sentence_from_the_fourth_on(self):
+        context = build_context(self.units(8), None)
+        self.assertEqual(context.compressed, "truncated")
+
     def test_over_budget_old_summaries_are_condensed_and_recent_ones_kept(self):
         long = lambda i: f"episode {i} " + "word " * 300  # noqa: E731
         seen = []

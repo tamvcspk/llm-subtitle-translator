@@ -1833,6 +1833,7 @@ export interface components {
             target?: string;
             gender?: string;
             description?: string;
+            aliases?: string[];
             card?: components["schemas"]["CharacterCard"];
         };
         CharacterSaved: {
@@ -2085,6 +2086,10 @@ export interface components {
             extract_calls: number;
             /** @description The model those reads use (``memory_model``), empty when ``extract_calls`` is 0. */
             extract_model: string;
+            /** @description Calls that condense the old story summaries (memory on, more old episodes than the recent ones kept in full), counted apart from ``calls``; 0 when none. */
+            summarize_calls?: number;
+            /** @description The model those calls use (``summarize_model``, else ``memory_model``), empty when ``summarize_calls`` is 0. */
+            summarize_model?: string;
         };
         /**
          * EstimateBody
@@ -2215,12 +2220,16 @@ export interface components {
             version: number;
             stale_units: number;
         };
-        /** @description The Name of a character: the translated name, gender and a short description. */
+        /**
+         * @description The Name of a character: the translated name, gender and a short description. ``aliases`` are other names the
+         *     source calls the same person (never a form of address like "Mom").
+         */
         GlossaryCharacter: {
             name: string;
             target?: string;
             gender?: string;
             description?: string;
+            aliases?: string[];
         };
         GlossaryCopy: {
             stale_now: number;

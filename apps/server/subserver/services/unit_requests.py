@@ -25,21 +25,26 @@ RETRY_ROWS_SHOWN = 200  # like a bulk request: the first rows are named, the res
 
 
 class RequestsMixin:
-    def _extract_calls(self, units: list[Unit]) -> int:
+    def _memory_calls(self, units: list[Unit]) -> tuple[int, int]:
         """Story-fact reads that translating these episodes would run first (P15g, FR-15.5.1): what the job's own memory
         step makes sure of (each earlier episode with no facts yet, and the episode itself), once for the whole request.
-        Nothing is called; 0 when memory is off or the facts are there."""
+        Also the calls that condense old summaries (P19c). Nothing is called; 0 when memory is off or the facts are there."""
         if self.memory is None:
-            return 0
+            return 0, 0
         by_series: dict[int, list[Unit]] = {}
         for unit in units:
             if unit.series_id is not None:
                 by_series.setdefault(unit.series_id, []).append(unit)
         settings = self._settings()
-        return sum(
-            len(self.memory.extract_needed(wanted, self.catalog.list_units(series_id), self.catalog.get_series(series_id), settings))
-            for series_id, wanted in by_series.items()
-        )
+        extract = condense = 0
+        for series_id, wanted in by_series.items():
+            known, series = self.catalog.list_units(series_id), self.catalog.get_series(series_id)
+            extract += len(self.memory.extract_needed(wanted, known, series, settings))
+            condense += self.memory.summarize_needed(wanted, known, series, settings)
+        return extract, condense
+
+    def _extract_calls(self, units: list[Unit]) -> int:
+        return self._memory_calls(units)[0]
 
     def request_prerequisites(self, job_id: str, *, estimate_only: bool = False) -> dict[str, Any]:
         """The "request that episode" button of a job that waits for story facts: queue the earlier episodes it
@@ -83,7 +88,7 @@ class RequestsMixin:
             requested.extend(made)
         if estimate_only:
             estimate = self.estimator.of(
-                len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned), self._extract_calls(planned_units),
+                len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned), *self._memory_calls(planned_units),
             )
             return {"estimate_only": True, "estimate": asdict(estimate), "planned_total": len(planned), "planned": planned,
                     "skipped_total": len(unavailable), "skipped_by_reason": {"no source subtitle": len(unavailable)} if unavailable else {},

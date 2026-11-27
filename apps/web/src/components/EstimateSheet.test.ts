@@ -32,6 +32,19 @@ describe("estimateLines", () => {
   });
 });
 
+describe("estimateLines, condensing the story", () => {
+  it("has a row for the calls that condense old summaries, after the extract row", () => {
+    const lines = estimateLines({ ...base, extract_calls: 2, extract_model: "lite", summarize_calls: 4, summarize_model: "lite-2" });
+    expect(lines.map(([label]) => label)).toEqual(["Jobs", "Cues", "Model calls (est.)", "Extract facts", "Condense story"]);
+    expect(lines[4]).toEqual(["Condense story", "4 calls · lite-2"]);
+    expect(estimateLines({ ...base, summarize_calls: 1 })[3]).toEqual(["Condense story", "1 call"]);
+  });
+
+  it("has no such row when an older answer does not carry the count", () => {
+    expect(labels({ ...base, summarize_calls: undefined })).toEqual(["Jobs", "Cues", "Model calls (est.)"]);
+  });
+});
+
 describe("planBreakdown", () => {
   it("lists new translations and retranslations with reasons for mode=auto", () => {
     const lines = planBreakdown(

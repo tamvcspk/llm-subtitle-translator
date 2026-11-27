@@ -94,6 +94,7 @@ def process_job(
     if not job.get("unit_id"):
         enrich_job_identity(job, media)
     description = metadata.description(job)
+    cast = metadata.cast(job) if hasattr(metadata, "cast") else None  # a port older than P19 has none: every rule stays
     if status_callback:
         status_callback("Sending subtitle batches to Gemini")
     # The queue picks primary or fallback per attempt; the configured model is the default.
@@ -103,7 +104,7 @@ def process_job(
         if status_callback:
             status_callback(f"Translating {done}/{total} cues", progress_done=done, progress_total=total)
 
-    status = (attempt or DEFAULT_ATTEMPT).run(job, description, settings, on_progress=report_progress)
+    status = (attempt or DEFAULT_ATTEMPT).run(job, description, settings, on_progress=report_progress, cast=cast)
     if job.get("trigger") == "variant":
         return status  # nothing went on disk: Bazarr has nothing to rescan
     if status_callback:

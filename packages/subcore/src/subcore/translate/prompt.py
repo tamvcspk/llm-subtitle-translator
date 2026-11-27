@@ -17,7 +17,9 @@ from typing import TYPE_CHECKING, Any, Iterable
 
 from .. import matching
 from ..glossary import ActiveRule, Glossary, Term
+from ..memory.fold import RELATIONSHIP_TITLE, drop_pairs
 from ..style import CharacterCard, Style, render_style, render_voices
+from .scope import ruled_pairs, scoped_rules, without_ruled_addresses
 
 if TYPE_CHECKING:  # the bundle reads nothing from here at run time; the prompt renders a bundle
     from ..bundle import TranslationBundle
@@ -33,7 +35,10 @@ __all__ = [
 ]
 
 # Bump when the prompt text or the way it is assembled changes (it is part of every bundle hash, NFR-3).
-PROMPT_VERSION = "p12-1"  # p12-1: the effective style and the character voices (FR-18) joined the system prompt
+# p12-1: the effective style and the character voices (FR-18) joined the system prompt.
+# p19-1: forms of address only for the people of the episode, and no pair printed twice (FR-5.11, FR-5.12), old
+#        episodes condensed from the fourth on (FR-5.8).
+PROMPT_VERSION = "p19-1"
 
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "array",
@@ -115,6 +120,8 @@ class PromptContext:
     # The effective style of the episode and the voices of the characters it names (FR-18, P12).
     style: Style = field(default_factory=Style)
     voices: list[CharacterCard] = field(default_factory=list)
+    # The names of the characters of this episode: the series' main cast and the episode's own (FR-5.11). Empty: unknown.
+    cast: list[str] = field(default_factory=list)
 
 
 def _mentioned(term: Term, haystack: str) -> bool:
@@ -168,7 +175,8 @@ def render_system(bundle: "TranslationBundle", texts: Iterable[str] | None = Non
 
     ``texts`` are the source lines of one request. With them, a glossary that has more terms than
     ``params.glossary_filter_threshold`` lists only the terms those lines mention (FR-4.3); address rules and character
-    cards are never filtered by words, because two characters can talk a whole scene in pronouns."""
+    cards are never filtered by words, because two characters can talk a whole scene in pronouns. They are filtered by
+    *who* is in the episode instead (``bundle.cast``, FR-5.11)."""
     sections: list[tuple[str, str]] = [
         ("Core rules", _CORE_RULES.format(language=bundle.target_name or language_name(bundle.target_lang))),
     ]
@@ -181,14 +189,22 @@ def render_system(bundle: "TranslationBundle", texts: Iterable[str] | None = Non
         if texts is not None and threshold > 0 and len(bundle.glossary.terms) > threshold:
             haystack = matching.joined(texts)
             shown = tuple(t for t in bundle.glossary.terms if _mentioned(t, haystack))
-        sections.append(("Glossary", _glossary_section(bundle.glossary, list(bundle.active_rules), shown)))
+        in_scope = scoped_rules(bundle.active_rules, bundle.cast, bundle.glossary)
+        sections.append(("Glossary", _glossary_section(bundle.glossary, in_scope, shown)))
     style = render_style(bundle.style)
     if style:
         sections.append(("Effective style", style))
-    voices = render_voices(bundle.voices)
+    voices = render_voices(without_ruled_addresses(bundle.voices, bundle.active_rules, bundle.glossary))
     if voices:
         sections.append(("Character voices", voices))
-    sections.extend(bundle.sections)
+    if bundle.active_rules:  # the glossary wins: a pair it has a rule for is not also listed as inferred (FR-5.12)
+        ruled = ruled_pairs(bundle.active_rules, bundle.glossary)
+        for title, body in bundle.sections:
+            body = drop_pairs(body, ruled) if title == RELATIONSHIP_TITLE else body
+            if body:
+                sections.append((title, body))
+    else:
+        sections.extend(bundle.sections)
 
     meta = []
     if bundle.title:

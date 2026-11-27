@@ -11,13 +11,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
 from ..providers.base import BadOutput
+from .address import clean_facts
 from .facts import INTIMACY_MAX, MIN_CONFIDENCE, Character, Facts
 
 __all__ = [
+    "PAIRS_HEADER",
+    "RELATIONSHIP_TITLE",
     "DEFAULT_BUDGET_TOKENS",
     "DEFAULT_RECENT_UNITS",
     "Relationship",
@@ -42,6 +46,11 @@ _OVERTURN_BELOW = 0.6
 _CONFIDENT = 0.9
 
 Compressor = Callable[[list[tuple[str, str]]], str]
+
+# The section the pairs are listed in, and the line that opens the list: ``drop_pairs`` reads them back (FR-5.12).
+RELATIONSHIP_TITLE = "Relationship state"
+PAIRS_HEADER = "Where each pair stands now:"
+_PAIR_LINE = re.compile(r"^- (?P<a>.+?) & (?P<b>.+?): ")
 
 
 @dataclass(frozen=True)
@@ -165,18 +174,20 @@ class _Names:
         return found
 
 
-def fold(units: Sequence[UnitFacts]) -> StoryState:
+def fold(units: Sequence[UnitFacts], lang: str | None = None) -> StoryState:
     """Fold the facts of ``units`` (already in story order) into one state.
 
     Characters merge by name or alias; each unordered pair keeps its latest relationship event
-    (latest unit, then latest cue within the unit); terms are counted per unit.
+    (latest unit, then latest cue within the unit); terms are counted per unit. Generic forms of address
+    ("Mom", "Sir") are not names: they are cleaned off each unit first (``clean_facts``, FR-5.9), in the
+    source language ``lang``.
     """
     names = _Names()
     latest: dict[tuple[str, str], Relationship] = {}
     terms: dict[str, int] = {}
     summaries: list[tuple[str, str]] = []
     for unit in units:
-        facts = unit.facts
+        facts = clean_facts(unit.facts, lang)
         taken: set[str] = set()
         for character in facts.characters:
             names.add(character, taken)
@@ -258,7 +269,7 @@ def _render(
             lines.append("Characters so far:")
             lines.extend(_character_line(c) for c in characters)
         if relationships:
-            lines.append("Where each pair stands now:")
+            lines.append(PAIRS_HEADER)
             lines.extend(_relationship_line(r) for r in relationships)
         return "\n".join(lines)
 
@@ -267,7 +278,9 @@ def _render(
 
     how = ""
     arc = ("Earlier episodes: " + "\n".join(f"{label}: {text}" for label, text in older)) if older else ""
-    if older and total(arc) > budget_tokens:
+    # Old episodes are condensed once there are more of them than the recent ones kept in full (FR-5.8), not only when
+    # the budget runs out: a long series otherwise sends every old summary at full length.
+    if older and (len(older) > keep or total(arc) > budget_tokens):
         condensed = ""
         if compress is not None:
             try:
@@ -295,14 +308,36 @@ def _render(
     if story:
         sections.append(("Story so far", story))
     if characters or relationships:
-        sections.append(("Relationship state", people_text()))
+        sections.append((RELATIONSHIP_TITLE, people_text()))
     return sections, how
 
 
-def render_episode(facts: Facts | None) -> tuple[str, str] | None:
+def drop_pairs(body: str, ruled: Callable[[str, str], bool]) -> str:
+    """The *Relationship state* body without the pair lines ``ruled(a, b)`` says the glossary already settles
+    (FR-5.12: the glossary wins and is not printed over). The pairs header goes with the last line under it; the
+    other lines are untouched. ``""`` when nothing but the hedge is left."""
+    kept: list[str] = []
+    pairs = left = 0
+    for line in body.split("\n"):
+        found = _PAIR_LINE.match(line)
+        if found:
+            pairs += 1
+            if ruled(found.group("a"), found.group("b")):
+                continue
+            left += 1
+        kept.append(line)
+    if pairs and not left:
+        kept = [line for line in kept if line != PAIRS_HEADER]
+    if not any(line.startswith("- ") or line.endswith(":") for line in kept):
+        return ""
+    return "\n".join(kept)
+
+
+def render_episode(facts: Facts | None, lang: str | None = None) -> tuple[str, str] | None:
     """The section for the unit being translated: its own summary and relationship changes by item."""
     if facts is None or facts.is_empty():
         return None
+    facts = clean_facts(facts, lang)
     lines = ["Taken from this episode's own subtitles; item numbers are the `i` values you are given."]
     if facts.summary:
         lines.append(f"Summary: {facts.summary}")
@@ -327,13 +362,14 @@ def build_context(
     budget_tokens: int = DEFAULT_BUDGET_TOKENS,
     recent: int = DEFAULT_RECENT_UNITS,
     compress: Compressor | None = None,
+    lang: str | None = None,
 ) -> StoryContext:
     """Context sections for a unit from the facts of the units before it and its own facts.
 
     ``prior`` must hold only units earlier in story order; the caller owns that selection.
     """
-    sections, how = _render(fold(prior), max(500, budget_tokens), recent, compress)
-    episode = render_episode(own)
+    sections, how = _render(fold(prior, lang), max(500, budget_tokens), recent, compress)
+    episode = render_episode(own, lang)
     if episode:
         sections.append(episode)
     return StoryContext(sections, fingerprint(prior, own), how)

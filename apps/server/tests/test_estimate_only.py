@@ -149,6 +149,7 @@ class EstimateNumbers(unittest.TestCase):
         self.assertEqual((result["calls_left_today"], result["paused_until"]), (10, None))
         self.assertEqual(set(result), {
             "jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at", "extract_calls", "extract_model",
+            "summarize_calls", "summarize_model",
         })
 
 

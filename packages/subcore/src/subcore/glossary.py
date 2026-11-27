@@ -18,6 +18,7 @@ Schema (all sections optional)::
         target: Alice
         gender: f
         description: "lead, 20s"
+        aliases: ["Al"]               # optional other names of the same person (never a form of address like "Mom")
     address_rules:
       - a: Alice
         b: Bob
@@ -124,6 +125,9 @@ class Character:
     target: str = ""
     gender: str = ""
     description: str = ""
+    # Other names the source calls the same person ("Carolyn Miller" for "Caroline Miller"): for matching a name to
+    # this character, never to be translated (P19b, FR-4.2). Forms of address ("Mom") are not aliases.
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -304,12 +308,16 @@ def from_doc(data: Any) -> Glossary:
     characters = []
     for n, entry in enumerate(_entries(data, "characters")):
         where = f"characters[{n}]"
+        aliases = entry.get("aliases") or []
+        if not isinstance(aliases, list) or not all(isinstance(a, str) and a.strip() for a in aliases):
+            raise GlossaryError(f"{where}.aliases: expected a list of non-empty text")
         characters.append(
             Character(
                 name=_need_str(entry, "name", where),
                 target=_need_str(entry, "target", where, required=False),
                 gender=_need_str(entry, "gender", where, required=False),
                 description=_need_str(entry, "description", where, required=False),
+                aliases=tuple(a.strip() for a in aliases),
             )
         )
 
@@ -379,7 +387,10 @@ def to_doc(glossary: Glossary) -> dict[str, Any]:
             data["terms"].append(item)
     if glossary.characters:
         data["characters"] = [
-            {k: v for k, v in (("name", c.name), ("target", c.target), ("gender", c.gender), ("description", c.description)) if v}
+            {
+                **{k: v for k, v in (("name", c.name), ("target", c.target), ("gender", c.gender), ("description", c.description)) if v},
+                **({"aliases": list(c.aliases)} if c.aliases else {}),
+            }
             for c in glossary.characters
         ]
     if glossary.address_rules:

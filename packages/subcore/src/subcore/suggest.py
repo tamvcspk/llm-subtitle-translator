@@ -20,13 +20,14 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Collection, Sequence
 
 import json_repair
 
 from . import srt
 from .glossary import AddressRule, Glossary, Position
+from .memory.address import clean_facts
 from .memory.facts import Character, Facts, RelationshipEvent
 from .memory.fold import _Names
 from .providers.base import BadOutput, LLMRequest, Provider
@@ -229,6 +230,11 @@ def _start_of(episode: Episode, cue: int, cues_of: CuesOf) -> Position:
 # -- the characters of the whole series ---------------------------------------------------------------------------
 
 
+def _clean(episodes: Sequence[Episode]) -> list[Episode]:
+    """The episodes with generic forms of address ("Mom", "Sir") taken off their facts (FR-5.9): they are not people."""
+    return [replace(e, facts=clean_facts(e.facts)) for e in episodes]
+
+
 def _names(episodes: Sequence[Episode]) -> _Names:
     """Every character of the series, merged by name and alias, before any event is read: an alias that only shows up
     in a later episode still folds the earlier events into the same person."""
@@ -383,6 +389,7 @@ def address_items(
     rules do not yet cover (in which case ``change_from`` is set on the item so a change proposal is created).
     ``exclude`` are pair keys ``(low, high)`` not to ask about for new pairs; ``exclude_changes`` are
     ``(low, high, change_from)`` keys already decided or pending for change proposals."""
+    episodes = _clean(episodes)
     names = _names(episodes)
     pairs: dict[tuple[str, str], list[tuple[Episode, RelationshipEvent]]] = {}
     for episode in episodes:
@@ -550,7 +557,7 @@ def term_items(
     """Names and terms that show in ``MIN_UNITS`` or more episodes and are not in the glossary, most widespread first.
     A character's own name is not a term. ``exclude`` are keys not to ask about; they go before ``limit`` applies, so
     what was already decided or could not be answered never crowds out the rest."""
-    names = _names(episodes)
+    names = _names(_clean(episodes))
     have = {s.casefold() for t in (glossary.terms if glossary else ()) for s in t.sources}
     found: dict[str, dict[str, Any]] = {}
     for episode in episodes:
@@ -602,6 +609,7 @@ def character_items(
     from a later episode (R13-2; a unit never sees the facts of a later one). ``cards`` are the casefolded names and
     aliases of the cards the admin already has; ``exclude`` are keys not to ask about (they are dropped before
     ``limit`` applies, so they cannot crowd out the rest)."""
+    episodes = _clean(episodes)
     names = _names(episodes)
     have = {c.name.casefold() for c in (glossary.characters if glossary else ())} | {c.casefold() for c in cards}
     order = {episode.label: n for n, episode in enumerate(episodes)}

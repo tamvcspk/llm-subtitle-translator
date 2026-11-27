@@ -31,6 +31,7 @@ from subcore.memory import (
     DEFAULT_BUDGET_TOKENS,
     DEFAULT_RECENT_UNITS,
     EXTRACT_PROMPT_VERSION,
+    FACTS_VERSIONS,
     Facts,
     FactsError,
     StoryContext,
@@ -38,12 +39,13 @@ from subcore.memory import (
     build_context,
     compress_arc,
     entries_hash,
+    episode_cast,
     extract_facts,
     fingerprint,
 )
 from subcore.providers import Provider
 
-from ..domain.ports import MediaLibrary, Series, TranslationVersion, Unit
+from ..domain.ports import Cast, MediaLibrary, Series, TranslationVersion, Unit
 from ..adapters.store import Store
 from ..domain.translation import ContextGapError
 from .versions import RETRANSLATE, sha256_file
@@ -101,6 +103,7 @@ class MemoryPlan:
     complete: bool = True
     missing: list[str] = field(default_factory=list)  # earlier units with no usable facts
     compressed: str = ""
+    cast: list[str] = field(default_factory=list)  # the characters of the episode, by name (FR-5.11); [] = unknown
 
 
 class StoryMemory:
@@ -188,7 +191,7 @@ class StoryMemory:
 
     # -- facts --------------------------------------------------------------------
     def _stored(self, units: list[Unit]) -> dict[int, Facts]:
-        rows = self.facts.latest_facts([u.id for u in units], EXTRACT_PROMPT_VERSION)
+        rows = self.facts.latest_facts([u.id for u in units], FACTS_VERSIONS)
         return {uid: row.facts for uid, row in rows.items()}
 
     def ensure_facts(
@@ -202,7 +205,7 @@ class StoryMemory:
         gets the reason of a ``failed`` or ``stored`` that was not for want of a source, for a job to say.
         """
         unit_id = unit.id
-        latest = self.facts.latest_facts([unit_id], EXTRACT_PROMPT_VERSION).get(unit_id)
+        latest = self.facts.latest_facts([unit_id], FACTS_VERSIONS).get(unit_id)
         kept = latest.facts if latest else None
         if not self.has_source(unit):
             return (kept, "stored") if kept is not None else (None, "no-source")
@@ -211,7 +214,7 @@ class StoryMemory:
             sha = self._source_hash(path)
         except OSError:
             return (kept, "stored") if kept is not None else (None, "failed")
-        row = self.facts.get_facts(unit_id, sha, EXTRACT_PROMPT_VERSION, touch=True)
+        row = self.facts.get_facts(unit_id, sha, FACTS_VERSIONS, touch=True)
         if row is not None:
             return row.facts, "cached"
         if provider_for is None:
@@ -238,14 +241,14 @@ class StoryMemory:
 
     def needs_extract(self, unit: Unit) -> bool:
         """Would ``ensure_facts`` call the model for ``unit``? Same reading as there: a source subtitle that can be
-        read and no facts stored for its sha256 and the current ``EXTRACT_PROMPT_VERSION``. Never calls anything."""
+        read and no facts stored for its sha256 under an accepted version (``FACTS_VERSIONS``). Never calls anything."""
         if not self.has_source(unit):
             return False
         try:
             sha = self._source_hash(Path(unit.source_path))
         except OSError:
             return False
-        return self.facts.get_facts(unit.id, sha, EXTRACT_PROMPT_VERSION) is None
+        return self.facts.get_facts(unit.id, sha, FACTS_VERSIONS) is None
 
     def extract_needed(
         self, wanted: Iterable[Unit], units: list[Unit], series: Series | None, settings: dict[str, Any] | None = None,
@@ -265,6 +268,30 @@ class StoryMemory:
                 if checked[needed.id]:
                     found[needed.id] = needed
         return list(found.values())
+
+    def summarize_needed(
+        self, wanted: Iterable[Unit], units: list[Unit], series: Series | None, settings: dict[str, Any] | None = None,
+    ) -> int:
+        """The condensing calls translating ``wanted`` would make (P19c, FR-5.8): the old summaries of an episode are
+        condensed once there are more of them than the recent ones kept in full, and a new episode changes the set, so
+        it is up to one call per episode. A call is not counted when the same old summaries were condensed before
+        (the cache the worker keeps) and one is counted where the facts are not stored yet (an upper bound, not a read).
+        Never calls anything; 0 when memory is off for the series."""
+        if not self.series_enabled(series, settings):
+            return 0
+        keep = max(0, self.options(settings).recent_units)
+        total = 0
+        for unit in wanted:
+            prior = self.prior_units(unit, units, series)
+            stored = self._stored(prior)
+            if any(u.id not in stored for u in prior):
+                total += 1 if len(prior) - keep > keep else 0
+                continue
+            summaries = [(unit_label(u), stored[u.id].summary) for u in prior if stored[u.id].summary]
+            older = summaries[:-keep] if keep else summaries
+            if len(older) > keep and self.facts.get_summary(entries_hash(older)) is None:
+                total += 1
+        return total
 
     # -- the series catalogue (FR-8.3) --------------------------------------------------
     def refresh_catalog(self, unit: Unit, series: Series, source_code: str) -> None:
@@ -302,12 +329,12 @@ class StoryMemory:
 
     def _context(
         self, prior: list[tuple[Unit, Facts]], own: Facts | None, series_id: int, unit_id: int,
-        options: MemoryOptions, provider_for: ProviderFor | None,
+        options: MemoryOptions, provider_for: ProviderFor | None, lang: str | None = None,
     ) -> StoryContext:
         return build_context(
             [UnitFacts(unit_label(u), f) for u, f in prior], own,
             budget_tokens=options.budget_tokens, recent=options.recent_units,
-            compress=self._compressor(series_id, unit_id, provider_for),
+            compress=self._compressor(series_id, unit_id, provider_for), lang=lang,
         )
 
     def plan(
@@ -317,13 +344,15 @@ class StoryMemory:
         settings: dict[str, Any],
         provider_for: ProviderFor,
         extracted: list[int] | None = None,
+        cast: Cast | None = None,
     ) -> MemoryPlan:
         """Make sure every earlier unit has facts, wait out gaps, and build the context for ``unit``.
 
         Raises :class:`ContextGapError` while an earlier unit has no source subtitle and ``gap_wait``
         has not passed (never for an explicit retranslation, which runs with what exists).
         ``extracted`` collects the ids of the units whose facts were extracted just now, also when the plan then
-        raises: it is what the proposal generators (P14) react to.
+        raises: it is what the proposal generators (P14) react to. ``cast`` is what TMDB lists (names only); the plan
+        turns it, with the facts, into the episode's cast (FR-5.11).
         """
         options = self.options(settings)
         series = self.units.get_series(unit.series_id)
@@ -391,9 +420,14 @@ class StoryMemory:
         own, how = self.ensure_facts(unit, title, settings, provider_for)
         if how == "extracted" and extracted is not None:
             extracted.append(unit.id)
-        context = self._context(prior, own, series.id, unit.id, options, provider_for)
+        context = self._context(prior, own, series.id, unit.id, options, provider_for, unit.source_language or unit.source_code or None)
         self.facts.put_snapshot(context.fingerprint, context.sections)
-        return MemoryPlan(context.sections, context.fingerprint, not missing, missing, context.compressed)
+        names = episode_cast(
+            [UnitFacts(unit_label(u), f) for u, f in prior], own,
+            main=[name for name, _ in (cast.main if cast else ())], guests=cast.guests if cast else (),
+            lang=unit.source_language or unit.source_code or None,
+        )
+        return MemoryPlan(context.sections, context.fingerprint, not missing, missing, context.compressed, names)
 
     # -- staleness (FR-5.5) ------------------------------------------------------------------
     def _series_view(self, series_id: int, cache: dict | None) -> tuple[list[Unit], dict[int, Facts]]:
@@ -460,7 +494,7 @@ class StoryMemory:
         prior_units = self.prior_units(unit, units, series)
         prior = [(u, facts[u.id]) for u in prior_units if u.id in facts]
         own = facts.get(unit.id)
-        context = self._context(prior, own, series.id, unit.id, options, None)
+        context = self._context(prior, own, series.id, unit.id, options, None, unit.source_language or unit.source_code or None)
         return {
             "fingerprint": context.fingerprint,
             "sections": [{"title": t, "body": b} for t, b in context.sections],
@@ -493,14 +527,14 @@ class StoryMemory:
             sha = self._source_hash(Path(unit.source_path))
         except OSError:
             return "no-source"
-        latest = self.facts.latest_facts([unit.id], EXTRACT_PROMPT_VERSION).get(unit.id)
+        latest = self.facts.latest_facts([unit.id], FACTS_VERSIONS).get(unit.id)
         # Facts of an older version of the source are not the newest: reading touches them back into use (``ensure_facts``).
         return "cached" if latest is not None and latest.source_sha256 == sha else ""
 
     def own_facts(self, unit: Unit) -> dict[str, Any]:
         """What the stored facts of one unit say (reads only), for the console to show: the characters, who stands
         how to whom, the terms and the summary. ``stored`` is false when nothing was read yet."""
-        row = self.facts.latest_facts([unit.id], EXTRACT_PROMPT_VERSION).get(unit.id)
+        row = self.facts.latest_facts([unit.id], FACTS_VERSIONS).get(unit.id)
         return {
             "label": unit_label(unit), "has_source": self.has_source(unit), "stored": row is not None,
             "facts": row.facts.to_dict() if row else None,

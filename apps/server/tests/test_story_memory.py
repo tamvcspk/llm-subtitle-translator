@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from subcore.memory import EXTRACT_PROMPT_VERSION
+from subcore.memory import EXTRACT_PROMPT_VERSION, FACTS_VERSIONS
 from subcore.providers import FakeProvider, QuotaExhausted, ResilientProvider
 from subcore.providers.fake import echo_items
 
@@ -679,6 +679,108 @@ class ExtractionVersionTests(unittest.TestCase):
         self.assertEqual(row.prompt_version, EXTRACT_PROMPT_VERSION)
         self.assertEqual(len(row.source_sha256), 64)
         self.assertEqual(env.store.latest_facts([uid], "older-version"), {})
+
+    def test_facts_stored_under_the_older_version_are_still_read_and_never_extracted_again(self):
+        """P19b, FR-5.9.3: moving to ``x4`` must not pull every episode through extraction once more."""
+        env = all_sources(self)
+        env.translate(2)
+        self.assertEqual(len(env.calls("extract")), 2)
+        before = {n: env.store.latest_facts([env.unit_id(n)], FACTS_VERSIONS)[env.unit_id(n)].facts.hash for n in (1, 2)}
+        with env.store._lock:  # what a database filled before the move holds
+            env.store._db.execute("UPDATE facts SET prompt_version = 'x3'")
+        for n in (1, 2):
+            unit = env.store.find_unit(env.store.list_series()[0].id, 1, n)
+            self.assertFalse(env.memory.needs_extract(unit), n)
+            facts, how = env.memory.ensure_facts(unit, "Show", env.settings, None)
+            self.assertEqual(how, "cached")
+            self.assertEqual(facts.hash, before[n])  # same facts, so the same fingerprints: nothing turns stale
+        env.translate(3)
+        self.assertEqual([c.meta["episode"] for c in env.calls("extract")], [1, 2, 3])  # only episode 3 was new
+        new = env.store.latest_facts([env.unit_id(3)], FACTS_VERSIONS)[env.unit_id(3)]
+        self.assertEqual(new.prompt_version, EXTRACT_PROMPT_VERSION)
+
+
+class CondensingTests(unittest.TestCase):
+    """P19c, FR-5.8: the old summaries are condensed from the fourth old episode on, and the estimate says so."""
+
+    def test_old_summaries_are_condensed_before_the_budget_runs_out_and_the_estimate_counts_the_call(self):
+        env = all_sources(self)
+        env.settings["memory_recent_episodes"] = 1
+        env.translate(2)  # registers the series and reads the facts of episodes 1 and 2
+        series = env.store.list_series()[0]
+        units = env.store.list_units(series.id)
+        by_episode = {u.episode: u for u in units}
+
+        # episode 3 has two old summaries and keeps one recent: condensing needs more old ones than recent ones kept
+        self.assertEqual(env.memory.summarize_needed([by_episode[3]], units, series, env.settings), 0)
+        env.translate(6)  # four old summaries (E1-E4) and E5 recent: one call to condense them
+        self.assertEqual(len(env.calls("summarize")), 1)
+        prompt = env.translate_prompts()[-1]
+        self.assertIn("ARC-SUMMARY-MARK", prompt)
+        self.assertIn("EP5-SUMMARY-MARK", prompt)  # the recent one stays in full
+        self.assertNotIn("EP2-SUMMARY-MARK", prompt)  # an old one is condensed away
+
+        units = env.store.list_units(series.id)
+        by_episode = {u.episode: u for u in units}
+        self.assertEqual(env.memory.summarize_needed([by_episode[6]], units, series, env.settings), 0)  # cached now
+        self.assertEqual(env.memory.summarize_needed([by_episode[5]], units, series, env.settings), 1)  # another set of old ones
+        self.assertEqual(env.memory.summarize_needed([by_episode[5], by_episode[6]], units, series, env.settings), 1)
+        env.settings["memory_enabled"] = False
+        self.assertEqual(env.memory.summarize_needed([by_episode[5]], units, series, env.settings), 0)
+
+
+class CastScopeTests(unittest.TestCase):
+    """P19b/P19c, FR-5.11: the episode's cast reaches the bundle, and forms of address outside it stay out of the prompt."""
+
+    def plan(self, env, episode, cast=None):
+        env.translate(episode - 1)  # facts of the episodes before it are read and stored
+        unit = env.store.find_unit(env.store.list_series()[0].id, 1, episode)
+        return env.memory.plan(unit, env.job(episode), env.settings, lambda task: env.fake, cast=cast)
+
+    def test_without_tmdb_the_cast_is_who_the_facts_show_often_and_the_episodes_own(self):
+        env = all_sources(self)
+        plan = self.plan(env, 5)
+        self.assertEqual(sorted(plan.cast), ["Alice", "Bob"])
+
+    def test_a_tmdb_list_replaces_the_recurring_ones_and_the_facts_of_the_episode_still_count(self):
+        from subserver.domain.ports import Cast
+
+        env = all_sources(self)
+        plan = self.plan(env, 5, Cast(main=(("Zed", 12), ("Mom (voice)", 3), ("Self", 1)), guests=("Quinn",)))
+        self.assertEqual(plan.cast, ["Zed", "Quinn", "Alice", "Bob"])  # no form of address, no "Self"
+
+    def test_the_bundle_keeps_a_rule_only_for_people_in_the_cast(self):
+        from subcore import glossary as g
+        from subcore.translate.prompt import render_system
+        from subserver.domain.gather import gather
+        from subserver.domain.rules import build_rules
+
+        glossary = g.loads(
+            "address_rules:\n  - {a: Alice, b: Bob, a_to_b: 'tôi–anh'}\n  - {a: Carol, b: Dan, a_to_b: 'chị–em'}\n"
+        )
+        rules = build_rules(glossary, season=1, episode=2, corrections=[])
+        cues = srt_cues()
+
+        def prompt(cast):
+            bundle = gather(
+                cues=cues, rules=rules, unit=None, title="Show", overview="", target_code="vi", target_name="Vietnamese",
+                source_code="en", model="m", max_output_tokens=0, temperature=None, only=None, keep=None, cast=cast,
+            )
+            self.assertEqual(bundle.cast, tuple(cast))
+            return render_system(bundle)
+
+        scoped = prompt(["Alice", "Bob", "Carol"])
+        self.assertIn("Alice speaking to Bob", scoped)
+        self.assertNotIn("Carol speaking to Dan", scoped)  # Dan is not in this episode
+        unknown = prompt([])
+        self.assertIn("Alice speaking to Bob", unknown)
+        self.assertIn("Carol speaking to Dan", unknown)  # no cast known: every rule stays
+
+
+def srt_cues():
+    from subcore import srt
+
+    return [srt.Cue(1, 0, 1500, "Hello", "00:00:00,000 --> 00:00:01,500")]
 
 
 if __name__ == "__main__":

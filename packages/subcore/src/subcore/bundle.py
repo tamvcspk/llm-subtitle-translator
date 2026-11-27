@@ -8,7 +8,7 @@ API key, no machine path and no database id. Few-shot examples are stored by val
 changes. Anything that only *describes* a bundle for a screen (which glossary entry matches cue 142) is
 not a field here: ``matches`` reads a bundle and returns that description, and nothing it returns is hashed.
 
-Format: ``bundle_version`` 2 (1 had no style or voices). ``from_dict`` accepts any version up to :data:`BUNDLE_VERSION`, fills
+Format: ``bundle_version`` 3 (2 had no ``cast``, 1 had no style or voices). ``from_dict`` accepts any version up to :data:`BUNDLE_VERSION`, fills
 optional fields that an older writer did not have, and ignores fields it does not know, so a bundle
 written by an earlier build still runs (FR-21.1, criterion 18h).
 """
@@ -27,7 +27,8 @@ from .style import CharacterCard, Style, StyleError
 __all__ = ["BUNDLE_VERSION", "Params", "TranslationBundle", "BundleError", "CueMatch", "matches"]
 
 # 2: the effective style and the character voices (P12). A version-1 bundle reads as one with no style.
-BUNDLE_VERSION = 2
+# 3: ``cast``, the names of the episode's characters (P19b); an older bundle reads as one with an unknown cast.
+BUNDLE_VERSION = 3
 
 
 class BundleError(ValueError):
@@ -123,6 +124,9 @@ class TranslationBundle:
     # the characters the dialogue names (FR-18.3). The glossary is not part of either: it always wins in the prompt.
     style: Style = field(default_factory=Style)
     voices: tuple[CharacterCard, ...] = ()
+    # The names of the characters of the episode (the series' main cast and its own, FR-5.11): which address rules are
+    # worth a line in the prompt. Names only, from wherever the caller got them; empty = unknown, every rule stays.
+    cast: tuple[str, ...] = ()
     # Extra (title, body) system sections: corrections, story memory. Placed before metadata.
     sections: tuple[tuple[str, str], ...] = ()
     # Accepted (source, translation) pairs, embedded by value (FR-21.6). Rendered last in the system prompt.
@@ -150,7 +154,9 @@ class TranslationBundle:
             params["model"] = self.params.model
         if self.params.max_output_tokens:
             params["max_output_tokens"] = self.params.max_output_tokens
+        extra: dict[str, Any] = {"cast": list(self.cast)} if self.cast else {}  # no key when unknown: older hashes hold
         return {
+            **extra,
             "bundle_version": BUNDLE_VERSION,
             "params": params,
             "language": {"target": self.target_lang, "target_name": self.target_name, "source": self.source_lang},
@@ -261,6 +267,7 @@ class TranslationBundle:
             active_rules=active,
             style=style,
             voices=voices,
+            cast=tuple(str(n) for n in data.get("cast") or [] if str(n).strip()),
             sections=tuple((str(s["title"]), str(s["body"])) for s in data.get("sections") or []),
             few_shot=tuple((str(s["source"]), str(s["target"])) for s in data.get("few_shot") or []),
             requested=None if requested is None else tuple(_cue_number(n, "requested") for n in requested),

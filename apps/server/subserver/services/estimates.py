@@ -38,6 +38,9 @@ class Estimate:
     finish_at: float | None = None
     extract_calls: int = 0
     extract_model: str = ""
+    # The calls that condense the old story summaries (P19c, FR-5.8): memory work like the reads, on ``summarize_model``.
+    summarize_calls: int = 0
+    summarize_model: str = ""
 
 
 class Estimator:
@@ -61,8 +64,9 @@ class Estimator:
         wanted = ordinals if ordinals is not None else list(range(1, len(cues) + 1))
         return max(1, len(plan_parts(cues, wanted, self.max_output_tokens())))
 
-    def of(self, jobs: int, cues: int, calls: int, extract_calls: int = 0) -> Estimate:
-        """``extract_calls`` are the story-fact reads the jobs would run first (P15g); they take time like any call."""
+    def of(self, jobs: int, cues: int, calls: int, extract_calls: int = 0, summarize_calls: int = 0) -> Estimate:
+        """``extract_calls`` are the story-fact reads the jobs would run first (P15g) and ``summarize_calls`` the calls
+        that condense old story summaries (P19c); they take time like any call."""
         now = self._clock()
         settings = self._settings()
         cap = int(settings.get("max_calls_per_day") or 0)
@@ -71,7 +75,7 @@ class Estimator:
             used = self.store.calls_since(policy.next_utc_midnight(now) - 86_400)
             left = max(0, cap - used)
         average = self.store.average_call_seconds()
-        total = calls + extract_calls
+        total = calls + extract_calls + summarize_calls
         minutes = total * average / 60.0 if average is not None and total else None
         paused = self.queue.quota_pause_until()
         finish = None
@@ -81,4 +85,6 @@ class Estimator:
             jobs=jobs, cues=cues, calls=calls, calls_left_today=left, paused_until=paused,
             minutes=round(minutes, 1) if minutes is not None else None, finish_at=finish,
             extract_calls=extract_calls, extract_model=model_for_task(settings, "extract") if extract_calls else "",
+            summarize_calls=summarize_calls,
+            summarize_model=model_for_task(settings, "summarize") if summarize_calls else "",
         )

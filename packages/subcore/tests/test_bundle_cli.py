@@ -304,7 +304,7 @@ class BundleCommandTests(CliTestBase):
             code, _, err = run_cli("bundle", str(self.src), "--glossary", str(self.glossary), "-o", b_path)
         self.assertEqual(code, 0, err)
         data = json.loads(Path(b_path).read_text(encoding="utf-8"))
-        self.assertEqual(data["bundle_version"], 2)
+        self.assertEqual(data["bundle_version"], 3)
         self.assertEqual(len(data["cues"]), 5)
 
     def test_bundle_command_refuses_to_overwrite(self):

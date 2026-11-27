@@ -316,17 +316,20 @@ class JobRequests:
         return self.estimator.calls_for(cues)
 
     def estimate(self, planned: list[PlannedJob], *, extract: bool = True) -> Estimate:
+        extract_calls, summarize_calls = self._memory_calls(planned) if extract else (0, 0)
         return self.estimator.of(
-            len(planned), sum(job.cues for job in planned), sum(job.calls for job in planned),
-            self._extract_calls(planned) if extract else 0,
+            len(planned), sum(job.cues for job in planned), sum(job.calls for job in planned), extract_calls, summarize_calls,
         )
 
     def _extract_calls(self, planned: list[PlannedJob]) -> int:
+        return self._memory_calls(planned)[0]
+
+    def _memory_calls(self, planned: list[PlannedJob]) -> tuple[int, int]:
         """Story-fact reads the planned jobs would run first (FR-15.5.1): per series with memory on, each episode before
         a planned one in story order and the planned one itself that has a source and no facts yet, once for the whole
         request. The rule is ``StoryMemory.needs_extract``, the one ``ensure_facts`` follows; nothing is called."""
         if self.memory is None:
-            return 0
+            return 0, 0
         by_series: dict[int, list[CatalogEntry]] = {}
         for item_id in dict.fromkeys(job.item_id for job in planned):
             entry = self.store.catalog_entry(item_id)
@@ -334,7 +337,7 @@ class JobRequests:
                 by_series.setdefault(entry.parent_id, []).append(entry)
         settings = self._settings()
         sources = enabled_source_languages(self._config())
-        total = 0
+        total = condensing = 0
         for parent_id, wanted in by_series.items():
             series = self.store.series_by_key(wanted[0].series_key)
             if not self.memory.series_enabled(series, settings):
@@ -356,10 +359,10 @@ class JobRequests:
                 units.append(unit)
                 chosen[episode.id] = unit
             units.extend(known.values())
-            total += len(self.memory.extract_needed(
-                [chosen[e.id] for e in wanted if e.id in chosen], units, series, settings,
-            ))
-        return total
+            asked = [chosen[e.id] for e in wanted if e.id in chosen]
+            total += len(self.memory.extract_needed(asked, units, series, settings))
+            condensing += self.memory.summarize_needed(asked, units, series, settings)
+        return total, condensing
 
     # -- making the jobs -------------------------------------------------------------------------------------------
     def create(

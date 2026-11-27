@@ -1,9 +1,12 @@
 """Story memory: episode facts, a deterministic fold, and the context sections they produce (ADR-6)."""
 
+from .address import GENERIC_ADDRESS, clean_facts, generic_terms, is_generic_address, merge_declared
+from .cast import MIN_MAIN_UNITS, clean_cast_name, episode_cast, recurring_names
 from .compress import compress_arc
 from .facts import (
     EXTRACT_PROMPT_VERSION,
     FACTS_SCHEMA,
+    FACTS_VERSIONS,
     Character,
     ExtractResult,
     Facts,
@@ -15,11 +18,14 @@ from .facts import (
 from .fold import (
     DEFAULT_BUDGET_TOKENS,
     DEFAULT_RECENT_UNITS,
+    PAIRS_HEADER,
+    RELATIONSHIP_TITLE,
     Relationship,
     StoryContext,
     StoryState,
     UnitFacts,
     build_context,
+    drop_pairs,
     entries_hash,
     fingerprint,
     fold,
@@ -29,8 +35,13 @@ from .fold import (
 __all__ = [
     "DEFAULT_BUDGET_TOKENS",
     "DEFAULT_RECENT_UNITS",
+    "MIN_MAIN_UNITS",
+    "PAIRS_HEADER",
+    "RELATIONSHIP_TITLE",
     "EXTRACT_PROMPT_VERSION",
     "FACTS_SCHEMA",
+    "FACTS_VERSIONS",
+    "GENERIC_ADDRESS",
     "Character",
     "ExtractResult",
     "Facts",
@@ -42,10 +53,18 @@ __all__ = [
     "StoryState",
     "UnitFacts",
     "build_context",
+    "clean_cast_name",
+    "clean_facts",
     "compress_arc",
+    "drop_pairs",
+    "episode_cast",
     "entries_hash",
     "extract_facts",
     "fingerprint",
     "fold",
+    "generic_terms",
+    "is_generic_address",
+    "merge_declared",
+    "recurring_names",
     "render_episode",
 ]
