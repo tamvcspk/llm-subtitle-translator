@@ -110,9 +110,9 @@ class CardDeleted(Answer):
     would_stale: int
 
 
-class CharacterSaved(Answer):
-    ok: bool
-    saved: bool
+class CharacterSaved(StyleImpact):
+    """``PUT …/characters``: the Name and the Voice written together (or only counted, with ``dry_run``). The counts are one
+    set over both halves, so an episode both reach is counted once."""
 
 
 class UnitStyleAnswer(Answer):

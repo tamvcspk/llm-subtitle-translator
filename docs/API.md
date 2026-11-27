@@ -169,6 +169,12 @@ returned as `**********` when a key is stored, with:
   characters (a value is never returned);
 - `<field>_status`: `ok`, `invalid` (the provider refused it) or `exhausted`; `""` when no key is stored.
 
+It also carries `task_models` (P19a, FR-9.3.1): the model each job runs on by what is saved now, `{"translate", "fallback",
+"extract", "summarize", "suggest", "research", "judge"}`. `fallback` is the strong model and is `""` when there is none (or
+it equals `gst_model`, which is dropped on save); `suggest` follows `extract`; every other one is its own setting
+(`memory_model`, `summarize_model`, `research_model`, `judge_model`), else the model above it. Nothing about how a task picks its
+model changes: this is `model_for_task` made readable. The console shows the table of what the unsaved boxes would give.
+
 `key_warnings` lists what Settings must warn about, each `{"kind", "message", ...}`: `key-invalid` (with
 `provider`, `key_id`, `label`) for a refused key, `model-not-found` (with `model`) for a model the provider
 does not know, `provider-unconfigured` when `llm_provider` is `openai_compat` and `llm_base_url` is empty.
@@ -442,7 +448,7 @@ glossary review`.
 | `GET /api/catalog/movies` | The same `items` for movies. |
 | `POST /api/catalog/sync` | **Sync now**: asks the background loop to read Bazarr at once (within a few seconds) and answers immediately with the status plus `"requested": true`; the read, and the `auto_request` policy after an accepted one, run in that loop, never in the request. Poll `GET /api/catalog/status` for the result. Body `{"accept_shrink": true}` lets that one read past the shrink guard when the status said `shrink` (the admin confirmed how many items go). A read never creates a job by itself. |
 | `PUT /api/catalog/series/{id}/policy` | `{"auto_request": "" \| "on" \| "off"}`: follow the global `auto_request` setting, force it on, or off for this series. |
-| `PUT /api/catalog/series/{id}/bootstrap` | **Continue** (FR-15.12): `{"released": true}` (the default) lets `auto_request` go past the first `auto_request_bootstrap` episodes of a series whose glossary nobody has reviewed; `false` holds it again. Nothing is requested at once: the rest is asked for after the next sync. `series.bootstrap` of the series page says where it stands: `locked` (the policy is on for it and holding episodes back), `limit`, `pending` (suggestions waiting for review), `released`, `held` (labels with `reason: "bootstrap"`). |
+| `PUT /api/catalog/series/{id}/bootstrap` | Let a held series go, or hold it again (FR-15.12; D-07). Three shapes. **`{"released": true, "estimate_only": true}`** changes nothing and answers `{"ok", "released", "estimate_only": true, "estimate": {...as for POST /api/jobs}, "planned_total", "skipped_total", "skipped_by_reason", "glossary_empty", "daily_cap", "cap_left"}`: what the policy would ask for once it is let go (the episodes it holds back, planned as the policy plans them, so ones it would skip are counted as skipped with the reason), whether nothing is approved yet, and the day's `auto_request_daily_cap` (0: none) with what is left of it (`cap_left`, null when no cap). **`{"released": true}`** (the default) lets `auto_request` go past the first `auto_request_bootstrap` episodes and asks for the rest at once, for this series only and in the background: `{"ok", "released": true, "started"}`; `started: false` says another pass of the policy was running, and the next sync asks. **`{"released": false, "cancel_queued_policy": true}`** holds it again; with `cancel_queued_policy` it also pulls back the policy's jobs that have not started (`queued` or `waiting`), except those of the bootstrap's own episodes, never an admin's own request and never one that runs. They end `cancelled` with the result `bootstrap_hold`: the row stays in Activity, the policy's rule that it never asks again for what the admin cancelled (D4) and the day's cap do not count it, so letting the series go again asks for exactly those episodes. Reply `{"ok", "released": false, "cancelled": N}`; `cancelled` is 0 when holding would hold nothing (`relockable` below). `estimate_only` with `released: false` is `400`. `series.bootstrap` of the series page says where it stands: `locked` (the policy is holding this series back), `limit`, `pending` (suggestions waiting for review), `released`, `held` (episodes with a Missing label and reason `bootstrap`, over all target languages) and `held_by_lang` (the same per language; only episodes with a source subtitle that nothing else stops count, so it is what Translate whole series still asks for on a series that has no failed or cancelled job), `no_source` (Missing episodes with no source subtitle: not held, only unable to start), `glossary_empty` (no glossary entry and no character card), `open_jobs` (this series' queued, waiting or running translations), `memory_on` (Story memory is on for the series), `queued_policy_jobs` (what Hold again would pull back) and `relockable` (released, the policy is on for the series and holding it again would hold something: false once a suggestion was decided and none waits, because then it is let go whatever is pressed). The bootstrap picks the first episodes among those that have a source subtitle and that the policy can ask for: an episode that is ignored, removed, or whose last job failed or was cancelled by the admin never takes a place. |
 | `POST /api/catalog/ignore` · `POST /api/catalog/unignore` | Select as for `POST /api/jobs` (`items`, `series`/`season`, or `all`), optional `languages`. Records or removes the decision "do not translate this language of this item": neither a sync nor the policy creates a job for it. Returns `{"ok", "changed", "ignored"}`. |
 | `POST /api/jobs` | Request translations (below). |
 
@@ -457,7 +463,7 @@ automatic policy), `"estimate_only": true`.
 
 With `estimate_only` nothing is made. The answer (and the real answer too) is
 `{"estimate_only", "mode", "estimate": {"jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at",
-"extract_calls", "extract_model", "summarize_calls", "summarize_model"}, "planned_total", "translate_total", "retranslate_total", "planned": [...first 200 rows], "skipped_total", "skipped_by_reason": {"already requested": 2, ...},
+"extract_calls", "extract_model", "summarize_calls", "summarize_model", "model"}, "planned_total", "translate_total", "retranslate_total", "planned": [...first 200 rows], "skipped_total", "skipped_by_reason": {"already requested": 2, ...},
 "skipped": [...first 200 rows]}`; a real request adds `"created": [job ids]`, `"count"` and `"merged"` (a replace
 request that turned an open `fill` job into the replacement). A row is `{"item_id", "title", "lang", "cues", "calls",
 "skip", "reason", "action"}` where `action` is `"translate"`, `"retranslate"` or `""` when skipped. `calls` is the planner's count of model calls to translate; repairs and splits add some.
@@ -469,7 +475,9 @@ no cap); `minutes` and `finish_at` use the average of recent calls over `calls +
 timed) and a spent quota (`paused_until`). `summarize_calls` (P19c) is the calls that condense old story summaries (from the
 fourth old episode on; one per planned episode at most, none where the same summaries were condensed before), on
 `summarize_model` (`summarize_model`, else `memory_model`); both are absent or 0 when there are none, and they count in
-`minutes`.
+`minutes`. `model` (P19a) is the model the `calls` run on (`gst_model`; a judge job's estimate names `judge_model`; a retry of several jobs names each
+model once), `""` when `calls` is 0; every estimate the console shows (translate, retranslate, variant, retry, judge, and the Bootstrap box) names it
+next to the count, and shows `Total calls (est.)` when two or more groups of calls are made.
 
 A request for something that already has an open job makes no second job (it lifts the first to the interactive
 class). The reasons an item is left out: `ignored by the admin`, `the source and the target language are the same`,
@@ -612,6 +620,9 @@ started at this moment would get; `approximate` is true when old summaries could
 only be shortened, not condensed by the model (that needs a call). `policy` is the
 series switch (`""` follows the global `memory_enabled`, `"on"`, `"off"`).
 
+### GET /api/series/{id}/memory
+Also says `extract_model` (P19a): the model "Extract facts" reads with (`memory_model`, else `gst_model`), for the Estimate box of the Context tab.
+
 ### POST /api/units/{id}/context/extract
 Reads facts (**spends model calls**, one per episode, using `memory_model`), as jobs: it makes one `extract` job per
 episode that needs reading, in story order, and answers at once; the queue runs them like any other job (daily quota,
@@ -728,8 +739,11 @@ One character, both halves **in one transaction** (P12b): its Name (a glossary d
 `{"glossary": {...document without the Name...}, "delete_card": "Bob"}`. Everything is validated first (`400` names the
 offending path, for example `card.speech: expected text`), then written together or not at all (a `delete_card` that names
 no card is `404` and writes nothing). Saving a card and deleting one in the same request, or sending nothing, is `400`.
-Reply `{"ok", "saved"}`; the live count of what it would flag stale comes from the `dry_run` of the glossary and card
-routes, as before. A movie has the same at `PUT /api/movies/{unit_id}/characters`.
+Reply `{"ok", "saved", "stale_now", "stale_after", "would_stale"}`. With `"dry_run": true` (P19b) nothing is written and the
+reply only counts what saving would flag stale: **one** count over the Name and the Voice together, so an episode both reach is
+counted once (the sum of the glossary and the card routes counted it twice). `aliases` are the other names of the character:
+the Name holds them (`glossary.characters[].aliases`) and the console writes the same list to the card when it has one; a
+character with no Voice gets no card made for its aliases. A movie has the same at `PUT /api/movies/{unit_id}/characters`.
 
 ### A movie's glossary, style and cards: `/api/movies/{unit_id}/...`
 A movie has the same pages as a series (P12b), reached by the **movie's unit id** (`id` of an item in `GET /api/catalog/movies`

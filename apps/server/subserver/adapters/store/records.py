@@ -74,9 +74,12 @@ class RecordsRepo(Repo):
         return float(row["ms"]) / 1000.0 if row["n"] else None
 
     def policy_jobs_since(self, at: float) -> int:
-        """Jobs the ``auto_request`` policy created since ``at``: what ``auto_request_daily_cap`` counts (FR-15.4)."""
+        """Jobs the ``auto_request`` policy created since ``at``: what ``auto_request_daily_cap`` counts (FR-15.4). A
+        job "Hold again" pulled back (``cancelled`` with the result ``bootstrap_hold``) is not counted: the policy may
+        ask for it again, and holding and releasing a series must not spend the day's cap twice (D-07)."""
         return int(self.query(
-            "SELECT COUNT(*) AS n FROM jobs WHERE origin = 'policy' AND created_at >= ?", (at,)
+            "SELECT COUNT(*) AS n FROM jobs WHERE origin = 'policy' AND created_at >= ?"
+            " AND NOT (state = 'cancelled' AND result = 'bootstrap_hold')", (at,)
         )[0]["n"])
 
     def llm_calls(self, job_id: str | None = None) -> list[LlmCall]:

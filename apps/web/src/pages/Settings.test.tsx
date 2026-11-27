@@ -112,6 +112,14 @@ function worker(extra: Record<string, unknown> = {}, start: Record<string, unkno
   };
 }
 
+/** Choose a model in the box of this name: the option is taken from the list that box opened (every box has one). */
+async function pick(box: string, model: string) {
+  const input = await screen.findByRole("combobox", { name: box });
+  await userEvent.click(input);
+  const opened = document.getElementById(input.getAttribute("aria-controls") ?? "") as HTMLElement;
+  await userEvent.click(await within(opened).findByRole("option", { name: model, hidden: true }));
+}
+
 const posts = () => sent("/api/settings").filter((body) => body !== null) as Array<Record<string, unknown>>;
 
 async function open(name: string) {
@@ -156,6 +164,8 @@ describe("Settings", () => {
       [
         "gst_model",
         "gst_fallback_model",
+        "memory_model",
+        "summarize_model",
         "research_model",
         "research_enabled",
         "research_max_calls_per_series",
@@ -173,6 +183,66 @@ describe("Settings", () => {
     );
     expect(await screen.findByText("✓ Saved")).toBeInTheDocument();
     expect(within(screen.getByRole("button", { name: /^2\. Translation/ })).queryByText("Unsaved changes")).not.toBeInTheDocument();
+  });
+
+  it("keeps every model box in group 2, and says in each empty one what it runs on (FR-9.3.1)", async () => {
+    serve(worker());
+    show("/settings");
+    for (const name of ["Default model", "Strong model", "Memory model", "Summarize model", "Research model", "Judge model"]) {
+      expect(await screen.findByRole("combobox", { name })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("combobox", { name: "Memory model" })).toHaveAttribute("placeholder", "Same as Default (gemini-3.1-flash-lite)");
+    expect(screen.getByRole("combobox", { name: "Summarize model" })).toHaveAttribute("placeholder", "Same as Default (gemini-3.1-flash-lite)");
+    expect(screen.getByRole("combobox", { name: "Research model" })).toHaveAttribute("placeholder", "Same as Default (gemini-3.1-flash-lite)");
+    await open("5. Story and style");
+    expect(screen.queryByRole("combobox", { name: "Memory model" })).toBeInTheDocument(); // still one box, now in group 2
+    expect(screen.getAllByRole("combobox", { name: "Memory model" })).toHaveLength(1);
+  });
+
+  it("lists what each task runs on, follows the boxes before Save, and warns when a changed default drags the others along", async () => {
+    serve(worker());
+    show("/settings");
+    const table = await screen.findByRole("region", { name: "Active models by task" });
+    const row = (label: string) => within(table).getByText(label).closest("li") as HTMLElement;
+    expect(row("Translate")).toHaveTextContent("gemini-3.1-flash-lite");
+    expect(row("Strong fallback")).toHaveTextContent("gemini-3.5-flash");
+    expect(row("Extract facts")).toHaveTextContent("gemini-3.1-flash-lite (uses Default model)");
+    expect(row("Condense story")).toHaveTextContent("(uses Default model)");
+    expect(row("Suggest from facts")).toHaveTextContent("(uses Extract facts model)");
+    expect(row("LLM judge")).toHaveTextContent("Off");
+    expect(screen.queryByText(/have no model of their own/)).not.toBeInTheDocument(); // nothing changed, nothing to warn about
+
+    await pick("Default model", "gemini-3.5-pro");
+    expect(row("Translate")).toHaveTextContent("gemini-3.5-pro");
+    expect(row("Extract facts")).toHaveTextContent("gemini-3.5-pro (uses Default model)");
+    expect(
+      screen.getByText("Extract facts, Condense story, Suggest from facts and Web research have no model of their own and will also run on gemini-3.5-pro."),
+    ).toBeInTheDocument();
+
+    await pick("Memory model", "gemini-3.1-flash-lite");
+    expect(row("Extract facts")).toHaveTextContent("gemini-3.1-flash-lite");
+    expect(row("Condense story")).toHaveTextContent("gemini-3.1-flash-lite (uses Memory model)");
+    expect(screen.getByText("Web research has no model of its own and will also run on gemini-3.5-pro.")).toBeInTheDocument();
+  });
+
+  it("says a Strong model equal to the Default model is dropped when saved", async () => {
+    serve(worker({}, { ...defaults, gst_fallback_model: "gemini-3.1-flash-lite" }));
+    show("/settings");
+    expect(await screen.findByText(/The Strong model is the same as the Default model/)).toBeInTheDocument();
+    const table = screen.getByRole("region", { name: "Active models by task" });
+    expect(within(table).getByText("Strong fallback").closest("li")).toHaveTextContent("Off (single model)");
+  });
+
+  it("does not bring back a memory model kept in an older draft of group 5", async () => {
+    sessionStorage.setItem("gst-draft:settings:story", JSON.stringify({ memory_model: "gemini-3.5-pro", memory_enabled: true }));
+    serve(worker());
+    show("/settings");
+    await open("5. Story and style");
+    expect(await screen.findByRole("switch", { name: "Story memory" })).toBeChecked(); // what it owns is restored
+    expect(screen.getByRole("combobox", { name: "Memory model" })).toHaveValue(""); // what moved is not
+    await userEvent.click(screen.getByRole("button", { name: "Save 5. Story and style" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(Object.keys(posts()[0]!)).not.toContain("memory_model");
   });
 
   it("keeps the LLM judge off until it is switched on, and saves it with its model", async () => {

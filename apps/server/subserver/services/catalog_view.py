@@ -220,18 +220,24 @@ class CatalogView:
 
     def item(self, entry: CatalogEntry, series: CatalogEntry | None, langs: list[str],
              ignored: set[tuple[int, str]], sources: list[dict[str, Any]], *, hold: bool = False,
-             reads: "PageReads | None" = None, unit: Unit | None | object = _UNSET) -> dict[str, Any]:
-        """``hold``: the policy would ask for this item but waits for the series' glossary to be reviewed. ``reads``
-        and ``unit`` (None when the item has none) are what a page already read for the item (see ``page_reads``)."""
+             reads: "PageReads | None" = None, unit: Unit | None | object = _UNSET,
+             blocked: frozenset = frozenset()) -> dict[str, Any]:
+        """``hold``: the policy would ask for this item but waits for the series' glossary to be reviewed. ``blocked`` is
+        what the policy never asks for (``Store.policy_blocked``): those are not waiting for anything. ``reads`` and
+        ``unit`` (None when the item has none) are what a page already read for the item (see ``page_reads``)."""
         unit = self.library.unit_of(entry) if unit is _UNSET else unit
+        picked = pick_source(entry, sources)
         labels = []
         for lang in langs:
             label = self.label(entry, lang, unit, ignored, sources, reads)
-            waiting = hold and label["content"] == "missing" and not label["job"] and not label["ignored"] and not label["removed"]
+            # An episode with no source subtitle is only Missing: the policy could not ask for it either way, so it is
+            # not "waiting for the glossary" (FR-15.12).
+            waiting = (hold and picked is not None and label["content"] == "missing" and not label["job"]
+                       and not label["ignored"] and not label["removed"]
+                       and (entry.season, entry.episode, lang) not in blocked)
             label["reason"] = "bootstrap" if waiting else ""
             label["text"] = display_text(label)
             labels.append(label)
-        picked = pick_source(entry, sources)
         return {
             "id": entry.id, "kind": entry.kind, "bazarr_id": entry.bazarr_id, "title": entry.title,
             "season": entry.season, "episode": entry.episode, "unit_id": unit.id if unit else None,
@@ -333,23 +339,48 @@ class CatalogView:
         listed = self._kept_episodes(series)
         override = stored.auto_request if stored else ""
         policy_on = override == "on" or (override != "off" and bool(self._settings().get("auto_request")))
-        state = self.bootstrap.state(series, [e for e in listed if e.gone_at is None], stored, langs)
+        present = [e for e in listed if e.gone_at is None]
+        state = self.bootstrap.state(series, present, stored, langs, sources)
         held = policy_on and state.locked
         # The page's units and jobs are read once, not asked for per item and language (R10-9).
         units = {(u.season, u.episode): u for u in self.store.list_units(stored.id)} if stored else {}
         reads = self.page_reads(list(units.values()), listed, langs, sources)
+        blocked = self.store.policy_blocked(series.series_key) if held else frozenset()
         items = [
             self.item(e, series, langs, ignored, sources, hold=held and e.id not in state.allowed, reads=reads,
-                      unit=units.get((e.season, e.episode)))
+                      unit=units.get((e.season, e.episode)), blocked=blocked)
             for e in listed
         ]
+        # What "Hold again" would do, only asked when it can be offered (released, still on, and holding would hold).
+        relockable = policy_on and state.released and state.relockable
+        queued = 0
+        if relockable and stored is not None:
+            again = self.bootstrap.state(series, present, stored, langs, sources, released=False)
+            keep = [units[(e.season, e.episode)].id for e in present if e.id in again.allowed and (e.season, e.episode) in units]
+            queued = self.queue.jobs.queued_policy(series.bazarr_id, keep)
+        memory_setting = stored.memory if stored else ""  # Story memory: the series' own choice, else the global switch
+        memory_on = memory_setting == "on" or (memory_setting != "off" and bool(self._settings().get("memory_enabled")))
+        open_jobs = int(self.store.query(
+            "SELECT COUNT(*) AS n FROM jobs WHERE kind = 'publish' AND series_key = ? AND state IN (?, ?, ?)",
+            (series.bazarr_id, *OPEN_STATES),
+        )[0]["n"]) if series.bazarr_id else 0
         return {
             "status": self.status(), "languages": langs,
             "series": {"id": series.id, "title": series.title, "key": series.series_key,
                        "auto_request": stored.auto_request if stored else "", "series_id": stored.id if stored else None,
                        "gone": series.gone_at is not None,
-                       "bootstrap": {"locked": held, "limit": state.limit, "pending": state.pending, "released": state.released,
-                                     "held": sum(1 for i in items for t in i["targets"] if t["reason"])}},
+                       "bootstrap": {
+                           "locked": held, "limit": state.limit, "pending": state.pending, "released": state.released,
+                           "held": sum(1 for i in items for t in i["targets"] if t["reason"]),
+                           # Per language, the same episodes the "Translate whole series" button counts as missing (FR-15.12);
+                           # the ones with no source subtitle are counted apart, not held.
+                           "held_by_lang": {lang: sum(1 for i in items for t in i["targets"] if t["reason"] and t["lang"] == lang)
+                                            for lang in langs},
+                           "no_source": sum(1 for i in items if i["kind"] == KIND_EPISODE and not i["has_source"] and not i["gone"]
+                                            and any(t["content"] == "missing" for t in i["targets"])),
+                           "glossary_empty": state.glossary_empty, "open_jobs": open_jobs, "memory_on": memory_on,
+                           "queued_policy_jobs": queued, "relockable": relockable,
+                       }},
             "items": items,
         }
 

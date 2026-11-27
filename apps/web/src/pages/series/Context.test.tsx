@@ -25,7 +25,7 @@ const unit = (id: number, has_source: boolean, has_facts: boolean) => ({
 });
 
 function memory(overrides: Record<string, unknown> = {}, units = [unit(501, true, true), unit(502, true, false), unit(503, false, false), unit(504, true, false)]) {
-  return { series: { id: 9, title: "Arcane" }, policy: "", specials_after: "", global_enabled: true, units, ...overrides };
+  return { series: { id: 9, title: "Arcane" }, policy: "", specials_after: "", global_enabled: true, extract_model: "lite-1", units, ...overrides };
 }
 
 /** What queueing an extraction answers: one job per episode that needs reading. */
@@ -129,7 +129,7 @@ describe("Series Context tab", () => {
     show("/series/1/context");
     await userEvent.click(await screen.findByRole("button", { name: "Extract facts (2 episodes)" }));
     const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
-    expect(within(sheet).getByText("Model calls (est.)").nextSibling).toHaveTextContent("2");
+    expect(within(sheet).getByText("2 calls · lite-1")).toBeInTheDocument(); // names the model it reads with
     expect(within(sheet).getByText(/One call per episode/)).toBeInTheDocument();
     expect(within(sheet).queryByRole("button", { name: "Run in background" })).not.toBeInTheDocument(); // the queue is the background now
     expect(sent("/api/units/504/context/extract")).toEqual([]);
@@ -178,7 +178,7 @@ describe("Series Context tab", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "Read the facts of S01E04" }));
     await userEvent.click(screen.getByRole("button", { name: "Extract ticked (1)" }));
     const sheet = await screen.findByRole("dialog", { name: "Extract facts" });
-    expect(within(sheet).getByText("Model calls (est.)").nextSibling).toHaveTextContent("1");
+    expect(within(sheet).getByText("1 call · lite-1")).toBeInTheDocument();
     await userEvent.click(within(sheet).getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(sent("/api/units/504/context/extract")).toEqual([{ unit_ids: [504] }]));
   });

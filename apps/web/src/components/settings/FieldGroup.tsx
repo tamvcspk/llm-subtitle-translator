@@ -2,7 +2,7 @@ import { SimpleGrid, Stack } from "@mantine/core";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useModels, useSaveSettings, type SettingsAnswer } from "../../api/queries";
 import { useDraft } from "../../lib/draft";
-import { fieldProblem, keysOf, pick, sameValue, toWire, type Field, type Values } from "../../lib/settings";
+import { fieldProblem, keysOf, modelPlaceholder, pick, sameValue, toWire, type Field, type Values } from "../../lib/settings";
 import { FieldInput } from "./FieldInput";
 import { GroupFrame } from "./GroupFrame";
 
@@ -11,6 +11,8 @@ const NO_KEYS: string[] = [];
 export interface ExtraProps {
   draft: Values;
   set: (patch: Values) => void;
+  /** What the worker has now, for a part that compares the draft with it. */
+  stored: Values;
 }
 
 /**
@@ -26,6 +28,7 @@ export function FieldGroup({
   extra,
   extraProblem,
   footer,
+  afterField,
   settings,
   saved,
   onSaved,
@@ -35,6 +38,8 @@ export function FieldGroup({
   fields: Field[];
   extraKeys?: string[];
   extra?: (props: ExtraProps) => ReactNode;
+  /** A part shown right under one field (by key), full width: the group's fields go on after it. */
+  afterField?: { key: string; render: (props: ExtraProps) => ReactNode };
   /** What is wrong with the part the group edits itself; `null` when nothing is. */
   extraProblem?: (draft: Values) => string | null;
   footer?: ReactNode;
@@ -71,19 +76,31 @@ export function FieldGroup({
     save.mutate(body);
   };
 
-  const fieldsPart = (
+  const grid = (list: Field[]) => (
     <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md" verticalSpacing="md">
-      {fields.map((field) => (
+      {list.map((field) => (
         <FieldInput
           key={field.key}
           field={field}
           value={draft[field.key]}
           models={models.data?.items ?? []}
+          placeholder={field.kind === "model" ? modelPlaceholder(field, draft) : undefined}
           onChange={(value) => set({ [field.key]: value })}
         />
       ))}
     </SimpleGrid>
   );
+  const cut = afterField ? fields.findIndex((field) => field.key === afterField.key) + 1 : 0;
+  const fieldsPart =
+    afterField && cut > 0 ? (
+      <>
+        {grid(fields.slice(0, cut))}
+        {afterField.render({ draft, set, stored })}
+        {grid(fields.slice(cut))}
+      </>
+    ) : (
+      grid(fields)
+    );
 
   return (
     <GroupFrame
@@ -103,7 +120,7 @@ export function FieldGroup({
     >
       <Stack gap="md">
         {fieldsPart}
-        {extra?.({ draft, set })}
+        {extra?.({ draft, set, stored })}
         {footer}
       </Stack>
     </GroupFrame>

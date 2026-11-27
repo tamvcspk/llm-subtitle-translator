@@ -37,6 +37,8 @@ class Estimate(Answer):
     """Calls that condense the old story summaries (memory on, more old episodes than the recent ones kept in full), counted apart from ``calls``; 0 when none."""
     summarize_model: str = ""
     """The model those calls use (``summarize_model``, else ``memory_model``), empty when ``summarize_calls`` is 0."""
+    model: str = ""
+    """The model the ``calls`` run on: the translating model, the strong model for a retry of a job already on that layer, or the judge's for a judge job. Empty when ``calls`` is 0."""
 
 
 class PlannedRow(Answer):

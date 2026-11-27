@@ -7,7 +7,7 @@ const NAMES = [
   // core, catalog
   "useStatus", "useQueue", "useJobSpec", "useMe", "useSignOut",
   "useCatalogStatus", "useSyncCatalog", "useCatalog", "useMovies", "useSeriesPage", "useSeriesUnits",
-  "useSetAutoRequest", "useReleaseBootstrap", "useIgnore",
+  "useSetAutoRequest", "useReleaseBootstrap", "useBootstrapEstimate", "useIgnore",
   // jobs, units, corrections
   "useEstimate", "useRequestJobs", "useStopJob",
   "useUnit", "useCues", "useUnitContext", "useVersions", "useDiff", "useCompare", "useAdoptImpact", "useChoose", "useRevert", "useAdopt", "useCueTotal",

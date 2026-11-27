@@ -19,7 +19,7 @@ function cleanAddress(rule: GlossaryAddress): GlossaryAddress {
 export function cleanCharacter(character: GlossaryCharacter): GlossaryCharacter {
   const out: GlossaryCharacter = { name: text(character.name) };
   for (const key of ["target", "gender", "description"] as const) if (text(character[key])) out[key] = text(character[key]);
-  if (character.aliases && character.aliases.length > 0) out.aliases = character.aliases; // not edited here yet: kept as stored
+  if (character.aliases && character.aliases.length > 0) out.aliases = character.aliases; // the Characters page edits them (P19b)
   return out;
 }
 
@@ -79,9 +79,34 @@ export const NOTE_LABEL: Record<string, string> = {
   copy: "copied from another series",
 };
 
-/** Unordered pair key: `(A, B)` and `(B, A)` map to the same group (P18d, P18f). */
-export function addressPairKey(a: string, b: string): string {
-  const pair = [text(a).toLowerCase(), text(b).toLowerCase()].sort();
+/**
+ * Maps any name a rule may be written with to the character's own name: `characters[].aliases` fold into
+ * `characters[].name` (P19b), so `Carolyn Miller` and `Caroline Miller` are one person. A name that is nobody's alias is its own.
+ * A first match wins, so two characters that claim the same alias do not swap each other's rules.
+ */
+export type Canon = (name: string) => string;
+
+export function canonicalNames(characters: readonly GlossaryCharacter[] | undefined): Canon {
+  const byName = new Map<string, string>();
+  for (const character of characters ?? []) byName.set(text(character.name).toLowerCase(), text(character.name));
+  const byAlias = new Map<string, string>();
+  for (const character of characters ?? []) {
+    for (const alias of character.aliases ?? []) {
+      const key = text(alias).toLowerCase();
+      if (key && !byName.has(key) && !byAlias.has(key)) byAlias.set(key, text(character.name));
+    }
+  }
+  return (name) => {
+    const key = text(name).toLowerCase();
+    return byName.get(key) ?? byAlias.get(key) ?? text(name);
+  };
+}
+
+const identity: Canon = (name) => text(name);
+
+/** Unordered pair key: `(A, B)` and `(B, A)` map to the same group (P18d, P18f), and so do a name and its aliases. */
+export function addressPairKey(a: string, b: string, canon: Canon = identity): string {
+  const pair = [canon(a).toLowerCase(), canon(b).toLowerCase()].sort();
   return `${pair[0]}\0${pair[1]}`;
 }
 
@@ -112,49 +137,76 @@ export function comparePosition(a: string | undefined, b: string | undefined): n
 export interface AddressPairGroup {
   key: string;
   label: string;
-  items: Array<{ rule: GlossaryAddress; index: number }>;
+  items: Array<{ rule: GlossaryAddress; index: number; /** Names of this rule that are aliases (it says them, not the character's own name). */ via: string[] }>;
+  /** Two stages cover the same window with different forms: the glossary says two things at once, and clean-up leaves them. */
+  conflicting: boolean;
 }
 
-/** Group forms of address by unordered character pair and sort each pair's stages by `from` (P18d). */
-export function groupAddressRules(rules: readonly GlossaryAddress[]): AddressPairGroup[] {
+/** The names of a rule that are aliases of a character (they are written as something else than the character's own name). */
+function viaAliases(rule: GlossaryAddress, canon: Canon): string[] {
+  return [rule.a, rule.b].map(text).filter((name) => name !== "" && canon(name).toLowerCase() !== name.toLowerCase());
+}
+
+const sameWindow = (x: GlossaryAddress, y: GlossaryAddress) => sameFold(x.from, y.from) && sameFold(x.until, y.until);
+
+/** Group forms of address by unordered character pair (aliases folded into the character's name) and sort each pair's stages by `from` (P18d). */
+export function groupAddressRules(rules: readonly GlossaryAddress[], characters?: readonly GlossaryCharacter[]): AddressPairGroup[] {
+  const canon = canonicalNames(characters);
   const groups = new Map<string, AddressPairGroup>();
   rules.forEach((rule, index) => {
     const a = text(rule.a);
     const b = text(rule.b);
     const isBlank = !a && !b;
-    const key = isBlank ? `__new_${index}` : addressPairKey(a, b);
+    const key = isBlank ? `__new_${index}` : addressPairKey(a, b, canon);
     const group = groups.get(key) ?? {
       key,
-      label: isBlank ? `New form of address` : `${a || "?"} ↔ ${b || "?"}`,
+      label: isBlank ? `New form of address` : `${canon(a) || "?"} ↔ ${canon(b) || "?"}`,
       items: [],
+      conflicting: false,
     };
-    group.items.push({ rule, index });
+    group.items.push({ rule, index, via: viaAliases(rule, canon) });
     groups.set(key, group);
   });
   for (const group of groups.values()) {
     group.items.sort((x, y) => comparePosition(x.rule.from, y.rule.from) || x.index - y.index);
+    group.conflicting = group.items.some(({ rule: x }, i) =>
+      group.items.slice(i + 1).some(({ rule: y }) => sameWindow(x, y) && !sameForms(x, y, canon)),
+    );
   }
   return [...groups.values()];
 }
 
 const sameFold = (a: string | undefined, b: string | undefined) => text(a).toLowerCase() === text(b).toLowerCase();
 
+/** Do two rules of one pair say the same thing, whichever way round each was written? */
+function sameForms(x: GlossaryAddress, y: GlossaryAddress, canon: Canon): boolean {
+  const flipped = canon(x.a).toLowerCase() !== canon(y.a).toLowerCase();
+  const [yAtoB, yBtoA] = flipped ? [y.b_to_a, y.a_to_b] : [y.a_to_b, y.b_to_a];
+  return sameFold(x.a_to_b, yAtoB) && sameFold(x.b_to_a, yBtoA);
+}
+
 /**
  * Collapse duplicate or adjacent identical forms of address of the same unordered pair (P18f): `(A, B)` and `(B, A)`
- * are compared in the same orientation and adjacent rules with identical forms merge into one window.
+ * are compared in the same orientation and adjacent rules with identical forms merge into one window. With the
+ * glossary's `characters`, a rule written with an alias counts as the character (P19b) and the rule that survives a merge
+ * is written with the character's own name. Rules that disagree about the same window are left as they are.
  */
-export function dedupeAddressRules(rules: readonly GlossaryAddress[]): { rules: GlossaryAddress[]; removed: number } {
+export function dedupeAddressRules(
+  rules: readonly GlossaryAddress[],
+  characters?: readonly GlossaryCharacter[],
+): { rules: GlossaryAddress[]; removed: number } {
+  const canon = canonicalNames(characters);
   const result: GlossaryAddress[] = [];
-  for (const group of groupAddressRules(rules)) {
+  for (const group of groupAddressRules(rules, characters)) {
     if (group.key.startsWith("__new_")) {
       for (const item of group.items) result.push(item.rule);
       continue;
     }
     const anchor = group.items[0]!.rule;
-    const anchorA = text(anchor.a).toLowerCase();
+    const anchorA = canon(anchor.a).toLowerCase();
     const merged: GlossaryAddress[] = [];
     for (const { rule } of group.items) {
-      const reversed = text(rule.a).toLowerCase() !== anchorA && text(rule.b).toLowerCase() === anchorA;
+      const reversed = canon(rule.a).toLowerCase() !== anchorA && canon(rule.b).toLowerCase() === anchorA;
       const oriented: GlossaryAddress = reversed
         ? {
             ...rule,
@@ -172,6 +224,9 @@ export function dedupeAddressRules(rules: readonly GlossaryAddress[]): { rules: 
         if (oriented.until) prev.until = oriented.until;
         else delete prev.until;
         if (!prev.note && oriented.note) prev.note = oriented.note;
+        // Several ways of writing one person became one rule: it says the person's own name.
+        prev.a = canon(prev.a);
+        prev.b = canon(prev.b);
         continue;
       }
       merged.push(oriented);

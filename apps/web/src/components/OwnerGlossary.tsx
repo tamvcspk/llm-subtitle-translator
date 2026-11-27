@@ -4,6 +4,7 @@ import { IconPlus, IconSearch } from "@tabler/icons-react";
 import { useMemo, useState } from "react";
 import { useGlossary, useGlossaryDryRun, useSaveGlossary, type StyleOwner } from "../api/queries";
 import type { GlossaryAddress, GlossaryAnswer, GlossaryDoc, GlossaryTerm } from "../api/types";
+import { isGenericAddress } from "../lib/address";
 import {
   cleanDoc,
   dedupeAddressRules,
@@ -75,19 +76,34 @@ function TermCard({ index, term, window, onChange, onDelete }: { index: number; 
 function AddressCard({
   index,
   rule,
+  via,
   window,
   onChange,
   onDelete,
 }: {
   index: number;
   rule: GlossaryAddress;
+  /** The names of this rule that are aliases of a character: it merges with the character's own rule on Clean up duplicates. */
+  via: string[];
   window: boolean;
   onChange: (patch: Partial<GlossaryAddress>) => void;
   onDelete: () => void;
 }) {
+  // A rule an older glossary holds for "Mom" or "Dad" is shown and kept: the admin decides what it was (D-02), nothing is deleted for them.
+  const generic = [rule.a, rule.b].filter((name) => isGenericAddress(name));
   return (
     <Card withBorder padding="md" radius="md" component="section" aria-label={`Form of address ${index + 1}`}>
       <Stack gap="sm">
+        {generic.length > 0 && (
+          <Alert color="orange" role="note">
+            {`"${generic[0]}" is a generic form of address, not a character. Replace it with a proper name (for example the one who is called that here) or delete this rule.`}
+          </Alert>
+        )}
+        {via.length > 0 && (
+          <Text size="sm" c="dimmed">
+            {`Written via alias: ${via.join(", ")} (merges on Clean up duplicates)`}
+          </Text>
+        )}
         <Group grow align="flex-start" wrap="wrap">
           <TextInput label="Person A" value={rule.a} onChange={(event) => onChange({ a: event.currentTarget.value })} style={{ flex: "1 1 12rem" }} />
           <TextInput label="Person B" value={rule.b} onChange={(event) => onChange({ b: event.currentTarget.value })} style={{ flex: "1 1 12rem" }} />
@@ -163,9 +179,10 @@ function Editor({ owner, lang, answer }: { owner: StyleOwner; lang: string; answ
   const terms = useMemo(() => draft.terms ?? [], [draft.terms]);
   const rules = useMemo(() => draft.address_rules ?? [], [draft.address_rules]);
   const visibleTerms = useMemo(() => filterTerms(terms, filter), [terms, filter]);
-  const groupedRules = useMemo(() => groupAddressRules(rules), [rules]);
+  const characters = draft.characters;
+  const groupedRules = useMemo(() => groupAddressRules(rules, characters), [rules, characters]);
   const visibleGroups = useMemo(() => filterAddressGroups(groupedRules, filter), [groupedRules, filter]);
-  const deduped = useMemo(() => dedupeAddressRules(rules), [rules]);
+  const deduped = useMemo(() => dedupeAddressRules(rules, characters), [rules, characters]);
   // A movie has one subtitle: a window in story order means nothing there.
   const window = !movie;
   const doSave = () => save.mutate({ doc: clean }, { onSuccess: () => setAsking(false) });
@@ -288,17 +305,25 @@ function Editor({ owner, lang, answer }: { owner: StyleOwner; lang: string; answ
                   <Text fw={600} size="sm">
                     {group.label}
                   </Text>
-                  {group.items.length > 1 && (
-                    <Badge variant="light" color="gray" size="sm">
-                      {group.items.length} stages
-                    </Badge>
-                  )}
+                  <Group gap={6}>
+                    {group.conflicting && (
+                      <Badge variant="light" color="orange" size="sm">
+                        Conflicting stages
+                      </Badge>
+                    )}
+                    {group.items.length > 1 && (
+                      <Badge variant="light" color="gray" size="sm">
+                        {group.items.length} stages
+                      </Badge>
+                    )}
+                  </Group>
                 </Group>
-                {group.items.map(({ rule, index }) => (
+                {group.items.map(({ rule, index, via }) => (
                   <AddressCard
                     key={index}
                     index={index}
                     rule={rule}
+                    via={via}
                     window={window}
                     onChange={(patch) => setDraft({ ...draft, address_rules: patchAt(rules, index, patch) })}
                     onDelete={() => setDraft({ ...draft, address_rules: removeAt(rules, index) })}

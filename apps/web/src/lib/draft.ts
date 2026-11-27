@@ -55,7 +55,10 @@ export function useDraft<T extends Record<string, unknown>>(id: string, stored: 
   const [state, setState] = useState<{ draft: T; restored: boolean }>(() => {
     const kept = read(id);
     if (kept) {
-      const merged = { ...stored, ...kept } as T;
+      // A copy kept by an older page may name a box that has moved to another group (`memory_model`, P19a): only the
+      // boxes this form has are taken, so the form never saves a value that is not its own.
+      const own = Object.fromEntries(Object.entries(kept).filter(([key]) => key in stored));
+      const merged = { ...stored, ...own } as T;
       if (!same(merged, stored)) return { draft: merged, restored: true };
     }
     return { draft: stored, restored: false };

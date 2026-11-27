@@ -78,6 +78,19 @@ class LanguageSetting(Answer):
     enabled: bool
 
 
+class TaskModels(Answer):
+    """The model each job runs on by what the settings say now (FR-9.3.1): ``translate`` is ``gst_model``; ``fallback`` the
+    strong model, empty when the translation is one layer; the others follow their own setting, else the model above them."""
+
+    translate: str
+    fallback: str
+    extract: str
+    summarize: str
+    suggest: str
+    research: str
+    judge: str
+
+
 class SettingsAnswer(Answer):
     """Every setting by its API name (``domain/config.py``; the console's list is ``apps/web/src/lib/settings.ts``).
     Only what has a shape of its own is named: the keys, which are never returned (a stored key is ``**********``) and
@@ -113,6 +126,7 @@ class SettingsAnswer(Answer):
     target_languages: list[LanguageSetting]
     media_roots: list[str]
     key_warnings: list[KeyWarning]
+    task_models: TaskModels
 
 
 class ModelCount(Answer):

@@ -128,9 +128,17 @@ origin `policy` and are the automatic class, so they never bring back what the a
 **Bootstrap** (setting `auto_request_bootstrap`, `bootstrap.py`):
 While a series has nothing approved (no glossary with anything in it, no character card, no suggestion
 decided), `auto_request` asks for only its first episodes in story order; the rest stay Missing with the
-reason *Waiting for glossary review*. It is a reason shown by Library, not a job state. It ends when the
-admin presses **Continue**, or once something is approved and nothing waits in Review. The admin's own
+reason *Waiting for glossary review*. It is a reason shown by Library, not a job state. Only episodes with a
+source subtitle that the policy could ask for count (not an ignored or removed one, nor one whose last job failed
+or was cancelled). It ends when the admin lets the series go (**Auto-request remaining N…**, after its estimate:
+the rest is asked for at once), or once something is approved and nothing waits in Review. The admin's own
 requests are never held back.
+
+**Hold again**:
+After a series was let go with nothing approved, the admin holds it once more. It can also pull back the policy's jobs
+that have not started (not the bootstrap's first episodes, not the admin's own): they end `cancelled` with the result
+`bootstrap_hold`, a pull-back the policy's rule "never ask again for what the admin cancelled" and the day's cap do not
+count, so letting the series go again asks for them once more.
 
 **Ignored** (table `unit_decisions`):
 The admin's "do not translate this language of this item". Neither a read nor the policy makes a job for
@@ -396,8 +404,9 @@ the prompt alone, and every reply is validated cue by cue either way.
 
 **Task model**:
 The model a kind of call runs on: `translate` (`gst_model`, with the strong model as the second
-layer), `extract` (`memory_model`), `summarize` (`summarize_model`, else `memory_model`), `research`
-(`research_model`). Each falls back to `gst_model`, so one model setting is enough.
+layer), `extract` (`memory_model`; `suggest` reads facts too, so it follows it), `summarize` (`summarize_model`, else
+`memory_model`), `research` (`research_model`), `judge` (`judge_model`). Each falls back to `gst_model`, so one model setting
+is enough. Settings shows them as *Active models by task*, and every estimate names the model its calls run on.
 
 **Invalid key**:
 A key the provider refused (`AuthError`). It is passed over, the next key takes over, and

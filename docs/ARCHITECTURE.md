@@ -417,7 +417,14 @@ any status, and what the model recently had no answer for (`suggestion_skips`, `
 of the candidates *before* each kind's limit. `FactsProposer.run` stores each kind as soon as it returns and lets a provider
 error propagate typed. `TranslationAttempt` calls `after_facts` once the job is settled and only queues a `suggest` job
 (origin `facts`, the lowest class); it must never raise into the job. `bootstrap.py` says whether a series is held back
-(`is_locked` is pure), asked by both `AutoRequest` and `CatalogView`.
+(`is_locked` is pure), asked by both `AutoRequest` and `CatalogView`. P19d (FR-15.12, D-07): the episodes it lets through are
+the ones the policy can actually ask for (`Store.policy_blocked` leaves out an ignored one, a removed one and one whose last
+job failed or was cancelled by the admin, rule D4; `pick_source` leaves out one with no source subtitle), `BootstrapState`
+says `relockable` and `glossary_empty`, and `released=` asks "what would be held if it were held again?". "Let it go" asks the
+policy for that series only, in the background: `AutoRequest.start(series_key)` takes the pass lock before it answers, so the
+route's `started` is true or false, never a silent empty pass. "Hold again" pulls back the policy's jobs that have not started with
+`JobStore.withdraw_policy` (they end `cancelled` with the result `bootstrap_hold`; `last_ended_state` and `policy_jobs_since`
+do not count that result, so letting the series go again asks for them once more).
 
 **Research grounding (P16, FR-7).** `subcore.research` asks twice, both calls for the `research` task: a search call (the
 provider's search tool on, no schema, `research_model`) and a call that reads its prose into `[{i, target, source_refs}]`
@@ -648,8 +655,10 @@ What must stay true, whatever the change.
   Removed item, one with a job, one whose last finished job failed or was cancelled by the admin (only an admin's request
   retries it, D4), one outside `GST_ONLY_PATHS`, nor past `auto_request_daily_cap`; `Requested.capped` counts only what the
   cap held back). There is no `/api/enqueue`. `auto_request` holds a series with nothing approved to its first
-  `auto_request_bootstrap` episodes (`bootstrap.py`, FR-15.12; the first that still need a translation plus the ones this
-  worker already translated, `Store.translated_episodes`); the admin's own request is never held.
+  `auto_request_bootstrap` episodes (`bootstrap.py`, FR-15.12; the first that still need a translation, have a source
+  subtitle and are not ignored, removed, failed or cancelled, plus the ones this worker already translated,
+  `Store.translated_episodes`); the admin's own request is never held. The held ones are listed per language on the series page
+  (`series.bootstrap.held_by_lang`) and the box that lets them go is an Estimate (`PUT .../bootstrap` with `estimate_only`).
 - **Sync now** only asks: `CatalogSync.request` wakes the background loop (`run_catalog_sync`, the only caller of
   `sync_and_request`) and answers at once; `AutoRequest.run` is guarded by a lock so two passes never add up past the cap;
   `accept_shrink` lets one read past the guard. A GET never writes (`GET /api/series/{id}/memory` makes no unit; the Context

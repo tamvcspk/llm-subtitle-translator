@@ -143,6 +143,21 @@ class SeriesBootstrap(Answer):
     pending: int
     released: bool
     held: int
+    """Episodes with a Missing label and the reason ``bootstrap``, over all target languages; ``held_by_lang`` splits it."""
+    held_by_lang: dict[str, int]
+    """Per target language: the episodes it holds back (they have a source subtitle and nothing else stops them)."""
+    no_source: int
+    """Episodes that are Missing but have no source subtitle: not held, only unable to start."""
+    glossary_empty: bool
+    """Nothing approved yet: no glossary entry and no character card."""
+    open_jobs: int
+    """Translations of this series that are queued, waiting or running."""
+    memory_on: bool
+    """Story memory is on for this series, so facts and suggestions get made."""
+    queued_policy_jobs: int
+    """What "Hold again" would pull back: the policy's jobs that have not started, not counting the bootstrap's own episodes."""
+    relockable: bool
+    """The series is released, the policy is on for it and holding it again would hold something (otherwise Hold again does nothing)."""
 
 
 class SeriesHeader(Answer):
@@ -170,8 +185,26 @@ class PolicyAnswer(Answer):
 
 
 class BootstrapAnswer(Answer):
+    """``PUT /api/catalog/series/{id}/bootstrap``. A real release says ``started``; a hold says ``cancelled``; an estimate says what
+    letting the series go would ask for (and nothing changed)."""
+
     ok: bool
     released: bool
+    estimate_only: bool = maybe()
+    started: bool = maybe()
+    """Release only: the policy's pass for this series was started now. False: another pass was running, the next sync asks."""
+    cancelled: int = maybe()
+    """Hold again only: how many jobs of the policy that had not started were pulled back."""
+    estimate: Estimate = maybe()
+    """Estimate only: what the episodes the policy holds back would cost (the same box as a bulk request)."""
+    planned_total: int = maybe()
+    skipped_total: int = maybe()
+    skipped_by_reason: dict[str, int] = maybe()
+    glossary_empty: bool = maybe()
+    """Estimate only: no glossary entry and no character card yet; the box warns that the rest would be translated without them."""
+    daily_cap: int = maybe()
+    cap_left: int | None = maybe()
+    """Estimate only: ``auto_request_daily_cap`` (0: none) and what is left of it today; the policy asks for no more than that."""
 
 
 class IgnoreAnswer(Answer):

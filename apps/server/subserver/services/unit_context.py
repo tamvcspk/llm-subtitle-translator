@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from .catalog import pick_source
+from ..domain.config import model_for_task
 from ..domain.ports import KIND_EPISODE, KIND_SERIES, Output, Unit
 from .memory import MEMORY_MODES, parse_anchor, unit_label
 
@@ -94,6 +95,7 @@ class ContextMixin:
             "policy": series.memory,
             "specials_after": series.specials_after,
             "global_enabled": self.memory.options(settings).enabled,
+            "extract_model": model_for_task(settings, "extract"),  # what "Extract facts" reads on (the Estimate box names it)
             "units": self.memory.coverage(series_id),
         }
 

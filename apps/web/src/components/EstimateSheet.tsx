@@ -17,24 +17,34 @@ function Line({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Rows of the box in wireframe 0d; a number the planner cannot know is left out, not shown as zero. */
-export function estimateLines(estimate: Estimate): Array<[string, string]> {
+/** "3 calls · gemini-3.8-flash": a count of calls and the model they run on (the model is left out when the answer names none). */
+export function callsText(count: number, model?: string): string {
+  return `${count.toLocaleString()} ${count === 1 ? "call" : "calls"}${model ? ` · ${model}` : ""}`;
+}
+
+/**
+ * Rows of the box in wireframe 0d; a number the planner cannot know is left out, not shown as zero. Each group of calls
+ * names the model it runs on (P19a): `callsLabel` is the main group ("Translate (est.)", or "Judge (est.)" for the judge),
+ * `jobsLabel` what the jobs are called ("Episodes to release" for the Bootstrap box).
+ */
+export function estimateLines(
+  estimate: Estimate,
+  options: { callsLabel?: string; jobsLabel?: string } = {},
+): Array<[string, string]> {
+  const model = estimate.model ?? "";
   const lines: Array<[string, string]> = [
-    ["Jobs", estimate.jobs.toLocaleString()],
+    [options.jobsLabel ?? "Jobs", estimate.jobs.toLocaleString()],
     ["Cues", estimate.cues.toLocaleString()],
-    ["Model calls (est.)", estimate.calls === null ? "unknown" : estimate.calls.toLocaleString()],
+    [options.callsLabel ?? "Translate (est.)", estimate.calls === null ? `unknown${model ? ` · ${model}` : ""}` : callsText(estimate.calls, model)],
   ];
   // Reading the story so far is not translation: its own row, with the model it runs on (FR-15.5.1).
-  if (estimate.extract_calls > 0) {
-    const model = estimate.extract_model ? ` · ${estimate.extract_model}` : "";
-    lines.push(["Extract facts", `${estimate.extract_calls.toLocaleString()} ${estimate.extract_calls === 1 ? "call" : "calls"}${model}`]);
-  }
+  if (estimate.extract_calls > 0) lines.push(["Extract facts", callsText(estimate.extract_calls, estimate.extract_model)]);
   // Condensing the old story summaries is memory work too (FR-5.8): its own row, on its own model.
   const condensing = estimate.summarize_calls ?? 0;
-  if (condensing > 0) {
-    const model = estimate.summarize_model ? ` · ${estimate.summarize_model}` : "";
-    lines.push(["Condense story", `${condensing.toLocaleString()} ${condensing === 1 ? "call" : "calls"}${model}`]);
-  }
+  if (condensing > 0) lines.push(["Condense story", callsText(condensing, estimate.summarize_model)]);
+  // Two or more groups of calls: the sum, so a person sees what the quota pays (it counts what is known).
+  const groups = [estimate.calls ?? 0, estimate.extract_calls, condensing].filter((n) => n > 0).length;
+  if (groups >= 2) lines.push(["Total calls (est.)", ((estimate.calls ?? 0) + estimate.extract_calls + condensing).toLocaleString()]);
   if (estimate.calls_left_today !== null) lines.push(["Calls left today", estimate.calls_left_today.toLocaleString()]);
   if (estimate.paused_until !== null) lines.push(["Paused until", clock(estimate.paused_until)]);
   if (estimate.minutes !== null) {
@@ -123,7 +133,7 @@ export function EstimateSheet({ request, onClose }: { request: EstimateRequest |
             {estimate.isError && <Alert color="red">{estimate.error.message}</Alert>}
             {answer && (
               <Stack gap="xs">
-                {estimateLines(answer.estimate).map(([label, value]) => (
+                {estimateLines(answer.estimate, { callsLabel: request && "judge" in request ? "Judge (est.)" : undefined }).map(([label, value]) => (
                   <Line key={label} label={label} value={value} />
                 ))}
                 {breakdown.map((line) => (

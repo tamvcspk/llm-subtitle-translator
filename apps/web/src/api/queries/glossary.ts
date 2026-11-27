@@ -124,6 +124,31 @@ export function useCardImpact(owner: StyleOwner, lang: string, request: { card: 
   });
 }
 
+/**
+ * What saving a character would flag stale, as one count over its Name and its Voice together: an episode both reach is
+ * counted once (the worker counts them in one pass, `dry_run` of the same route that saves, P19b).
+ */
+export function useCharacterImpact(
+  owner: StyleOwner,
+  lang: string,
+  parts: { glossary: GlossaryDoc | null; card: { card: CharacterCard; replaces?: string } | null } | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["character-impact", owner, lang, parts] as const,
+    queryFn: ({ signal }) =>
+      api<StyleImpact>(ownerUrl<"characters", "put">(owner, "characters", { lang }), {
+        method: "PUT",
+        body: { ...(parts?.glossary ? { glossary: parts.glossary } : {}), ...(parts?.card ? { card: parts.card } : {}), dry_run: true },
+        signal,
+      }),
+    enabled: enabled && parts !== null,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
 /** Save a character: its Name goes into the glossary and its Voice into its card, in one request the worker writes in one transaction (UX §6.3). */
 export function useSaveCharacter(owner: StyleOwner, lang: string) {
   const refresh = useRefreshStyle();

@@ -386,6 +386,39 @@ class UndoTests(unittest.TestCase):
         self.assertEqual(asked["would_stale"], 2)
 
 
+class AliasSyncTests(unittest.TestCase):
+    """P19b (D-04): the other names of a character are one list, in its Name and in its Voice."""
+
+    def test_accepting_a_character_with_a_voice_writes_the_aliases_to_both_halves(self):
+        env = Env(self)
+        env.propose(character(aliases=["Ky"], card={"speech": "hums", "aliases": ["Kyb"]}))
+        env.suggestions.accept(env.pending()[0]["id"])
+        (entry,) = env.glossary().characters
+        (card,) = env.styles.cards("series", "bazarr-7")
+        self.assertEqual((list(entry.aliases), list(card.aliases)), (["Ky", "Kyb"], ["Ky", "Kyb"]))
+
+    def test_a_character_with_no_voice_gets_no_card_made_for_its_aliases(self):
+        env = Env(self)
+        env.propose(character(aliases=["Ky"]))
+        env.suggestions.accept(env.pending()[0]["id"])
+        self.assertEqual(list(env.glossary().characters[0].aliases), ["Ky"])
+        self.assertEqual(env.styles.cards("series", "bazarr-7"), [])
+
+    def test_a_voice_the_admin_already_has_learns_the_aliases_the_suggestion_adds(self):
+        env = Env(self)
+        env.style.save_card(env.series, {"card": {"name": "Kyber", "speech": "mine", "aliases": ["Old"]}})
+        env.propose(character(aliases=["Ky"]))
+        env.suggestions.accept(env.pending()[0]["id"])
+        (card,) = env.styles.cards("series", "bazarr-7")
+        self.assertEqual((card.speech, list(card.aliases), list(env.glossary().characters[0].aliases)), ("mine", ["Ky", "Old"], ["Ky", "Old"]))
+
+    def test_an_alias_equal_to_the_name_is_dropped(self):
+        env = Env(self)
+        env.propose(character(aliases=["kyber", "Ky"]))
+        env.suggestions.accept(env.pending()[0]["id"])
+        self.assertEqual(list(env.glossary().characters[0].aliases), ["Ky"])
+
+
 class EverySourceTests(unittest.TestCase):
     def test_21h_every_source_goes_through_the_same_accept(self):
         env = Env(self)

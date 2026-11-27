@@ -25,6 +25,7 @@ from ..domain.config import (
     GST_STRING_CONFIG_KEYS,
     JUDGE_BOOL_CONFIG_KEYS,
     KEY_SLOTS,
+    task_models,
     LLM_INT_CONFIG_KEYS,
     LLM_PROVIDERS,
     LOG_FLOAT_CONFIG_KEYS,
@@ -300,6 +301,7 @@ class SettingsService:
             config[f"{field}_last4"] = last_chars(row.value) if row else ""
             config[f"{field}_status"] = row.status if row else ""
         config["key_warnings"] = self.warnings()
+        config["task_models"] = task_models(config)
         return config
 
     def export_config(self) -> dict[str, Any]:

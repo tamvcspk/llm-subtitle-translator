@@ -108,10 +108,19 @@ class CatalogAnswers(Contract):
 
         self.assertTrue(self.answer("POST", "/api/catalog/sync", {})["requested"])
         self.assertEqual(self.answer("PUT", f"/api/catalog/series/{series['id']}/policy", {"auto_request": "on"})["auto_request"], "on")
-        self.answer("PUT", f"/api/catalog/series/{series['id']}/bootstrap", {"released": True})
         held = self.answer("GET", f"/api/catalog/series/{series['id']}")
         self.assertEqual(held["series"]["auto_request"], "on")
         self.answer("PUT", f"/api/catalog/series/{series['id']}/policy", {"auto_request": ""})
+        # The three shapes of the bootstrap route, with the policy off for the series so letting it go asks for nothing.
+        bootstrap = f"/api/catalog/series/{series['id']}/bootstrap"
+        self.assertTrue(self.answer("PUT", bootstrap, {"estimate_only": True})["estimate_only"])
+        self.assertIn("started", self.answer("PUT", bootstrap, {"released": True}))
+        self.assertIn("cancelled", self.answer("PUT", bootstrap, {"released": False, "cancel_queued_policy": True}))
+        self.assertEqual(
+            sorted(self.answer("GET", f"/api/catalog/series/{series['id']}")["series"]["bootstrap"]),
+            sorted(["locked", "limit", "pending", "released", "held", "held_by_lang", "no_source", "glossary_empty", "open_jobs",
+                    "memory_on", "queued_policy_jobs", "relockable"]),
+        )
 
         movie = movies["items"][0]["id"]
         self.assertEqual(self.answer("POST", "/api/catalog/ignore", {"items": [movie], "languages": ["vi"]})["changed"], 1)

@@ -71,6 +71,7 @@ export function describe(suggestion: Pick<Suggestion, "kind" | "payload">): { ti
   const character = payload as CharacterPayload;
   const details: string[] = [];
   if (character.gender) details.push(`Gender: ${character.gender}`);
+  if (character.aliases?.length) details.push(`Also: ${character.aliases.join(", ")}`); // accepted into the Name and the Voice alike (P19b)
   if (character.description) details.push(character.description);
   if (character.card?.speech) details.push(`Voice: ${character.card.speech}`);
   return { title: character.target && character.target !== character.name ? `${character.name} → ${character.target}` : character.name, details };

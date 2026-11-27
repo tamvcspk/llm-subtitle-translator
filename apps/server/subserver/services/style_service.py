@@ -13,6 +13,7 @@ import time
 from dataclasses import replace
 from typing import Any, Callable
 
+from subcore import glossary as g
 from subcore import srt
 from subcore.providers import ProviderError
 from subcore.style import CharacterCard, Style, StyleError, resolve_style, language_style
@@ -267,10 +268,26 @@ class StyleService:
             raise ValueError("save a card or delete one, not both")
         if glossary is None and card is None and delete is None:
             raise ValueError("there is nothing to save")
-        self.library.glossaries.write_character(
-            owner.kind, owner.key, lang, glossary_doc=glossary, card=card, delete_card=None if delete is None else str(delete),
+        dry_run = body.get("dry_run") is True
+        # What the save would flag stale: one count over both halves, so an episode the Name and the Voice both reach is
+        # counted once (B1 of the review of P19). ``dry_run`` stops here.
+        candidate = g.from_doc(glossary) if glossary is not None else None  # GlossaryError is a ValueError
+        cards = tuple(self.styles.cards(owner.kind, owner.key))
+        if card is not None:
+            name, doc, replaces = card
+            gone = {name.casefold(), (replaces or "").casefold()}
+            cards = (*[c for c in cards if c.name.casefold() not in gone], CharacterCard.from_doc(doc, "card"))
+        elif delete is not None:
+            cards = tuple(c for c in cards if c.name.casefold() != str(delete).casefold())
+        impact = self.library.impact_units(
+            owner.units, lang, glossary=candidate,
+            layers=(lambda unit: replace(self.library.style_layers(unit), cards=cards)) if (card is not None or delete is not None) else None,
         )
-        return {"ok": True, "saved": True}
+        if not dry_run:
+            self.library.glossaries.write_character(
+                owner.kind, owner.key, lang, glossary_doc=glossary, card=card, delete_card=None if delete is None else str(delete),
+            )
+        return {"ok": True, "saved": not dry_run, **impact}
 
     # -- the style of one episode -------------------------------------------------------------------------
     def unit_style(self, unit_id: int) -> dict[str, Any]:

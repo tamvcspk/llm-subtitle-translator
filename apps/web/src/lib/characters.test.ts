@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { addressFor, cardOf, draftOf, formatAddressWindow, people, plan, sameDraft, styleSummary, withEntry, withoutEntry } from "./characters";
+import {
+  addressFor,
+  aliasesOf,
+  aliasList,
+  cardOf,
+  draftOf,
+  entryOf,
+  formatAddressWindow,
+  nameProblems,
+  people,
+  plan,
+  sameDraft,
+  styleSummary,
+  withEntry,
+  withoutEntry,
+} from "./characters";
 
 const doc = {
   version: 1,
@@ -20,9 +35,9 @@ describe("characters", () => {
     const [vi] = people(doc, [{ name: "Vi", aliases: ["Violet"], catchphrases: ["Cupcake"], samples: ["a", "b"], style: { profanity: "keep" }, always: true }]);
     const draft = draftOf(vi ?? null);
     expect(draft).toMatchObject({ name: "Vi", target: "Vi", aliases: "Violet", catchphrases: "Cupcake", samples: "a\nb", always: true });
-    expect(cardOf({ ...draft, samples: "a\n\n b ", aliases: "Violet, Vi ," })).toEqual({
+    expect(cardOf({ ...draft, samples: "a\n\n b ", aliases: "Violet, Vi , violet," })).toEqual({
       name: "Vi",
-      aliases: ["Violet", "Vi"],
+      aliases: ["Violet"], // not twice, and not the character's own name
       catchphrases: ["Cupcake"],
       samples: ["a", "b"],
       style: { profanity: "keep" },
@@ -91,5 +106,62 @@ describe("characters", () => {
     const a = draftOf(null);
     expect(sameDraft({ ...a, name: " Vi " }, { ...a, name: "Vi" })).toBe(true);
     expect(sameDraft({ ...a, speech: "x" }, a)).toBe(false);
+  });
+});
+
+describe("characters, other names (P19b)", () => {
+  const withAliases = {
+    version: 1,
+    characters: [
+      { name: "Caroline Miller", target: "Caroline Miller", aliases: ["Carolyn Miller"] },
+      { name: "Malcolm", target: "Malcolm" },
+      { name: "Lois", target: "Lois", aliases: ["Mrs. Wilkerson"] },
+    ],
+    address_rules: [
+      { a: "Malcolm", b: "Carolyn Miller", a_to_b: "em–cô", b_to_a: "cô–em" },
+      { a: "Caroline Miller", b: "Malcolm", a_to_b: "cô–em", b_to_a: "em–cô", from: "S02E01" },
+    ],
+  };
+
+  it("reads one list of other names from both halves, without repeats and without the character's own name", () => {
+    const [caroline] = people(withAliases, [{ name: "Caroline Miller", aliases: ["Carolyn Miller", "Miss Miller", "caroline miller"] }]);
+    expect(aliasesOf(caroline ?? null)).toEqual(["Carolyn Miller", "Miss Miller"]);
+    expect(aliasesOf(null)).toEqual([]);
+    expect(draftOf(caroline ?? null).aliases).toBe("Carolyn Miller, Miss Miller");
+  });
+
+  it("writes the same list to the Name, and to the Voice only when there is one", () => {
+    const draft = { ...draftOf(null), name: "Caroline Miller", aliases: "Carolyn Miller, Carolyn Miller, Caroline Miller" };
+    expect(aliasList(draft)).toEqual(["Carolyn Miller"]);
+    expect(entryOf(draft)).toEqual({ name: "Caroline Miller", aliases: ["Carolyn Miller"] });
+    // An alias is not a Voice: no card is made for it...
+    expect(plan(draft, null)).toEqual({ entry: { name: "Caroline Miller", aliases: ["Carolyn Miller"] }, card: null });
+    // ...but a character that has one keeps the two lists equal.
+    const [existing] = people({ version: 1 }, [{ name: "Caroline Miller", speech: "warm" }]);
+    expect(plan({ ...draftOf(existing ?? null), aliases: "Carolyn Miller" }, existing ?? null).card).toEqual({ name: "Caroline Miller", aliases: ["Carolyn Miller"], speech: "warm" });
+  });
+
+  it("refuses a form of address as a name or an alias, and a name that is another character's", () => {
+    const all = people(withAliases, []);
+    const draft = { ...draftOf(null), original: null as string | null };
+    const refusal = `"Mom" is a relative form of address, not a character's name.`;
+    expect(nameProblems({ ...draft, name: "Mom", aliases: "" }, all).name).toBe(refusal);
+    expect(nameProblems({ ...draft, name: "Ida", aliases: "Mom" }, all).aliases).toBe(refusal);
+    expect(nameProblems({ ...draft, name: "Ida", aliases: "Carolyn Miller" }, all).aliases).toBe('"Carolyn Miller" already belongs to Caroline Miller.');
+    expect(nameProblems({ ...draft, name: "Mrs. Wilkerson", aliases: "" }, all).name).toBe('"Mrs. Wilkerson" is already an alias of Lois.');
+    expect(nameProblems({ ...draft, name: "Ida", aliases: "Mrs. Ida" }, all)).toEqual({ name: null, aliases: null });
+    // Editing a character keeps its own names legal.
+    expect(nameProblems({ ...draft, original: "Caroline Miller", name: "Caroline Miller", aliases: "Carolyn Miller" }, all)).toEqual({ name: null, aliases: null });
+  });
+
+  it("reads the forms of address a character has under any of its names", () => {
+    const forms = addressFor(withAliases, "Caroline Miller");
+    expect(forms).toHaveLength(1);
+    expect(forms[0]!.with).toBe("Malcolm");
+    expect(forms[0]!.stages).toEqual([
+      { says: "cô–em", hears: "em–cô" },
+      { says: "cô–em", hears: "em–cô", from: "S02E01" },
+    ]);
+    expect(addressFor(withAliases, "Malcolm")[0]!.with).toBe("Caroline Miller"); // the partner is named as the character, not as the alias
   });
 });

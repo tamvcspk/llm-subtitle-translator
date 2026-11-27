@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router";
 import { useAdoptEpisodes, useExtractFacts, useExtractJobs, useSeriesMemory, useStopJobs, useUnitFacts } from "../../api/queries";
 import type { MemoryUnit, UnitFacts } from "../../api/types";
+import { callsText } from "../../components/EstimateSheet";
 import { FactsView } from "../../components/FactsView";
 import { memoryIsOn, missingFacts, readingLine, skippedLine } from "../../lib/memory";
 import type { SeriesContext } from "../Series";
@@ -11,7 +12,7 @@ import type { SeriesContext } from "../Series";
  * The price of Extract facts (UX §6.4): one call per episode asked for, counted here from the list. **Confirm** queues one
  * job per episode; the queue reads them under the day's quota, so the box closes at once and Activity shows the work.
  */
-function ExtractSheet({ opened, ids, onClose }: { opened: boolean; ids: number[]; onClose: () => void }) {
+function ExtractSheet({ opened, ids, model, onClose }: { opened: boolean; ids: number[]; model: string; onClose: () => void }) {
   const extract = useExtractFacts();
   const answer = extract.data;
 
@@ -55,8 +56,8 @@ function ExtractSheet({ opened, ids, onClose }: { opened: boolean; ids: number[]
               <Text fw={600}>{ids.length.toLocaleString()}</Text>
             </Group>
             <Group justify="space-between" wrap="nowrap">
-              <Text c="dimmed">Model calls (est.)</Text>
-              <Text fw={600}>{ids.length.toLocaleString()}</Text>
+              <Text c="dimmed">Extract facts</Text>
+              <Text fw={600}>{callsText(ids.length, model)}</Text>
             </Group>
             <Text size="sm" c="dimmed">
               One call per episode, with the memory model. Nothing is translated. The jobs wait in line with the translations and
@@ -254,7 +255,7 @@ export function SeriesContextTab() {
         </Stack>
       )}
 
-      <ExtractSheet opened={asking !== null} ids={asking ?? []} onClose={() => setAsking(null)} />
+      <ExtractSheet opened={asking !== null} ids={asking ?? []} model={memory.data.extract_model} onClose={() => setAsking(null)} />
     </Stack>
   );
 }

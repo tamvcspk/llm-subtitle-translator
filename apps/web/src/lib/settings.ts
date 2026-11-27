@@ -17,10 +17,45 @@ export interface Field {
 
 export type Values = Record<string, unknown>;
 
-export const TRANSLATION_FIELDS: Field[] = [
+/** Every box that chooses a model, kept together in group 2 so one Save sets how the quota is shared (FR-9.3.1). */
+export const MODEL_FIELDS: Field[] = [
   { key: "gst_model", label: "Default model", kind: "model", hint: "Does the work." },
   { key: "gst_fallback_model", label: "Strong model", kind: "model", empty: "(none)", hint: "Takes hard jobs, outages and spent quota. Clear it to run on one model." },
-  { key: "research_model", label: "Research model", kind: "model", empty: "(same as Default)", hint: "Does the web search of Research terms. Needs Gemini." },
+  {
+    key: "memory_model",
+    label: "Memory model",
+    kind: "model",
+    empty: "(same as Default)",
+    hint: "Runs Extract facts, Suggest from facts, and step 2 of Web research.",
+  },
+  {
+    key: "summarize_model",
+    label: "Summarize model",
+    kind: "model",
+    empty: "(same as Memory)",
+    hint: "Condenses old story summaries (falls back to Memory, then Default).",
+  },
+  {
+    key: "research_model",
+    label: "Research model",
+    kind: "model",
+    empty: "(same as Default)",
+    hint: "Uses Google Search grounding (Gemini only; skipped on OpenAI-compatible).",
+  },
+  {
+    key: "judge_model",
+    label: "Judge model",
+    kind: "model",
+    empty: "(same as Default)",
+    hint: "A stronger model than the one that translated judges better.",
+  },
+];
+
+/** The box after which group 2 shows the table of models by task and the warnings (they belong with the model boxes). */
+export const LAST_MODEL_FIELD = "judge_model";
+
+export const TRANSLATION_FIELDS: Field[] = [
+  ...MODEL_FIELDS,
   {
     key: "research_enabled",
     label: "Research terms by itself",
@@ -40,7 +75,6 @@ export const TRANSLATION_FIELDS: Field[] = [
     kind: "switch",
     hint: "Off by default. On a candidate in Compare, a model says which cues look better. Advice only, and every use spends model calls.",
   },
-  { key: "judge_model", label: "Judge model", kind: "model", empty: "(same as Default)", hint: "A stronger model than the one that translated judges better." },
   { key: "gst_temperature", label: "Temperature", kind: "numtext", min: 0, max: 2, step: 0.1 },
   { key: "gst_thinking_budget", label: "Thinking budget", kind: "numtext", min: 0, step: 128 },
   { key: "gst_no_thinking", label: "No thinking", kind: "switch" },
@@ -85,8 +119,6 @@ export const QUEUE_FIELDS: Field[] = [
 
 export const STORY_FIELDS: Field[] = [
   { key: "memory_enabled", label: "Story memory", kind: "switch" },
-  { key: "memory_model", label: "Memory model", kind: "model", empty: "(same as Default)" },
-  { key: "summarize_model", label: "Summarize model", kind: "model", empty: "(same as Memory)" },
   { key: "memory_gap_wait_seconds", label: "Gap wait, seconds", kind: "int", min: 0, hint: "0 = never wait." },
   { key: "memory_budget_tokens", label: "Memory budget, tokens", kind: "int", min: 500 },
   { key: "memory_recent_episodes", label: "Recent episodes", kind: "int", min: 0 },
@@ -185,6 +217,95 @@ export function sameValue(field: Field | undefined, a: unknown, b: unknown): boo
   }
   if (field?.kind === "model") return String(a ?? "").trim() === String(b ?? "").trim();
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+const named = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+/** What an empty model box would run on, said in the box itself: "Same as Default (gemini-3.8-flash)" (FR-9.3.1). */
+export function modelPlaceholder(field: Field, values: Values): string | undefined {
+  const main = named(values.gst_model);
+  const memory = named(values.memory_model);
+  if (field.key === "summarize_model" && memory) return `Same as Memory (${memory})`;
+  if (["memory_model", "summarize_model", "research_model", "judge_model"].includes(field.key) && main) return `Same as Default (${main})`;
+  return field.empty;
+}
+
+export interface TaskRow {
+  label: string;
+  /** What it runs on now; empty when the task is off or has no model (the strong layer). */
+  model: string;
+  /** Where an empty box takes its model from: "(uses Default model)". */
+  note: string;
+  off?: string;
+}
+
+/**
+ * The models by task as the boxes say now (the same rule as the worker's `model_for_task`, so it follows the unsaved
+ * draft). `translate` is the default model; the others take their own box, else the one above them.
+ */
+export function activeModels(values: Values): TaskRow[] {
+  const main = named(values.gst_model);
+  const strong = named(values.gst_fallback_model);
+  const memory = named(values.memory_model);
+  const summarize = named(values.summarize_model);
+  const research = named(values.research_model);
+  const judge = named(values.judge_model);
+  return [
+    { label: "Translate", model: main, note: "" },
+    {
+      label: "Strong fallback",
+      model: strong && strong !== main ? strong : "",
+      note: "",
+      off: strong && strong !== main ? undefined : "Off (single model)",
+    },
+    { label: "Extract facts", model: memory || main, note: memory ? "" : "(uses Default model)" },
+    {
+      label: "Condense story",
+      model: summarize || memory || main,
+      note: summarize ? "" : memory ? "(uses Memory model)" : "(uses Default model)",
+    },
+    { label: "Suggest from facts", model: memory || main, note: "(uses Extract facts model)" },
+    { label: "Web research", model: research || main, note: research ? "" : "(uses Default model)" },
+    {
+      label: "LLM judge",
+      model: judge || main,
+      note: judge ? "" : "(uses Default model)",
+      off: values.judge_enabled === true ? undefined : `Off  (${judge || main} when enabled)`,
+    },
+  ];
+}
+
+function joined(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * What a change of the model boxes would surprise the admin with, before it is saved: the tasks with no model of their
+ * own that follow a changed default model, and a strong model equal to the default (the worker drops it on save).
+ */
+export function modelWarnings(stored: Values, draft: Values): string[] {
+  const out: string[] = [];
+  const main = named(draft.gst_model);
+  if (main && main !== named(stored.gst_model)) {
+    const memory = named(draft.memory_model);
+    const followers = [
+      !memory && "Extract facts",
+      !named(draft.summarize_model) && !memory && "Condense story",
+      !memory && "Suggest from facts",
+      !named(draft.research_model) && "Web research",
+      !named(draft.judge_model) && draft.judge_enabled === true && "LLM judge",
+    ].filter((name): name is string => typeof name === "string");
+    if (followers.length > 0) {
+      const one = followers.length === 1;
+      out.push(`${joined(followers)} ${one ? "has" : "have"} no model of ${one ? "its" : "their"} own and will also run on ${main}.`);
+    }
+  }
+  const strong = named(draft.gst_fallback_model);
+  if (strong && strong === main) {
+    out.push("The Strong model is the same as the Default model. Saving clears it, and the translation runs on one model.");
+  }
+  return out;
 }
 
 export function formatBytes(bytes: number): string {

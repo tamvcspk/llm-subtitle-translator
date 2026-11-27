@@ -44,6 +44,11 @@ describe("describe", () => {
       title: "Vi",
       details: ["Gender: f", "Voice: blunt"],
     });
+    // The other names of a character are said on the card, so accepting it is no surprise (P19b).
+    expect(describeSuggestion({ kind: "character", payload: { name: "Caroline Miller", aliases: ["Carolyn Miller"] } })).toEqual({
+      title: "Caroline Miller",
+      details: ["Also: Carolyn Miller"],
+    });
   });
 });
 

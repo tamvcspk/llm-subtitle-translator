@@ -41,6 +41,9 @@ class Estimate:
     # The calls that condense the old story summaries (P19c, FR-5.8): memory work like the reads, on ``summarize_model``.
     summarize_calls: int = 0
     summarize_model: str = ""
+    # The model the main group of ``calls`` runs on (P19a): the translating model, or the judge's for a judge job.
+    # Empty when there are no such calls.
+    model: str = ""
 
 
 class Estimator:
@@ -64,9 +67,12 @@ class Estimator:
         wanted = ordinals if ordinals is not None else list(range(1, len(cues) + 1))
         return max(1, len(plan_parts(cues, wanted, self.max_output_tokens())))
 
-    def of(self, jobs: int, cues: int, calls: int, extract_calls: int = 0, summarize_calls: int = 0) -> Estimate:
+    def of(
+        self, jobs: int, cues: int, calls: int, extract_calls: int = 0, summarize_calls: int = 0, *, model: str | None = None,
+    ) -> Estimate:
         """``extract_calls`` are the story-fact reads the jobs would run first (P15g) and ``summarize_calls`` the calls
-        that condense old story summaries (P19c); they take time like any call."""
+        that condense old story summaries (P19c); they take time like any call. ``model`` is what the ``calls`` run on
+        (default: the translating model; a judge job passes the judge's)."""
         now = self._clock()
         settings = self._settings()
         cap = int(settings.get("max_calls_per_day") or 0)
@@ -87,4 +93,5 @@ class Estimator:
             extract_calls=extract_calls, extract_model=model_for_task(settings, "extract") if extract_calls else "",
             summarize_calls=summarize_calls,
             summarize_model=model_for_task(settings, "summarize") if summarize_calls else "",
+            model=(model if model is not None else model_for_task(settings, "translate")) if calls else "",
         )

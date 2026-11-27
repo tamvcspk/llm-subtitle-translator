@@ -214,7 +214,7 @@ describe("Compare page", () => {
     show("/unit/7/compare/4?lang=vi");
     await userEvent.click(await screen.findByRole("button", { name: "Ask the judge (2 cues)" }));
     const sheet = await screen.findByRole("dialog", { name: "Ask the judge · Candidate v4" });
-    expect(await within(sheet).findByText("Model calls (est.)")).toBeInTheDocument();
+    expect(await within(sheet).findByText("Judge (est.)")).toBeInTheDocument();
     expect(sent("/api/units/7/versions/4/judge")).toEqual([{ lang: "vi", estimate_only: true }]); // nothing is queued by looking
     await userEvent.click(within(sheet).getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(sent("/api/units/7/versions/4/judge")).toEqual([{ lang: "vi", estimate_only: true }, { lang: "vi" }]));

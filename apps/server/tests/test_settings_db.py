@@ -465,6 +465,23 @@ class ModelNotFoundTests(unittest.TestCase):
             self.assertEqual(service.warnings(), [])
 
 
+class TaskModelsTests(unittest.TestCase):
+    def test_settings_say_which_model_each_task_runs_on_and_follow_a_change(self):
+        with started() as (service, root, store):
+            service.save({"gst_model": "big", "gst_fallback_model": "", "memory_model": ""})
+            models = service.public()["task_models"]
+            self.assertEqual({models[name] for name in ("translate", "extract", "summarize", "suggest", "research", "judge")}, {"big"})
+            self.assertEqual(models["fallback"], "")  # one layer
+            service.save({"gst_model": "big", "gst_fallback_model": "strong", "memory_model": "cheap", "judge_model": "judge-it"})
+            models = service.public()["task_models"]
+            self.assertEqual(
+                (models["translate"], models["fallback"], models["extract"], models["suggest"], models["summarize"], models["research"], models["judge"]),
+                ("big", "strong", "cheap", "cheap", "cheap", "big", "judge-it"),
+            )
+            service.save({"gst_model": "strong"})  # the strong model equal to the default is dropped when saved
+            self.assertEqual(service.public()["task_models"]["fallback"], "")
+
+
 class BackupTests(unittest.TestCase):
     """19e: a backup holds no API key unless asked to, and a restore never touches the console account."""
 

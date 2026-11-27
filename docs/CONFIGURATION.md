@@ -371,9 +371,14 @@ Library browses that cache. Reading it never creates a job. These settings are l
   Missing and is tried again after the next read.
 - `auto_request_bootstrap` (default `2`, `0` = no wait): a series with **nothing approved yet** (no glossary with anything
   in it, no character card, no suggestion decided) gets only this many first episodes (story order, specials last) from the
-  policy. The rest stay Missing with the reason *Waiting for glossary review*, and the series page says so. It is let go
-  when you press **Continue**, or when something was approved and nothing is left waiting in Review (or every suggestion
-  was decided). The rest is then requested after the next read. Your own requests are never held back.
+  policy, among the episodes that have a source subtitle and that the policy could ask for (an ignored or removed one, or
+  one whose last job failed or you cancelled, takes no place). The rest stay Missing with the reason *Waiting for glossary
+  review*, and the series page says so, in the state it is really in (suggestions waiting, a job running, Story memory off, or
+  nothing to review). It is let go when you press **Auto-request remaining N…** and confirm the estimate (it asks for the rest at once,
+  for that series), or when something was approved and nothing is left waiting in Review (or every suggestion was decided).
+  **Hold again** (on a series you let go with nothing approved) holds it once more and, if you tick it, pulls back the policy's
+  jobs that have not started (not the first episodes', not yours); letting it go again asks for them once more. Your own
+  requests are never held back.
 
 A request you make in Library is not limited by the cap. A request for more than one job shows an estimate first
 (jobs, cues, model calls, what is left of `max_calls_per_day`, the time at the recent pace) and asks you to confirm.
@@ -453,9 +458,12 @@ prints the facts and the running relationship state per episode.
   subtitle yet, the job waits this long (checking every 5 minutes) and then translates with
   the story incomplete (`incomplete` in the Library). `0` never waits. A manual retranslation
   never waits.
-- `memory_model`: model that reads facts (task `extract`); blank uses `gst_model`. A cheaper model is fine.
+- `memory_model`: model that reads facts (task `extract`) and makes suggestions from them; blank uses `gst_model`. A cheaper model is fine.
 - `summarize_model`: model that condenses old summaries (task `summarize`); blank uses `memory_model`, then
   `gst_model`.
+  Both are chosen in group *2. Translation* of Settings, beside the other model boxes, where an empty box says which model it
+  runs on and the table *Active models by task* lists all seven (`GET /api/settings` answers it as `task_models`). Changing the
+  default model while some box is empty is warned about there: those tasks follow it.
 - `memory_recent_episodes` (default `3`) and `memory_budget_tokens` (default `8000`): the
   summaries of that many latest earlier episodes are given in full; when the whole story
   would exceed the budget, older summaries are condensed by one model call (cached).

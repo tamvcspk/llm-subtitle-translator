@@ -109,6 +109,14 @@ export function episode(n: number, overrides: Partial<CatalogItem> = {}): Catalo
   };
 }
 
+/** The Bootstrap block of a series that is not held; a test overrides what it is about. */
+export function bootstrapState(overrides: Partial<SeriesPage["series"]["bootstrap"]> = {}): SeriesPage["series"]["bootstrap"] {
+  return {
+    locked: false, limit: 2, pending: 0, released: false, held: 0, held_by_lang: { vi: 0 }, no_source: 0, glossary_empty: true,
+    open_jobs: 0, memory_on: true, queued_policy_jobs: 0, relockable: false, ...overrides,
+  };
+}
+
 export function seriesPage(items: CatalogItem[], overrides: Partial<SeriesPage["series"]> = {}): SeriesPage {
   return {
     status: catalogStatus({ items: items.length, listed: items.length }),
@@ -120,7 +128,7 @@ export function seriesPage(items: CatalogItem[], overrides: Partial<SeriesPage["
       auto_request: "",
       series_id: 9,
       gone: false,
-      bootstrap: { locked: false, limit: 2, pending: 0, released: false, held: 0 },
+      bootstrap: bootstrapState(),
       ...overrides,
     },
     items,

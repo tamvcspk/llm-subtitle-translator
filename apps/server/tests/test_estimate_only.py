@@ -7,6 +7,7 @@ import json
 import unittest
 
 from subserver.api import library_api
+from subserver.domain.config import TASK_NAMES, model_for_task, task_models
 from subserver.services.console import ConsoleActions
 from subserver.services.estimates import Estimator
 
@@ -149,8 +150,44 @@ class EstimateNumbers(unittest.TestCase):
         self.assertEqual((result["calls_left_today"], result["paused_until"]), (10, None))
         self.assertEqual(set(result), {
             "jobs", "cues", "calls", "calls_left_today", "paused_until", "minutes", "finish_at", "extract_calls", "extract_model",
-            "summarize_calls", "summarize_model",
+            "summarize_calls", "summarize_model", "model",
         })
+        self.assertEqual(result["model"], model_for_task({}, "translate"))  # the model the calls run on, named in the box
+
+
+class ModelsNamed(unittest.TestCase):
+    """P19a (FR-9.3.1): the box says which model the calls run on, and Settings says which model each task would run on."""
+
+    def test_each_estimate_names_the_model_of_its_calls(self):
+        env = Env(self)
+        env.translated(1)
+        wanted = model_for_task(env.service._settings(), "translate")
+        self.assertTrue(wanted)
+        self.assertEqual(env.service.retranslate(env.unit(1), {"lang": "vi", "estimate_only": True})["estimate"]["model"], wanted)
+        self.assertEqual(env.service.variant(env.unit(1), {"lang": "vi", "style": {"tone": "dry"}, "estimate_only": True})["estimate"]["model"], wanted)
+        job = failed_retranslation(env, 1)
+        self.assertEqual(env.service.estimate_retry({"job_id": job})["estimate"]["model"], wanted)
+
+    def test_an_estimate_with_no_calls_has_no_model(self):
+        estimate = Estimator(Env(self).store, Env(self).jobs, lambda: {}).of(0, 0, 0)
+        self.assertEqual(estimate.model, "")
+
+    def test_a_judge_estimate_says_the_judges_model(self):
+        env = Env(self)
+        estimator = Estimator(env.store, env.jobs, lambda: {"gst_model": "light", "judge_model": "big"})
+        self.assertEqual(estimator.of(1, 10, 2).model, "light")
+        self.assertEqual(estimator.of(1, 10, 2, model="big").model, "big")
+
+    def test_task_models_follow_model_for_task_for_all_seven_roles(self):
+        both = {"gst_model": "main", "gst_fallback_model": "strong", "memory_model": "cheap", "summarize_model": "", "research_model": "web"}
+        self.assertEqual(task_models(both), {
+            "translate": "main", "fallback": "strong", "extract": "cheap", "summarize": "cheap", "suggest": "cheap",
+            "research": "web", "judge": "main",
+        })
+        one = task_models({"gst_model": "main", "gst_fallback_model": "main"})
+        self.assertEqual(one["fallback"], "")  # the same model twice is one layer
+        self.assertEqual({one[name] for name in TASK_NAMES if name != "fallback"}, {"main"})  # a single model setting is enough
+        self.assertEqual(set(one), set(TASK_NAMES))
 
 
 class AdoptKeepingTheStyle(unittest.TestCase):

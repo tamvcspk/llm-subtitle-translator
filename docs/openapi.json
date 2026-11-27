@@ -5458,6 +5458,51 @@
           },
           "released": {
             "type": "boolean"
+          },
+          "estimate_only": {
+            "type": "boolean"
+          },
+          "started": {
+            "type": "boolean",
+            "description": "Release only: the policy's pass for this series was started now. False: another pass was running, the next sync asks."
+          },
+          "cancelled": {
+            "type": "integer",
+            "description": "Hold again only: how many jobs of the policy that had not started were pulled back."
+          },
+          "estimate": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "Estimate only: what the episodes the policy holds back would cost (the same box as a bulk request)."
+          },
+          "planned_total": {
+            "type": "integer"
+          },
+          "skipped_total": {
+            "type": "integer"
+          },
+          "skipped_by_reason": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "glossary_empty": {
+            "type": "boolean",
+            "description": "Estimate only: no glossary entry and no character card yet; the box warns that the rest would be translated without them."
+          },
+          "daily_cap": {
+            "type": "integer"
+          },
+          "cap_left": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Estimate only: ``auto_request_daily_cap`` (0: none) and what is left of it today; the policy asks for no more than that."
           }
         },
         "additionalProperties": false,
@@ -5465,7 +5510,8 @@
         "required": [
           "ok",
           "released"
-        ]
+        ],
+        "description": "``PUT /api/catalog/series/{id}/bootstrap``. A real release says ``started``; a hold says ``cancelled``; an estimate says what\nletting the series go would ask for (and nothing changed)."
       },
       "BootstrapBody": {
         "properties": {
@@ -5473,11 +5519,22 @@
             "type": "boolean",
             "title": "Released",
             "default": true
+          },
+          "estimate_only": {
+            "type": "boolean",
+            "title": "Estimate Only",
+            "default": false
+          },
+          "cancel_queued_policy": {
+            "type": "boolean",
+            "title": "Cancel Queued Policy",
+            "default": false
           }
         },
         "additionalProperties": true,
         "type": "object",
-        "title": "BootstrapBody"
+        "title": "BootstrapBody",
+        "description": "``released: true`` lets a held series go (with ``estimate_only`` it only says what that would ask for); ``false`` holds it\nagain, and ``cancel_queued_policy`` then also pulls back the policy's jobs that have not started (FR-15.12)."
       },
       "BulkAnswer": {
         "properties": {
@@ -6165,14 +6222,27 @@
           },
           "saved": {
             "type": "boolean"
+          },
+          "stale_now": {
+            "type": "integer"
+          },
+          "stale_after": {
+            "type": "integer"
+          },
+          "would_stale": {
+            "type": "integer"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "ok",
-          "saved"
-        ]
+          "saved",
+          "stale_now",
+          "stale_after",
+          "would_stale"
+        ],
+        "description": "``PUT …/characters``: the Name and the Voice written together (or only counted, with ``dry_run``). The counts are one\nset over both halves, so an episode both reach is counted once."
       },
       "ChooseAnswer": {
         "properties": {
@@ -7110,6 +7180,10 @@
           "summarize_model": {
             "type": "string",
             "description": "The model those calls use (``summarize_model``, else ``memory_model``), empty when ``summarize_calls`` is 0."
+          },
+          "model": {
+            "type": "string",
+            "description": "The model the ``calls`` run on: the translating model, the strong model for a retry of a job already on that layer, or the judge's for a judge job. Empty when ``calls`` is 0."
           }
         },
         "additionalProperties": false,
@@ -11465,7 +11539,39 @@
             "type": "boolean"
           },
           "held": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Episodes with a Missing label and the reason ``bootstrap``, over all target languages; ``held_by_lang`` splits it."
+          },
+          "held_by_lang": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "description": "Per target language: the episodes it holds back (they have a source subtitle and nothing else stops them)."
+          },
+          "no_source": {
+            "type": "integer",
+            "description": "Episodes that are Missing but have no source subtitle: not held, only unable to start."
+          },
+          "glossary_empty": {
+            "type": "boolean",
+            "description": "Nothing approved yet: no glossary entry and no character card."
+          },
+          "open_jobs": {
+            "type": "integer",
+            "description": "Translations of this series that are queued, waiting or running."
+          },
+          "memory_on": {
+            "type": "boolean",
+            "description": "Story memory is on for this series, so facts and suggestions get made."
+          },
+          "queued_policy_jobs": {
+            "type": "integer",
+            "description": "What \"Hold again\" would pull back: the policy's jobs that have not started, not counting the bootstrap's own episodes."
+          },
+          "relockable": {
+            "type": "boolean",
+            "description": "The series is released, the policy is on for it and holding it again would hold something (otherwise Hold again does nothing)."
           }
         },
         "additionalProperties": false,
@@ -11475,7 +11581,14 @@
           "limit",
           "pending",
           "released",
-          "held"
+          "held",
+          "held_by_lang",
+          "no_source",
+          "glossary_empty",
+          "open_jobs",
+          "memory_on",
+          "queued_policy_jobs",
+          "relockable"
         ],
         "description": "While nothing of a series is approved, ``auto_request`` asks for its first ``limit`` episodes only (FR-15.12).\n``locked`` says it is holding the rest back; ``pending`` is how many suggestions wait for review."
       },
@@ -11548,6 +11661,10 @@
           "global_enabled": {
             "type": "boolean"
           },
+          "extract_model": {
+            "type": "string",
+            "description": "The model \"Extract facts\" runs on (``memory_model``, else ``gst_model``), for the Estimate box of the Context tab."
+          },
           "units": {
             "items": {
               "$ref": "#/components/schemas/MemoryUnit"
@@ -11562,6 +11679,7 @@
           "policy",
           "specials_after",
           "global_enabled",
+          "extract_model",
           "units"
         ]
       },
@@ -11690,6 +11808,9 @@
               "$ref": "#/components/schemas/KeyWarning"
             },
             "type": "array"
+          },
+          "task_models": {
+            "$ref": "#/components/schemas/TaskModels"
           }
         },
         "additionalProperties": true,
@@ -11721,7 +11842,8 @@
           "source_languages",
           "target_languages",
           "media_roots",
-          "key_warnings"
+          "key_warnings",
+          "task_models"
         ],
         "description": "Every setting by its API name (``domain/config.py``; the console's list is ``apps/web/src/lib/settings.ts``).\nOnly what has a shape of its own is named: the keys, which are never returned (a stored key is ``**********``) and\nsay what they safely can, the languages and the warnings. The other settings are plain values, and the answer\ncarries every one of them."
       },
@@ -12408,6 +12530,43 @@
         "additionalProperties": true,
         "type": "object",
         "title": "SyncBody"
+      },
+      "TaskModels": {
+        "properties": {
+          "translate": {
+            "type": "string"
+          },
+          "fallback": {
+            "type": "string"
+          },
+          "extract": {
+            "type": "string"
+          },
+          "summarize": {
+            "type": "string"
+          },
+          "suggest": {
+            "type": "string"
+          },
+          "research": {
+            "type": "string"
+          },
+          "judge": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "translate",
+          "fallback",
+          "extract",
+          "summarize",
+          "suggest",
+          "research",
+          "judge"
+        ],
+        "description": "The model each job runs on by what the settings say now (FR-9.3.1): ``translate`` is ``gst_model``; ``fallback`` the\nstrong model, empty when the translation is one layer; the others follow their own setting, else the model above them."
       },
       "TelemetryStats": {
         "properties": {

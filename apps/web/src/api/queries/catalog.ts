@@ -82,13 +82,38 @@ export function useSetAutoRequest(id: number) {
   });
 }
 
-/** **Continue**: let `auto_request` go past the first episodes of a series whose glossary nobody has reviewed (FR-15.12). */
+type BootstrapAnswerOf = AnswerOf<"/api/catalog/series/{p1}/bootstrap", "put">;
+
+/**
+ * What letting a held series go would ask for: nothing changes, nothing is made (FR-15.12). The box of "Auto-request
+ * remaining N…" shows it, so the button never spends without a price. A price is only true now: never reused.
+ */
+export function useBootstrapEstimate(id: number, opened: boolean) {
+  return useQuery({
+    queryKey: ["bootstrap-estimate", id],
+    queryFn: ({ signal }) =>
+      api<BootstrapAnswerOf>(`/api/catalog/series/${id}/bootstrap`, { method: "PUT", body: { released: true, estimate_only: true }, signal }),
+    enabled: opened,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/**
+ * Let `auto_request` go past the first episodes of a series whose glossary nobody has reviewed, and ask for the rest at
+ * once (`released: true`), or hold it again (`released: false`), optionally pulling back what the policy queued and had
+ * not started (`cancelQueuedPolicy`) (FR-15.12).
+ */
 export function useReleaseBootstrap(id: number) {
-  const client = useQueryClient();
+  const refresh = useRefreshJobs();
   return useMutation({
-    mutationFn: (released: boolean) =>
-      api<AnswerOf<"/api/catalog/series/{p1}/bootstrap", "put">>(`/api/catalog/series/${id}/bootstrap`, { method: "PUT", body: { released } }),
-    onSettled: () => client.invalidateQueries({ queryKey: ["catalog"] }),
+    mutationFn: ({ released, cancelQueuedPolicy }: { released: boolean; cancelQueuedPolicy?: boolean }) =>
+      api<BootstrapAnswerOf>(`/api/catalog/series/${id}/bootstrap`, {
+        method: "PUT",
+        body: released ? { released: true } : { released: false, cancel_queued_policy: cancelQueuedPolicy === true },
+      }),
+    onSettled: () => void refresh(), // the rest may be in line already, or pulled back
   });
 }
 

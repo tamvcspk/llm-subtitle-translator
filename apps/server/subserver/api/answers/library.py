@@ -505,6 +505,8 @@ class SeriesMemory(Answer):
     specials_after: str
     """Where season 0 sits in the story (``S02E05``); blank is after the last episode of the first season."""
     global_enabled: bool
+    extract_model: str
+    """The model "Extract facts" runs on (``memory_model``, else ``gst_model``), for the Estimate box of the Context tab."""
     units: list[MemoryUnit]
 
 

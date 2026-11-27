@@ -155,7 +155,7 @@ class JudgeService:
         if body.get("estimate_only") is True:
             return {
                 "ok": True, "estimate_only": True, "cues": cues, "differing": len(wanted), "capped": len(wanted) > cues,
-                "calls": calls, "model": self.model(), "estimate": asdict(self.units.estimator.of(1, cues, calls)),
+                "calls": calls, "model": self.model(), "estimate": asdict(self.units.estimator.of(1, cues, calls, model=self.model())),
             }
         series = self.units.catalog.get_series(unit.series_id) if unit.series_id is not None else None
         job_id, new = self.queue.enqueue_judge({

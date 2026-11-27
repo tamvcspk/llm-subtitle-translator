@@ -34,6 +34,24 @@ class CharacterWriteTests(unittest.TestCase):
                    "card": {"card": {"name": "Violet", "speech": "blunt"}, "replaces": "Vi"}})
         self.assertEqual((names(self.env, self.series), cards(self.env, self.series)), (["Violet"], ["Violet"]))
 
+    def test_dry_run_counts_one_set_over_both_halves_and_writes_nothing(self):
+        # The Name and the Voice both reach episode 1; it is flagged once, not once per half (B1 of the P19 review).
+        body = {"glossary": {"version": 1, "characters": [{"name": "Vi", "target": "Vi", "aliases": ["Violet"]}]},
+                "card": {"card": {"name": "Vi", "speech": "blunt", "aliases": ["Violet"]}}}
+        counted = self.save({**body, "dry_run": True})
+        self.assertEqual((counted["ok"], counted["saved"], counted["would_stale"]), (True, False, 1))
+        self.assertEqual((names(self.env, self.series), cards(self.env, self.series)), ([], []))
+        saved = self.save(body)
+        self.assertEqual((saved["saved"], saved["would_stale"]), (True, 1))
+        self.assertEqual((names(self.env, self.series), cards(self.env, self.series)), (["Vi"], ["Vi"]))
+        again = self.save({**body, "dry_run": True})
+        self.assertEqual(again["would_stale"], 0)  # nothing new to flag: the episode is already counted as stale
+
+    def test_dry_run_of_a_delete_counts_what_losing_the_voice_would_flag(self):
+        self.save({"glossary": {"version": 1, "characters": [{"name": "Vi"}]}, "card": {"card": {"name": "Vi", "speech": "blunt"}}})
+        counted = self.save({"glossary": {"version": 1, "characters": [{"name": "Vi"}]}, "delete_card": "Vi", "dry_run": True})
+        self.assertEqual((counted["saved"], cards(self.env, self.series)), (False, ["Vi"]))  # still there
+
     def test_a_bad_card_stops_the_save_before_the_name_is_written(self):
         with self.assertRaises(ValueError):
             self.save({"glossary": {"version": 1, "characters": [{"name": "Vi"}]}, "card": {"card": {"name": "Vi", "nonsense": 1}}})

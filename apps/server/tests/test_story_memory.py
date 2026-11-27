@@ -482,6 +482,7 @@ class ContextEndpointTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             env.service.set_series_memory(series_id, {"specials_after": "next week"})
         self.assertEqual(env.service.series_memory(series_id)["units"][0]["label"], "S01E01")
+        self.assertTrue(env.service.series_memory(series_id)["extract_model"])  # the Estimate box of Extract facts names it
 
     def test_refresh_extracts_facts_for_the_episode_and_those_before_it(self):
         env = all_sources(self)

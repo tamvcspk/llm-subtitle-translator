@@ -56,6 +56,14 @@ FILL, REPLACE = "fill", "replace"
 
 SKIPPED_RESULTS = ("skipped", "skipped-not-wanted", "skipped-existing-output")
 
+# A ``cancelled`` job whose ``result`` is this was pulled back by "Hold again" (FR-15.12), not by the admin cancelling it
+# for good: the policy's rule D4 and the day's cap do not count it, so letting the series go again asks for it once more.
+BOOTSTRAP_HOLD = "bootstrap_hold"
+# The same fact as a SQL condition on a row of ``jobs`` called ``alias``.
+def not_withdrawn(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return f"NOT ({prefix}state = '{CANCELLED}' AND {prefix}result = '{BOOTSTRAP_HOLD}')"
+
 
 def job_key(subtitle_path: str, output_path: str, target_code: str) -> str:
     """The sha1 that has always identified "this source subtitle into this target"."""
@@ -242,9 +250,10 @@ class JobStore:
     def last_ended_state(self, key: str, unit_id: int | None, target_lang: str, kind: str = PUBLISH) -> str | None:
         """The state of the newest finished job (done, skipped, failed or cancelled) of this request, found by its key or,
         when files were renamed, by its unit and language; None when it never ended. The policy reads it to leave a
-        request alone that failed or that the admin cancelled (R10-1, D4)."""
+        request alone that failed or that the admin cancelled (R10-1, D4). A job "Hold again" pulled back
+        (``BOOTSTRAP_HOLD``) is not one of those: it is as if it had not been made."""
         rows = self.store.query(
-            "SELECT state FROM jobs WHERE kind = ? AND state IN (?, ?, ?, ?)"
+            f"SELECT state FROM jobs WHERE kind = ? AND state IN (?, ?, ?, ?) AND {not_withdrawn()}"
             " AND (key = ? OR (unit_id = ? AND target_lang = ?)) ORDER BY id DESC LIMIT 1",
             (kind, *ENDED_STATES, key, unit_id, target_lang),
         )
@@ -559,6 +568,32 @@ class JobStore:
                 db.execute("UPDATE jobs SET cancel_requested = 1, updated_at = ? WHERE job_id = ?", (now, job_id))
                 return "stopping"
         return None
+
+    def withdraw_policy(self, series_key: str, keep_units: Iterable[int] = ()) -> int:
+        """Pull back the translations the policy asked for and that have not started (``queued`` or ``waiting``) for
+        one series, keeping the jobs of ``keep_units`` (the bootstrap's own episodes). They end ``cancelled`` with the
+        result ``BOOTSTRAP_HOLD``, so the row stays in Activity and the policy may ask for them again (D-07). Admin
+        requests, retranslations and the job that runs now are not touched. Returns how many were pulled back."""
+        keep = sorted({int(unit) for unit in keep_units})
+        now = self.clock()
+        with self.store.transaction() as db:
+            sql = ("UPDATE jobs SET state = ?, wait_reason = '', result = ?, updated_at = ?, finished_at = ?"
+                   " WHERE kind = ? AND origin = 'policy' AND series_key = ? AND state IN (?, ?)")
+            args: list[Any] = [CANCELLED, BOOTSTRAP_HOLD, now, now, PUBLISH, series_key, QUEUED, WAITING]
+            if keep:
+                sql += f" AND (unit_id IS NULL OR unit_id NOT IN ({','.join('?' * len(keep))}))"
+                args.extend(keep)
+            return db.execute(sql, args).rowcount
+
+    def queued_policy(self, series_key: str, keep_units: Iterable[int] = ()) -> int:
+        """How many jobs ``withdraw_policy`` would pull back: what the "Hold again" sheet says before the admin decides."""
+        keep = sorted({int(unit) for unit in keep_units})
+        sql = ("SELECT COUNT(*) AS n FROM jobs WHERE kind = ? AND origin = 'policy' AND series_key = ? AND state IN (?, ?)")
+        args: list[Any] = [PUBLISH, series_key, QUEUED, WAITING]
+        if keep:
+            sql += f" AND (unit_id IS NULL OR unit_id NOT IN ({','.join('?' * len(keep))}))"
+            args.extend(keep)
+        return int(self.store.query(sql, args)[0]["n"])
 
     def gate_rows(self) -> list["GateRow"]:
         """The rows the script's admission gate left (FR-12), still in the table, oldest first.

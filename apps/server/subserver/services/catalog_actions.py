@@ -15,7 +15,7 @@ from .catalog_view import CatalogView
 from .job_requests import JobRequests, PlannedJob, RequestPlan, Selection
 from ..jobs.jobs import FILL
 from .library import Library
-from ..domain.ports import KIND_SERIES
+from ..domain.ports import KIND_SERIES, CatalogEntry
 from ..adapters.store import Store
 
 ROWS_SHOWN = 200  # a bulk request over a whole library names its first rows and counts the rest
@@ -51,6 +51,8 @@ class CatalogActions:
         self.auto = auto
         self.requests = requests
         self.view = view
+        #: Runs the policy's pass right after "let it go" (``AutoRequest.start``): a background thread unless a test says otherwise.
+        self.spawn: Any = None
 
     # -- reading ---------------------------------------------------------------------------------------------------
     def status(self) -> dict[str, Any]:
@@ -115,14 +117,60 @@ class CatalogActions:
         return {"ok": True, "auto_request": value}
 
     def set_bootstrap(self, catalog_id: int, body: dict[str, Any]) -> dict[str, Any]:
-        """**Continue** (FR-15.12): let ``auto_request`` go past the first episodes of a series whose glossary nobody has
-        reviewed. ``released: false`` holds it again. The rest is requested after the next sync, not at once."""
+        """Let ``auto_request`` go past the first episodes of a series whose glossary nobody has reviewed, or hold it
+        again (FR-15.12). Three shapes:
+
+        * ``released: true, estimate_only: true``: change nothing and say what letting it go would ask for (the Estimate
+          box; the button never skips it).
+        * ``released: true``: let it go, and ask for the rest now, in the background and for this series only. ``started``
+          is false when another pass of the policy was running: the next sync then asks.
+        * ``released: false``: hold it again; with ``cancel_queued_policy`` also pull back the policy's jobs that have not
+          started, except the bootstrap's own episodes. They end ``cancelled`` with the result ``bootstrap_hold``, so
+          letting it go again asks for them once more (D-07)."""
         released = body.get("released", True)
-        if not isinstance(released, bool):
-            raise ValueError("released must be true or false")
+        estimate_only = body.get("estimate_only", False)
+        cancel = body.get("cancel_queued_policy", False)
+        for name, value in (("released", released), ("estimate_only", estimate_only), ("cancel_queued_policy", cancel)):
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be true or false")
         entry = self.store.catalog_entry(catalog_id)
         if entry is None or entry.kind != KIND_SERIES:
             raise LookupError(f"no series {catalog_id} in the catalog")
+        if estimate_only:
+            if not released:
+                raise ValueError("estimate_only is for letting a series go; holding it again costs nothing")
+            return self._bootstrap_estimate(entry)
         series_id = self.store.upsert_series(entry.series_key, title=entry.title, bazarr_id=entry.bazarr_id)
         self.store.set_series_bootstrap_released(series_id, released)
-        return {"ok": True, "released": released}
+        if released:
+            return {"ok": True, "released": True, "started": self.auto.start(entry.series_key, self.spawn)}
+        cancelled = 0
+        if cancel:
+            cancelled = self._withdraw_policy(entry)
+        return {"ok": True, "released": False, "cancelled": cancelled}
+
+    def _withdraw_policy(self, entry: CatalogEntry) -> int:
+        """Pull back the policy's jobs of a series that have not started, but only when holding it would hold something,
+        and never the ones of the episodes the bootstrap itself lets through."""
+        episodes, again = self.auto.bootstrap_view(entry, released=False)
+        if not again.locked:
+            return 0
+        stored = self.store.series_by_key(entry.series_key)
+        units = {(u.season, u.episode): u.id for u in self.store.list_units(stored.id)} if stored else {}
+        keep = [units[(e.season, e.episode)] for e in episodes if e.id in again.allowed and (e.season, e.episode) in units]
+        return self.requests.queue.jobs.withdraw_policy(entry.bazarr_id, keep)
+
+    def _bootstrap_estimate(self, entry: CatalogEntry) -> dict[str, Any]:
+        """What letting this series go would ask for: the episodes the policy holds back, planned the way the policy
+        plans them (so the ones it would skip are counted as skipped, with the reason), and the day's cap."""
+        episodes, state = self.auto.bootstrap_view(entry)
+        targets = self.auto.target_codes()
+        held = [e for e in episodes if state.locked and e.id not in state.allowed and targets & set(e.missing)]
+        plan = self.requests.plan(Selection(everything=True), FILL, automatic=True, entries=held)
+        cap, left = self.auto.daily_cap()
+        return {
+            "ok": True, "released": state.released, "estimate_only": True, "estimate": asdict(plan.estimate),
+            "planned_total": len(plan.planned), "skipped_total": len(plan.skipped),
+            "skipped_by_reason": dict(Counter(j.reason for j in plan.skipped)),
+            "glossary_empty": state.glossary_empty, "daily_cap": cap, "cap_left": left,
+        }

@@ -225,6 +225,27 @@ def model_for_task(settings: dict[str, Any], task: str, default: str = DEFAULT_M
     return main
 
 
+TASK_NAMES = ("translate", "fallback", "extract", "summarize", "suggest", "research", "judge")
+
+
+def task_models(settings: dict[str, Any], default: str = DEFAULT_MODEL) -> dict[str, str]:
+    """The model each job of the worker runs on, by what the settings say now (FR-9.3.1; the console shows it so a changed
+    ``gst_model`` is not a surprise for the jobs that read). ``fallback`` is the strong model, empty when there is none (the
+    translation is one layer); ``suggest`` reads the facts, so it follows ``extract``. Nothing here changes how a task
+    picks its model: this reads ``model_for_task``."""
+    main = model_for_task(settings, "translate", default)
+    strong = str(settings.get("gst_fallback_model") or "").strip()
+    return {
+        "translate": main,
+        "fallback": "" if strong == main else strong,
+        "extract": model_for_task(settings, "extract", default),
+        "summarize": model_for_task(settings, "summarize", default),
+        "suggest": model_for_task(settings, "extract", default),
+        "research": model_for_task(settings, "research", default),
+        "judge": model_for_task(settings, "judge", default),
+    }
+
+
 def enabled_languages(config: dict[str, Any], key: str, default: list[dict[str, Any]]) -> list[dict[str, Any]]:
     entries = config.get(key) if isinstance(config, dict) else None
     if not isinstance(entries, list):

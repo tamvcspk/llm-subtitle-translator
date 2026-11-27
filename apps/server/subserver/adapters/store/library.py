@@ -289,6 +289,31 @@ class LibraryRepo(Repo):
         )
         return frozenset((r["season"], r["episode"]) for r in rows)
 
+    def policy_blocked(self, series_key: str) -> frozenset[tuple[int | None, int | None, str]]:
+        """``(season, episode, language)`` the ``auto_request`` policy will not ask for again, whatever the catalog says:
+        ignored by the admin, removed by the admin (the newest version of its file is ``removed``) or whose newest ended
+        job failed or was cancelled by the admin (rule D4). A job pulled back by "Hold again" is not among them. The
+        bootstrap leaves these out of the episodes it lets through, or a series could be held on episodes the policy
+        would never request (FR-15.12)."""
+        blocked: set[tuple[int | None, int | None, str]] = set()
+
+        def add(sql: str) -> None:
+            for row in self.query(sql, (series_key,)):
+                blocked.add((row["season"], row["episode"], str(row["lang"])))
+
+        add("SELECT u.season, u.episode, d.target_lang AS lang FROM unit_decisions d JOIN units u ON u.id = d.unit_id"
+            " JOIN series s ON s.id = u.series_id WHERE s.key = ? AND d.decision = 'ignored'")
+        add("SELECT u.season, u.episode, t.target_lang AS lang FROM translations t JOIN units u ON u.id = t.unit_id"
+            " JOIN series s ON s.id = u.series_id WHERE s.key = ? AND t.status = 'removed' AND t.version = ("
+            "SELECT MAX(v.version) FROM translations v WHERE v.output_path = t.output_path)")
+        add("SELECT u.season, u.episode, j.target_lang AS lang FROM jobs j JOIN units u ON u.id = j.unit_id"
+            " JOIN series s ON s.id = u.series_id WHERE s.key = ? AND j.kind = 'publish'"
+            " AND j.state IN ('failed', 'cancelled') AND j.id = (SELECT MAX(k.id) FROM jobs k WHERE k.unit_id = j.unit_id"
+            " AND k.target_lang = j.target_lang AND k.kind = 'publish'"
+            " AND k.state IN ('done', 'failed', 'cancelled', 'skipped')"
+            " AND NOT (k.state = 'cancelled' AND k.result = 'bootstrap_hold'))")
+        return frozenset(blocked)
+
     def series_by_key(self, key: str) -> Series | None:
         with self._lock:
             row = self._db.execute("SELECT * FROM series WHERE key = ?", (key,)).fetchone()

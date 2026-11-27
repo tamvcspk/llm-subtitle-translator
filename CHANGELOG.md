@@ -1,6 +1,6 @@
 # Unreleased
 
-- **P19b/P19c: clean characters and a shorter, consistent translation prompt (in progress).**
+- **P19: clean characters, a shorter prompt, visible models and a safe Bootstrap.**
   - *Characters:* "Mom", "Dad", "Sir" and the like are no longer character names or aliases (`subcore.memory.address`, read-time, stored
     facts untouched, so no translation turns stale and nothing is extracted again); an entry that declares another as its alias merges
     inside one episode (`Mom (aka Lois)` + `Lois` is one Lois, `Ida (aka Mom)` stays Ida). Extraction prompt `x4` asks for proper
@@ -9,6 +9,24 @@
     `Metadata.cast`, else the facts); a form-of-address rule is listed only when both people are in it, a pair the glossary has a rule
     for is not printed again in *Relationship state* or in a character voice, and old story summaries are condensed from the fourth on.
     The Estimate box counts the new condensing calls (`summarize_calls`).
+  - *Other names of a character (P19b UI):* the Characters sheet has one `Aliases` box in the Name part; Save writes the list to the glossary
+    entry and, for a character that has a Voice, to the card (never a card made for an alias alone); a form of address typed as a name or
+    an alias, or a name another character owns, is refused on the form, while a glossary that already holds "Mom" is read as it is and
+    warned about on its rule. Forms of address fold aliases into the character's name (grouping, *Written via alias*, *Clean up
+    duplicates*, *Conflicting stages*); accepting a `character` suggestion writes its aliases to both halves (`Also: …` on the card).
+    `PUT …/characters` takes `dry_run` and counts the Name and the Voice as one set (an episode both reach was counted twice).
+  - *Models by task (P19a):* Settings group *2. Translation* now holds every model box (Memory and Summarize moved up from group 5),
+    each empty box says what it runs on (`Same as Default (gemini-3.8-flash)`), *Active models by task* lists the seven roles
+    (`GET /api/settings` also answers them as `task_models`) and a changed default model warns about the tasks that will follow it.
+    Every estimate names the model of its calls (`Estimate.model`: `Translate (est.): 16 calls · model`, `Judge (est.)`), shows
+    `Total calls (est.)` when two or more groups of calls are made, and the Context tab's Extract facts box names `extract_model`.
+  - *Safe Bootstrap (P19d, D-07):* the held count and the first episodes are the ones the policy can really ask for (a source subtitle
+    is needed; an ignored, removed, failed or cancelled episode takes no place), counted per language (`held_by_lang`, `no_source`).
+    The yellow box says the state it is in (suggestions waiting, a job running, Story memory off, nothing to review) and **Continue** is
+    **Auto-request remaining N…**: it opens an estimate (episodes, calls and models, the day's cap, an orange warning when the glossary
+    is empty) and Confirm lets the series go and asks for the rest at once, for that series only and in the background (`started`).
+    **Hold again** (only when it would hold something: `relockable`) can also pull back the policy's jobs that have not started
+    (result `bootstrap_hold`); letting it go again asks for exactly those, and neither the policy's rule D4 nor the daily cap counts them.
 
 ## 1.0.0-rc.2 (2026-11-25)
 Second release candidate: Phase 18 (P18a–P18f) UX round 1–2 fixes, disk I/O reduction, pair-level address proposals with hysteresis, and P18 code review fixes (R18-1..R18-10).

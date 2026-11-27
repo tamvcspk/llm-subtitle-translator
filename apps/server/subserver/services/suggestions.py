@@ -634,12 +634,15 @@ class SuggestionService:
             before = [e for e in existing if _identity(kind, e) == _identity(kind, entry)]
             if kind == "character" and len(before) == 1:  # the fields the proposal says; what the admin wrote stays (R13-3)
                 entry = {**before[0], **entry}
+            card_doc = payload.get("card")
+            if kind == "character":
+                # One list of other names, in the Name and in the Voice alike (P19b, D-04), so the card never loses what the glossary knows
+                entry, card_doc = _sync_aliases(entry, card_doc, cards.get(str(entry["name"]).casefold()))
             record = {"section": section, "before": before, "after": entry}
             if before == [entry]:
                 record["noop"] = True
             else:
                 doc[section] = [e for e in existing if _identity(kind, e) != _identity(kind, entry)] + [entry]
-            card_doc = payload.get("card")
             if card_doc is not None:
                 prior = cards.get(str(entry["name"]).casefold())
                 if prior is not None:  # a card the admin already has keeps its other fields (and its own spelling of the name)
@@ -683,6 +686,26 @@ class SuggestionService:
             )
         else:
             self.library.glossaries.save_doc(owner.kind, owner.key, lang, folded.doc, note=note)
+
+
+def _sync_aliases(
+    entry: dict[str, Any], card_doc: dict[str, Any] | None, prior: CharacterCard | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """The other names of a character, one list for both of its halves: the union of what the glossary entry, the card
+    the suggestion brings and the card already stored say, written to the entry and to the card (when there is one).
+    A character with no Voice gets no card made for it."""
+    names: list[str] = []
+    for source in (entry.get("aliases") or [], (card_doc or {}).get("aliases") or [], prior.aliases if prior else ()):
+        for alias in source:
+            alias = str(alias).strip()
+            if alias and alias.casefold() not in {n.casefold() for n in names} and alias.casefold() != str(entry["name"]).casefold():
+                names.append(alias)
+    if not names:
+        return entry, card_doc
+    entry = {**entry, "aliases": names}
+    if card_doc is not None or prior is not None:
+        card_doc = {**(card_doc if card_doc is not None else prior.to_doc()), "aliases": names}
+    return entry, card_doc
 
 
 def _blank(series_id: int, lang: str, kind: str, source: str) -> Suggestion:

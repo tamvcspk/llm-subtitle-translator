@@ -1647,17 +1647,52 @@ export interface components {
         BackupsAnswer: {
             items: components["schemas"]["BackupFile"][];
         };
+        /**
+         * @description ``PUT /api/catalog/series/{id}/bootstrap``. A real release says ``started``; a hold says ``cancelled``; an estimate says what
+         *     letting the series go would ask for (and nothing changed).
+         */
         BootstrapAnswer: {
             ok: boolean;
             released: boolean;
+            estimate_only?: boolean;
+            /** @description Release only: the policy's pass for this series was started now. False: another pass was running, the next sync asks. */
+            started?: boolean;
+            /** @description Hold again only: how many jobs of the policy that had not started were pulled back. */
+            cancelled?: number;
+            /** @description Estimate only: what the episodes the policy holds back would cost (the same box as a bulk request). */
+            estimate?: components["schemas"]["Estimate"];
+            planned_total?: number;
+            skipped_total?: number;
+            skipped_by_reason?: {
+                [key: string]: number;
+            };
+            /** @description Estimate only: no glossary entry and no character card yet; the box warns that the rest would be translated without them. */
+            glossary_empty?: boolean;
+            daily_cap?: number;
+            /** @description Estimate only: ``auto_request_daily_cap`` (0: none) and what is left of it today; the policy asks for no more than that. */
+            cap_left?: number | null;
         };
-        /** BootstrapBody */
+        /**
+         * BootstrapBody
+         * @description ``released: true`` lets a held series go (with ``estimate_only`` it only says what that would ask for); ``false`` holds it
+         *     again, and ``cancel_queued_policy`` then also pulls back the policy's jobs that have not started (FR-15.12).
+         */
         BootstrapBody: {
             /**
              * Released
              * @default true
              */
             released: boolean;
+            /**
+             * Estimate Only
+             * @default false
+             */
+            estimate_only: boolean;
+            /**
+             * Cancel Queued Policy
+             * @default false
+             */
+            cancel_queued_policy: boolean;
         } & {
             [key: string]: unknown;
         };
@@ -1836,9 +1871,16 @@ export interface components {
             aliases?: string[];
             card?: components["schemas"]["CharacterCard"];
         };
+        /**
+         * @description ``PUT …/characters``: the Name and the Voice written together (or only counted, with ``dry_run``). The counts are one
+         *     set over both halves, so an episode both reach is counted once.
+         */
         CharacterSaved: {
             ok: boolean;
             saved: boolean;
+            stale_now: number;
+            stale_after: number;
+            would_stale: number;
         };
         ChooseAnswer: {
             ok: boolean;
@@ -2090,6 +2132,8 @@ export interface components {
             summarize_calls?: number;
             /** @description The model those calls use (``summarize_model``, else ``memory_model``), empty when ``summarize_calls`` is 0. */
             summarize_model?: string;
+            /** @description The model the ``calls`` run on: the translating model, the strong model for a retry of a job already on that layer, or the judge's for a judge job. Empty when ``calls`` is 0. */
+            model?: string;
         };
         /**
          * EstimateBody
@@ -3197,7 +3241,24 @@ export interface components {
             limit: number;
             pending: number;
             released: boolean;
+            /** @description Episodes with a Missing label and the reason ``bootstrap``, over all target languages; ``held_by_lang`` splits it. */
             held: number;
+            /** @description Per target language: the episodes it holds back (they have a source subtitle and nothing else stops them). */
+            held_by_lang: {
+                [key: string]: number;
+            };
+            /** @description Episodes that are Missing but have no source subtitle: not held, only unable to start. */
+            no_source: number;
+            /** @description Nothing approved yet: no glossary entry and no character card. */
+            glossary_empty: boolean;
+            /** @description Translations of this series that are queued, waiting or running. */
+            open_jobs: number;
+            /** @description Story memory is on for this series, so facts and suggestions get made. */
+            memory_on: boolean;
+            /** @description What "Hold again" would pull back: the policy's jobs that have not started, not counting the bootstrap's own episodes. */
+            queued_policy_jobs: number;
+            /** @description The series is released, the policy is on for it and holding it again would hold something (otherwise Hold again does nothing). */
+            relockable: boolean;
         };
         SeriesHeader: {
             id: number;
@@ -3219,6 +3280,8 @@ export interface components {
             /** @description Where season 0 sits in the story (``S02E05``); blank is after the last episode of the first season. */
             specials_after: string;
             global_enabled: boolean;
+            /** @description The model "Extract facts" runs on (``memory_model``, else ``gst_model``), for the Estimate box of the Context tab. */
+            extract_model: string;
             units: components["schemas"]["MemoryUnit"][];
         };
         /** @description ``GET /api/catalog/series/{id}``: one series with the label of every episode and language. */
@@ -3262,6 +3325,7 @@ export interface components {
             target_languages: components["schemas"]["LanguageSetting"][];
             media_roots: string[];
             key_warnings: components["schemas"]["KeyWarning"][];
+            task_models: components["schemas"]["TaskModels"];
         } & {
             [key: string]: unknown;
         };
@@ -3441,6 +3505,19 @@ export interface components {
             accept_shrink: boolean;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * @description The model each job runs on by what the settings say now (FR-9.3.1): ``translate`` is ``gst_model``; ``fallback`` the
+         *     strong model, empty when the translation is one layer; the others follow their own setting, else the model above them.
+         */
+        TaskModels: {
+            translate: string;
+            fallback: string;
+            extract: string;
+            summarize: string;
+            suggest: string;
+            research: string;
+            judge: string;
         };
         TelemetryStats: {
             written: number;

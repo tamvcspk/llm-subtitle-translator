@@ -1,13 +1,23 @@
 import { Accordion, Alert, Loader, Stack, Title } from "@mantine/core";
 import { useState } from "react";
 import { useSettings, type SettingsAnswer } from "../api/queries";
+import { ActiveModels } from "../components/settings/ActiveModels";
 import { ConnectionsGroup } from "../components/settings/ConnectionsGroup";
 import { FieldGroup } from "../components/settings/FieldGroup";
 import { LanguageLists, languagesProblem, MediaRoots, rootsProblem } from "../components/settings/ListParts";
 import { MaintenanceTools } from "../components/settings/MaintenanceTools";
 import { SecurityGroup } from "../components/settings/SecurityGroup";
 import { forgetDraft } from "../lib/draft";
-import { keysOf, LIBRARY_FIELDS, MAINTENANCE_FIELDS, pick, QUEUE_FIELDS, STORY_FIELDS, TRANSLATION_FIELDS } from "../lib/settings";
+import {
+  keysOf,
+  LAST_MODEL_FIELD,
+  LIBRARY_FIELDS,
+  MAINTENANCE_FIELDS,
+  pick,
+  QUEUE_FIELDS,
+  STORY_FIELDS,
+  TRANSLATION_FIELDS,
+} from "../lib/settings";
 
 const CONNECTION_KEYS = ["bazarr_url", "llm_provider", "llm_base_url"];
 const LANGUAGE_KEYS = ["source_languages", "target_languages"];
@@ -43,6 +53,7 @@ function Groups({ settings }: { settings: SettingsAnswer }) {
         title="2. Translation"
         fields={TRANSLATION_FIELDS}
         extraKeys={LANGUAGE_KEYS}
+        afterField={{ key: LAST_MODEL_FIELD, render: ({ draft, stored }) => <ActiveModels draft={draft} stored={stored} /> }}
         extra={(props) => <LanguageLists {...props} />}
         extraProblem={languagesProblem}
         {...saving("translation")}

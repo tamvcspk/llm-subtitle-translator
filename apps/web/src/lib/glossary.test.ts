@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanDoc,
+  canonicalNames,
   dedupeAddressRules,
   filterAddressGroups,
   filterTerms,
@@ -128,5 +129,56 @@ describe("glossary document", () => {
     ]);
     expect(filterAddressGroups(groups, "powder").map((g) => g.label)).toEqual(["Vi ↔ Powder"]);
     expect(filterAddressGroups(groups, "tôi–cậu").map((g) => g.label)).toEqual(["Jayce ↔ Viktor"]);
+  });
+});
+
+describe("forms of address and other names (P19b)", () => {
+  const people = [{ name: "Caroline Miller", aliases: ["Carolyn Miller"] }, { name: "Malcolm" }];
+  const forms = { a_to_b: "em–cô", b_to_a: "cô–em" };
+
+  it("groups a rule written with an alias under the character's own name and says so", () => {
+    const groups = groupAddressRules(
+      [
+        { a: "Malcolm", b: "Caroline Miller", ...forms },
+        { a: "Malcolm", b: "Carolyn Miller", ...forms, from: "S02E01" },
+      ],
+      people,
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.label).toBe("Malcolm ↔ Caroline Miller");
+    expect(groups[0]!.items.map((item) => item.via)).toEqual([[], ["Carolyn Miller"]]);
+    // Without the characters, they are two people, as before.
+    expect(groupAddressRules([{ a: "Malcolm", b: "Caroline Miller" }, { a: "Malcolm", b: "Carolyn Miller" }])).toHaveLength(2);
+  });
+
+  it("merges a rule written with an alias into the character's rule, and the survivor says the character's name", () => {
+    const res = dedupeAddressRules(
+      [
+        { a: "Malcolm", b: "Carolyn Miller", ...forms },
+        { a: "Caroline Miller", b: "Malcolm", a_to_b: "cô–em", b_to_a: "em–cô", from: "S02E01" },
+      ],
+      people,
+    );
+    expect(res.removed).toBe(1);
+    expect(res.rules).toEqual([{ a: "Malcolm", b: "Caroline Miller", ...forms }]);
+  });
+
+  it("leaves a rule that disagrees about the same window, and says the stages conflict", () => {
+    const rules = [
+      { a: "Malcolm", b: "Caroline Miller", ...forms },
+      { a: "Malcolm", b: "Carolyn Miller", a_to_b: "tôi–cô", b_to_a: "tôi–em" },
+    ];
+    const res = dedupeAddressRules(rules, people);
+    expect(res.removed).toBe(0);
+    expect(res.rules).toHaveLength(2);
+    expect(groupAddressRules(rules, people)[0]!.conflicting).toBe(true);
+    // Different windows are stages, not a conflict.
+    expect(groupAddressRules([{ a: "Malcolm", b: "Caroline Miller", ...forms }, { a: "Malcolm", b: "Caroline Miller", a_to_b: "x", b_to_a: "y", from: "S02E01" }], people)[0]!.conflicting).toBe(false);
+  });
+
+  it("does not take a name that is a character as an alias of another", () => {
+    const canon = canonicalNames([{ name: "Lois", aliases: ["Hal"] }, { name: "Hal" }]);
+    expect(canon("hal")).toBe("Hal");
+    expect(canon("Ida")).toBe("Ida");
   });
 });

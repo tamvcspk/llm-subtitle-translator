@@ -17,11 +17,14 @@ export function FieldInput({
   value,
   onChange,
   models,
+  placeholder,
 }: {
   field: Field;
   value: unknown;
   onChange: (value: unknown) => void;
   models: ModelChoice[];
+  /** What an empty model box says it runs on (it follows the draft); the field's own `empty` when not given. */
+  placeholder?: string;
 }) {
   const problem = fieldProblem(field, value);
   const zoneList = useMemo(() => zones(), []);
@@ -63,7 +66,7 @@ export function FieldInput({
         <Select
           label={field.label}
           description={field.hint}
-          placeholder={field.empty}
+          placeholder={placeholder ?? field.empty}
           data={data}
           value={current || null}
           onChange={(next) => onChange(next ?? "")}

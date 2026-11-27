@@ -92,7 +92,12 @@ class PolicyBody(RequestObject):
 
 
 class BootstrapBody(RequestObject):
+    """``released: true`` lets a held series go (with ``estimate_only`` it only says what that would ask for); ``false`` holds it
+    again, and ``cancel_queued_policy`` then also pulls back the policy's jobs that have not started (FR-15.12)."""
+
     released: StrictBool = True
+    estimate_only: StrictBool = False
+    cancel_queued_policy: StrictBool = False
 
 
 class SelectionBody(RequestObject):

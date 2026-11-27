@@ -4,7 +4,7 @@ import { IconPlus } from "@tabler/icons-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import {
-  useCardImpact,
+  useCharacterImpact,
   useDeleteCharacter,
   useGlossary,
   useGlossaryDryRun,
@@ -15,8 +15,10 @@ import {
 import type { CharacterCard, GlossaryDoc, Style } from "../api/types";
 import {
   addressFor,
+  aliasesOf,
   draftOf,
   formatAddressWindow,
+  nameProblems,
   people,
   plan,
   sameDraft,
@@ -89,6 +91,7 @@ function PersonCard({ person, doc, onEdit, onDelete }: { person: Person; doc: Gl
           </Text>
           <Title order={4}>{person.name}</Title>
           <Fact label="Translated">{entry?.target}</Fact>
+          <Fact label="Aliases">{aliasesOf(person).join(", ")}</Fact>
           <Fact label="Gender">{entry?.gender}</Fact>
           <Fact label="Description">{entry?.description}</Fact>
         </Stack>
@@ -100,7 +103,6 @@ function PersonCard({ person, doc, onEdit, onDelete }: { person: Person; doc: Gl
           {card ? (
             <>
               <Fact label="Speech">{card.speech}</Fact>
-              <Fact label="Aliases">{card.aliases?.join(", ")}</Fact>
               <Fact label="Catchphrases">{card.catchphrases?.map((line) => `“${line}”`).join(" ")}</Fact>
               <Fact label="Samples">{card.samples && card.samples.length > 0 ? `${card.samples.length} line${card.samples.length === 1 ? "" : "s"}` : ""}</Fact>
               <Fact label="Style">{style}</Fact>
@@ -184,6 +186,9 @@ function PersonSheet({
 
   const name = draft.name.trim();
   const clash = name !== "" && all.some((other) => lower(other.name) === lower(name) && lower(other.name) !== lower(initial.name));
+  const problems = nameProblems(draft, all);
+  // The glossary of an older version may hold "Mom": that is shown, never blocked; only typing one is refused (P19b).
+  const wrongNames = clash || problems.name !== null || problems.aliases !== null;
   const changed = !sameDraft(draft, initial);
 
   const parts = plan(draft, person);
@@ -195,19 +200,25 @@ function PersonSheet({
   const [settledJson] = useDebouncedValue(json, 400);
   const settled = useMemo(() => JSON.parse(settledJson) as { glossary: GlossaryDoc | null; card: { card: CharacterCard; replaces?: string } | null }, [settledJson]);
   const waiting = settledJson !== json;
-  const ready = changed && name !== "" && !clash && !waiting;
-  const forGlossary = useGlossaryDryRun(owner, lang, settled.glossary ? { doc: settled.glossary } : null, ready);
-  const forCard = useCardImpact(owner, lang, settled.card, ready);
+  const ready = changed && name !== "" && !wrongNames && !waiting;
+  // One count for the Name and the Voice together (the worker counts them in one pass), not the sum of two.
+  const counted = useCharacterImpact(owner, lang, settled, ready);
 
-  const checking = ready && (forGlossary.isFetching || forCard.isFetching);
-  const problem = forGlossary.error?.message ?? forCard.error?.message ?? null;
-  const total = (forGlossary.data?.would_stale ?? 0) + (forCard.data?.would_stale ?? 0);
+  const checking = ready && counted.isFetching;
+  const problem = counted.error?.message ?? null;
+  const total = counted.data?.would_stale ?? 0;
   const sentence = glossaryImpact({ would_stale: total }, "Saving", noun);
 
   const forms = addressFor(doc, name);
   const patch = (next: Partial<PersonDraft>) => setDraft({ ...draft, ...next });
-  const text = (key: "name" | "target" | "gender" | "description" | "speech", label: string, extra: { required?: boolean } = {}) => (
-    <TextInput label={label} required={extra.required} value={draft[key]} onChange={(event) => patch({ [key]: event.currentTarget.value })} />
+  const text = (key: "name" | "target" | "gender" | "description" | "speech", label: string, extra: { required?: boolean; error?: string | null } = {}) => (
+    <TextInput
+      label={label}
+      required={extra.required}
+      error={extra.error ?? undefined}
+      value={draft[key]}
+      onChange={(event) => patch({ [key]: event.currentTarget.value })}
+    />
   );
   const doSave = () => save.mutate({ glossary, card }, { onSuccess: onClose });
   const stylePatch = (style: Style) => patch({ style });
@@ -217,16 +228,22 @@ function PersonSheet({
     <Drawer opened onClose={onClose} position="bottom" size="90%" title={person ? `Edit ${person.name}` : "Add character"} padding="lg" radius="lg">
       <Stack gap="lg">
         <Section title="Name">
-          {text("name", "Source name", { required: true })}
+          {text("name", "Source name", { required: true, error: problems.name })}
           {clash && <Alert color="red">There is already a character called {name}.</Alert>}
           {text("target", "Translated name")}
+          <TextInput
+            label="Aliases"
+            description="Other names for the same person, separated by commas. Not forms of address like Mom."
+            value={draft.aliases}
+            error={problems.aliases ?? undefined}
+            onChange={(event) => patch({ aliases: event.currentTarget.value })}
+          />
           {text("gender", "Gender")}
           {text("description", "Description")}
         </Section>
 
         <Section title="Voice">
           {text("speech", "Speech")}
-          <TextInput label="Aliases" description="Other names, separated by commas" value={draft.aliases} onChange={(event) => patch({ aliases: event.currentTarget.value })} />
           <Textarea label="Catchphrases" description="One per line" autosize minRows={2} value={draft.catchphrases} onChange={(event) => patch({ catchphrases: event.currentTarget.value })} />
           <Textarea label="Samples" description="Lines that sound like them, one per line" autosize minRows={2} value={draft.samples} onChange={(event) => patch({ samples: event.currentTarget.value })} />
           <Stack gap="sm">
@@ -266,7 +283,7 @@ function PersonSheet({
             </Badge>
           )}
           <Text role="status" size="sm" c={problem ? "red" : "dimmed"}>
-            {!changed ? "No changes." : name === "" ? "Give the character a name." : clash ? "" : waiting || checking ? "Checking…" : (problem ?? sentence)}
+            {!changed ? "No changes." : name === "" ? "Give the character a name." : wrongNames ? "" : waiting || checking ? "Checking…" : (problem ?? sentence)}
           </Text>
           {save.isError && !asking && <Alert color="red">{save.error.message}</Alert>}
           <Group justify="space-between">
@@ -274,7 +291,7 @@ function PersonSheet({
               Cancel
             </Button>
             <Button
-              disabled={!changed || name === "" || clash || waiting || checking || problem !== null}
+              disabled={!changed || name === "" || wrongNames || waiting || checking || problem !== null}
               loading={save.isPending && !asking}
               onClick={() => (total > 0 ? setAsking(true) : doSave())}
             >

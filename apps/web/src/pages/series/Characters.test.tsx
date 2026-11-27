@@ -45,8 +45,17 @@ function characters(cards: unknown[] = [vi], glossaryDoc: unknown = doc, extra: 
     "/api/series/9/cards?lang=vi": (body: Record<string, unknown> | null) => ({
       body: { ok: true, saved: body?.dry_run !== true, card: body?.card, stale_now: 0, stale_after: 3, would_stale: 3 },
     }),
-    "/api/series/9/characters?lang=vi": { body: { ok: true, saved: true } },
+    "/api/series/9/characters?lang=vi": counting(),
     ...extra,
+  };
+}
+
+/** The route that saves a character, which also counts what saving would flag (`dry_run`): 2 for the Name, 3 for the Voice, as one count. */
+function counting(real: { status?: number; body: unknown } = { body: { ok: true, saved: true, stale_now: 0, stale_after: 0, would_stale: 0 } }) {
+  return (body: Record<string, unknown> | null) => {
+    if (body?.dry_run !== true) return real;
+    const would = (body.glossary ? 2 : 0) + (body.card ? 3 : 0);
+    return { body: { ok: true, saved: false, stale_now: 0, stale_after: would, would_stale: would } };
   };
 }
 
@@ -90,20 +99,22 @@ describe("Series Characters tab", () => {
     const speech = within(sheet).getByRole("textbox", { name: "Speech" });
     await userEvent.clear(speech);
     await userEvent.type(speech, "Calm");
-    // 2 (the glossary half) + 3 (the card half): the effect of both is added, as the design says.
+    // One count for both halves, asked of the route that saves a character (the worker counts an episode both reach once).
     expect(await within(sheet).findByText("Saving flags 5 episodes stale.")).toBeInTheDocument();
-    expect((sent("/api/series/9/cards?lang=vi").at(-1) as { card: { speech: string }; dry_run: boolean }).dry_run).toBe(true);
+    expect(sent("/api/series/9/cards?lang=vi")).toEqual([]);
+    expect((sent("/api/series/9/characters?lang=vi").at(-1) as { card: { speech: string }; dry_run: boolean }).dry_run).toBe(true);
 
     await userEvent.click(within(sheet).getByRole("button", { name: "Save" }));
     const ask = await screen.findByRole("dialog", { name: "Save character?" });
-    expect(sent("/api/series/9/characters?lang=vi")).toEqual([]);
+    expect(real("/api/series/9/characters?lang=vi")).toEqual([]);
     await userEvent.click(within(ask).getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(sent("/api/series/9/characters?lang=vi")).toHaveLength(1));
+    await waitFor(() => expect(real("/api/series/9/characters?lang=vi")).toHaveLength(1));
     // One request holds both halves; nothing else is written (the dry runs are the only other calls).
     expect(real("/api/series/9/cards?lang=vi")).toEqual([]);
     expect(real("/api/series/9/glossary?lang=vi")).toEqual([]);
-    const written = sent("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; card: unknown };
-    expect(written.glossary.characters[0]).toEqual({ name: "Vi", target: "Vi", gender: "f", description: "Brawler from Zaun" });
+    const written = real("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; card: unknown };
+    // The card's alias is the character's alias too: one list, written to both halves (P19b).
+    expect(written.glossary.characters[0]).toEqual({ name: "Vi", target: "Vi", gender: "f", description: "Brawler from Zaun", aliases: ["Violet"] });
     expect(written.glossary.address_rules).toEqual(doc.address_rules);
     expect(written.card).toEqual({
       card: { name: "Vi", aliases: ["Violet"], speech: "Calm", catchphrases: ["Cupcake"], samples: ["a", "b"], style: { profanity: "keep" }, always: true },
@@ -118,15 +129,71 @@ describe("Series Characters tab", () => {
     await userEvent.type(within(sheet).getByRole("textbox", { name: /Source name/ }), "Jayce");
     expect(await within(sheet).findByText("Saving flags 2 episodes stale.")).toBeInTheDocument();
     expect(sent("/api/series/9/cards?lang=vi")).toEqual([]);
+    expect((sent("/api/series/9/characters?lang=vi").at(-1) as { card?: unknown }).card).toBeUndefined(); // a name alone asks only for the name
 
     await userEvent.type(within(sheet).getByRole("textbox", { name: "Speech" }), "Measured");
     expect(await within(sheet).findByText("Saving flags 5 episodes stale.")).toBeInTheDocument();
     await userEvent.click(within(sheet).getByRole("button", { name: "Save" }));
     await userEvent.click(within(await screen.findByRole("dialog", { name: "Save character?" })).getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(sent("/api/series/9/characters?lang=vi")).toHaveLength(1));
-    const written = sent("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; card: unknown };
+    await waitFor(() => expect(real("/api/series/9/characters?lang=vi")).toHaveLength(1));
+    const written = real("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; card: unknown };
     expect(written.card).toEqual({ card: { name: "Jayce", speech: "Measured" } });
     expect(written.glossary.characters.map((item) => item.name)).toEqual(["Vi", "Caitlyn", "Jayce"]);
+  });
+
+  it("keeps the Aliases box in the Name part, and fills it from the card when the glossary has none (P19b)", async () => {
+    serve(characters());
+    show("/series/1/characters");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Vi" }));
+    const sheet = await screen.findByRole("dialog", { name: "Edit Vi" });
+    expect(within(sheet).getAllByRole("textbox", { name: "Aliases" })).toHaveLength(1); // one box, not one for each half
+    expect(within(sheet).getByRole("textbox", { name: "Aliases" })).toHaveValue("Violet");
+  });
+
+  it("writes an alias to the Name alone for a character with no voice, and never makes an empty card for it", async () => {
+    serve(characters());
+    show("/series/1/characters");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Caitlyn" }));
+    const sheet = await screen.findByRole("dialog", { name: "Edit Caitlyn" });
+    await userEvent.type(within(sheet).getByRole("textbox", { name: "Aliases" }), "Cait, Officer Kiramman");
+    expect(await within(sheet).findByText("Saving flags 2 episodes stale.")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Save" }));
+    await userEvent.click(within(await screen.findByRole("dialog", { name: "Save character?" })).getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(real("/api/series/9/characters?lang=vi")).toHaveLength(1));
+    const written = real("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; card?: unknown };
+    expect(written.card).toBeUndefined();
+    expect(written.glossary.characters[1]).toEqual({ name: "Caitlyn", target: "Caitlyn", aliases: ["Cait", "Officer Kiramman"] });
+  });
+
+  it("refuses a form of address as a name or an alias, and an alias another character has, on the form", async () => {
+    serve(characters());
+    show("/series/1/characters");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Caitlyn" }));
+    const sheet = await screen.findByRole("dialog", { name: "Edit Caitlyn" });
+    const aliases = within(sheet).getByRole("textbox", { name: "Aliases" });
+    await userEvent.type(aliases, "Mom");
+    expect(within(sheet).getByText(`"Mom" is a relative form of address, not a character's name.`)).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.clear(aliases);
+    await userEvent.type(aliases, "Violet"); // Vi's, by her card
+    expect(within(sheet).getByText('"Violet" already belongs to Vi.')).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.clear(aliases);
+    const name = within(sheet).getByRole("textbox", { name: /Source name/ });
+    await userEvent.clear(name);
+    await userEvent.type(name, "Dad");
+    expect(within(sheet).getByText(`"Dad" is a relative form of address, not a character's name.`)).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("shows a character the stored glossary calls Mom without refusing to read it", async () => {
+    serve(characters([], { version: 1, characters: [{ name: "Mom", target: "Mẹ" }] }));
+    show("/series/1/characters");
+    const card = await screen.findByRole("region", { name: "Mom" });
+    expect(within(card).getByText("Mẹ")).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Edit Mom" }));
+    const sheet = await screen.findByRole("dialog", { name: "Edit Mom" });
+    expect(within(sheet).getByText(/relative form of address/)).toBeInTheDocument(); // told, so the admin can rename it
   });
 
   it("refuses a name another character already has", async () => {
@@ -150,8 +217,8 @@ describe("Series Characters tab", () => {
     await within(sheet).findByText("Saving flags 5 episodes stale.");
     await userEvent.click(within(sheet).getByRole("button", { name: "Save" }));
     await userEvent.click(within(await screen.findByRole("dialog", { name: "Save character?" })).getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(sent("/api/series/9/characters?lang=vi")).toHaveLength(1));
-    const written = sent("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; card: { replaces: string } };
+    await waitFor(() => expect(real("/api/series/9/characters?lang=vi")).toHaveLength(1));
+    const written = real("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; card: { replaces: string } };
     expect(written.card.replaces).toBe("Vi");
     expect(written.glossary.characters.map((item) => item.name)).toEqual(["Violet", "Caitlyn"]);
   });
@@ -162,16 +229,16 @@ describe("Series Characters tab", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Delete Vi" }));
     const ask = await screen.findByRole("dialog", { name: "Delete Vi?" });
     expect(await within(ask).findByText(/This removes the name and the voice. Deleting flags 2 episodes stale. Nothing is retranslated./)).toBeInTheDocument();
-    expect(sent("/api/series/9/characters?lang=vi")).toEqual([]);
+    expect(real("/api/series/9/characters?lang=vi")).toEqual([]);
     await userEvent.click(within(ask).getByRole("button", { name: "Confirm delete" }));
-    await waitFor(() => expect(sent("/api/series/9/characters?lang=vi")).toHaveLength(1));
-    const written = sent("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; delete_card: string };
+    await waitFor(() => expect(real("/api/series/9/characters?lang=vi")).toHaveLength(1));
+    const written = real("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; delete_card: string };
     expect(written.delete_card).toBe("Vi");
     expect(written.glossary.characters.map((item) => item.name)).toEqual(["Caitlyn"]);
   });
 
   it("shows the refusal of the worker and has sent nothing else when the one request fails", async () => {
-    serve(characters([vi], doc, { "/api/series/9/characters?lang=vi": { status: 400, body: { error: "card.speech: expected text" } } }));
+    serve(characters([vi], doc, { "/api/series/9/characters?lang=vi": counting({ status: 400, body: { error: "card.speech: expected text" } }) }));
     show("/series/1/characters");
     await userEvent.click(await screen.findByRole("button", { name: "Edit Vi" }));
     const sheet = await screen.findByRole("dialog", { name: "Edit Vi" });
@@ -180,7 +247,7 @@ describe("Series Characters tab", () => {
     await userEvent.click(within(sheet).getByRole("button", { name: "Save" }));
     await userEvent.click(within(await screen.findByRole("dialog", { name: "Save character?" })).getByRole("button", { name: "Confirm" }));
     expect((await screen.findAllByText("card.speech: expected text")).length).toBeGreaterThan(0);
-    expect(sent("/api/series/9/characters?lang=vi")).toHaveLength(1);
+    expect(real("/api/series/9/characters?lang=vi")).toHaveLength(1);
     expect(real("/api/series/9/glossary?lang=vi")).toEqual([]);
   });
 

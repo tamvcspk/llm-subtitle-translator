@@ -106,6 +106,60 @@ describe("Series Glossary tab", () => {
     expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
   });
 
+  it("folds a rule written with an alias into the character, says so, and merges it on Clean up duplicates (P19b)", async () => {
+    const aliasDoc = {
+      version: 1,
+      target_lang: "vi",
+      characters: [{ name: "Caroline Miller", aliases: ["Carolyn Miller"] }, { name: "Malcolm" }],
+      address_rules: [
+        { a: "Malcolm", b: "Caroline Miller", a_to_b: "em–cô", b_to_a: "cô–em" },
+        { a: "Malcolm", b: "Carolyn Miller", a_to_b: "em–cô", b_to_a: "cô–em", from: "S02E01" },
+      ],
+    };
+    serve(
+      glossary({
+        "/api/series/9/glossary?lang=vi": (body: Record<string, unknown> | null) =>
+          body === null
+            ? { body: { ...answer, doc: aliasDoc } }
+            : { body: { ok: true, saved: body.dry_run !== true, version: body.dry_run ? null : 5, stale_now: 0, stale_after: 1, would_stale: 1 } },
+      }),
+    );
+    show("/series/1/glossary");
+    await userEvent.click(await screen.findByRole("radio", { name: "Forms of address (2)" }));
+    const group = screen.getByRole("region", { name: "Malcolm ↔ Caroline Miller" });
+    expect(within(group).getByText("2 stages")).toBeInTheDocument();
+    expect(within(group).getByText("Written via alias: Carolyn Miller (merges on Clean up duplicates)")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Clean up duplicates (1)" }));
+    expect(screen.getByRole("radio", { name: "Forms of address (1)" })).toBeInTheDocument();
+    expect(screen.queryByText(/Written via alias/)).not.toBeInTheDocument();
+  });
+
+  it("warns, without blocking, on an old rule for Mom, and names stages that disagree", async () => {
+    const oldDoc = {
+      version: 1,
+      target_lang: "vi",
+      characters: [{ name: "Malcolm" }, { name: "Lois" }],
+      address_rules: [
+        { a: "Malcolm", b: "Mom", a_to_b: "con–mẹ", b_to_a: "mẹ–con" },
+        { a: "Malcolm", b: "Lois", a_to_b: "con–mẹ", b_to_a: "mẹ–con" },
+        { a: "Lois", b: "Malcolm", a_to_b: "tôi–anh", b_to_a: "tôi–em" },
+      ],
+    };
+    serve(
+      glossary({
+        "/api/series/9/glossary?lang=vi": (body: Record<string, unknown> | null) =>
+          body === null ? { body: { ...answer, doc: oldDoc } } : { body: { ok: true, saved: false, version: null, stale_now: 0, stale_after: 0, would_stale: 0 } },
+      }),
+    );
+    show("/series/1/glossary");
+    await userEvent.click(await screen.findByRole("radio", { name: "Forms of address (3)" }));
+    const mom = screen.getByRole("region", { name: "Malcolm ↔ Mom" });
+    expect(within(mom).getByRole("note")).toHaveTextContent('"Mom" is a generic form of address, not a character.');
+    expect(within(mom).getByRole("textbox", { name: "Person B" })).toHaveValue("Mom"); // kept as it was stored
+    expect(screen.getByText("Conflicting stages")).toBeInTheDocument(); // Malcolm ↔ Lois say two things about the same window
+    expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument(); // reading it changed nothing
+  });
+
   it("counts what a change flags, live, and saves the whole document only after a confirmation", async () => {
     serve(glossary());
     show("/series/1/glossary");

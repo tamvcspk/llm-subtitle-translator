@@ -13,8 +13,9 @@ from typing import Any
 
 from subcore import srt
 
+from ..domain.config import model_for_task
 from ..jobs.jobs import (
-    EXTRACT, FAILED, JUDGE, READING_KINDS, RESEARCH, RESEARCH_CALLS, SUGGEST_CALLS, VARIANT, job_name, variant_key,
+    EXTRACT, FAILED, JUDGE, READING_KINDS, RESEARCH, SUGGEST, RESEARCH_CALLS, SUGGEST_CALLS, VARIANT, job_name, variant_key,
 )
 from ..domain.ports import Output, Unit
 from .memory import unit_label
@@ -213,6 +214,17 @@ class RequestsMixin:
         retried = sum(1 for job_id in ids if self.jobs.retry(job_id))
         return {"ok": retried > 0 or not ids, "count": retried, "skipped": len(ids) - retried}
 
+    def _model_of_job(self, job: dict[str, Any]) -> str:
+        """The model the calls of a retried job run on: a retry starts again on the default layer (``JobStore.retry``)."""
+        settings = self._settings()
+        return model_for_task(settings, {EXTRACT: "extract", SUGGEST: "extract", JUDGE: "judge", RESEARCH: "research"}.get(
+            str(job.get("kind") or ""), "translate"))
+
+    @staticmethod
+    def _retry_model(models: list[str]) -> str:
+        """One name when every planned job runs on the same model, else the names together."""
+        return " + ".join(dict.fromkeys(models))
+
     def estimate_retry(self, body: dict[str, Any]) -> dict[str, Any]:
         """The cost of putting failed jobs back in line, before the admin confirms. Name them with exactly one of
         ``job_id``, ``job_ids`` or ``all`` (every failed job: Retry All Failed). A job that is not failed, or whose
@@ -223,6 +235,7 @@ class RequestsMixin:
         planned: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
         retried_units: list[Unit] = []  # the episodes of the translations among them: their story facts may need reading first
+        models: list[str] = []  # what each planned job's calls run on
         for job_id in dict.fromkeys(ids):
             job = store.get(job_id)
             row: dict[str, Any] = {"job_id": job_id, "title": "", "lang": "", "cues": 0, "calls": 0, "skip": "", "reason": ""}
@@ -259,9 +272,11 @@ class RequestsMixin:
                 skipped.append({**row, "skip": reason, "reason": reason})
             else:
                 planned.append({**row, "cues": cues, "calls": calls})
+                if job is not None:
+                    models.append(self._model_of_job(job))
         estimate = self.estimator.of(
             len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned),
-            self._extract_calls(list({u.id: u for u in retried_units}.values())),
+            self._extract_calls(list({u.id: u for u in retried_units}.values())), model=self._retry_model(models),
         )
         counts: dict[str, int] = {}
         for row in skipped:
