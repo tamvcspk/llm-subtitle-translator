@@ -14,7 +14,7 @@ Ghi đè toàn bộ file mỗi lần chuyển tool. Tối đa 30 dòng.
 ## Việc tiếp theo (theo thứ tự)
 1. Push `main` khi user cho phép, rồi `gh run list -R tamvcspk/llm-subtitle-translator` đến khi CI xanh.
 2. P20: chốt W1–W3 (`docs/design/REVIEW-P19-P20.md`: route lưu hàng loạt, `base_version`/409, pin theo số cue), rồi ghi FR. Chỉ làm P20a sau khi chốt.
-3. A/B xưng hô trên bundle v2 (cần gọi model: hỏi user trước, có Estimate). Không bắt buộc để đóng P19.
+3. A/B xưng hô bundle v2 đã chạy và chấm (`local-state/p19/ab/v2-grading.md`): 55 đúng / 4 chấp nhận / 7 sai, tương đương mốc. Open point: S02E04 #10 "mình à" không nhất quán với series.
 4. Cân nhắc `test-plan` (browser) cho: xoá nhân vật chỉ có Voice, nhãn alias ở Glossary, sửa đề xuất `Mom` ở Review, hộp Bootstrap hai ngôn ngữ.
 
 ## Lưu ý cho người nhận
