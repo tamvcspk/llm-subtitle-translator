@@ -46,6 +46,8 @@
       deleting a character counts the card that goes with it, so one with only a Voice has a number; letting a series go reads the
       library again after 2 s, when the jobs exist; with two or more target languages held the price box says `Translations to release`
       and `By language 99 vi + 21 fr`; an empty Default model is refused (`Choose a model`) instead of showing `—` and being filled in by the worker.
+  - *P19-0 measurement fix (subcore CLI):* `subcore render-prompt --bundle` and `translate --bundle` dropped the bundle's `cast`, so the
+    form-of-address scope (FR-5.11) was not applied on the CLI path; the worker was not affected. Unit test in `test_bundle_cli.py`.
 
 ## 1.0.0-rc.2 (2026-11-25)
 Second release candidate: Phase 18 (P18a–P18f) UX round 1–2 fixes, disk I/O reduction, pair-level address proposals with hysteresis, and P18 code review fixes (R18-1..R18-10).

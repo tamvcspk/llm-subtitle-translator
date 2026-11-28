@@ -141,6 +141,7 @@ def _inputs(args: argparse.Namespace, cues: list[srt.Cue] | None):
             extra_sections=list(base.sections),
             active_rules=list(base.active_rules),
             few_shot=list(base.few_shot),
+            cast=list(base.cast),  # the episode's characters decide which address rules are in scope (FR-5.11)
         )
         options = options_of(base)
         if getattr(args, "season", None) is not None or getattr(args, "episode", None) is not None:

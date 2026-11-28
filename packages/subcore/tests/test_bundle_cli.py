@@ -113,6 +113,19 @@ class TranslateFromBundleTests(CliTestBase):
         self.assertEqual(len(report["bundle_hash"]), 64)
         self.assertIn("review", report)
 
+    def test_the_cli_keeps_the_episode_cast_of_a_bundle(self):
+        """P19-0 finding: the cast of a bundle was dropped on the way through the CLI, so address rules outside the
+        episode's characters were never left out of render-prompt or translate --bundle (FR-5.11)."""
+        b_path = self.path("cast.json")
+        run_cli("bundle", str(self.src), "-o", b_path)
+        data = json.loads(Path(b_path).read_text(encoding="utf-8"))
+        data["cast"] = ["Alice", "Bob"]
+        Path(b_path).write_text(json.dumps(data), encoding="utf-8")
+        args = cli.build_parser().parse_args(["render-prompt", "--bundle", b_path])
+        _, ctx, *_ = cli._inputs(args, None)
+        self.assertEqual(ctx.cast, ["Alice", "Bob"])
+        self.assertEqual(cli._bundle_for(args, None).cast, ("Alice", "Bob"))
+
     def test_old_bundle_runs_through_the_cli(self):
         """Criterion 18h at the CLI: a bundle without the optional fields still translates."""
         b_path = self.path("old.json")
