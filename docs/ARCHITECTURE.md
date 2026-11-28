@@ -371,7 +371,10 @@ facts stored under `x3` are still read (`FACTS_VERSIONS`, newest preferred) so m
 Who is in an episode (P19b, P19c): `subcore.memory.cast` (`episode_cast`) turns the facts and, when the worker has one, a list of
 main-cast and guest names into the episode's cast, a list of names only (`subcore` never learns TMDB: `Metadata.cast` returns
 a `Cast`, `adapters/tmdb.py` reads `/tv/{id}/aggregate_credits` and the episode's `guest_stars`, 0 model calls, empty when there
-is no key or no match). `StoryMemory.plan` puts it in `MemoryPlan.cast`, `gather` in the bundle (`cast`, bundle version 3, in the
+is no key or no match). `process_job` hands `TranslationAttempt.run` the cast (and the description) as callables, so the attempt asks for
+the cast only inside the Story memory branch, once, and for the description only after the two skip checks: with memory off a job
+makes no cast lookup and every rule stays (D-08); `TmdbMetadata` asks Bazarr for the series and the episode once per job. The cast is in
+`context_hash` when there is one (`translation_attempt.context_hash`, sorted names). `StoryMemory.plan` puts it in `MemoryPlan.cast`, `gather` in the bundle (`cast`, bundle version 3, in the
 hash only when known). `subcore.translate.scope` then decides at prompt time, from names alone and never from the words of a
 line: a form-of-address rule is listed only when both people are in the cast (none known: every rule stays), and a pair that has
 an active rule is not printed again in *Relationship state* (`memory.fold.drop_pairs`) or in a character voice's `Addresses` lines

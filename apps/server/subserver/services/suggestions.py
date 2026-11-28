@@ -30,6 +30,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from subcore import glossary as g
+from subcore.memory import is_generic_address
 from subcore.suggest import collapse_stages
 from subcore.style import CharacterCard, StyleError
 
@@ -100,7 +101,7 @@ def normalise(kind: str, payload: Any) -> dict[str, Any]:
                 if not isinstance(card, dict):
                     raise ValueError("card must be an object")
                 doc = {**doc, "card": CharacterCard.from_doc({**card, "name": doc["name"]}, "card").to_doc()}
-            return doc
+            return _without_generic_aliases(doc)
         if kind == "address_rule" and payload.get("stages") is not None:
             raw_stages = payload.get("stages")
             if not isinstance(raw_stages, list) or not raw_stages:
@@ -139,6 +140,20 @@ def normalise(kind: str, payload: Any) -> dict[str, Any]:
         return g.to_doc(g.from_doc({section: [clean]}))[section][0]
     except (g.GlossaryError, StyleError) as exc:
         raise ValueError(str(exc)) from None
+
+
+def _without_generic_aliases(doc: dict[str, Any]) -> dict[str, Any]:
+    """A character suggestion without forms of address among its other names, in the entry and in its card (D-02, R19-2).
+    The language of the dialogue is not known here: the English table is the fallback ``is_generic_address`` uses."""
+    def kept(holder: dict[str, Any]) -> dict[str, Any]:
+        aliases = [a for a in holder.get("aliases") or [] if not is_generic_address(str(a))]
+        rest = {k: v for k, v in holder.items() if k != "aliases"}
+        return {**rest, "aliases": aliases} if aliases else rest
+
+    out = kept(doc)
+    if isinstance(doc.get("card"), dict):
+        out["card"] = kept(doc["card"])
+    return out
 
 
 def _fold_text(value: Any) -> Any:
@@ -637,7 +652,9 @@ class SuggestionService:
             card_doc = payload.get("card")
             if kind == "character":
                 # One list of other names, in the Name and in the Voice alike (P19b, D-04), so the card never loses what the glossary knows
-                entry, card_doc = _sync_aliases(entry, card_doc, cards.get(str(entry["name"]).casefold()))
+                entry, card_doc = _sync_aliases(
+                    entry, card_doc, cards.get(str(entry["name"]).casefold()), owner.source_lang,
+                )
             record = {"section": section, "before": before, "after": entry}
             if before == [entry]:
                 record["noop"] = True
@@ -689,18 +706,26 @@ class SuggestionService:
 
 
 def _sync_aliases(
-    entry: dict[str, Any], card_doc: dict[str, Any] | None, prior: CharacterCard | None,
+    entry: dict[str, Any], card_doc: dict[str, Any] | None, prior: CharacterCard | None, lang: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """The other names of a character, one list for both of its halves: the union of what the glossary entry, the card
     the suggestion brings and the card already stored say, written to the entry and to the card (when there is one).
-    A character with no Voice gets no card made for it."""
+    A character with no Voice gets no card made for it. A form of address ("Mom") is never an alias, whichever of the
+    three says it (R19-2: a card stored before P19b can hold one, and copying it would make ``Names`` read every "Mom" as
+    this character); ``lang`` is the language of the dialogue."""
     names: list[str] = []
     for source in (entry.get("aliases") or [], (card_doc or {}).get("aliases") or [], prior.aliases if prior else ()):
         for alias in source:
             alias = str(alias).strip()
-            if alias and alias.casefold() not in {n.casefold() for n in names} and alias.casefold() != str(entry["name"]).casefold():
+            if (
+                alias and not is_generic_address(alias, lang) and alias.casefold() not in {n.casefold() for n in names}
+                and alias.casefold() != str(entry["name"]).casefold()
+            ):
                 names.append(alias)
     if not names:
+        entry = {k: v for k, v in entry.items() if k != "aliases"}
+        if card_doc is not None and card_doc.get("aliases"):
+            card_doc = {k: v for k, v in card_doc.items() if k != "aliases"}
         return entry, card_doc
     entry = {**entry, "aliases": names}
     if card_doc is not None or prior is not None:

@@ -321,9 +321,6 @@ class JobRequests:
             len(planned), sum(job.cues for job in planned), sum(job.calls for job in planned), extract_calls, summarize_calls,
         )
 
-    def _extract_calls(self, planned: list[PlannedJob]) -> int:
-        return self._memory_calls(planned)[0]
-
     def _memory_calls(self, planned: list[PlannedJob]) -> tuple[int, int]:
         """Story-fact reads the planned jobs would run first (FR-15.5.1): per series with memory on, each episode before
         a planned one in story order and the planned one itself that has a source and no facts yet, once for the whole

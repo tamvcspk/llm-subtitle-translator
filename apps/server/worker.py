@@ -93,8 +93,10 @@ def process_job(
         status_callback("Resolving movie details")
     if not job.get("unit_id"):
         enrich_job_identity(job, media)
-    description = metadata.description(job)
-    cast = metadata.cast(job) if hasattr(metadata, "cast") else None  # a port older than P19 has none: every rule stays
+    # Both lookups are handed over as callables: the attempt asks for the description only when the job is not skipped, and
+    # for the cast only when Story memory is on for the series (D-08), so a job that needs neither costs no HTTP call.
+    description = lambda: metadata.description(job)  # noqa: E731
+    cast = (lambda: metadata.cast(job)) if hasattr(metadata, "cast") else None  # a port older than P19 has none: every rule stays
     if status_callback:
         status_callback("Sending subtitle batches to Gemini")
     # The queue picks primary or fallback per attempt; the configured model is the default.

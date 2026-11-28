@@ -51,6 +51,11 @@ class Owner:
     def label(self) -> str:
         return "series" if self.kind == SERIES else "movie"
 
+    @property
+    def source_lang(self) -> str | None:
+        """The language the dialogue is in (what a form of address is read against), from the first unit that knows it."""
+        return next((u.source_language or u.source_code for u in self.units if u.source_language or u.source_code), None)
+
 
 @dataclass
 class Identity:

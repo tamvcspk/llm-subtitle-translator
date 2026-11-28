@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, Callable
@@ -58,6 +59,34 @@ def tmdb_find_tv_id(series: dict[str, Any], tmdb: HTTPClient, tmdb_api_key: str,
     return ""
 
 
+class _OncePerJob:
+    """An HTTP client that asks Bazarr once per job: ``description``, ``cast`` and ``genres`` all read the same series and
+    episode rows, and a repeat GET inside one job is answered from memory (R19-9). TMDB is cached by ``cached_get_json``
+    already. The memory is dropped when the job changes, and a job with no id is never remembered. The key is the URL and
+    the query, never the headers, so no API key sits in it."""
+
+    def __init__(self, http: HTTPClient) -> None:
+        self.http = http
+        self._job = ""
+        self._seen: dict[str, Any] = {}
+
+    def bind(self, job: dict[str, Any]) -> None:
+        job_id = str(job.get("job_id") or "")
+        if job_id != self._job:
+            self._job, self._seen = job_id, {}
+
+    def get_json(self, url: str, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> Any:
+        if not self._job:
+            return self.http.get_json(url, params=params, headers=headers)
+        key = json.dumps([url, sorted((params or {}).items())], ensure_ascii=True)
+        if key not in self._seen:  # a failed read raises before anything is stored
+            self._seen[key] = self.http.get_json(url, params=params, headers=headers)
+        return self._seen[key]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.http, name)
+
+
 class TmdbMetadata:
     """The :class:`~subserver.domain.ports.Metadata` port over TMDB and Bazarr. Reads the live settings on every call,
     so a key saved in the console takes effect without a restart."""
@@ -66,13 +95,15 @@ class TmdbMetadata:
         self.http = http
         self.cache = cache
         self._settings = settings_source
+        self._once = _OncePerJob(http)
 
     def description(self, job: dict[str, Any]) -> str:
         settings = self._settings()
+        self._once.bind(job)
         return build_tmdb_description(
             job,
-            bazarr=self.http,
-            tmdb=self.http,
+            bazarr=self._once,
+            tmdb=self._once,
             bazarr_url=str(settings.get("bazarr_url") or ""),
             bazarr_api_key=str(settings.get("bazarr_api_key") or ""),
             tmdb_api_key=str(settings.get("tmdb_api_key") or ""),
@@ -82,16 +113,18 @@ class TmdbMetadata:
 
     def cast(self, job: dict[str, Any]) -> Cast:
         settings = self._settings()
+        self._once.bind(job)
         return build_tmdb_cast(
-            job, bazarr=self.http, tmdb=self.http, bazarr_url=str(settings.get("bazarr_url") or ""),
+            job, bazarr=self._once, tmdb=self._once, bazarr_url=str(settings.get("bazarr_url") or ""),
             bazarr_api_key=str(settings.get("bazarr_api_key") or ""), tmdb_api_key=str(settings.get("tmdb_api_key") or ""),
             cache=self.cache,
         )
 
     def genres(self, job: dict[str, Any]) -> tuple[str, ...]:
         settings = self._settings()
+        self._once.bind(job)
         return build_tmdb_genres(
-            job, bazarr=self.http, tmdb=self.http, bazarr_url=str(settings.get("bazarr_url") or ""),
+            job, bazarr=self._once, tmdb=self._once, bazarr_url=str(settings.get("bazarr_url") or ""),
             bazarr_api_key=str(settings.get("bazarr_api_key") or ""), tmdb_api_key=str(settings.get("tmdb_api_key") or ""),
             cache=self.cache,
         )

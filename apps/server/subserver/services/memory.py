@@ -37,7 +37,9 @@ from subcore.memory import (
     StoryContext,
     UnitFacts,
     build_context,
+    clean_cast_name,
     compress_arc,
+    condensing_calls,
     entries_hash,
     episode_cast,
     extract_facts,
@@ -272,25 +274,28 @@ class StoryMemory:
     def summarize_needed(
         self, wanted: Iterable[Unit], units: list[Unit], series: Series | None, settings: dict[str, Any] | None = None,
     ) -> int:
-        """The condensing calls translating ``wanted`` would make (P19c, FR-5.8): the old summaries of an episode are
-        condensed once there are more of them than the recent ones kept in full, and a new episode changes the set, so
-        it is up to one call per episode. A call is not counted when the same old summaries were condensed before
-        (the cache the worker keeps) and one is counted where the facts are not stored yet (an upper bound, not a read).
-        Never calls anything; 0 when memory is off for the series."""
+        """The condensing calls translating ``wanted`` would make (P19c, FR-5.8, R19-3): asked of the same code that
+        builds the context (``subcore.memory.condensing_calls``), so the threshold (more old summaries than recent
+        ones kept, or over the token budget) lives in one place. A new episode changes the set, so it is up to one
+        call per episode. A call is not counted when the same old summaries were condensed before (the cache the
+        worker keeps) and one is counted where the facts are not stored yet and the count of old episodes alone
+        calls for it (an upper bound, not a read). Never calls anything; 0 when memory is off for the series."""
         if not self.series_enabled(series, settings):
             return 0
-        keep = max(0, self.options(settings).recent_units)
+        options = self.options(settings)
+        keep = max(0, options.recent_units)
+        priors = {unit.id: self.prior_units(unit, units, series) for unit in wanted}
+        stored = self._stored(list({u.id: u for prior in priors.values() for u in prior}.values()))  # one query
         total = 0
-        for unit in wanted:
-            prior = self.prior_units(unit, units, series)
-            stored = self._stored(prior)
+        for prior in priors.values():
             if any(u.id not in stored for u in prior):
                 total += 1 if len(prior) - keep > keep else 0
                 continue
-            summaries = [(unit_label(u), stored[u.id].summary) for u in prior if stored[u.id].summary]
-            older = summaries[:-keep] if keep else summaries
-            if len(older) > keep and self.facts.get_summary(entries_hash(older)) is None:
-                total += 1
+            total += condensing_calls(
+                [UnitFacts(unit_label(u), stored[u.id]) for u in prior],
+                budget_tokens=options.budget_tokens, recent=options.recent_units,
+                cached=lambda entries: self.facts.get_summary(entries_hash(entries)) is not None,
+            )
         return total
 
     # -- the series catalogue (FR-8.3) --------------------------------------------------
@@ -330,11 +335,12 @@ class StoryMemory:
     def _context(
         self, prior: list[tuple[Unit, Facts]], own: Facts | None, series_id: int, unit_id: int,
         options: MemoryOptions, provider_for: ProviderFor | None, lang: str | None = None,
+        cast: Iterable[str] = (), keep: Iterable[str] = (),
     ) -> StoryContext:
         return build_context(
             [UnitFacts(unit_label(u), f) for u, f in prior], own,
             budget_tokens=options.budget_tokens, recent=options.recent_units,
-            compress=self._compressor(series_id, unit_id, provider_for), lang=lang,
+            compress=self._compressor(series_id, unit_id, provider_for), lang=lang, cast=list(cast), keep=list(keep),
         )
 
     def plan(
@@ -345,6 +351,7 @@ class StoryMemory:
         provider_for: ProviderFor,
         extracted: list[int] | None = None,
         cast: Cast | None = None,
+        keep: Iterable[str] = (),
     ) -> MemoryPlan:
         """Make sure every earlier unit has facts, wait out gaps, and build the context for ``unit``.
 
@@ -352,7 +359,8 @@ class StoryMemory:
         has not passed (never for an explicit retranslation, which runs with what exists).
         ``extracted`` collects the ids of the units whose facts were extracted just now, also when the plan then
         raises: it is what the proposal generators (P14) react to. ``cast`` is what TMDB lists (names only); the plan
-        turns it, with the facts, into the episode's cast (FR-5.11).
+        turns it, with the facts, into the episode's cast (FR-5.11) and spells a name of the facts as the list does when it
+        is a close misspelling of exactly one of them (FR-5.10a); ``keep`` (the glossary's names and aliases) is never renamed.
         """
         options = self.options(settings)
         series = self.units.get_series(unit.series_id)
@@ -420,12 +428,15 @@ class StoryMemory:
         own, how = self.ensure_facts(unit, title, settings, provider_for)
         if how == "extracted" and extracted is not None:
             extracted.append(unit.id)
-        context = self._context(prior, own, series.id, unit.id, options, provider_for, unit.source_language or unit.source_code or None)
+        lang = unit.source_language or unit.source_code or None
+        main = [name for name, _ in (cast.main if cast else ())]
+        guests = list(cast.guests) if cast else []
+        keep = list(keep)
+        outside = [n for n in (clean_cast_name(m) for m in (*main, *guests)) if n]
+        context = self._context(prior, own, series.id, unit.id, options, provider_for, lang, cast=outside, keep=keep)
         self.facts.put_snapshot(context.fingerprint, context.sections)
         names = episode_cast(
-            [UnitFacts(unit_label(u), f) for u, f in prior], own,
-            main=[name for name, _ in (cast.main if cast else ())], guests=cast.guests if cast else (),
-            lang=unit.source_language or unit.source_code or None,
+            [UnitFacts(unit_label(u), f) for u, f in prior], own, main=main, guests=guests, lang=lang, keep=keep,
         )
         return MemoryPlan(context.sections, context.fingerprint, not missing, missing, context.compressed, names)
 

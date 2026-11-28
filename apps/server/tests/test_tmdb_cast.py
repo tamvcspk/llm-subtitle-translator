@@ -73,6 +73,21 @@ class TmdbCastTests(unittest.TestCase):
         with self.assertLogs(level="ERROR"):
             self.assertEqual(repo.cast(JOB), Cast())
 
+    def test_one_job_asks_bazarr_once_for_the_series_and_the_episode(self):  # R19-9
+        job = {**JOB, "job_id": "j1"}
+        self.repo.description(job)
+        self.repo.cast(job)
+        self.repo.genres(job)
+        self.assertEqual(self.http.calls.count("http://bazarr/api/series"), 1)
+        self.assertEqual(self.http.calls.count("http://bazarr/api/episodes"), 1)
+        self.repo.cast({**job, "job_id": "j2"})  # the next job reads Bazarr again: what it says can have changed
+        self.assertEqual(self.http.calls.count("http://bazarr/api/series"), 2)
+
+    def test_a_job_without_an_id_is_not_remembered(self):
+        self.repo.cast(JOB)
+        self.repo.cast(JOB)
+        self.assertEqual(self.http.calls.count("http://bazarr/api/series"), 2)
+
     def test_a_movie_has_no_cast(self):
         self.assertEqual(self.repo.cast({"media_type": "movie", "video_path": "/m/{tmdb-1}.mkv"}), Cast())
         self.assertEqual(self.http.calls, [])

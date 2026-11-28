@@ -412,6 +412,21 @@ class AliasSyncTests(unittest.TestCase):
         (card,) = env.styles.cards("series", "bazarr-7")
         self.assertEqual((card.speech, list(card.aliases), list(env.glossary().characters[0].aliases)), ("mine", ["Ky", "Old"], ["Ky", "Old"]))
 
+    def test_a_form_of_address_on_an_old_card_is_not_copied_into_the_glossary(self):  # R19-2
+        env = Env(self)
+        env.styles.save_card("series", "bazarr-7", {"name": "Kyber", "speech": "mine", "aliases": ["Mom", "Lo"]})  # before P19b
+        env.propose(character(aliases=["Ky"]))
+        env.suggestions.accept(env.pending()[0]["id"])
+        (entry,) = env.glossary().characters
+        (card,) = env.styles.cards("series", "bazarr-7")
+        self.assertEqual((list(entry.aliases), list(card.aliases)), (["Ky", "Lo"], ["Ky", "Lo"]))
+
+    def test_a_suggestion_never_carries_a_form_of_address_as_another_name(self):  # R19-2
+        out = normalise("character", {"name": "Lois", "aliases": ["Mom", "Lo", "Sir"], "card": {"speech": "x", "aliases": ["Mama", "Lo"]}})
+        self.assertEqual((out["aliases"], out["card"]["aliases"]), (["Lo"], ["Lo"]))
+        bare = normalise("character", {"name": "Lois", "aliases": ["Mom"]})
+        self.assertNotIn("aliases", bare)
+
     def test_an_alias_equal_to_the_name_is_dropped(self):
         env = Env(self)
         env.propose(character(aliases=["kyber", "Ky"]))

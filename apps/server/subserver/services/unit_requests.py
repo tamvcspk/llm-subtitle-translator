@@ -44,9 +44,6 @@ class RequestsMixin:
             condense += self.memory.summarize_needed(wanted, known, series, settings)
         return extract, condense
 
-    def _extract_calls(self, units: list[Unit]) -> int:
-        return self._memory_calls(units)[0]
-
     def request_prerequisites(self, job_id: str, *, estimate_only: bool = False) -> dict[str, Any]:
         """The "request that episode" button of a job that waits for story facts: queue the earlier episodes it
         waits for, those whose source subtitle is on disk. The others cannot be translated yet and are named, so
@@ -139,7 +136,7 @@ class RequestsMixin:
             cues = len(ordinals) if ordinals else len(source)
             return {
                 "ok": True, "estimate_only": True, "range": window, "correction_ids": ids,
-                "estimate": asdict(self.estimator.of(1, cues, self.estimator.calls_for(source, ordinals), self._extract_calls([unit]))),
+                "estimate": asdict(self.estimator.of(1, cues, self.estimator.calls_for(source, ordinals), *self._memory_calls([unit]))),
             }
         job_id = self.jobs.enqueue_retranslation(job)
         # An admin asking for a retranslation says the current translation was not good enough (FR-19.4).
@@ -188,7 +185,7 @@ class RequestsMixin:
                 raise ValueError("A variant of this episode is already queued")
             return {
                 "ok": True, "estimate_only": True, "label": variant["label"],
-                "estimate": asdict(self.estimator.of(1, len(source), self.estimator.calls_for(source), self._extract_calls([unit]))),
+                "estimate": asdict(self.estimator.of(1, len(source), self.estimator.calls_for(source), *self._memory_calls([unit]))),
             }
         job_id = self.jobs.enqueue_variant(job)
         return {"ok": True, "job_id": job_id, "label": variant["label"]}
@@ -276,7 +273,7 @@ class RequestsMixin:
                     models.append(self._model_of_job(job))
         estimate = self.estimator.of(
             len(planned), sum(r["cues"] for r in planned), sum(r["calls"] for r in planned),
-            self._extract_calls(list({u.id: u for u in retried_units}.values())), model=self._retry_model(models),
+            *self._memory_calls(list({u.id: u for u in retried_units}.values())), model=self._retry_model(models),
         )
         counts: dict[str, int] = {}
         for row in skipped:

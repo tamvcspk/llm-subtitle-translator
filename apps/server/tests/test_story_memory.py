@@ -28,7 +28,7 @@ from subserver.adapters.store import Store
 from subserver.domain.translation import ContextGapError, DailyQuotaExceededError
 from subserver.jobs.translation_attempt import TranslationAttempt
 from subserver.services.units import UnitService
-from subserver.services.versions import TranslationVersions
+from subserver.services.versions import SKIPPED_EXISTING, TranslationVersions
 
 CUES = 12
 SETTINGS = {"gst_model": "m-1", "memory_enabled": True, "memory_gap_wait_seconds": 1800}
@@ -730,13 +730,124 @@ class CondensingTests(unittest.TestCase):
         self.assertEqual(env.memory.summarize_needed([by_episode[5]], units, series, env.settings), 0)
 
 
+    def test_retranslating_a_variant_and_a_retry_estimate_the_condensing_like_a_new_translation(self):  # R19-3
+        env = all_sources(self)
+        env.translate(6)  # recent = 3: E1-E5 are read, E6 is translated, nothing is condensed yet
+        self.assertEqual(env.calls("summarize"), [])
+        env.settings["memory_recent_episodes"] = 1  # now E1-E4 are four old summaries against one kept in full
+        unit = env.store.find_unit(env.store.list_series()[0].id, 1, 6)
+        again = env.service.retranslate(unit.id, {"lang": "vi", "estimate_only": True})["estimate"]
+        variant = env.service.variant(unit.id, {"lang": "vi", "label": "dry", "style": {"tone": "dry"}, "estimate_only": True})["estimate"]
+        self.assertEqual((again["extract_calls"], again["summarize_calls"]), (0, 1))
+        self.assertEqual((variant["extract_calls"], variant["summarize_calls"]), (0, 1))
+
+    def test_over_budget_old_summaries_are_counted_even_with_few_of_them(self):  # R19-3 2b/2c
+        env = all_sources(self, filler="word " * 600)  # every summary is long: four of them are over a 500-token budget
+        env.settings["memory_budget_tokens"] = 500
+        env.translate(4)  # facts of E1-E3 and E4; E4 has three old ones against three kept: nothing to condense
+        self.assertEqual(env.calls("summarize"), [])
+        series = env.store.list_series()[0]
+        units = env.store.list_units(series.id)
+        five = next(u for u in units if u.episode == 5)
+        self.assertEqual(env.memory.summarize_needed([five], units, series, env.settings), 1)  # one old, over budget
+        env.translate(5)
+        self.assertEqual(len(env.calls("summarize")), 1)  # and that is what the translation then does
+        self.assertEqual(env.memory.summarize_needed([five], units, series, env.settings), 0)  # now stored
+
+    def test_several_wanted_episodes_read_the_stored_facts_once(self):  # R19-3 2c
+        env = all_sources(self)
+        env.translate(6)
+        series = env.store.list_series()[0]
+        units = env.store.list_units(series.id)
+        seen = []
+        original = env.memory._stored
+        env.memory._stored = lambda us: seen.append(len(us)) or original(us)
+        env.memory.summarize_needed([u for u in units if u.episode in (4, 5, 6)], units, series, env.settings)
+        self.assertEqual(len(seen), 1)
+
+
+class LazyLookupsTests(unittest.TestCase):
+    """R19-1 (D-08): the TMDB cast is asked for only when Story memory is on, and the description only when a job runs."""
+
+    @staticmethod
+    def forbidden(name):
+        def lookup():
+            raise AssertionError(f"{name} must not be looked up")
+
+        return lookup
+
+    def test_with_memory_off_the_cast_is_never_asked_for_and_every_rule_stays(self):
+        env = all_sources(self)
+        settings = {**env.settings, "memory_enabled": False}
+        status = env.attempt.run(env.job(1), lambda: "", settings, cast=self.forbidden("the cast"))
+        self.assertEqual(status, "translated")
+        prompt = env.translate_prompts()[-1]
+        self.assertNotIn("Story so far", prompt)
+
+    def test_with_memory_on_the_cast_is_asked_for_once(self):
+        from subserver.domain.ports import Cast
+
+        env = all_sources(self)
+        asked = []
+        env.attempt.run(env.job(1), "", env.settings, cast=lambda: asked.append(1) or Cast(main=(("Alice", 9),)))
+        self.assertEqual(asked, [1])
+
+    def test_a_job_that_is_skipped_never_asks_for_the_description(self):
+        env = all_sources(self)
+        job = env.job(1)
+        Path(job["output_path"]).write_text("1\n00:00:00,000 --> 00:00:01,000\nKept\n", encoding="utf-8")
+        status = env.attempt.run(job, self.forbidden("the description"), env.settings, cast=self.forbidden("the cast"))
+        self.assertEqual(status, SKIPPED_EXISTING)
+
+    def test_a_job_that_runs_asks_for_the_description_once(self):
+        env = all_sources(self)
+        asked = []
+        env.attempt.run(env.job(1), lambda: asked.append(1) or "A show about a family.", env.settings)
+        self.assertEqual(asked, [1])
+        self.assertIn("A show about a family.", env.translate_prompts()[-1])
+
+
+class ContextHashCastTests(unittest.TestCase):
+    """R19-10: the cast decides which rules reach the prompt, so it is part of what a translation was made from."""
+
+    def test_a_cast_changes_the_hash_and_none_leaves_it_as_it_was(self):
+        from subserver.jobs.translation_attempt import context_hash
+
+        base = context_hash("m", "vi", "d", None, "rules", "memory")
+        self.assertEqual(context_hash("m", "vi", "d", None, "rules", "memory", ()), base)
+        with_cast = context_hash("m", "vi", "d", None, "rules", "memory", ["Lois", "Malcolm"])
+        self.assertNotEqual(with_cast, base)
+        self.assertEqual(context_hash("m", "vi", "d", None, "rules", "memory", ["Malcolm", "Lois", "Lois"]), with_cast)
+        self.assertNotEqual(context_hash("m", "vi", "d", None, "rules", "memory", ["Lois"]), with_cast)
+
+
 class CastScopeTests(unittest.TestCase):
     """P19b/P19c, FR-5.11: the episode's cast reaches the bundle, and forms of address outside it stay out of the prompt."""
 
-    def plan(self, env, episode, cast=None):
+    def plan(self, env, episode, cast=None, **kwargs):
         env.translate(episode - 1)  # facts of the episodes before it are read and stored
         unit = env.store.find_unit(env.store.list_series()[0].id, 1, episode)
-        return env.memory.plan(unit, env.job(episode), env.settings, lambda task: env.fake, cast=cast)
+        return env.memory.plan(unit, env.job(episode), env.settings, lambda task: env.fake, cast=cast, **kwargs)
+
+    def test_a_name_the_facts_misspell_is_spelled_as_the_tmdb_list_has_it(self):  # FR-5.10a, 25d
+        from subserver.domain.ports import Cast
+
+        env = all_sources(self)
+        cast = Cast(main=(("Alyce Smith", 12),))
+        plan = self.plan(env, 5, cast)
+        self.assertEqual(plan.cast, ["Alyce Smith", "Bob"])
+        story = dict(plan.sections)["Relationship state"]
+        self.assertIn("Alyce Smith & Bob", story)
+        self.assertNotIn("Alice", story)
+        # a name the glossary already has is the admin's spelling and stays
+        kept = env.memory.plan(
+            env.store.find_unit(env.store.list_series()[0].id, 1, 5), env.job(5), env.settings, lambda task: env.fake,
+            cast=cast, keep=["Alice"],
+        )
+        self.assertIn("Alice", kept.cast)
+        self.assertIn("Alice & Bob", dict(kept.sections)["Relationship state"])
+        # no cast list: the facts as they are
+        self.assertIn("Alice & Bob", dict(self.plan(env, 5, None).sections)["Relationship state"])
 
     def test_without_tmdb_the_cast_is_who_the_facts_show_often_and_the_episodes_own(self):
         env = all_sources(self)

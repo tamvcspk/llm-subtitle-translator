@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from subcore import fewshot, srt
 from subcore.providers import CallLog
@@ -43,12 +43,17 @@ class _AfterRun:
 
 def context_hash(
     model: str, target_code: str, description: str, temperature: float | None, rules_hash: str = "",
-    memory_hash: str = "",
+    memory_hash: str = "", cast: Iterable[str] = (),
 ) -> str:
-    """Everything besides the source text that changes what the model is asked (NFR-3)."""
+    """Everything besides the source text that changes what the model is asked (NFR-3). ``cast`` is the episode's
+    character names: they decide which forms of address reach the prompt (FR-5.11), so a different cast is a different
+    ask. Left out when empty, so every hash made without a cast stays what it was (R19-10)."""
     parts = [PROMPT_VERSION, model, target_code, description, temperature, rules_hash]
     if memory_hash:  # absent without memory, so those hashes stay what they were before P4
         parts.append(memory_hash)
+    names = sorted(dict.fromkeys(cast))
+    if names:
+        parts.append(hashlib.sha256(json.dumps(names, ensure_ascii=False).encode("utf-8")).hexdigest())
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
@@ -58,6 +63,11 @@ def _count_kinds(findings: Any) -> dict[str, int]:
     for finding in findings:
         counts[finding.kind] = counts.get(finding.kind, 0) + 1
     return counts
+
+
+def _glossary_names(glossary: Any) -> list[str]:
+    """The names and aliases the glossary gives to characters: the admin's spelling, which the cast list never renames."""
+    return [n for c in getattr(glossary, "characters", ()) for n in (c.name, *c.aliases)]
 
 
 def _temperature(settings: dict[str, Any]) -> float | None:
@@ -96,13 +106,15 @@ class TranslationAttempt:
     def run(
         self,
         job: dict[str, Any],
-        description: str,
+        description: str | Callable[[], str],
         settings: dict[str, Any],
         on_progress: Callable[[int, int], None] | None = None,
-        cast: Cast | None = None,
+        cast: Cast | Callable[[], Cast] | None = None,
     ) -> str:
         """``cast`` is the character list an outside source (TMDB) gave for the item, names only; it is optional and
-        only narrows the prompt (FR-5.11)."""
+        only narrows the prompt (FR-5.11). Either it and ``description`` can be a callable: the lookup then runs only
+        when the job gets that far. A job that is skipped never asks for the description, and the cast is asked for only
+        when Story memory is on for the series (D-08: without the facts a cast alone would drop rules that are needed)."""
         after = _AfterRun()
         try:
             result = self._run(job, description, settings, on_progress, after, cast)
@@ -123,11 +135,11 @@ class TranslationAttempt:
     def _run(
         self,
         job: dict[str, Any],
-        description: str,
+        description: str | Callable[[], str],
         settings: dict[str, Any],
         on_progress: Callable[[int, int], None] | None,
         after: "_AfterRun",
-        cast: Cast | None = None,
+        cast: Cast | Callable[[], Cast] | None = None,
     ) -> str:
         source = Path(str(job["subtitle_path"]))
         target_code = str(job.get("target_code") or "vi")
@@ -159,6 +171,8 @@ class TranslationAttempt:
         # (FR-16.3). Taken here, not when the job was queued, so a wait does not make every edit a conflict.
         base = self.versions.repo.current_version(output) if self.versions is not None else None
         base_version = base.version if base else None
+        if callable(description):  # past both skips: only a job that goes on pays for the TMDB lookup
+            description = description()
 
         source_sha = sha256_bytes(source.read_bytes())
         cues = srt.parse_file(source)
@@ -196,8 +210,14 @@ class TranslationAttempt:
         plan = None
         if self.memory is not None and unit is not None and self.memory.enabled_for(unit, settings):
             with mapped_errors(settings):
-                plan = self.memory.plan(unit, job, settings, provider_for, extracted=after.extracted, cast=cast)
-        ctx_hash = context_hash(model, target_code, description, temperature, rules.hash, plan.fingerprint if plan else "")
+                plan = self.memory.plan(
+                    unit, job, settings, provider_for, extracted=after.extracted,
+                    cast=cast() if callable(cast) else cast, keep=_glossary_names(rules.glossary),
+                )
+        ctx_hash = context_hash(
+            model, target_code, description, temperature, rules.hash, plan.fingerprint if plan else "",
+            plan.cast if plan else (),
+        )
         published = dict(
             trigger=trigger, source_path=str(source), source_sha256=source_sha,
             target_lang=target_code, context_hash=ctx_hash, model=model,

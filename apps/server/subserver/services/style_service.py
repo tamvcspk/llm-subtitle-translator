@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from subcore import glossary as g
 from subcore import srt
+from subcore.memory import is_generic_address
 from subcore.providers import ProviderError
 from subcore.style import CharacterCard, Style, StyleError, resolve_style, language_style
 from subcore.translate import TranslationError, run
@@ -42,6 +43,18 @@ def _preset_json(p: PresetView) -> dict[str, Any]:
 
 def _card_json(card: CharacterCard) -> dict[str, Any]:
     return card.to_doc()
+
+
+def _refuse_new_generic_aliases(name: str, aliases: Any, before: Any, lang: str | None) -> None:
+    """A form of address ("Mom", "Sir") is not another name for a character (D-02, D-04). Only an alias that is new
+    against what was stored for the same character is refused, so data written before P19b can still be saved as it is."""
+    held = {str(a).casefold() for a in before}
+    for alias in aliases:
+        if str(alias).casefold() not in held and is_generic_address(str(alias), lang):
+            raise ValueError(
+                f"{alias!r} is a form of address, not another name for {name}: it changes with who is speaking, "
+                "so it would send every other \"" + str(alias) + "\" to this character"
+            )
 
 
 def pick_samples(texts: list[str], count: int) -> list[int]:
@@ -215,6 +228,10 @@ class StyleService:
             raise ValueError(str(exc)) from None
         replaces = str(body.get("replaces") or "") or None
         existing = self.styles.cards(owner.kind, owner.key)
+        _refuse_new_generic_aliases(
+            card.name, card.aliases, next((c.aliases for c in existing if c.name.casefold() == (replaces or card.name).casefold()), ()),
+            owner.source_lang,
+        )
         if card.name.casefold() != (replaces or card.name).casefold() and any(c.name.casefold() == card.name.casefold() for c in existing):
             # a rename onto another card: say so before counting an impact that would never happen (R12-5)
             raise ValueError(f"there is already a card for {card.name!r}; rename or delete that one first")
@@ -273,6 +290,13 @@ class StyleService:
         # counted once (B1 of the review of P19). ``dry_run`` stops here.
         candidate = g.from_doc(glossary) if glossary is not None else None  # GlossaryError is a ValueError
         cards = tuple(self.styles.cards(owner.kind, owner.key))
+        if candidate is not None:  # only what is NEW is refused: a glossary that already holds "Mom" is still read and saved (D-04)
+            stored = {c.name.casefold(): c.aliases for c in self.library.glossaries.load(owner.kind, owner.key, lang).characters}
+            for character in candidate.characters:
+                _refuse_new_generic_aliases(character.name, character.aliases, stored.get(character.name.casefold(), ()), owner.source_lang)
+        if card is not None:
+            held = next((c.aliases for c in cards if c.name.casefold() == (card[2] or card[0]).casefold()), ())
+            _refuse_new_generic_aliases(card[0], CharacterCard.from_doc(card[1], "card").aliases, held, owner.source_lang)
         if card is not None:
             name, doc, replaces = card
             gone = {name.casefold(), (replaces or "").casefold()}

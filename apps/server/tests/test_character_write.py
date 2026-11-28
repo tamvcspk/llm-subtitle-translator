@@ -73,6 +73,26 @@ class CharacterWriteTests(unittest.TestCase):
         self.save({"glossary": {"version": 1, "characters": [{"name": "Vi"}]}, "delete_card": "Jinx"})
         self.assertEqual((names(self.env, self.series), cards(self.env, self.series)), (["Vi"], []))
 
+    def test_a_new_form_of_address_is_refused_as_another_name_but_an_old_one_still_saves(self):  # R19-2, D-04
+        with self.assertRaisesRegex(ValueError, "'Dad' is a form of address"):
+            self.save({"glossary": {"version": 1, "characters": [{"name": "Lois", "aliases": ["Dad"]}]}, "dry_run": True})
+        # a glossary written before P19b already holds "Mom": it is read and saved as it is, and only what is new is checked
+        self.env.service.library.glossaries.save_doc("series", "bazarr-7", "vi", {"version": 1, "characters": [{"name": "Lois", "aliases": ["Mom"]}]})
+        self.save({"glossary": {"version": 1, "characters": [{"name": "Lois", "aliases": ["Mom", "Lo"]}]}})
+        with self.assertRaisesRegex(ValueError, "'Dad' is a form of address"):
+            self.save({"glossary": {"version": 1, "characters": [{"name": "Lois", "aliases": ["Mom", "Dad"]}]}})
+        doc = self.env.service.glossary(self.series, "vi")["doc"]
+        self.assertEqual(doc["characters"][0]["aliases"], ["Mom", "Lo"])  # the refused save wrote nothing
+
+    def test_a_new_form_of_address_on_a_voice_is_refused_the_same_way(self):  # R19-2
+        with self.assertRaisesRegex(ValueError, "form of address"):
+            self.env.style.save_card(self.series, {"card": {"name": "Lois", "speech": "x", "aliases": ["Mom"]}})
+        with self.assertRaisesRegex(ValueError, "form of address"):
+            self.save({"card": {"card": {"name": "Lois", "speech": "x", "aliases": ["Sir"]}}})
+        self.env.styles.save_card("series", "bazarr-7", {"name": "Lois", "speech": "old", "aliases": ["Mom"]})  # before P19b
+        saved = self.env.style.save_card(self.series, {"card": {"name": "Lois", "speech": "new", "aliases": ["Mom", "Lo"]}})
+        self.assertTrue(saved["saved"])
+
     def test_what_is_asked_must_make_sense(self):
         for body in ({}, {"glossary": "x"}, {"card": {"nope": 1}}, {"card": {"card": {"name": "A"}}, "delete_card": "A"}):
             with self.subTest(body=body), self.assertRaises(ValueError):
