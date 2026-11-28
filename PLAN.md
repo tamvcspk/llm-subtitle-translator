@@ -601,7 +601,7 @@ Review mức `high` trên working tree của nhánh `p18-plan` (chưa commit, so
 - [x] **R18-9 (thấp, P18b)** `suggestions.py:565` Mỗi sự kiện `suggestion.accepted` của bulk mang `would_stale` của cả lô ngôn ngữ, không phải của riêng nó: 5 đề xuất cùng làm 2 bản dịch stale thì telemetry/Insights cộng ra 10. Hướng sửa: một sự kiện bulk mang tổng, hoặc bỏ `stale` khỏi sự kiện từng mục.
 - [x] **R18-10 (thấp, P18a/P18b)** `apps/web/src/api/queries/suggestions.ts:82` Sau khi accept/reject/undo một thẻ, số impact đang hiện trên các thẻ khác không còn được làm mới (`useRefreshSuggestions` không invalidate `suggestion-impact` nữa, `refetchOnWindowFocus` tắt), nên sai tới khi hết cache 20 s. Admin mở "Affected translations" ở A và B (đều 3), accept A làm stale cùng các tập, B vẫn báo 3. Hướng sửa: đánh dấu stale mà không refetch (`refetchType: 'none'`), hoặc chỉ invalidate thẻ đang mở, trừ thẻ vừa quyết định. Giữ đúng mục tiêu của P18a là không tính lại impact cho mọi thẻ.
 
-## P19 — Sửa feedback Giai đoạn 1: Dịch & Glossary `[ ]`
+## P19 — Sửa feedback Giai đoạn 1: Dịch & Glossary `[x]` (đóng 2026-11-28; A/B xưng hô trên bundle v2 còn để sau, xem P19c)
 
 Nguồn: trace read-only trên homeserver (`llm-translator` `v1.0.0-rc.2`, *Malcolm in the Middle*, `/state/app.db` và `2026-11-25.001.jsonl`), ghi ở `local-state/handoff/P19-TRACE-AND-PLAN.md` (git-ignored), feedback `local-state/feedback/UX-FEEDBACK-01..03.md`. Phạm vi chốt 2026-11-26 sau review chéo: `docs/DECISIONS.md` D-02.
 
@@ -636,7 +636,7 @@ Nguồn: trace read-only trên homeserver (`llm-translator` `v1.0.0-rc.2`, *Malc
 - [x] **Forms of address theo phạm vi tập.** Giữ rule khi cả hai người thuộc: cast chính (TMDB `aggregate_credits` xếp hạng, hoặc nhân vật có mặt ở ≥ N tập facts khi không có TMDB) ∪ nhân vật của tập (TMDB `guest_stars` ∪ facts của chính tập). Không lọc theo từ trong câu (docstring `render_system`: hai người nói cả cảnh bằng đại từ). Không có dữ liệu phạm vi nào thì giữ hết như cũ. **Xong:** `scoped_rules`; chưa đo 72/152 dòng vì bundle cũ không có `cast`.
 - [x] **Story so far gọn.** Nén các tập cũ khi số tập cũ > 3 (`DEFAULT_RECENT_UNITS`), không đợi trần 8.000 token; dùng `compress` có cache như hiện tại, lỗi thì cắt câu đầu. Estimate đếm lời gọi `summarize` mới. **Xong:** nén khi số tập cũ > `memory_recent_episodes`; Estimate có `summarize_calls`/`summarize_model` (`StoryMemory.summarize_needed`).
 - [x] `PROMPT_VERSION` tăng; fingerprint đổi thì bản dịch cũ hiện Stale nhưng **không tự dịch lại** (bất biến). `p19-1`. `PROMPT_VERSION` có nằm trong `context_hash` (`translation_attempt.py:49`, chỉ làm cache không dùng lại bản cũ), nhưng Stale chỉ so `glossary_hash` và memory (`library.py:344`), nên bản dịch cũ không hiện Stale. Chốt 2026-11-28: giữ như vậy, bỏ tiêu chí 25h (xem R19-4, D-08).
-- [~] Test: prompt có rule `Malcolm–Lois` thì không có dòng `Malcolm & Lois` ở Relationship state; nhân vật một tập ở season khác không vào Forms of address; nhân vật không có trong TMDB nhưng có trong facts của tập vẫn giữ rule; > 3 tập cũ thì Story so far nén; P19-0 diff trên S02E04 đạt tiêu chí ở bảng tổng quan. Đã có test cho từng ý; phần "P19-0 diff trên S02E04" cần bundle mới dựng lại từ facts trên homeserver (hỏi người dùng).
+- [x] Test: prompt có rule `Malcolm–Lois` thì không có dòng `Malcolm & Lois` ở Relationship state; nhân vật một tập ở season khác không vào Forms of address; nhân vật không có trong TMDB nhưng có trong facts của tập vẫn giữ rule; > 3 tập cũ thì Story so far nén; P19-0 diff trên S02E04 đạt tiêu chí ở bảng tổng quan. Đã có test cho từng ý; phần "P19-0 diff trên S02E04" cần bundle mới dựng lại từ facts trên homeserver (hỏi người dùng). **Xong 2026-11-28:** bundle v2 (xem P19-0 ở trên) cho diff S02E04 đạt: không còn cặp trùng, không còn `Mom`/`Dad` là nhân vật, Forms of address chỉ gồm nhân vật có trong cast. Chưa chạy lại A/B xưng hô trên bundle v2 (cần model call); A/B trước đó dùng bundle sau có cast 16 tên.
 
 ### P19a — Model theo tác vụ hiện rõ
 - [x] Settings (`2. Translation`) gom đủ các ô chọn model (chuyển `memory_model` và `summarize_model` từ nhóm 5 lên nhóm 2), hiện placeholder động nêu tên model đang kế thừa, bảng chỉ đọc `Active models by task` (`translate`, fallback, `extract`, `summarize`, `suggest`, `research`, `judge`) và cảnh báo khi đổi `gst_model` mà các ô phụ trống (hoặc khi `gst_fallback_model == gst_model`). Không đổi luật fallback của FR-9.3; `GET /api/settings` trả kèm `task_models`. **Xong 2026-11-28:** `domain.config.task_models`, `MODEL_FIELDS`/`activeModels`/`modelWarnings`/`modelPlaceholder` (`lib/settings.ts`), `ActiveModels`, nháp cũ của nhóm 5 bỏ khoá `memory_model` (A2, `useDraft` chỉ nhận khoá của nhóm).
@@ -654,7 +654,7 @@ Nguồn: trace read-only trên homeserver (`llm-translator` `v1.0.0-rc.2`, *Malc
 - [x] Chạy lại P19-0 sau P19c, ghi kết quả (diff prompt, điểm A/B) vào đây. Nếu xưng hô vẫn sai nhiều thì mở mục `speaker`/`addressee` ở backlog. **Đã chạy 2026-11-28** trên 3 bundle dựng lại từ export read-only `Malcolm` (`/state/app.db`, không có TMDB key trên homeserver) bằng `StoryMemory.plan` + `gather` mới: `generic_names_as_characters` `["Mom","Dad"]` → **`[]`** cả 3 tập; `pairs_in_both_raw` `18/7/9` → **`0/0/0`**; `S02E04 Story so far` `18 tập (2.338 từ)` → **`3 tập (598 từ)`** (nén tự động). Dịch lại 3 tập (`gemini-3.8-flash`, 1 call/tập) và đối chiếu 66 câu golden (`local-state/p19/ab/after-comparison.md`): sửa được lỗi rule `#11` (Lois→Kitty `cô`), `#75` (Lester `ông/bạn`), `#76` (`mẹ`); các dao động còn lại (`#54`, `#68`, `#72`, `#18`) đều do SRT thiếu nhãn người nói (đã ghi ở mục "Giới hạn còn lại", để `speaker`/`addressee` ở backlog sau v1).
 - [x] CI GitHub xanh (run `46161133795` trên `9ad076d`, 2026-11-28); triển khai homeserver chỉ khi được yêu cầu.
 
-### Code review P19 (2026-11-28) `[~]` đã review, đã phản biện và chốt hướng, chưa sửa (10 phát hiện: R19-1..R19-10)
+### Code review P19 (2026-11-28) `[x]` đã review, đã phản biện, đã sửa (10 phát hiện: R19-1..R19-10; commit `4e2acd6`, `8f8c09c`, `d93b1ab`)
 
 Review trên dải commit `9999037..1b433f0` (đối chiếu SPEC §6 tiêu chí 25–27, `docs/ARCHITECTURE.md` §2/§10/§11). Quy trình như P18: sửa từng mục, tick `[x]`, ghi `CHANGELOG.md`, kèm unit test trước khi đóng `## P19`. Mỗi mục gốc bên dưới giữ nguyên lời review; **hướng sửa đã chốt nằm ở mục "Phản biện và hướng chốt"** ngay sau, và thắng khi hai bên khác nhau.
 
@@ -673,7 +673,7 @@ Review trên dải commit `9999037..1b433f0` (đối chiếu SPEC §6 tiêu chí
   - Bundle "sau" có sẵn (code mới, cast 7/12/16 tên không có TMDB): S02E04 **50** (25), S01E03 **30** (15), S01E05 **40** (20).
   - Bundle "sau" + cast TMDB (27–28 tên): S02E04 **66** (33), S01E03 **64** (32), S01E05 **62** (31). Đây là số cho production có khoá TMDB. Tokens ước lượng: S02E04 14.2K → 11.3K; S01E03 12.8K → 10.2K; S01E05 12.5K → 9.9K.
   - **Lỗi tìm ra và sửa:** `subcore` CLI (`render-prompt --bundle`, `translate --bundle`) bỏ `cast` của bundle, nên phạm vi Forms of address không được áp dụng trên đường CLI (worker không bị ảnh hưởng). Sửa `cli._inputs` và thêm test `test_the_cli_keeps_the_episode_cast_of_a_bundle` (`test_bundle_cli.py`).
-  - **Còn mở:** cast TMDB làm rộng phạm vi (66 > 50 với cast 16), nên số "sau" phụ thuộc cast; bundle "sau" có glossary khác bundle gốc (14.3K so với 6.9K ký tự), không chỉ khác cast. A/B xưng hô với cast TMDB chưa chạy lại (cần model call; xem mục golden ở trên). Harness dựng bundle từ export không còn trong repo (chỉ file kết quả ở `local-state/p19/`).
+  - **Còn mở:** cast TMDB làm rộng phạm vi (66 > 50 với cast 16), nên số "sau" phụ thuộc cast; bundle "sau" có glossary khác bundle gốc (14.3K so với 6.9K ký tự), không chỉ khác cast. A/B xưng hô với cast TMDB chưa chạy lại (cần model call; xem mục golden ở trên). **Bundle v2** (sections dựng lại bằng code hiện tại + cast TMDB qua `StoryMemory.plan`, `local-state/p19/rebuild_sections.py`, số ở `local-state/p19/v2-measure.json`): Forms of address S02E04 **66** (33 cặp), S01E03 **66** (33), S01E05 **60** (30); `Mom`/`Dad` thành nhân vật **0**; cặp trùng Glossary **0**; Story so far S02E04 **3 tập (700 từ)**; ~11.4K / 10.2K / 9.8K token.
 
 #### Phản biện và hướng chốt (2026-11-28, người dùng đã chốt 3 câu hỏi)
 
@@ -698,7 +698,7 @@ Sự thật dùng để chốt: production **có** khoá TMDB (`tmdb_api_key`); 
 3. [x] Server: R19-3 ý 1 + 2c → R19-2 → R19-1 B + R19-10 → R19-9 ý 1 (và nối 25d: `cast=`/`keep=` vào `StoryMemory.plan`).
 4. [x] Web: R19-2 `draftProblem` → R19-7 → R19-8 → R19-9 ý 2.
 5. `CHANGELOG.md`, tick từng `R19-*`, `doccheck.py`, `scripts/check` đủ 10 bước, push `main`, CI xanh.
-6. P19-0 đo lại kèm cast (hỏi người dùng trước khi đọc khoá trên homeserver), rồi đóng `## P19`.
+6. P19-0 đo lại kèm cast (hỏi người dùng trước khi đọc khoá trên homeserver), rồi đóng `## P19`. **Xong 2026-11-28** (bundle v2).
 
 ## P20 (v1.1) — Unified Glossary Workspace 4 góc nhìn `[ ]`
 
