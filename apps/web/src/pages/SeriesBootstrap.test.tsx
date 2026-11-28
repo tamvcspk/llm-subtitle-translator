@@ -85,6 +85,39 @@ describe("A series whose auto-request is waiting for its glossary (FR-15.12)", (
     expect(await within(sheet).findByText("Released. The rest is being asked for now; follow it in Activity.")).toBeInTheDocument();
   });
 
+  it("reads the series again a moment after release, when the worker has made the jobs (R19-8)", async () => {
+    serve({
+      ...base,
+      "/api/catalog/series/1": { body: seriesPage([episode(3, { targets: [held] })], { bootstrap: lockedWith() }) },
+      "/api/catalog/series/1/bootstrap": (body: Record<string, unknown> | null) =>
+        body?.estimate_only === true ? { body: price() } : { body: { ok: true, released: true, started: true } },
+    });
+    show("/series/1/episodes");
+    await userEvent.click(await screen.findByRole("button", { name: "Auto-request 99 without glossary…" }));
+    const sheet = await screen.findByRole("dialog");
+    await within(sheet).findByText("Episodes to release");
+    const reads = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/catalog/series/1").length;
+    await userEvent.click(within(sheet).getByRole("button", { name: /Release & auto-request/ }));
+    await within(sheet).findByText("Released. The rest is being asked for now; follow it in Activity.");
+    const right = reads();
+    await waitFor(() => expect(reads()).toBeGreaterThan(right), { timeout: 4_000 });
+  });
+
+  it("calls the jobs translations, and divides them, when two languages are held (R19-8)", async () => {
+    serve({
+      ...base,
+      "/api/catalog/series/1": { body: seriesPage([episode(3, { targets: [held] })], { bootstrap: lockedWith({ held: 120, held_by_lang: { vi: 99, fr: 21 } }) }) },
+      "/api/catalog/series/1/bootstrap": { body: price({ estimate: { ...estimate, jobs: 120 } }) },
+    });
+    show("/series/1/episodes");
+    await userEvent.click(await screen.findByRole("button", { name: "Auto-request 99 without glossary…" }));
+    const sheet = await screen.findByRole("dialog");
+    expect(await within(sheet).findByText("Translations to release")).toBeInTheDocument();
+    expect(within(sheet).getByText("Translations to release").nextSibling).toHaveTextContent("120");
+    expect(within(sheet).getByText("By language").nextSibling).toHaveTextContent("99 vi + 21 fr");
+    expect(within(sheet).queryByText("Episodes to release")).toBeNull();
+  });
+
   it("does not warn when something is approved, and says when the rest waits for the next sync", async () => {
     serve({
       ...base,

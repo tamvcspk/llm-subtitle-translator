@@ -54,7 +54,7 @@ function characters(cards: unknown[] = [vi], glossaryDoc: unknown = doc, extra: 
 function counting(real: { status?: number; body: unknown } = { body: { ok: true, saved: true, stale_now: 0, stale_after: 0, would_stale: 0 } }) {
   return (body: Record<string, unknown> | null) => {
     if (body?.dry_run !== true) return real;
-    const would = (body.glossary ? 2 : 0) + (body.card ? 3 : 0);
+    const would = (body.glossary ? 2 : 0) + (body.card ? 3 : 0) + (body.delete_card ? 3 : 0);
     return { body: { ok: true, saved: false, stale_now: 0, stale_after: would, would_stale: would } };
   };
 }
@@ -223,18 +223,31 @@ describe("Series Characters tab", () => {
     expect(written.glossary.characters.map((item) => item.name)).toEqual(["Violet", "Caitlyn"]);
   });
 
-  it("deletes the voice and the name in one request, after counting what leaving the glossary flags", async () => {
+  it("counts a delete with the card that would go, then deletes the voice and the name in one request", async () => {
     serve(characters());
     show("/series/1/characters");
     await userEvent.click(await screen.findByRole("button", { name: "Delete Vi" }));
     const ask = await screen.findByRole("dialog", { name: "Delete Vi?" });
-    expect(await within(ask).findByText(/This removes the name and the voice. Deleting flags 2 episodes stale. Nothing is retranslated./)).toBeInTheDocument();
+    expect(await within(ask).findByText(/This removes the name and the voice. Deleting flags 5 episodes stale. Nothing is retranslated./)).toBeInTheDocument();
+    const counted = sent("/api/series/9/characters?lang=vi").filter((body) => body?.dry_run === true);
+    expect(counted[0]).toMatchObject({ delete_card: "Vi", dry_run: true });
     expect(real("/api/series/9/characters?lang=vi")).toEqual([]);
     await userEvent.click(within(ask).getByRole("button", { name: "Confirm delete" }));
     await waitFor(() => expect(real("/api/series/9/characters?lang=vi")).toHaveLength(1));
     const written = real("/api/series/9/characters?lang=vi")[0] as { glossary: typeof doc; delete_card: string };
     expect(written.delete_card).toBe("Vi");
     expect(written.glossary.characters.map((item) => item.name)).toEqual(["Caitlyn"]);
+  });
+
+  it("counts a delete of a character that has only a voice (R19-7)", async () => {
+    serve(characters([{ name: "Mara", speech: "Quiet" }]));
+    show("/series/1/characters");
+    await userEvent.click(await screen.findByRole("button", { name: "Delete Mara" }));
+    const ask = await screen.findByRole("dialog", { name: "Delete Mara?" });
+    expect(await within(ask).findByText(/Deleting flags 3 episodes stale/)).toBeInTheDocument();
+    await userEvent.click(within(ask).getByRole("button", { name: "Confirm delete" }));
+    await waitFor(() => expect(real("/api/series/9/characters?lang=vi")).toHaveLength(1));
+    expect(real("/api/series/9/characters?lang=vi")[0]).toEqual({ delete_card: "Mara" });
   });
 
   it("shows the refusal of the worker and has sent nothing else when the one request fails", async () => {

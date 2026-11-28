@@ -77,14 +77,17 @@ function AddressCard({
   index,
   rule,
   via,
+  merges,
   window,
   onChange,
   onDelete,
 }: {
   index: number;
   rule: GlossaryAddress;
-  /** The names of this rule that are aliases of a character: it merges with the character's own rule on Clean up duplicates. */
+  /** The names of this rule that are aliases of a character. */
   via: string[];
+  /** Clean up duplicates would fold this rule into another (R19-7): the note says so only then. */
+  merges: boolean;
   window: boolean;
   onChange: (patch: Partial<GlossaryAddress>) => void;
   onDelete: () => void;
@@ -101,7 +104,7 @@ function AddressCard({
         )}
         {via.length > 0 && (
           <Text size="sm" c="dimmed">
-            {`Written via alias: ${via.join(", ")} (merges on Clean up duplicates)`}
+            {`Written via alias: ${via.join(", ")}${merges ? " (merges on Clean up duplicates)" : ""}`}
           </Text>
         )}
         <Group grow align="flex-start" wrap="wrap">
@@ -324,6 +327,7 @@ function Editor({ owner, lang, answer }: { owner: StyleOwner; lang: string; answ
                     index={index}
                     rule={rule}
                     via={via}
+                    merges={deduped.merging.has(index)}
                     window={window}
                     onChange={(patch) => setDraft({ ...draft, address_rules: patchAt(rules, index, patch) })}
                     onDelete={() => setDraft({ ...draft, address_rules: removeAt(rules, index) })}

@@ -189,51 +189,52 @@ function sameForms(x: GlossaryAddress, y: GlossaryAddress, canon: Canon): boolea
  * Collapse duplicate or adjacent identical forms of address of the same unordered pair (P18f): `(A, B)` and `(B, A)`
  * are compared in the same orientation and adjacent rules with identical forms merge into one window. With the
  * glossary's `characters`, a rule written with an alias counts as the character (P19b) and the rule that survives a merge
- * is written with the character's own name. Rules that disagree about the same window are left as they are.
+ * is written with the character's own name. Rules that disagree about the same window are left as they are, as they were
+ * written: the direction is turned round only to compare, never in what is returned (R19-7). `merging` holds the position
+ * in `rules` of every rule that Clean up would fold into another, so a screen says "merges" only when it does.
  */
 export function dedupeAddressRules(
   rules: readonly GlossaryAddress[],
   characters?: readonly GlossaryCharacter[],
-): { rules: GlossaryAddress[]; removed: number } {
+): { rules: GlossaryAddress[]; removed: number; merging: ReadonlySet<number> } {
   const canon = canonicalNames(characters);
   const result: GlossaryAddress[] = [];
+  const merging = new Set<number>();
   for (const group of groupAddressRules(rules, characters)) {
     if (group.key.startsWith("__new_")) {
       for (const item of group.items) result.push(item.rule);
       continue;
     }
-    const anchor = group.items[0]!.rule;
-    const anchorA = canon(anchor.a).toLowerCase();
-    const merged: GlossaryAddress[] = [];
-    for (const { rule } of group.items) {
+    const anchorA = canon(group.items[0]!.rule.a).toLowerCase();
+    // `out` is what is written back; `cmp` the same rule turned to the anchor's direction, for comparing only.
+    const merged: Array<{ out: GlossaryAddress; cmp: GlossaryAddress; indices: number[] }> = [];
+    for (const { rule, index } of group.items) {
       const reversed = canon(rule.a).toLowerCase() !== anchorA && canon(rule.b).toLowerCase() === anchorA;
-      const oriented: GlossaryAddress = reversed
-        ? {
-            ...rule,
-            a: anchor.a,
-            b: anchor.b,
-            a_to_b: rule.b_to_a,
-            b_to_a: rule.a_to_b,
-          }
-        : { ...rule };
+      const cmp: GlossaryAddress = reversed ? { ...rule, a_to_b: rule.b_to_a, b_to_a: rule.a_to_b } : { ...rule };
       const prev = merged.at(-1);
-      // R18-7: only merge when windows are contiguous (prev has no `until`, or prev.until matches oriented.from).
+      // R18-7: only merge when windows are contiguous (prev has no `until`, or prev.until matches cmp.from).
       // Keep prev.from (never widen into earlier episodes) and take `until` from the last merged rule.
-      const contiguous = prev !== undefined && (!text(prev.until) || sameFold(prev.until, oriented.from));
-      if (prev && contiguous && sameFold(prev.a_to_b, oriented.a_to_b) && sameFold(prev.b_to_a, oriented.b_to_a)) {
-        if (oriented.until) prev.until = oriented.until;
-        else delete prev.until;
-        if (!prev.note && oriented.note) prev.note = oriented.note;
+      const contiguous = prev !== undefined && (!text(prev.cmp.until) || sameFold(prev.cmp.until, cmp.from));
+      if (prev && contiguous && sameFold(prev.cmp.a_to_b, cmp.a_to_b) && sameFold(prev.cmp.b_to_a, cmp.b_to_a)) {
+        for (const target of [prev.out, prev.cmp]) {
+          if (cmp.until) target.until = cmp.until;
+          else delete target.until;
+        }
+        if (!prev.out.note && cmp.note) prev.out.note = cmp.note;
         // Several ways of writing one person became one rule: it says the person's own name.
-        prev.a = canon(prev.a);
-        prev.b = canon(prev.b);
+        prev.out.a = canon(prev.out.a);
+        prev.out.b = canon(prev.out.b);
+        prev.indices.push(index);
         continue;
       }
-      merged.push(oriented);
+      merged.push({ out: { ...rule }, cmp, indices: [index] });
     }
-    result.push(...merged);
+    for (const entry of merged) {
+      if (entry.indices.length > 1) entry.indices.forEach((index) => merging.add(index));
+      result.push(entry.out);
+    }
   }
-  return { rules: result, removed: rules.length - result.length };
+  return { rules: result, removed: rules.length - result.length, merging };
 }
 
 export function filterTerms(terms: readonly GlossaryTerm[], query: string): Array<{ term: GlossaryTerm; index: number }> {

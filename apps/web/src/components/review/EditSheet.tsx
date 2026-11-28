@@ -1,8 +1,9 @@
 import { Alert, Button, Drawer, Group, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { useMemo, useState } from "react";
-import { useAcceptSuggestion, useSuggestionImpact } from "../../api/queries";
+import { useAcceptSuggestion, useGlossary, useOwnerStyle, useSuggestionImpact } from "../../api/queries";
 import type { Suggestion, SuggestionDecision, SuggestionPayload } from "../../api/types";
+import { people } from "../../lib/characters";
 import { draftOf, draftProblem, impactLine, payloadOf, sameDraft, type EditDraft } from "../../lib/suggestions";
 
 interface Labels {
@@ -23,7 +24,12 @@ function Form({ suggestion, onDone, onClose }: { suggestion: Suggestion; onDone:
   const [draft, setDraft] = useState<EditDraft>(original);
   const accept = useAcceptSuggestion();
   const labels = LABELS[suggestion.kind];
-  const problem = draftProblem(suggestion.kind, draft);
+  // A character's name is checked against the series' own characters, once they are loaded (the worker checks again).
+  const owner = suggestion.kind === "character" ? { kind: "series" as const, id: suggestion.series_id } : null;
+  const glossary = useGlossary(owner, suggestion.lang);
+  const style = useOwnerStyle(owner, suggestion.lang);
+  const known = useMemo(() => (glossary.data && style.data ? people(glossary.data.doc, style.data.cards) : []), [glossary.data, style.data]);
+  const problem = draftProblem(suggestion.kind, draft, known);
   const payload = payloadOf(suggestion, draft);
   // The number is the worker's own, for the edited text: a dry run on every pause in typing, never a button.
   const json = JSON.stringify(payload);

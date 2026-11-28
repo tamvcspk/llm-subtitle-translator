@@ -67,6 +67,7 @@ export function FieldInput({
           label={field.label}
           description={field.hint}
           placeholder={placeholder ?? field.empty}
+          error={problem}
           data={data}
           value={current || null}
           onChange={(next) => onChange(next ?? "")}

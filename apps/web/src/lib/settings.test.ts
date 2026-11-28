@@ -36,7 +36,11 @@ describe("settings", () => {
     expect(fieldProblem(field("breaker_threshold"), 3)).toBeNull();
     expect(fieldProblem(field("gst_temperature"), "2.5")).toBe("At most 2");
     expect(fieldProblem(field("gst_temperature"), "0.7")).toBeNull();
-    expect(fieldProblem(field("gst_model"), "")).toBeNull(); // a model is not a number
+    // The Default model must name a model (R19-9); the others may be left empty, and a model is not a number.
+    expect(fieldProblem(field("gst_model"), "")).toBe("Choose a model");
+    expect(fieldProblem(field("gst_model"), "  ")).toBe("Choose a model");
+    expect(fieldProblem(field("gst_model"), "gemini-3.1-flash-lite")).toBeNull();
+    expect(fieldProblem(field("memory_model"), "")).toBeNull();
   });
 
   it("sends numbers as numbers, except the two the worker keeps as text", () => {

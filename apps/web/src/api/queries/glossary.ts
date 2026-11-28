@@ -126,12 +126,13 @@ export function useCardImpact(owner: StyleOwner, lang: string, request: { card: 
 
 /**
  * What saving a character would flag stale, as one count over its Name and its Voice together: an episode both reach is
- * counted once (the worker counts them in one pass, `dry_run` of the same route that saves, P19b).
+ * counted once (the worker counts them in one pass, `dry_run` of the same route that saves, P19b). `delete_card` is the
+ * name of a card that would go (R19-7): a character with only a Voice has a number too.
  */
 export function useCharacterImpact(
   owner: StyleOwner,
   lang: string,
-  parts: { glossary: GlossaryDoc | null; card: { card: CharacterCard; replaces?: string } | null } | null,
+  parts: { glossary: GlossaryDoc | null; card: { card: CharacterCard; replaces?: string } | null; delete_card?: string | null } | null,
   enabled: boolean,
 ) {
   return useQuery({
@@ -139,7 +140,12 @@ export function useCharacterImpact(
     queryFn: ({ signal }) =>
       api<StyleImpact>(ownerUrl<"characters", "put">(owner, "characters", { lang }), {
         method: "PUT",
-        body: { ...(parts?.glossary ? { glossary: parts.glossary } : {}), ...(parts?.card ? { card: parts.card } : {}), dry_run: true },
+        body: {
+          ...(parts?.glossary ? { glossary: parts.glossary } : {}),
+          ...(parts?.card ? { card: parts.card } : {}),
+          ...(parts?.delete_card ? { delete_card: parts.delete_card } : {}),
+          dry_run: true,
+        },
         signal,
       }),
     enabled: enabled && parts !== null,

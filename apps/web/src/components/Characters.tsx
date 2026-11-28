@@ -7,7 +7,6 @@ import {
   useCharacterImpact,
   useDeleteCharacter,
   useGlossary,
-  useGlossaryDryRun,
   useOwnerStyle,
   useSaveCharacter,
   type StyleOwner,
@@ -319,13 +318,15 @@ function PersonSheet({
   );
 }
 
-/** Delete both halves. The count comes from a dry run of the glossary alone: a card cannot be counted before it goes. */
+/** Delete both halves. The count is the worker's dry run of the same request, with the card that would go (R19-7): a character with only a Voice has a number too. */
 function DeleteSheet({ owner, lang, doc, person, noun, onClose }: { owner: StyleOwner; lang: string; doc: GlossaryDoc; person: Person; noun: "episode" | "movie"; onClose: () => void }) {
   const remove = useDeleteCharacter(owner, lang);
   const without = person.entry ? cleanDoc(withoutEntry(doc, person.name)) : null;
-  const impact = useGlossaryDryRun(owner, lang, without ? { doc: without } : null, true);
+  const card = person.card ? person.card.name : null;
+  const parts = useMemo(() => ({ glossary: without, card: null, delete_card: card }), [without, card]);
+  const impact = useCharacterImpact(owner, lang, parts, without !== null || card !== null);
   const counted = glossaryImpact(impact.data, "Deleting", noun);
-  const checking = without !== null && impact.isFetching;
+  const checking = impact.isFetching;
   return (
     <ConfirmSheet
       opened
@@ -334,7 +335,7 @@ function DeleteSheet({ owner, lang, doc, person, noun, onClose }: { owner: Style
       pending={remove.isPending}
       error={remove.isError ? remove.error.message : null}
       onClose={onClose}
-      onConfirm={() => remove.mutate({ glossary: without, card: person.card ? person.card.name : null }, { onSuccess: onClose })}
+      onConfirm={() => remove.mutate({ glossary: without, card }, { onSuccess: onClose })}
     >
       {checking
         ? "Checking…"

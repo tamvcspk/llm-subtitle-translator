@@ -163,6 +163,30 @@ describe("forms of address and other names (P19b)", () => {
     expect(res.rules).toEqual([{ a: "Malcolm", b: "Caroline Miller", ...forms }]);
   });
 
+  it("hands back a rule it does not merge exactly as written, whichever way round (R19-7)", () => {
+    const first = { a: "Malcolm", b: "Carolyn Miller", ...forms };
+    const second = { a: "Caroline Miller", b: "Malcolm", a_to_b: "tôi–em", b_to_a: "tôi–cô", from: "S02E01" };
+    const res = dedupeAddressRules([first, second], people);
+    expect(res.removed).toBe(0);
+    expect(res.rules).toEqual([first, second]);
+    expect(res.merging.size).toBe(0);
+  });
+
+  it("names the rules it would merge, and only those", () => {
+    const lone = dedupeAddressRules([{ a: "Malcolm", b: "Carolyn Miller", ...forms }], people);
+    expect(lone.merging.size).toBe(0);
+    const pair = dedupeAddressRules(
+      [
+        { a: "Malcolm", b: "Carolyn Miller", ...forms },
+        { a: "Caroline Miller", b: "Malcolm", a_to_b: "cô–em", b_to_a: "em–cô", from: "S02E01" },
+        { a: "Malcolm", b: "Caroline Miller", a_to_b: "x", b_to_a: "y", from: "S03E01" },
+      ],
+      people,
+    );
+    expect([...pair.merging].sort()).toEqual([0, 1]);
+    expect(pair.rules).toHaveLength(2);
+  });
+
   it("leaves a rule that disagrees about the same window, and says the stages conflict", () => {
     const rules = [
       { a: "Malcolm", b: "Caroline Miller", ...forms },

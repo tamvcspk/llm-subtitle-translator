@@ -8,6 +8,7 @@ import type {
   SuggestionPayload,
   SuggestionSource,
 } from "../api/types";
+import { nameProblems, type Person } from "./characters";
 
 export const KIND_LABEL: Record<SuggestionKind, string> = {
   term: "Term",
@@ -213,14 +214,19 @@ export function payloadOf(suggestion: Pick<Suggestion, "kind" | "payload">, draf
   return next;
 }
 
-/** What is missing before the worker would refuse it, or `null`. The worker checks too; this only says so first. */
-export function draftProblem(kind: SuggestionKind, draft: EditDraft): string | null {
+/**
+ * What is missing before the worker would refuse it, or `null`. The worker checks too; this only says so first. A character's
+ * name goes through the same `nameProblems` as the Characters form (R19-2): a form of address is not a name, and a name that
+ * is another character's alias is not a new one. `known` is the series' characters, when they are loaded.
+ */
+export function draftProblem(kind: SuggestionKind, draft: EditDraft, known: readonly Person[] = []): string | null {
   if (kind === "term") return text(draft.a) && text(draft.b) ? null : "A term needs both the source and its translation.";
   if (kind === "address_rule") {
     if (!text(draft.a) || !text(draft.b)) return "Both characters need a name.";
     return text(draft.c) || text(draft.d) ? null : "Say how at least one of them addresses the other.";
   }
-  return text(draft.a) ? null : "A character needs a name.";
+  if (!text(draft.a)) return "A character needs a name.";
+  return nameProblems({ name: draft.a, aliases: "", original: null }, known).name;
 }
 
 export function sameDraft(a: EditDraft, b: EditDraft): boolean {

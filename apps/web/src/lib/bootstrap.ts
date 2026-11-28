@@ -49,6 +49,16 @@ export function releaseLabel(bootstrap: SeriesBootstrap, lang: string): string {
   return bootstrap.glossary_empty ? `Auto-request ${held.toLocaleString()} without glossary…` : `Auto-request remaining ${held.toLocaleString()}…`;
 }
 
+/**
+ * What the price box calls its jobs (R19-8). With one target language a job is an episode; with two or more the price counts
+ * every language, so they are translations, and `spread` says how they divide (`99 vi + 21 fr`).
+ */
+export function releaseJobs(bootstrap: Pick<SeriesBootstrap, "held_by_lang">): { label: string; spread: string | null } {
+  const held = Object.entries(bootstrap.held_by_lang).filter(([, count]) => count > 0);
+  if (held.length < 2) return { label: "Episodes to release", spread: null };
+  return { label: "Translations to release", spread: held.map(([lang, count]) => `${count.toLocaleString()} ${lang}`).join(" + ") };
+}
+
 /** The line that says what the day's cap leaves for this release; `null` when there is no cap. */
 export function capLine(cap: number | undefined, left: number | null | undefined): string | null {
   if (!cap || cap <= 0) return null;

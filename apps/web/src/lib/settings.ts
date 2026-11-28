@@ -186,8 +186,13 @@ export function pick(settings: Values, keys: readonly string[]): Values {
   return out;
 }
 
-/** A number box that is empty or not a number: what the field's problem is, or `null` when it is fine. */
+/**
+ * A number box that is empty or not a number, or a model box that must name a model (the Default model has no `empty`
+ * meaning) and does not: what the field's problem is, or `null` when it is fine. An empty Default model would show `—` in
+ * the table of models by task and be filled in by the worker on Save with a model the admin never saw (R19-9).
+ */
 export function fieldProblem(field: Field, value: unknown): string | null {
+  if (field.kind === "model") return field.empty === undefined && named(value) === "" ? "Choose a model" : null;
   if (field.kind !== "int" && field.kind !== "float" && field.kind !== "numtext") return null;
   const text = typeof value === "string" ? value.trim() : value;
   if (text === "" || text === null || text === undefined) return "Enter a number";

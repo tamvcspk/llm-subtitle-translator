@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { bootstrapState } from "../test/fixtures";
-import { bootstrapMode, capLine, holdingLine, modeLine, releaseLabel, requestedLine } from "./bootstrap";
+import { bootstrapMode, capLine, holdingLine, modeLine, releaseJobs, releaseLabel, requestedLine } from "./bootstrap";
 
 describe("bootstrapMode", () => {
   it("picks the first state that is true, in the order the box answers them", () => {
@@ -40,6 +40,12 @@ describe("the sentences of the box", () => {
   it("names the button after what it does", () => {
     expect(releaseLabel(bootstrapState({ glossary_empty: true, held_by_lang: { vi: 99 } }), "vi")).toBe("Auto-request 99 without glossary…");
     expect(releaseLabel(bootstrapState({ glossary_empty: false, held_by_lang: { vi: 99 } }), "vi")).toBe("Auto-request remaining 99…");
+  });
+
+  it("calls the jobs of a release episodes with one language and translations with several (R19-8)", () => {
+    expect(releaseJobs(bootstrapState({ held_by_lang: { vi: 99 } }))).toEqual({ label: "Episodes to release", spread: null });
+    expect(releaseJobs(bootstrapState({ held_by_lang: { vi: 99, fr: 0 } }))).toEqual({ label: "Episodes to release", spread: null });
+    expect(releaseJobs(bootstrapState({ held_by_lang: { vi: 99, fr: 21 } }))).toEqual({ label: "Translations to release", spread: "99 vi + 21 fr" });
   });
 
   it("says the day's cap only when there is one", () => {

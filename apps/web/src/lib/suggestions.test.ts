@@ -117,6 +117,19 @@ describe("editing", () => {
     expect(draftProblem("character", { ...draftOf({ kind: "character", payload: { name: "" } }) })).toMatch(/needs a name/);
     expect(draftProblem("term", draftOf(term))).toBeNull();
   });
+
+  it("refuses a form of address, or another character's alias, as a character's name (R19-2)", () => {
+    const named = (name: string) => draftOf({ kind: "character", payload: { name } });
+    const known = [
+      { name: "Lois", entry: { name: "Lois", aliases: ["Mrs. Wilkerson"] }, card: null },
+      { name: "Malcolm", entry: { name: "Malcolm" }, card: null },
+    ];
+    expect(draftProblem("character", named("Mom"))).toBe('"Mom" is a relative form of address, not a character\'s name.');
+    expect(draftProblem("character", named("Mrs. Wilkerson"), known)).toBe('"Mrs. Wilkerson" is already an alias of Lois.');
+    // A name the series already has is the same character, not a clash: accepting updates it.
+    expect(draftProblem("character", named("Malcolm"), known)).toBeNull();
+    expect(draftProblem("character", named("Reese"), known)).toBeNull();
+  });
 });
 
 describe("the lines", () => {

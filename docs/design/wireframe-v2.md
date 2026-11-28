@@ -235,6 +235,8 @@ Trạng thái:
 | Auto-request remaining episodes · {title}                   (Bottom Sheet)   |
 +------------------------------------------------------------------------------+
 | Episodes to release   {estimate.jobs: 99}                                    |
+|   (từ 2 ngôn ngữ đích trở lên: nhãn "Translations to release" và thêm dòng   |
+|    "By language  99 vi + 21 fr" ngay dưới; R19-8)                            |
 |   (khi daily_cap > 0: "up to {cap_left} today · daily cap {daily_cap}")      |
 | Cues                  {estimate.cues: 48,210}                                |
 | Translate (est.)      {estimate.calls: 99} calls · {estimate.model}          |

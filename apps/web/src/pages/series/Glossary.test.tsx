@@ -134,6 +134,21 @@ describe("Series Glossary tab", () => {
     expect(screen.queryByText(/Written via alias/)).not.toBeInTheDocument();
   });
 
+  it("says a rule written with an alias merges only when Clean up duplicates would merge it (R19-7)", async () => {
+    const lone = {
+      version: 1,
+      target_lang: "vi",
+      characters: [{ name: "Caroline Miller", aliases: ["Carolyn Miller"] }, { name: "Malcolm" }],
+      address_rules: [{ a: "Malcolm", b: "Carolyn Miller", a_to_b: "em–cô", b_to_a: "cô–em" }],
+    };
+    serve(glossary({ "/api/series/9/glossary?lang=vi": { body: { ...answer, doc: lone } } }));
+    show("/series/1/glossary");
+    await userEvent.click(await screen.findByRole("radio", { name: "Forms of address (1)" }));
+    expect(screen.getByText("Written via alias: Carolyn Miller")).toBeInTheDocument();
+    expect(screen.queryByText(/merges on Clean up duplicates/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Clean up duplicates/ })).not.toBeInTheDocument();
+  });
+
   it("warns, without blocking, on an old rule for Mom, and names stages that disagree", async () => {
     const oldDoc = {
       version: 1,

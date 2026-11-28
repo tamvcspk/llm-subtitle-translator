@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { useBootstrapEstimate, useReleaseBootstrap } from "../api/queries";
 import type { SeriesBootstrap } from "../api/types";
-import { bootstrapMode, capLine, holdingLine, modeLine, releaseLabel, requestedLine } from "../lib/bootstrap";
+import { bootstrapMode, capLine, holdingLine, modeLine, releaseJobs, releaseLabel, requestedLine } from "../lib/bootstrap";
 import { estimateLines } from "./EstimateSheet";
 
 function Line({ label, value }: { label: string; value: string }) {
@@ -19,7 +19,19 @@ function Line({ label, value }: { label: string; value: string }) {
  * The price of letting a held series go (UX 2): the episodes it would ask for, the calls and their models, the day's cap, and
  * an orange warning when nothing is approved. **Confirm** lets it go and asks for the rest at once, for this series only.
  */
-function ReleaseSheet({ seriesId, title, opened, onClose }: { seriesId: number; title: string; opened: boolean; onClose: () => void }) {
+function ReleaseSheet({
+  seriesId,
+  title,
+  bootstrap,
+  opened,
+  onClose,
+}: {
+  seriesId: number;
+  title: string;
+  bootstrap: SeriesBootstrap;
+  opened: boolean;
+  onClose: () => void;
+}) {
   const estimate = useBootstrapEstimate(seriesId, opened);
   const release = useReleaseBootstrap(seriesId);
   const answer = estimate.data;
@@ -32,6 +44,9 @@ function ReleaseSheet({ seriesId, title, opened, onClose }: { seriesId: number; 
   const cap = answer ? capLine(answer.daily_cap, answer.cap_left) : null;
   const left = answer?.skipped_by_reason ? Object.entries(answer.skipped_by_reason).map(([reason, n]) => `${n} ${reason}`) : [];
   const jobs = answer?.estimate?.jobs ?? 0;
+  const { label: jobsLabel, spread } = releaseJobs(bootstrap);
+  const rows = answer?.estimate ? estimateLines(answer.estimate, { jobsLabel }) : [];
+  if (spread) rows.splice(1, 0, ["By language", spread]);
 
   return (
     <Drawer opened={opened} onClose={close} position="bottom" size="auto" title={`Auto-request remaining episodes · ${title}`} padding="lg" radius="lg">
@@ -51,7 +66,7 @@ function ReleaseSheet({ seriesId, title, opened, onClose }: { seriesId: number; 
             {estimate.isError && <Alert color="red">{estimate.error.message}</Alert>}
             {answer?.estimate && (
               <Stack gap="xs">
-                {estimateLines(answer.estimate, { jobsLabel: "Episodes to release" }).map(([label, value]) => (
+                {rows.map(([label, value]) => (
                   <Line key={label} label={label} value={value} />
                 ))}
                 {cap && (
@@ -200,7 +215,7 @@ export function BootstrapNotice({ seriesId, title, bootstrap, lang }: { seriesId
   return (
     <>
       {notice}
-      <ReleaseSheet seriesId={seriesId} title={title} opened={releasing} onClose={() => setReleasing(false)} />
+      <ReleaseSheet seriesId={seriesId} title={title} bootstrap={bootstrap} opened={releasing} onClose={() => setReleasing(false)} />
       <HoldSheet seriesId={seriesId} title={title} queued={bootstrap.queued_policy_jobs} opened={holding} onClose={() => setHolding(false)} />
     </>
   );

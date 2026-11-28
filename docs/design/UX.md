@@ -385,7 +385,7 @@ Nguồn: `docs/CONFIGURATION.md`. Khi một tên giá trị trong tài liệu đ
 | | Khoá Bazarr, TMDB, Gemini 1, Gemini 2, OpenAI-compatible | bí mật | | hiện 4 ký tự cuối, trạng thái `ok`/`invalid`/`exhausted`, Test; dán khoá mới hoặc Test thành công thì trạng thái về `ok` |
 | | `llm_provider` (LLM provider) | `gemini` · `openai_compat` | `gemini` | |
 | | `llm_base_url` (Base URL) | URL tới `/v1` | rỗng | chỉ khi `openai_compat` |
-| Translation | `gst_model` (Default model) | chọn từ danh sách | `gemini-3.1-flash-lite` | đổi sang model khác khi còn ô phụ trống sẽ hiện cảnh báo dùng chung model (P19a) |
+| Translation | `gst_model` (Default model) | chọn từ danh sách | `gemini-3.1-flash-lite` | đổi sang model khác khi còn ô phụ trống sẽ hiện cảnh báo dùng chung model (P19a); không được để trống (`Choose a model`, khoá Save; R19-9) |
 | | `gst_fallback_model` (Strong model) | chọn | `gemini-3.5-flash` | xoá để bỏ tầng thứ hai; trùng `gst_model` thì cảnh báo sẽ xoá khi lưu |
 | | `memory_model` (Memory model) | chọn | rỗng = dùng `gst_model` | **[Đổi]** (v0.23, P19a) chuyển từ nhóm 5 lên nhóm 2; chạy `extract`, `suggest` và bước đọc kết quả của `research`; trống hiện `Same as Default (<model>)` |
 | | `summarize_model` (Summarize model) | chọn | rỗng = `memory_model` rồi `gst_model` | **[Đổi]** (v0.23, P19a) chuyển từ nhóm 5 lên nhóm 2; chạy `summarize`; trống hiện `Same as Memory (<model>)` (hoặc `Same as Default (<model>)`) |

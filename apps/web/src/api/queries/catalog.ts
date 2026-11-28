@@ -114,6 +114,10 @@ export function useReleaseBootstrap(id: number) {
         body: released ? { released: true } : { released: false, cancel_queued_policy: cancelQueuedPolicy === true },
       }),
     onSettled: () => void refresh(), // the rest may be in line already, or pulled back
+    // The worker asks for the rest in the background and answers at once: read once more when it has made the jobs (R19-8).
+    onSuccess: (answer) => {
+      if (answer.started) window.setTimeout(() => void refresh(), 2_000);
+    },
   });
 }
 

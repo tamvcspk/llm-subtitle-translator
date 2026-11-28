@@ -27,6 +27,25 @@
     is empty) and Confirm lets the series go and asks for the rest at once, for that series only and in the background (`started`).
     **Hold again** (only when it would hold something: `relockable`) can also pull back the policy's jobs that have not started
     (result `bootstrap_hold`); letting it go again asks for exactly those, and neither the policy's rule D4 nor the daily cap counts them.
+  - *Code review fixes (R19-1..R19-10, D-08):*
+    - Story memory off: no cast is fetched and every form-of-address rule stays in the prompt; the episode's cast and description are
+      read lazily, after the skip checks, and only when memory is on (`TranslationAttempt.run`). The cast is part of `context_hash`
+      (only when there is one, so older hashes are unchanged). `TmdbMetadata` asks Bazarr once per job for `/api/series` and `/api/episodes`.
+    - Estimates: retranslate, variant and retry count the condensing calls too (`Condense story`, `Total calls (est.)`), and the count
+      comes from the same rule that builds the context (`condensing_calls`), including a story over its token budget. Condensing starts
+      when more than K older episodes pile up behind the K latest (FR-5.8 now says so).
+    - Prompt: a form of address is dropped from *Relationship state* only when it is listed in the Glossary and covers the episode from
+      its start; `Names` never merges two separate glossary characters or a shared surname or first name that fits several people.
+    - Spelling: a facts name that is one letter or two away from exactly one TMDB cast name (`Carolyn` → `Caroline Miller`) is read as
+      that person, unless the glossary already has the name (criterion 25d, narrow form). Changing `PROMPT_VERSION` turns nothing stale and
+      reuses no cache (criterion 25h reworded).
+    - Aliases: "Mom" and its kind are filtered out of a card's aliases when they are copied into the glossary and from a suggestion's
+      payload; saving a character or a card refuses a *newly added* generic or owned alias with a 400, while a glossary that already
+      holds one is saved as it is. Editing a character suggestion in Review checks its name the same way as the Characters form.
+    - Console: Clean up duplicates keeps rules it does not merge exactly as written and says *merges* only on the rules it folds;
+      deleting a character counts the card that goes with it, so one with only a Voice has a number; letting a series go reads the
+      library again after 2 s, when the jobs exist; with two or more target languages held the price box says `Translations to release`
+      and `By language 99 vi + 21 fr`; an empty Default model is refused (`Choose a model`) instead of showing `—` and being filled in by the worker.
 
 ## 1.0.0-rc.2 (2026-11-25)
 Second release candidate: Phase 18 (P18a–P18f) UX round 1–2 fixes, disk I/O reduction, pair-level address proposals with hysteresis, and P18 code review fixes (R18-1..R18-10).
