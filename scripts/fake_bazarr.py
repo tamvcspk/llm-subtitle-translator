@@ -47,6 +47,17 @@ def _library(media: Path) -> tuple[list[dict], dict[str, list[dict]], list[dict]
     }
     series = [{"sonarrSeriesId": 7, "title": "Arcane Demo"}, {"sonarrSeriesId": 9, "title": "Second Demo"}]
     by_series = {"7": episodes, "9": []}
+    bdir = media / "Bootstrap Demo" / "Season 1"
+    if bdir.is_dir():
+        beps = []
+        for n in (1, 2, 3):
+            stem = f"Bootstrap.Demo.S01E{n:02d}"
+            beps.append({
+                "sonarrEpisodeId": 200 + n, "season": 1, "episode": n, "title": f"Episode {n}", "path": str(bdir / f"{stem}.mkv"),
+                "subtitles": [_sub("en", bdir / f"{stem}.en.srt")], "missing_subtitles": [{"code2": "vi", "forced": False}],
+            })
+        series.append({"sonarrSeriesId": 12, "title": "Bootstrap Demo"})
+        by_series["12"] = beps
     if SHRUNK["on"]:  # 2 items of 6: far past the guard
         return series[:1], {"7": episodes[:1]}, []
     return series, by_series, [movie]

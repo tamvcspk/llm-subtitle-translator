@@ -189,7 +189,7 @@ def write_old_queue(state: Path) -> None:
 
 def seed(
     state: Path, translated: tuple[int, ...] = (1, 2), *, edit_demo: bool = False, candidate: bool = False, facts: bool = False,
-    review: bool = False,
+    review: bool = False, bootstrap_demo: bool = False,
 ) -> str:
     media = state / "preview-media"
     show = media / "Arcane Demo" / "Season 1"
@@ -279,6 +279,21 @@ def seed(
             video_path=str(folder / "Edit.Demo.S01E01.mkv"),
             subtitles=(CatalogSubtitle("en", str(source)), CatalogSubtitle("vi", str(target))),
         ))
+    if bootstrap_demo:
+        # One series with auto_request=on, an empty glossary and 3 missing episodes: lets Bootstrap hold & Hold again run in preview.
+        bdir = media / "Bootstrap Demo" / "Season 1"
+        bdir.mkdir(parents=True)
+        bsid = store.upsert_series("bazarr-12", title="Bootstrap Demo", bazarr_id="12")
+        store.set_series_auto_request(bsid, "on")
+        entries.append(CatalogEntry(KIND_SERIES, "12", series_key="bazarr-12", title="Bootstrap Demo", missing=("vi",)))
+        for ep in (1, 2, 3):
+            src = bdir / f"Bootstrap.Demo.S01E{ep:02d}.en.srt"
+            src.write_text(srt(ep), encoding="utf-8")
+            entries.append(CatalogEntry(
+                KIND_EPISODE, str(200 + ep), series_key="bazarr-12", parent_bazarr_id="12", season=1, episode=ep,
+                title=f"Episode {ep}", video_path=str(bdir / f"Bootstrap.Demo.S01E{ep:02d}.mkv"),
+                subtitles=(CatalogSubtitle("en", str(src)),), missing=("vi",),
+            ))
     if facts:
         seed_facts(store, show)
     if review:
@@ -307,7 +322,7 @@ def main() -> int:
         shutil.rmtree(state)
     state.mkdir(parents=True)
     (state / MARK).write_text("made by tests/preview_seed.py; --reset may delete this folder\n", encoding="utf-8")
-    seed(state, () if args.live else (1, 2), edit_demo=args.live, facts=True, review=True)
+    seed(state, () if args.live else (1, 2), edit_demo=args.live, facts=True, review=True, bootstrap_demo=not args.live)
     if args.old_queue:
         write_old_queue(state)
     print(f"seeded {state}")
