@@ -688,7 +688,7 @@ Sự thật dùng để chốt: production **có** khoá TMDB (`tmdb_api_key`); 
 - **R19-9: ý 1 nâng lên Trung bình** (production có khoá TMDB nên mỗi job series gọi `/api/series` và `/api/episodes` của Bazarr nhiều lần; với R19-1 B, chỉ còn ở series bật memory nhưng vẫn lặp giữa `description`/`cast`/`genres`). Sửa: `TmdbMetadata` nhớ kết quả hai lookup Bazarr theo `job_id` trong một job; khoá cache **không** chứa `X-API-KEY`. **Test:** một job có khoá TMDB → mỗi endpoint Bazarr gọi 1 lần. Ý 2: `activeModels` dùng model mặc định do server trả thay vì `—`; nếu API chưa trả thì chặn lưu ô trống. Vitest.
 
 **Thứ tự làm:**
-1. Ghi `docs/DECISIONS.md` D-08 (R19-1 B, ngưỡng nén R19-3, 25d bản hẹp, bỏ 25h) và sửa `SPEC.md` FR-5.8, FR-5.10(a), FR-5.11, tiêu chí 25d/25g/25h (skill `design-docs`).
+1. [x] Ghi `docs/DECISIONS.md` D-08 (R19-1 B, ngưỡng nén R19-3, 25d bản hẹp, bỏ 25h) và sửa `SPEC.md` v0.26 FR-5.8, FR-5.10(a), FR-5.11, tiêu chí 25d/25g/25h, quyết định #33, `docs/design/ARCHITECTURE.md` v0.26 (skill `design-docs`).
 2. `subcore`: R19-6 → R19-5 → 25d bản hẹp → compressor thăm dò cho `summarize_needed` (R19-3 2b).
 3. Server: R19-3 ý 1 + 2c → R19-2 → R19-1 B + R19-10 → R19-9 ý 1.
 4. Web: R19-2 `draftProblem` → R19-7 → R19-8 → R19-9 ý 2.
