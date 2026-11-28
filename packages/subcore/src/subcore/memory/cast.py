@@ -14,6 +14,7 @@ from typing import Iterable, Sequence
 from .address import clean_facts, is_generic_address
 from .facts import Facts
 from .fold import UnitFacts, _Names
+from .spelling import spelling_map
 
 __all__ = ["MIN_MAIN_UNITS", "clean_cast_name", "episode_cast", "recurring_names"]
 
@@ -54,14 +55,22 @@ def episode_cast(
     guests: Iterable[str] = (),
     min_units: int = MIN_MAIN_UNITS,
     lang: str | None = None,
+    keep: Iterable[str] = (),
 ) -> list[str]:
     """The names of the characters of the episode: ``main`` (an outside list of the series' main cast, else the
     recurring ones of ``prior``), the episode's own ``guests`` and the characters (with aliases) of ``own``.
-    Empty when nothing is known, which tells the prompt to keep every rule."""
-    base = [n for n in (clean_cast_name(m) for m in main) if n] or recurring_names(prior, min_units=min_units, lang=lang)
-    names = list(base)
-    names.extend(n for n in (clean_cast_name(g) for g in guests) if n)
+    Empty when nothing is known, which tells the prompt to keep every rule.
+
+    With an outside list (``main`` or ``guests``), a name of ``own`` that is a close misspelling of exactly one name on
+    it is listed as the list spells it (FR-5.10a); ``keep`` (the glossary's names and aliases) is never renamed."""
+    outside = [n for n in (clean_cast_name(m) for m in main) if n]
+    guest_names = [n for n in (clean_cast_name(g) for g in guests) if n]
+    base = outside or recurring_names(prior, min_units=min_units, lang=lang)
+    names = [*base, *guest_names]
     if own is not None:
+        own_names: list[str] = []
         for character in clean_facts(own, lang).characters:
-            names.extend((character.name, *character.aliases))
+            own_names.extend((character.name, *character.aliases))
+        respell = spelling_map(own_names, [*outside, *guest_names], keep)
+        names.extend(respell.get(n, n) for n in own_names)
     return list(dict.fromkeys(n for n in names if n))

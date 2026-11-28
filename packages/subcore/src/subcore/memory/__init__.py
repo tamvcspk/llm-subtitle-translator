@@ -25,12 +25,14 @@ from .fold import (
     StoryState,
     UnitFacts,
     build_context,
+    condensing_calls,
     drop_pairs,
     entries_hash,
     fingerprint,
     fold,
     render_episode,
 )
+from .spelling import rename_facts, spelling_map
 
 __all__ = [
     "DEFAULT_BUDGET_TOKENS",
@@ -56,6 +58,7 @@ __all__ = [
     "clean_cast_name",
     "clean_facts",
     "compress_arc",
+    "condensing_calls",
     "drop_pairs",
     "episode_cast",
     "entries_hash",
@@ -66,5 +69,7 @@ __all__ = [
     "is_generic_address",
     "merge_declared",
     "recurring_names",
+    "rename_facts",
     "render_episode",
+    "spelling_map",
 ]

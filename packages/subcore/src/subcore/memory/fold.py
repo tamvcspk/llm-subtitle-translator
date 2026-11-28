@@ -13,11 +13,12 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 from ..providers.base import BadOutput
 from .address import clean_facts
 from .facts import INTIMACY_MAX, MIN_CONFIDENCE, Character, Facts
+from .spelling import rename_facts, spelling_map
 
 __all__ = [
     "PAIRS_HEADER",
@@ -29,6 +30,7 @@ __all__ = [
     "StoryState",
     "UnitFacts",
     "build_context",
+    "condensing_calls",
     "entries_hash",
     "fingerprint",
     "fold",
@@ -174,20 +176,20 @@ class _Names:
         return found
 
 
-def fold(units: Sequence[UnitFacts], lang: str | None = None) -> StoryState:
+def fold(units: Sequence[UnitFacts], lang: str | None = None, respell: Mapping[str, str] | None = None) -> StoryState:
     """Fold the facts of ``units`` (already in story order) into one state.
 
     Characters merge by name or alias; each unordered pair keeps its latest relationship event
     (latest unit, then latest cue within the unit); terms are counted per unit. Generic forms of address
     ("Mom", "Sir") are not names: they are cleaned off each unit first (``clean_facts``, FR-5.9), in the
-    source language ``lang``.
+    source language ``lang``. ``respell`` renames misspelled names to the cast list's spelling (``spelling_map``).
     """
     names = _Names()
     latest: dict[tuple[str, str], Relationship] = {}
     terms: dict[str, int] = {}
     summaries: list[tuple[str, str]] = []
     for unit in units:
-        facts = clean_facts(unit.facts, lang)
+        facts = rename_facts(clean_facts(unit.facts, lang), respell or {})
         taken: set[str] = set()
         for character in facts.characters:
             names.add(character, taken)
@@ -333,11 +335,13 @@ def drop_pairs(body: str, ruled: Callable[[str, str], bool]) -> str:
     return "\n".join(kept)
 
 
-def render_episode(facts: Facts | None, lang: str | None = None) -> tuple[str, str] | None:
+def render_episode(
+    facts: Facts | None, lang: str | None = None, respell: Mapping[str, str] | None = None
+) -> tuple[str, str] | None:
     """The section for the unit being translated: its own summary and relationship changes by item."""
     if facts is None or facts.is_empty():
         return None
-    facts = clean_facts(facts, lang)
+    facts = rename_facts(clean_facts(facts, lang), respell or {})
     lines = ["Taken from this episode's own subtitles; item numbers are the `i` values you are given."]
     if facts.summary:
         lines.append(f"Summary: {facts.summary}")
@@ -363,13 +367,59 @@ def build_context(
     recent: int = DEFAULT_RECENT_UNITS,
     compress: Compressor | None = None,
     lang: str | None = None,
+    cast: Sequence[str] = (),
+    keep: Sequence[str] = (),
 ) -> StoryContext:
     """Context sections for a unit from the facts of the units before it and its own facts.
 
-    ``prior`` must hold only units earlier in story order; the caller owns that selection.
+    ``prior`` must hold only units earlier in story order; the caller owns that selection. ``cast`` is an outside list of
+    the series' character names (TMDB): a name in the facts that is a close misspelling of exactly one of them is
+    spelled as the list does, unless it is one of ``keep`` (the glossary's names and aliases). Empty: the facts as they
+    are (FR-5.10a). The fingerprint is of the stored facts and does not change with either.
     """
-    sections, how = _render(fold(prior, lang), max(500, budget_tokens), recent, compress)
-    episode = render_episode(own, lang)
+    respell = _respell(prior, own, cast, keep, lang)
+    sections, how = _render(fold(prior, lang, respell), max(500, budget_tokens), recent, compress)
+    episode = render_episode(own, lang, respell)
     if episode:
         sections.append(episode)
     return StoryContext(sections, fingerprint(prior, own), how)
+
+
+def _respell(
+    prior: Sequence[UnitFacts], own: Facts | None, cast: Sequence[str], keep: Sequence[str], lang: str | None
+) -> dict[str, str]:
+    if not cast:
+        return {}
+    seen: list[str] = []
+    for facts in (*(u.facts for u in prior), own):
+        if facts is None:
+            continue
+        cleaned = clean_facts(facts, lang)
+        seen.extend(c.name for c in cleaned.characters)
+        for e in cleaned.relationship_events:
+            seen.extend((e.a, e.b))
+    return spelling_map(seen, cast, keep)
+
+
+def condensing_calls(
+    prior: Sequence[UnitFacts],
+    *,
+    budget_tokens: int = DEFAULT_BUDGET_TOKENS,
+    recent: int = DEFAULT_RECENT_UNITS,
+    cached: Callable[[list[tuple[str, str]]], bool] | None = None,
+) -> int:
+    """How many model calls building the context of the unit after ``prior`` would make to condense old summaries.
+
+    It runs the real ``build_context`` with a probe in place of the compressor, so the one place that decides whether to
+    condense (``_render``: more old summaries than recent ones kept, or over budget) is the place that is asked, and an
+    estimate cannot drift from the call (R19-3). ``cached(entries)`` says the answer for exactly those summaries is
+    stored, which costs nothing. The probe never calls a model.
+    """
+    asked: list[list[tuple[str, str]]] = []
+
+    def probe(entries: list[tuple[str, str]]) -> str:
+        asked.append(entries)
+        return ""
+
+    build_context(prior, None, budget_tokens=budget_tokens, recent=recent, compress=probe)
+    return sum(1 for entries in asked if not (cached and cached(entries)))

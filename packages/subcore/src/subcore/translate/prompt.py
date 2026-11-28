@@ -183,22 +183,24 @@ def render_system(bundle: "TranslationBundle", texts: Iterable[str] | None = Non
     lang_rules = _TARGET_RULES.get(bundle.target_lang.lower().split("-")[0])
     if lang_rules:
         sections.append(("Target-language rules", lang_rules))
+    # The rules the prompt lists: what the Glossary section prints and what the inferred lines give way to are the same
+    # set, so a pair left out of one is never also taken out of the other (R19-5).
+    in_scope = scoped_rules(bundle.active_rules, bundle.cast, bundle.glossary)
     if not bundle.glossary.is_empty():
         shown = None
         threshold = bundle.params.glossary_filter_threshold
         if texts is not None and threshold > 0 and len(bundle.glossary.terms) > threshold:
             haystack = matching.joined(texts)
             shown = tuple(t for t in bundle.glossary.terms if _mentioned(t, haystack))
-        in_scope = scoped_rules(bundle.active_rules, bundle.cast, bundle.glossary)
         sections.append(("Glossary", _glossary_section(bundle.glossary, in_scope, shown)))
     style = render_style(bundle.style)
     if style:
         sections.append(("Effective style", style))
-    voices = render_voices(without_ruled_addresses(bundle.voices, bundle.active_rules, bundle.glossary))
+    voices = render_voices(without_ruled_addresses(bundle.voices, in_scope, bundle.glossary, bundle.cast))
     if voices:
         sections.append(("Character voices", voices))
-    if bundle.active_rules:  # the glossary wins: a pair it has a rule for is not also listed as inferred (FR-5.12)
-        ruled = ruled_pairs(bundle.active_rules, bundle.glossary)
+    if in_scope:  # the glossary wins: a pair it has a rule for is not also listed as inferred (FR-5.12)
+        ruled = ruled_pairs(in_scope, bundle.glossary, bundle.cast)
         for title, body in bundle.sections:
             body = drop_pairs(body, ruled) if title == RELATIONSHIP_TITLE else body
             if body:

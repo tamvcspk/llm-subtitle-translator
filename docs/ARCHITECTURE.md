@@ -375,9 +375,19 @@ is no key or no match). `StoryMemory.plan` puts it in `MemoryPlan.cast`, `gather
 hash only when known). `subcore.translate.scope` then decides at prompt time, from names alone and never from the words of a
 line: a form-of-address rule is listed only when both people are in the cast (none known: every rule stays), and a pair that has
 an active rule is not printed again in *Relationship state* (`memory.fold.drop_pairs`) or in a character voice's `Addresses` lines
-(the glossary wins). The stored glossary is not touched by any of it. Old story summaries are condensed (`compress`, cached) as
-soon as there are more of them than `memory_recent_episodes`, not when the token budget runs out. Glossary characters take
+(the glossary wins), counting only the rules that are in scope and that hold from the start of the episode (`from_cue is None`; a rule
+that begins mid-episode leaves the opening state to the inferred line). `scope.Names` never treats two glossary characters as one
+person and matches a short name by its words only when exactly one person among the glossary and the cast carries it. The stored
+glossary is not touched by any of it. Old story summaries are condensed (`compress`, cached) when there are more of them, older than the
+`memory_recent_episodes` newest, than that many (that is, more than twice that many episodes before the one being translated), or
+when the token budget runs out; `fold.condensing_calls` is how an estimate counts those calls: it runs `build_context` with a
+probe in place of the compressor, so `_render` stays the only place that decides. Glossary characters take
 `aliases`, used only to recognise a name; a form of address is never an alias.
+
+One spelling per character (FR-5.10a, D-08): `subcore.memory.spelling` (`spelling_map`, `rename_facts`) renames, at read time and only
+when an outside cast list is given to `build_context(cast=..., keep=...)` or `episode_cast`, a name of the facts that is a close
+misspelling of exactly one cast name ("Carolyn" for "Caroline Miller"); a name or alias of a glossary character (`keep`) is never
+renamed and two close cast names merge nothing. Stored facts and fingerprints do not change.
 
 `memory.py` (`StoryMemory`) decides which facts a unit sees. Story order is `(season, episode)` as Bazarr numbers them;
 season 0 sits outside the chain and sees the state after `series.specials_after` (default: the end of season 1). Before a
@@ -538,7 +548,7 @@ package's own tests keep it so). Modules:
   `subcore.providers.fake` (deterministic, for tests and dry runs) and `subcore.providers.limiter` (`RateLimiter`,
   `ResilientProvider`: RPM/TPM/RPD windows, retry with backoff, key failover);
 - `subcore.memory.facts`, `subcore.memory.fold`, `subcore.memory.address`, `subcore.memory.cast`, `subcore.memory.compress`,
-  `subcore.translate.scope`; `subcore.suggest`, `subcore.feedback`,
+  `subcore.memory.spelling`, `subcore.translate.scope`; `subcore.suggest`, `subcore.feedback`,
   `subcore.research`, `subcore.golden`, `subcore.compare` and `subcore.judge`;
 - `subcore.cli`: the `subcore` command (`translate`, `bundle`, `render-prompt`, `validate`, `compare`); it knows no
   database, queue or HTTP. A bundle's `params.model` empty and `max_output_tokens` 0 mean "decided by the provider that runs

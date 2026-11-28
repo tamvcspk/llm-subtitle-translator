@@ -9,6 +9,8 @@ from subcore.memory import (
     UnitFacts,
     build_context,
     compress_arc,
+    condensing_calls,
+    entries_hash,
     extract_facts,
     fingerprint,
     fold,
@@ -292,6 +294,43 @@ class BundleTests(unittest.TestCase):
         a = build_context(self.units(4), facts("x"))
         b = build_context(self.units(4), facts("x"))
         self.assertEqual((a.sections, a.fingerprint), (b.sections, b.fingerprint))
+
+
+class CondensingCallsTests(unittest.TestCase):
+    """R19-3: the estimate asks the same code that decides to condense, so the two cannot disagree."""
+
+    units = BundleTests.units
+
+    def asked(self, units, **kwargs):
+        """What ``build_context`` really asks the compressor for, with the same arguments."""
+        seen = []
+        build_context(units, None, compress=lambda entries: seen.append(entries) or "", **kwargs)
+        return seen
+
+    def test_it_counts_exactly_the_calls_build_context_makes(self):
+        long = lambda i: "plot " * 300  # noqa: E731
+        cases = [
+            (self.units(3), {}),                                   # nothing old
+            (self.units(6), {}),                                   # 3 old, 3 recent: kept in full
+            (self.units(7), {}),                                   # 4 old: more than the recent ones kept
+            (self.units(6, long), {"budget_tokens": 600}),         # over budget with no more old than recent ones kept
+            (self.units(8, long), {"budget_tokens": 600, "recent": 2}),
+            (self.units(4), {"recent": 0}),
+        ]
+        for units, kwargs in cases:
+            with self.subTest(units=len(units), **kwargs):
+                self.assertEqual(condensing_calls(units, **kwargs), len(self.asked(units, **kwargs)))
+
+    def test_the_thresholds(self):
+        self.assertEqual([condensing_calls(self.units(n)) for n in (2, 6, 7)], [0, 0, 1])
+        long = lambda i: "plot " * 300  # noqa: E731
+        self.assertEqual(condensing_calls(self.units(6, long), budget_tokens=600), 1)  # over budget, 3 old <= 3 recent
+
+    def test_condensing_that_is_stored_costs_nothing(self):
+        units = self.units(7)
+        stored = {entries_hash(self.asked(units)[0])}
+        self.assertEqual(condensing_calls(units, cached=lambda entries: entries_hash(entries) in stored), 0)
+        self.assertEqual(condensing_calls(self.units(8), cached=lambda entries: entries_hash(entries) in stored), 1)
 
 
 class CompressArcTests(unittest.TestCase):

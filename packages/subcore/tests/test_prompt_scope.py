@@ -45,6 +45,26 @@ class NamesTests(unittest.TestCase):
     def test_two_people_with_a_shared_first_name_among_a_known_cast_are_not_told_apart_by_guesswork(self):
         self.assertTrue(Names().same("Ida", "Ida Smith"))  # one name is the words of the other: the same person
 
+    def test_two_glossary_characters_are_never_one_person(self):  # R19-6
+        names = Names(Glossary(characters=(Character("George"), Character("George Michael"))))
+        self.assertFalse(names.same("George", "George Michael"))
+        self.assertTrue(names.same("george michael", "George Michael"))
+        declared = Names(Glossary(characters=(Character("George Michael", aliases=("George",)),)))
+        self.assertTrue(declared.same("George", "George Michael"))  # unless one is declared the other's alias
+
+    def test_a_short_name_matches_by_words_only_when_one_person_carries_it(self):  # R19-6
+        glossary = Glossary(characters=(Character("Lois Wilkerson"), Character("Hal Wilkerson")))
+        names = Names(glossary, cast=["Lois", "Hal"])
+        self.assertTrue(names.same("Lois", "Lois Wilkerson"))  # the cast's "Lois" is the glossary's Lois
+        self.assertTrue(names.same("Hal", "Hal Wilkerson"))
+        self.assertFalse(names.same("Wilkerson", "Lois Wilkerson"))  # a surname two people share
+        self.assertFalse(names.same("Wilkerson", "Hal Wilkerson"))
+        self.assertFalse(names.same("Lois", "Hal"))
+        # a first name two people of the cast carry is a guess too
+        guess = Names(None, cast=["George Michael", "George Sr"])
+        self.assertFalse(guess.same("George", "George Michael"))
+        self.assertTrue(Names(None, cast=["George Michael"]).same("George", "George Michael"))
+
 
 class ScopeTests(unittest.TestCase):
     def test_no_cast_keeps_every_rule(self):
@@ -119,6 +139,43 @@ class DropPairsTests(unittest.TestCase):
         # a bundle with no rule keeps the section as it is
         plain = render_system(bundle([], sections=sections))
         self.assertIn("Malcolm & Lois", plain)
+
+    def test_a_rule_outside_the_cast_does_not_hide_the_inferred_line_of_its_pair(self):  # R19-5
+        body = "Inferred.\nWhere each pair stands now:\n- Ned & Ruth: friend, closeness 2/5, equals (as of S01E01)"
+        rules = [rule("Ned", "Ruth", "anh–chị")]
+        system = render_system(bundle(rules, cast=["Malcolm", "Lois"], sections=[(RELATIONSHIP_TITLE, body)]))
+        self.assertNotIn("Ned speaking to Ruth", system)  # out of scope: not in the Glossary section
+        self.assertIn("Ned & Ruth", system)  # so the inferred line is the only word on the pair
+        card = CharacterCard("Ned", address=(("Ruth", "anh–chị"),))
+        self.assertIn('Addresses Ruth: "anh–chị"', render_system(bundle(rules, cast=["Malcolm"], voices=[card])))
+
+    def test_a_rule_that_starts_mid_episode_leaves_the_opening_state_to_the_inferred_line(self):  # R19-5
+        body = "Inferred.\nWhere each pair stands now:\n- Malcolm & Lois: family, closeness 4/5, equals (as of S01E01)"
+        sections = [(RELATIONSHIP_TITLE, body)]
+        late = ActiveRule(AddressRule(a="Malcolm", b="Lois", a_to_b="con–mẹ"), from_cue=40)
+        self.assertIn("Malcolm & Lois", render_system(bundle([late], sections=sections)))
+        whole = ActiveRule(AddressRule(a="Malcolm", b="Lois", a_to_b="con–mẹ"))
+        self.assertNotIn(RELATIONSHIP_TITLE, render_system(bundle([whole], sections=sections)))
+        # two stages that follow each other cover the whole episode: the opening one is from the start
+        first = ActiveRule(AddressRule(a="Malcolm", b="Lois", a_to_b="con–mẹ"), until_cue=40)
+        second = ActiveRule(AddressRule(a="Malcolm", b="Lois", a_to_b="con–bà"), from_cue=40)
+        self.assertNotIn(RELATIONSHIP_TITLE, render_system(bundle([first, second], sections=sections)))
+        card = CharacterCard("Malcolm", address=(("Lois", "con–mẹ"),))
+        self.assertIn('Addresses Lois: "con–mẹ"', render_system(bundle([late], voices=[card])))
+
+    def test_a_shared_surname_does_not_clear_the_lines_of_another_pair(self):  # R19-6
+        chars = [Character("Lois Wilkerson"), Character("Hal Wilkerson"), Character("Malcolm")]
+        body = (
+            "Inferred.\nWhere each pair stands now:\n"
+            "- Lois & Malcolm: family, closeness 4/5, equals (as of S01E01)\n"
+            "- Wilkerson & Malcolm: family, closeness 4/5, equals (as of S01E01)"
+        )
+        system = render_system(bundle(
+            [rule("Lois Wilkerson", "Malcolm", "mẹ–con")], cast=["Lois", "Hal", "Malcolm"], characters=chars,
+            sections=[(RELATIONSHIP_TITLE, body)],
+        ))
+        self.assertNotIn("Lois & Malcolm", system)
+        self.assertIn("Wilkerson & Malcolm", system)  # two Wilkersons: the surname alone is no one's rule
 
     def test_the_relationship_section_is_dropped_when_nothing_is_left(self):
         sections = [(RELATIONSHIP_TITLE, "Inferred.\nWhere each pair stands now:\n- Malcolm & Lois: family, closeness 4/5, equals (as of S01E01)")]
